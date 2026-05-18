@@ -19,7 +19,21 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 - **When you hit a blocker** you can't unstick this turn, capture it under **Known issues** at the top of `docs/progress.md` with a one-line diagnosis and a candidate fix. Leave the original checkbox in `[~]`.
 - **Always** bump the `Last updated` line at the top of `docs/progress.md` when you change the file.
 - **Never delete completed items.**
-- **Never `git commit` or `git push` without the user asking.** The user drives version control on this repo.
+- **Commit and push after every meaningful change.** As soon as `./build.ps1 pre-commit` is green for a slice (or for a focused doc-only edit that doesn't need it), stage the change, write a Conventional-Commits message, commit, and `git push` to the active feature branch. The user explicitly opted in to this on 2026-05-18 — they want each slice landed on `origin` as it completes so a lost session never costs more than the last unpushed slice. See **Commit & push protocol** below for the exact rules.
+
+## Commit & push protocol
+
+- **Cadence**: one commit per slice. A "slice" is the unit you just flipped from `[~]` to `[x]` in `docs/progress.md` (or a self-contained doc/refactor that doesn't have its own checkbox).
+- **Gate**: `./build.ps1 pre-commit` must be green before you commit code changes. Doc-only commits skip the gate.
+- **Message style**: Conventional Commits.
+  - `feat(<area>): …` for new behaviour (`feat(http): honour AVM_MIRROR via Resolve-AvmMirrorUrl helper`).
+  - `fix(<area>): …` for bug fixes.
+  - `refactor(<area>): …`, `test(<area>): …`, `docs: …`, `chore: …`, `ci: …` as appropriate.
+  - First line ≤ 72 chars. Use a body when the *why* isn't obvious from the diff; reference the spec / progress item.
+- **Staging**: prefer `git add -A` for slice commits so progress-doc updates land with the code. If you have unrelated dirty files (rare), be explicit instead.
+- **Push**: `git push origin <branch>` immediately after the commit. Never `--force`. Never push to `main`.
+- **Failure path**: if `git push` is rejected because the remote moved, `git pull --rebase origin <branch>` and re-run `./build.ps1 pre-commit` before retrying the push. Do not force-push to resolve.
+- **PRs / merges**: still user-driven. Don't open, merge, or close PRs without explicit instruction.
 
 ## Build / test commands
 
@@ -57,6 +71,6 @@ Read [`/memories/repo/pester-and-lint-gotchas.md`](.) (in your assistant's memor
 
 ## Branch & PR posture
 
-- **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR open).
+- **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`).
 - **Default branch**: `main`, which currently has only the initial commit.
-- Never push to `main`. Never force-push. Never open a PR without explicit user instruction.
+- Commit-and-push to the active feature branch after every slice (see **Commit & push protocol**). Never push to `main`. Never force-push. Never open, merge, or close a PR without explicit user instruction.

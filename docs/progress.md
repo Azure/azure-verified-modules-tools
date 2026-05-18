@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (continuing same day — AVM_MIRROR rewrite path landed)
+**Last updated**: 2026-05-18 (commit-and-push protocol activated)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -31,6 +31,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - When you hit a blocker you can't unstick this turn, add a bullet to **Known issues** with a one-line diagnosis.
 - Always bump the **Last updated** line at the top.
 - Never delete completed items — they are the audit trail.
+- **Commit and push after every slice.** Once `./build.ps1 pre-commit` is green, `git add -A`, write a Conventional-Commits message, commit, and `git push origin feat/avm-authoring-initial`. Full rules live in `AGENTS.md` § **Commit & push protocol**.
 
 ---
 
