@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (build task now verifies staged exports match the manifest)
+**Last updated**: 2026-05-18 (Smoke tier wired; release-branch / on-demand only)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, `coverage`, `integration`, and `build` all green (241 unit + 3 integration tests, 78.83% line coverage vs 70% floor; `build` task verifies 12 functions + 1 alias against the staged manifest); release pipeline ready; remaining items are Smoke tier + case-collision fixture |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, `coverage`, `integration`, `build` all green and the `smoke` task scaffold lands (241 unit + 3 integration tests, 78.83% line coverage vs 70% floor; `build` task verifies 12 functions + 1 alias against the staged manifest; `smoke` task downloads `terraform-docs` from GitHub and SHA-verifies against `tools.lock.psd1`); release pipeline ready; only the Linux-only case-collision fixture remains |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -116,7 +116,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] Pester 5.5+ Unit tests for every Public + Private function landed so far (230 pass, 2 skip on non-host OS)
 - [x] Test tree mirrors source tree under `tests/Pester/Unit/{Module,Public,Private,Private/Engines}/`
 - [x] `tests/Pester/Integration/` populated (spec §18 layer: real FS + stub binaries under `tests/fixtures/bin/`) — canary `Process.Tests.ps1` exercises `Invoke-AvmProcess` end-to-end against real `pwsh` subprocesses and real `TestDrive` filesystem (3 tests, all `-Tag Integration`); new `integration` build task wired into `ci` so the composite now runs `layout + lint + coverage + integration` per spec §18 "Every PR runs Unit + Integration"; `tests/fixtures/bin/README.md` documents the stub-binary harness convention for future engine-level integration tests that need to fake `bicep` / `terraform` / `tflint` / `terraform-docs`
-- [ ] `tests/Pester/Smoke/` populated (network-dependent, `-Tag Smoke`, run on release branches only)
+- [x] `tests/Pester/Smoke/` populated (network-dependent, `-Tag Smoke`, run on release branches only) — canary `Http.Tests.ps1` downloads the smallest managed tool (`terraform-docs`, ~5 MB) from its real GitHub release via `Invoke-AvmHttp` and lets the helper's SHA verification catch any lock-file drift; the test is filed under `-Tag 'Smoke'`, inline-skips when `$env:AVM_OFFLINE='1'` (Pester 5 evaluates `-Skip:` at discovery time so the offline check has to be inline, not in `BeforeAll`), and writes into `TestDrive` so smoke runs leave no residue. New `smoke` build task mirrors the `integration` shape but stays out of both `pre-commit` and `ci` — it only runs when explicitly invoked via `./build.ps1 smoke`. README under `tests/Pester/Smoke/` documents the contract (real network, release-only, every test `-Tag 'Smoke'`, honour `AVM_OFFLINE`)
 - [ ] `tests/fixtures/` with a real case-collision file pair (spec §6.2) — only meaningful on Linux runners
 - [x] Encoding/EOL pre-commit Pester check (spec §5: "no BOM, no CRLF in `src/`") — `tests/Pester/Unit/Module/Encoding.Tests.ps1` walks every `.ps1`/`.psm1`/`.psd1`/`.md`/`.yml`/`.yaml`/`.json`/`.toml`/`.sh`/`.bicep`/`.tf` under `src/` and asserts no UTF-8 BOM (bytes 0xEF 0xBB 0xBF) and no 0x0D byte. Caught a real CRLF in `Resolve-AvmMirrorUrl.ps1` on first run (file-write tooling defaulted to Windows endings); fixed and now green.
 

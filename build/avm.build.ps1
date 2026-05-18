@@ -12,6 +12,7 @@
       test        - Run Pester unit tests (excludes Integration and Smoke).
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
       integration - Run Pester tests under tests/Pester/Integration/ (real FS + real subprocess, no network).
+      smoke       - Run Pester tests under tests/Pester/Smoke/ (real FS + REAL NETWORK). Not part of ci/pre-commit; release/on-demand only.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
@@ -329,6 +330,39 @@ task integration {
         throw "$($result.FailedCount) Integration test(s) failed."
     }
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
+}
+
+# Spec section 18 Smoke tier: real FS + real network. Tests live under
+# tests/Pester/Smoke/ and are tagged `Smoke`. The smoke task is the only
+# entry point that runs them; it is NOT part of `pre-commit` or `ci` so
+# routine builds never touch the network. Wire this into a release-branch
+# workflow or invoke on demand. Honours `$env:AVM_OFFLINE` indirectly --
+# the tests themselves Skip when offline rather than fail.
+task smoke {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+
+    $smokePath = Join-Path $script:testsRoot 'Smoke'
+    if (-not (Test-Path -LiteralPath $smokePath)) {
+        Write-Build Yellow "  no smoke tests found at $smokePath"
+        return
+    }
+
+    $config = New-PesterConfiguration
+    $config.Run.Path           = $smokePath
+    $config.Run.PassThru       = $true
+    $config.Run.Exit           = $false
+    $config.Output.Verbosity   = 'Detailed'
+    $config.TestResult.Enabled = $false
+    $config.Filter.Tag         = @('Smoke')
+
+    $result = Invoke-Pester -Configuration $config
+    if ($result.TotalCount -eq 0) {
+        throw "No Smoke-tagged tests ran from $smokePath. Tag your It / Describe with -Tag 'Smoke'."
+    }
+    if ($result.FailedCount -gt 0) {
+        throw "$($result.FailedCount) Smoke test(s) failed."
+    }
+    Write-Build Green "  smoke OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
 task 'pre-commit' layout, lint, test
