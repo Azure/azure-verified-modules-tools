@@ -60,6 +60,12 @@
 # Rules:
 #   - All urlTemplate values MUST start with 'https://'. Mirrors are applied at
 #     download time via $env:AVM_MIRROR; the lock itself stays canonical.
+#     The mirror's scheme, authority, and path prefix are preserved, e.g.
+#     AVM_MIRROR='https://m.example.com/proxy' rewrites
+#       https://releases.hashicorp.com/terraform/1.9.5/foo.zip
+#     to
+#       https://m.example.com/proxy/terraform/1.9.5/foo.zip
+#     The mirror MUST itself be https://; http:// mirrors are rejected.
 #   - {os} resolves to windows|linux|darwin. {arch} resolves to amd64|arm64.
 #   - {platform} requires a platformAliases map and resolves per-platform.
 #   - {ext} resolves to '.zip' / '.tar.gz' / '' from the per-platform archive

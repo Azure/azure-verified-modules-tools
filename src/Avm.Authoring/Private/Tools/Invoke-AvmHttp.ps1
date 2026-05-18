@@ -46,12 +46,9 @@ function Invoke-AvmHttp {
             "ExpectedSha256 must be 64-char lowercase hex. Got: $ExpectedSha256")
     }
 
-    $effectiveUrl = $Url
     $mirror = if (Test-Path Env:\AVM_MIRROR) { $env:AVM_MIRROR } else { $null }
-    if ($mirror -and $effectiveUrl.StartsWith('https://')) {
-        $sourceUri = [Uri]::new($effectiveUrl)
-        $mirrorUri = [Uri]::new($mirror)
-        $effectiveUrl = '{0}://{1}{2}' -f $mirrorUri.Scheme, $mirrorUri.Authority, $sourceUri.PathAndQuery
+    $effectiveUrl = Resolve-AvmMirrorUrl -Source $Url -Mirror $mirror
+    if ($effectiveUrl -cne $Url) {
         Write-Verbose "AVM_MIRROR rewrite: $Url -> $effectiveUrl"
     }
 
