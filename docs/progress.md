@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (coverage gate landed; ci now enforces 70% floor)
+**Last updated**: 2026-05-18 (release pipeline landed: CHANGELOG + release.yml + Get-AvmReleaseNotes)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, and `coverage` all green (230 tests, 78.83% line coverage vs 70% floor); remaining items are release workflow and Integration/Smoke tiers |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, and `coverage` all green (241 tests, 78.83% line coverage vs 70% floor); release pipeline ready (`release.yml` + CHANGELOG); remaining items are Integration/Smoke tiers |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -103,8 +103,8 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 - [x] `scripts/Publish-AvmAuthoring.ps1` (PSGallery publish path with hard casing guards, `-WhatIf` support)
 - [x] `scripts/Update-AvmToolsLock.ps1` (refresh per-platform SHA256s for managed tools)
-- [ ] `.github/workflows/release.yml` (PSGallery publish on tag + GitHub Release zip with `SHA256SUMS`)
-- [ ] `CHANGELOG.md` (Keep a Changelog format) with an unreleased section
+- [x] `.github/workflows/release.yml` (PSGallery publish on tag + GitHub Release zip with `SHA256SUMS`) — tag-driven (`v[0-9]+.[0-9]+.[0-9]+`) + `workflow_dispatch`; runs ci gate, `./build.ps1 build`, packages `out/Avm.Authoring-<version>.zip` + `out/SHA256SUMS`, verifies tag↔manifest↔CHANGELOG version match, publishes via `scripts/Publish-AvmAuthoring.ps1` (gated by `psgallery` environment + `PSGALLERY_API_KEY` secret), creates GitHub Release via `gh` CLI. Prerelease tags (`-preview.N` / `-rc.N`) deferred — the workflow currently rejects them with a clear error
+- [x] `CHANGELOG.md` (Keep a Changelog format) with an unreleased section — `[Unreleased]` + `[0.1.0] - 2026-05-18` + `[0.0.1] - 2026-05-12` plus compare-URL refs; new `scripts/Get-AvmReleaseNotes.ps1` extracts the per-version section by exact `## [<version>]` match (rejects similarly-prefixed versions like `0.1.0` vs `0.1.0-preview.1`) and the release workflow fails before the ci gate if the entry is missing. 11 unit tests cover happy path + failure cases + CRLF tolerance + repo-CHANGELOG sanity
 
 ### Verbs that still owe Phase 0
 
