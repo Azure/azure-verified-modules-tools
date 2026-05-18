@@ -11,10 +11,11 @@
       lint        - Run PSScriptAnalyzer with repo settings.
       test        - Run Pester unit tests (excludes Integration and Smoke).
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
+      integration - Run Pester tests under tests/Pester/Integration/ (real FS + real subprocess, no network).
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
-      ci          - Composite invoked by the CI workflow: layout + lint + coverage.
+      ci          - Composite invoked by the CI workflow: layout + lint + coverage + integration.
 
     The default task (`.`) is `layout`.
 #>
@@ -220,12 +221,45 @@ task clean {
     Write-Build Green '  clean OK'
 }
 
+# Spec section 18 Integration tier: real FS + real subprocess, no network.
+# Tests live under tests/Pester/Integration/ and are tagged `Integration` so
+# they are excluded from `test` / `coverage` (which run the Unit tier only).
+# This task runs them in isolation, with no coverage instrumentation -- the
+# coverage floor is a Unit-tier contract.
+task integration {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+
+    $integrationPath = Join-Path $script:testsRoot 'Integration'
+    if (-not (Test-Path -LiteralPath $integrationPath)) {
+        Write-Build Yellow "  no integration tests found at $integrationPath"
+        return
+    }
+
+    $config = New-PesterConfiguration
+    $config.Run.Path           = $integrationPath
+    $config.Run.PassThru       = $true
+    $config.Run.Exit           = $false
+    $config.Output.Verbosity   = 'Detailed'
+    $config.TestResult.Enabled = $false
+    $config.Filter.Tag         = @('Integration')
+    $config.Filter.ExcludeTag  = @('Smoke')
+
+    $result = Invoke-Pester -Configuration $config
+    if ($result.TotalCount -eq 0) {
+        throw "No Integration-tagged tests ran from $integrationPath. Tag your It / Describe with -Tag 'Integration'."
+    }
+    if ($result.FailedCount -gt 0) {
+        throw "$($result.FailedCount) Integration test(s) failed."
+    }
+    Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
+}
+
 task 'pre-commit' layout, lint, test
 
-# CI runs layout + lint + coverage (not pre-commit) so the spec section 18
-# 70% line-coverage floor is enforced on every matrix combo. Coverage runs
-# the same unit tests with CodeCoverage enabled, so we do not also run
-# `test` here — it would be a wasted duplicate Pester invocation.
-task ci layout, lint, coverage
+# CI runs layout + lint + coverage + integration. Coverage runs the Unit tier
+# with CodeCoverage enabled (so we get the spec section 18 70% floor) and
+# `integration` runs the real-subprocess tier separately. `pre-commit` (the
+# local gate) skips both coverage and integration to stay fast.
+task ci layout, lint, coverage, integration
 
 task . layout
