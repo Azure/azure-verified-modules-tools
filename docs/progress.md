@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (encoding/EOL guard landed; commit-and-push protocol activated)
+**Last updated**: 2026-05-18 (coverage gate landed; ci now enforces 70% floor)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, and `test` all green (230 tests); remaining items are coverage gate, release workflow, Integration/Smoke tiers |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, and `coverage` all green (230 tests, 78.83% line coverage vs 70% floor); remaining items are release workflow and Integration/Smoke tiers |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -96,7 +96,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `build/avm.build.ps1` task graph: `layout`, `lint`, `test`, `coverage`, `build`, `clean`, `pre-commit`, `ci`
 - [x] `.github/workflows/ci.yml` matrix on `ubuntu-latest`, `windows-latest`, `macos-latest`
 - [x] **PSScriptAnalyzer crash diagnosis** — could not reproduce on 2026-05-18; `./build.ps1 lint` returns `lint OK: no findings`. Watching for recurrence on CI.
-- [ ] `coverage` task enforces the spec §18 70% line floor as a hard build gate (not just emits the JaCoCo report)
+- [x] `coverage` task enforces the spec §18 70% line floor as a hard build gate (CI runs `layout + lint + coverage`; current actual 78.83%)
 - [ ] `build` task produces a tested staged module under `out/Avm.Authoring/` (it copies today but doesn't verify exports beyond `Test-ModuleManifest`)
 
 ### Publish / release

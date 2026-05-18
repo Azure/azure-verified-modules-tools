@@ -10,11 +10,11 @@
       layout      - Verify on-disk casing and manifest shape.
       lint        - Run PSScriptAnalyzer with repo settings.
       test        - Run Pester unit tests (excludes Integration and Smoke).
-      coverage    - Run unit tests with coverage enabled.
+      coverage    - Run unit tests with coverage; fails below the spec §18 floor.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
-      ci          - Composite invoked by the CI workflow. Today: same as pre-commit.
+      ci          - Composite invoked by the CI workflow: layout + lint + coverage.
 
     The default task (`.`) is `layout`.
 #>
@@ -35,6 +35,11 @@ $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
+
+# Single source of truth for the spec section 18 line-coverage floor. The CI
+# job (`ci` task) runs `coverage` and fails below this number. Adjust here
+# when the per-file ratchet lands; the spec lets us start at 70 and tighten.
+$script:coverageFloor = 70
 
 # --- helpers ----------------------------------------------------------------
 
@@ -142,25 +147,54 @@ task coverage {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path                       = $unitPath
-    $config.Run.PassThru                   = $true
-    $config.Run.Exit                       = $false
-    $config.Output.Verbosity               = 'Detailed'
-    $config.Filter.ExcludeTag              = @('Smoke', 'Integration')
-    $config.CodeCoverage.Enabled           = $true
-    $config.CodeCoverage.Path              = @(
+    $config.Run.Path                           = $unitPath
+    $config.Run.PassThru                       = $true
+    $config.Run.Exit                           = $false
+    $config.Output.Verbosity                   = 'Detailed'
+    $config.Filter.ExcludeTag                  = @('Smoke', 'Integration')
+    $config.CodeCoverage.Enabled               = $true
+    $config.CodeCoverage.Path                  = @(
         (Join-Path $script:moduleRoot 'Public'),
         (Join-Path $script:moduleRoot 'Private')
     )
-    $config.CodeCoverage.OutputFormat      = 'JaCoCo'
-    $config.CodeCoverage.OutputPath        = (Join-Path $coverageOut 'coverage.xml')
-    $config.CodeCoverage.OutputEncoding    = 'UTF8'
+    $config.CodeCoverage.OutputFormat          = 'JaCoCo'
+    $config.CodeCoverage.OutputPath            = (Join-Path $coverageOut 'coverage.xml')
+    $config.CodeCoverage.OutputEncoding        = 'UTF8'
+    # Set Pester's own target so its run-end summary matches our floor; the
+    # hard gate below is what actually fails the build.
+    $config.CodeCoverage.CoveragePercentTarget = $script:coverageFloor
 
     $result = Invoke-Pester -Configuration $config
     if ($result.FailedCount -gt 0) {
         throw "$($result.FailedCount) Pester test(s) failed."
     }
+
+    $covered  = [math]::Round([double]$result.CodeCoverage.CoveragePercent, 2)
+    $analyzed = $result.CodeCoverage.CommandsAnalyzedCount
+    $executed = $result.CodeCoverage.CommandsExecutedCount
+    $files    = $result.CodeCoverage.FilesAnalyzedCount
     Write-Build Green "  coverage report: $($config.CodeCoverage.OutputPath.Value)"
+    Write-Build Green "  coverage: $covered% ($executed of $analyzed commands across $files files); floor: $($script:coverageFloor)%"
+
+    if ($covered -lt $script:coverageFloor) {
+        # Per spec section 18 the CI build fails below the floor. Make the
+        # failure message actionable: list every file under the floor so the
+        # contributor knows where to add tests next.
+        $missed = $result.CodeCoverage.CommandsMissed |
+            Group-Object -Property File |
+            ForEach-Object {
+                $rel = $_.Name
+                if ($rel.StartsWith($script:repoRoot)) {
+                    $rel = $rel.Substring($script:repoRoot.Length).TrimStart('\','/')
+                }
+                '    {0}: {1} missed' -f $rel, $_.Count
+            } |
+            Sort-Object
+
+        $detail = if ($missed) { "`n" + ($missed -join "`n") } else { '' }
+        throw ("Coverage gate failed: $covered% < $($script:coverageFloor)% floor. " +
+               "Add tests for the files below or raise coverage on existing ones.$detail")
+    }
 }
 
 task build layout, {
@@ -188,6 +222,10 @@ task clean {
 
 task 'pre-commit' layout, lint, test
 
-task ci 'pre-commit'
+# CI runs layout + lint + coverage (not pre-commit) so the spec section 18
+# 70% line-coverage floor is enforced on every matrix combo. Coverage runs
+# the same unit tests with CodeCoverage enabled, so we do not also run
+# `test` here — it would be a wasted duplicate Pester invocation.
+task ci layout, lint, coverage
 
 task . layout
