@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ci (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
+          foreach ($pkg in @(
+              @{ Name = 'InvokeBuild';        MinimumVersion = '5.10.0' },
+              @{ Name = 'Pester';             MinimumVersion = '5.5.0'  },
+              @{ Name = 'PSScriptAnalyzer';   MinimumVersion = '1.21.0' }
+          )) {
+              Install-PSResource @pkg -Scope CurrentUser -TrustRepository
+          }
+
+      - name: PowerShell environment
+        shell: pwsh
+        run: |
+          $PSVersionTable | Format-List
+          Get-Module -ListAvailable -Name InvokeBuild, Pester, PSScriptAnalyzer |
+              Select-Object Name, Version | Format-Table
+
+      - name: Run ci task
+        shell: pwsh
+        run: ./build.ps1 ci

@@ -1,0 +1,243 @@
+# Contributing to `Avm.Authoring`
+
+This module is being built up in phases per [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md). The engineering rules live in [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md) — read that before sending a PR.
+
+The repo currently contains the **placeholder release** (`Avm.Authoring 0.0.1`) and the publish pipeline only. The full build / test / lint scaffolding lands in Phase 0. Sections below marked **(Phase 0+)** describe commands that don't exist yet but will be wired up to the same entry points listed here, so you can write scripts against them today.
+
+---
+
+## 1. Prerequisites
+
+| Tool                                            | Minimum     | Required for                                       |
+| ----------------------------------------------- | ----------- | -------------------------------------------------- |
+| [PowerShell 7](https://aka.ms/powershell)       | 7.4 (LTS)   | Everything                                          |
+| [Git](https://git-scm.com/downloads)            | 2.40        | Cloning, branching                                  |
+| [Microsoft.PowerShell.PSResourceGet](https://learn.microsoft.com/powershell/utility-modules/psresourceget/overview) | 1.0.0 | Publishing (`Publish-PSResource`)                  |
+| [Pester](https://pester.dev)                    | 5.5         | Running tests **(Phase 0+)**                        |
+| [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting **(Phase 0+)**                              |
+| [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks **(Phase 0+)**          |
+| [GitHub CLI](https://cli.github.com/)           | 2.40        | Optional — opening PRs from the terminal            |
+
+Install everything the module needs (one-time, user scope):
+
+```pwsh
+Install-PSResource Microsoft.PowerShell.PSResourceGet -Scope CurrentUser
+Install-PSResource Pester                              -Scope CurrentUser
+Install-PSResource PSScriptAnalyzer                    -Scope CurrentUser
+Install-PSResource InvokeBuild                         -Scope CurrentUser
+```
+
+PS 7.4 is required on **Windows**, **Linux**, and **macOS**. PS 5.1 is explicitly unsupported.
+
+---
+
+## 2. Clone the repo
+
+```pwsh
+git clone https://github.com/Azure/azure-verified-modules-tools.git
+cd azure-verified-modules-tools
+```
+
+Use `Set-Location`, not relative `cd ../..`, when moving around the tree — paths in this guide assume the repo root is the current working directory.
+
+---
+
+## 3. Import the module from source
+
+The simplest dev loop. No install, no copy, no symlink — point `Import-Module` at the manifest.
+
+```pwsh
+Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
+Get-Command -Module Avm.Authoring
+Get-AvmAuthoringPlaceholder | Format-List
+Remove-Module Avm.Authoring -Force
+```
+
+Re-run `Import-Module … -Force` after any change to `src/Avm.Authoring/*.ps*`.
+
+`Remove-Module` before the next `-Force` import is good hygiene — it surfaces leaks (orphaned background jobs, registered event handlers, etc.) earlier.
+
+---
+
+## 4. Install the module into your user scope (from source)
+
+For a closer-to-shipped experience without publishing, drop the module folder into your user module path.
+
+### Find your user module path (cross-platform)
+
+```pwsh
+$userModulesPath = ($env:PSModulePath -split [System.IO.Path]::PathSeparator)[0]
+$userModulesPath
+```
+
+Resolves to:
+
+- **Windows**: `~/Documents/PowerShell/Modules`
+- **Linux**: `~/.local/share/powershell/Modules`
+- **macOS**: `~/.local/share/powershell/Modules`
+
+### Copy in
+
+```pwsh
+$src   = Join-Path $PWD 'src/Avm.Authoring'
+$dst   = Join-Path $userModulesPath 'Avm.Authoring'
+if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+Copy-Item $src $dst -Recurse
+```
+
+Now `Avm.Authoring` autoloads in any new PS 7 session: `Get-AvmAuthoringPlaceholder` just works.
+
+To undo:
+
+```pwsh
+$userModulesPath = ($env:PSModulePath -split [System.IO.Path]::PathSeparator)[0]
+Remove-Item (Join-Path $userModulesPath 'Avm.Authoring') -Recurse -Force
+```
+
+### Or symlink (advanced)
+
+For an inner loop where edits in `src/` are picked up by a fresh shell without copying:
+
+```pwsh
+$userModulesPath = ($env:PSModulePath -split [System.IO.Path]::PathSeparator)[0]
+$src = Join-Path $PWD 'src/Avm.Authoring'
+$dst = Join-Path $userModulesPath 'Avm.Authoring'
+if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+New-Item -ItemType SymbolicLink -Path $dst -Target $src
+```
+
+> **Windows**: creating a symlink needs either an elevated shell **or** Developer Mode enabled (Settings → System → For developers).
+
+---
+
+## 5. Validate the module layout
+
+The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)) lands in Phase 0. Until then, the publish script (`scripts/Publish-AvmAuthoring.ps1`) does the same hard casing guards inline. Run it in `-WhatIf` mode any time you want to confirm the on-disk layout matches the manifest:
+
+```pwsh
+./scripts/Publish-AvmAuthoring.ps1 -WhatIf
+```
+
+Expected tail:
+
+```text
+What if: Performing the operation "Publish to PSGallery" on target "Avm.Authoring 0.0.1".
+```
+
+If the script throws before that line, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/avm-implementation-spec.md#case-sensitivity)) before retrying.
+
+---
+
+## 6. Build, test, lint **(Phase 0+)**
+
+These commands don't run anything useful yet — the Invoke-Build task graph at `build/avm.build.ps1` lands in Phase 0. The CLI surface is intentionally locked now so PRs and CI scripts can target it:
+
+```pwsh
+# All Phase 0 tasks
+./build.ps1 ci                # pre-commit + full Pester matrix
+
+# Individual tasks
+./build.ps1 pre-commit        # layout + lint + Pester Unit
+./build.ps1 lint              # PSScriptAnalyzer with project settings
+./build.ps1 test              # Pester Unit + Integration
+./build.ps1 test -Tag Smoke   # adds network-dependent smoke tests
+./build.ps1 coverage          # Pester with coverage gate (70% line)
+./build.ps1 build             # stage the module for packaging
+./build.ps1 clean             # nuke build/output
+./build.ps1 ?                 # list every task
+```
+
+Until the build script exists, the closest equivalents are:
+
+```pwsh
+# Smoke import + invoke
+Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
+Get-AvmAuthoringPlaceholder
+Remove-Module Avm.Authoring -Force
+
+# Manifest validation
+Test-ModuleManifest ./src/Avm.Authoring/Avm.Authoring.psd1
+
+# Pre-publish layout + dry run
+./scripts/Publish-AvmAuthoring.ps1 -WhatIf
+```
+
+---
+
+## 7. Run a single Pester test **(Phase 0+)**
+
+Once the test tree exists at `tests/Pester/{Unit,Integration,Smoke}/`:
+
+```pwsh
+Invoke-Pester -Path ./tests/Pester/Unit/Public/Invoke-AvmPreCommit.Tests.ps1 -Output Detailed
+```
+
+To run one `It` block by name:
+
+```pwsh
+Invoke-Pester -Path ./tests/Pester/Unit -FullNameFilter '*resolves module context from `$PWD*'
+```
+
+---
+
+## 8. Publish to PSGallery (maintainers only)
+
+Don't run this unless you're a PSGallery owner of the `Avm.Authoring` package and you intend to ship.
+
+```pwsh
+$key   = Read-Host -AsSecureString -Prompt 'Paste your PSGallery API key (input is hidden)'
+$plain = [System.Net.NetworkCredential]::new('', $key).Password
+./scripts/Publish-AvmAuthoring.ps1 -ApiKey $plain
+Remove-Variable plain, key
+Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
+```
+
+**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. The version of the script above is the only sanctioned publish path; it asserts the on-disk casing matches the manifest before calling `Publish-PSResource` ([spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)).
+
+---
+
+## 9. OS-specific notes
+
+### Windows
+
+- Use PowerShell 7, not Windows PowerShell 5.1. `pwsh` not `powershell`.
+- `Copy-Item` and `Move-Item` are case-preserving but not case-sensitive — renames within the same casing class are silent no-ops. To change a folder or file's casing, rename to a different name first and then to the desired casing.
+- Symlinks need Developer Mode or an elevated shell.
+
+### Linux
+
+- If you installed PS via the `dotnet tool` channel, `pwsh` lives under `~/.dotnet/tools/`. Add it to PATH.
+- Filesystem is case-sensitive by default — code that breaks on Linux but not Windows is almost always a casing bug.
+
+### macOS
+
+- APFS is case-insensitive *but* case-preserving by default, like NTFS. The PSGallery casing trap from May 2026 reproduces here. Treat as case-sensitive.
+- Apple Silicon is the Tier 1 target ([spec §2](docs/avm-implementation-spec.md#operating-systems)); Intel macs run but get smoke tests only in CI.
+
+---
+
+## 10. Branch and PR workflow
+
+1. Fork the repo and create a feature branch off `main`:
+
+   ```pwsh
+   git switch -c feat/<short-description>
+   ```
+
+2. Make changes, keeping the PR focused on a single concern.
+3. Run the layout check (`./scripts/Publish-AvmAuthoring.ps1 -WhatIf`) and — once Phase 0 lands — `./build.ps1 pre-commit`.
+4. Commit. Prefer [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`).
+5. Push and open a PR against `Azure/azure-verified-modules-tools:main`. Link the relevant phase / spec section in the description.
+6. Address review comments via `git commit --fixup` + `git rebase -i --autosquash` before merge, not force-push reflinks.
+
+---
+
+## 11. What to read before changing anything
+
+| Topic                                            | File                                                                 |
+| ------------------------------------------------ | -------------------------------------------------------------------- |
+| Why the module exists and what we're building     | [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md)     |
+| How to write spec-compliant code                  | [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md)   |
+| Inventory of upstream AVM tooling we're replacing | [docs/avm-tooling-report.md](docs/avm-tooling-report.md)             |
+| Module placeholder details                         | [src/Avm.Authoring/README.md](src/Avm.Authoring/README.md)           |
+| The casing incident (mandatory reading)            | [docs/avm-implementation-spec.md §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident) |
