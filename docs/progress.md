@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18
+**Last updated**: 2026-05-18 (continuing same day — lint blocker no longer reproduces; `./build.ps1 pre-commit` green end-to-end on Windows)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout` and `test` green; `lint` is the active blocker      |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, and `test` all green; remaining items are `doctor --install`, coverage gate, release workflow, Integration/Smoke tiers |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -20,8 +20,8 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 ## Known issues / active blockers
 
-- **`./build.ps1 lint` crashes PSScriptAnalyzer** with `Object reference not set to an instance of an object.` at the `Invoke-ScriptAnalyzer @params` call site in `build/avm.build.ps1:87`. The crash is inside PSScriptAnalyzer itself while walking `src/Avm.Authoring/`. Suspect: the nested `function script:Assert-Module` pattern (see `/memories/repo/pester-and-lint-gotchas.md` line 34) or one of the engine files. **Next step**: bisect by running `Invoke-ScriptAnalyzer` per file under `src/` to isolate the offender, then refactor.
-- **Branch is `feat/avm-authoring-initial` but the work is broader** than the initial "scaffold" — when CI is green again, consider an interim commit and a clearer PR-ready branch name.
+- **Branch is `feat/avm-authoring-initial` but the work is broader** than the initial "scaffold" — consider an interim commit and a clearer PR-ready branch name when the next milestone lands.
+- _(Resolved 2026-05-18)_ The PSScriptAnalyzer crash from the prior session no longer reproduces. `./build.ps1 lint` returns `lint OK: no findings`; full `pre-commit` is green (199 tests pass, 2 platform-conditional skips on Windows). Suspect cause: stale analyzer cache or transient state from an in-progress edit when the prior session was interrupted. If it reappears, bisect by running `Invoke-ScriptAnalyzer` per file under `src/Avm.Authoring/`.
 
 ## How to use this file
 
@@ -94,7 +94,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `build.ps1` repo-root entry forwarding to Invoke-Build
 - [x] `build/avm.build.ps1` task graph: `layout`, `lint`, `test`, `coverage`, `build`, `clean`, `pre-commit`, `ci`
 - [x] `.github/workflows/ci.yml` matrix on `ubuntu-latest`, `windows-latest`, `macos-latest`
-- [ ] **Fix PSScriptAnalyzer crash** so `./build.ps1 lint` (and therefore `ci`) goes green end-to-end on all three OSes
+- [x] **PSScriptAnalyzer crash diagnosis** — could not reproduce on 2026-05-18; `./build.ps1 lint` returns `lint OK: no findings`. Watching for recurrence on CI.
 - [ ] `coverage` task enforces the spec §18 70% line floor as a hard build gate (not just emits the JaCoCo report)
 - [ ] `build` task produces a tested staged module under `out/Avm.Authoring/` (it copies today but doesn't verify exports beyond `Test-ModuleManifest`)
 

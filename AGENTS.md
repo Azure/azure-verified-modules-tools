@@ -25,15 +25,15 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 
 ```pwsh
 ./build.ps1 layout       # casing & manifest guards (fast)
-./build.ps1 lint         # PSScriptAnalyzer + custom rules (currently CRASHES — see progress.md Known issues)
+./build.ps1 lint         # PSScriptAnalyzer + repo settings
 ./build.ps1 test         # Pester unit tests (excludes Smoke + Integration)
-./build.ps1 pre-commit   # layout + lint + test
+./build.ps1 pre-commit   # layout + lint + test (the recommended local gate)
 ./build.ps1 ci           # CI entry point (alias for pre-commit, called from .github/workflows/ci.yml)
 ./build.ps1 coverage     # Pester with coverage (JaCoCo XML under out/coverage/)
 ./build.ps1 clean        # remove out/
 ```
 
-While `./build.ps1 lint` is broken, gate your work with `./build.ps1 layout` + `./build.ps1 test` and add a `[ ]` note in `progress.md` if your slice introduces analyzer noise that needs cleaning up later.
+Run `./build.ps1 pre-commit` before handing work off. If lint ever crashes with `Object reference not set to an instance of an object.`, see `docs/progress.md` Known issues — the prior recurrence was transient and bisecting per file under `src/Avm.Authoring/` was the diagnostic path.
 
 ## Repo conventions that matter
 
@@ -52,7 +52,7 @@ Read [`/memories/repo/pester-and-lint-gotchas.md`](.) (in your assistant's memor
 - `PSUseConsistentWhitespace` + `PSAlignAssignmentStatement` mutual exclusion
 - `PSUseProcessBlockForPipelineCommand` requiring `begin {}` around `Set-StrictMode` when the function has `[Parameter(ValueFromPipeline)]`
 - Auto-variable traps (`$matches`, `$eventArgs`) inside Pester `It` blocks
-- `function script:Foo { … }` nested inside another function occasionally crashing PSScriptAnalyzer with `NullReferenceException` (suspected current blocker on `./build.ps1 lint`)
+- `function script:Foo { … }` nested inside another function occasionally crashing PSScriptAnalyzer with `NullReferenceException` (suspected cause of a transient crash seen in 2026-05; no longer reproducing)
 - Pester 5 `TestCases` parameter binding (`<word>` placeholders) accidentally hitting test names
 
 ## Branch & PR posture
