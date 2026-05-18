@@ -1,0 +1,62 @@
+# Agent instructions
+
+This repo is being delivered phase by phase against the plan in [`docs/avm-consolidation-plan.md`](docs/avm-consolidation-plan.md) and the engineering rules in [`docs/avm-implementation-spec.md`](docs/avm-implementation-spec.md). Sessions get swapped out often, so the work depends on every agent leaving the next agent a clean handoff.
+
+## Read first, in this order
+
+1. **[`docs/progress.md`](docs/progress.md)** — the living checklist. Tells you what's done, what's in flight (`[~]`), what's blocked, and what to pick up next. **Always start here.**
+2. **[`docs/avm-implementation-spec.md`](docs/avm-implementation-spec.md)** — wins on implementation details (file layout, encoding, cross-OS rules, error handling, testing layers).
+3. **[`docs/avm-consolidation-plan.md`](docs/avm-consolidation-plan.md)** — wins on scope and sequencing (verb table, phase exit criteria, architecture options).
+4. **[`docs/avm-tooling-report.md`](docs/avm-tooling-report.md)** — inventory of the existing AVM tooling being consolidated; useful when porting a legacy script.
+
+## Working protocol
+
+The protocol exists so that "I lost my context window" never means "I lost my place."
+
+- **Before starting a slice**, flip its checkbox in `docs/progress.md` from `[ ]` to `[~]` so the next session knows it's in flight.
+- **When you finish a slice**, flip `[~]` to `[x]`. Add a one-line note only if there's something a future reader would otherwise be surprised by (a workaround, a deferred sub-task, the commit hash).
+- **When you discover a new must-do**, add it under the right phase. Don't reshape historical items — they're the audit trail.
+- **When you hit a blocker** you can't unstick this turn, capture it under **Known issues** at the top of `docs/progress.md` with a one-line diagnosis and a candidate fix. Leave the original checkbox in `[~]`.
+- **Always** bump the `Last updated` line at the top of `docs/progress.md` when you change the file.
+- **Never delete completed items.**
+- **Never `git commit` or `git push` without the user asking.** The user drives version control on this repo.
+
+## Build / test commands
+
+```pwsh
+./build.ps1 layout       # casing & manifest guards (fast)
+./build.ps1 lint         # PSScriptAnalyzer + custom rules (currently CRASHES — see progress.md Known issues)
+./build.ps1 test         # Pester unit tests (excludes Smoke + Integration)
+./build.ps1 pre-commit   # layout + lint + test
+./build.ps1 ci           # CI entry point (alias for pre-commit, called from .github/workflows/ci.yml)
+./build.ps1 coverage     # Pester with coverage (JaCoCo XML under out/coverage/)
+./build.ps1 clean        # remove out/
+```
+
+While `./build.ps1 lint` is broken, gate your work with `./build.ps1 layout` + `./build.ps1 test` and add a `[ ]` note in `progress.md` if your slice introduces analyzer noise that needs cleaning up later.
+
+## Repo conventions that matter
+
+- **PowerShell 7.4+, Core only.** No Windows PowerShell 5.1 paths.
+- **LF, UTF-8 (no BOM)** for every text file in `src/`. `.gitattributes` enforces it; if a `git status` shows CRLF warnings, fix the file rather than fighting `core.autocrlf`.
+- **Approved verbs only.** `Get-Verb` is the allow-list.
+- **`Avm` prefix** on every exported function and noun.
+- **Argv-array subprocess invocation** through `Invoke-AvmProcess`. Never build a single command string.
+- **`[CmdletBinding(SupportsShouldProcess)]`** on any cmdlet that writes to disk or state.
+- **Spec §6 casing rules**: the `Avm.Authoring/` folder and `Avm.Authoring.psd1` filename are guarded by `Test-AvmModuleLayout` after a 2026-05 manifest-casing incident. Don't loosen those guards.
+
+## Known traps
+
+Read [`/memories/repo/pester-and-lint-gotchas.md`](.) (in your assistant's memory store, not in the repo) before you fight PSScriptAnalyzer or Pester 5 scoping. It captures the recurring failure modes:
+
+- `PSUseConsistentWhitespace` + `PSAlignAssignmentStatement` mutual exclusion
+- `PSUseProcessBlockForPipelineCommand` requiring `begin {}` around `Set-StrictMode` when the function has `[Parameter(ValueFromPipeline)]`
+- Auto-variable traps (`$matches`, `$eventArgs`) inside Pester `It` blocks
+- `function script:Foo { … }` nested inside another function occasionally crashing PSScriptAnalyzer with `NullReferenceException` (suspected current blocker on `./build.ps1 lint`)
+- Pester 5 `TestCases` parameter binding (`<word>` placeholders) accidentally hitting test names
+
+## Branch & PR posture
+
+- **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR open).
+- **Default branch**: `main`, which currently has only the initial commit.
+- Never push to `main`. Never force-push. Never open a PR without explicit user instruction.
