@@ -62,6 +62,74 @@ function script:Assert-Module {
     Import-Module @importArgs
 }
 
+# Verifies that the staged module under out/Avm.Authoring/ exports exactly
+# what the manifest declares: every name in FunctionsToExport / AliasesToExport
+# is reachable after Import-Module, and nothing extra leaks out. Runs in a
+# fresh child pwsh so we exercise the same import path a user would and so we
+# do not pollute the build runspace. Returns the verified export sets so the
+# build task can include counts in its success message.
+function script:Test-AvmStagedModuleExports {
+    param(
+        [Parameter(Mandatory)] [string] $ManifestPath
+    )
+
+    $data = Import-PowerShellDataFile -LiteralPath $ManifestPath
+    $expectedFns     = @($data.FunctionsToExport) | Sort-Object -Unique
+    $expectedAliases = @($data.AliasesToExport)   | Sort-Object -Unique
+
+    $pwsh = (Get-Process -Id $PID).Path
+    $probe = @'
+param([string]$Manifest)
+$ErrorActionPreference = 'Stop'
+Import-Module -Name $Manifest -Force -ErrorAction Stop
+$mod = Get-Module -Name 'Avm.Authoring'
+$avmAlias = if ($mod.ExportedAliases.ContainsKey('avm')) { $mod.ExportedAliases['avm'].Definition } else { $null }
+[pscustomobject]@{
+    Functions      = @($mod.ExportedFunctions.Keys)
+    Aliases        = @($mod.ExportedAliases.Keys)
+    AvmAliasTarget = $avmAlias
+} | ConvertTo-Json -Compress
+'@
+
+    $probePath = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-build-verify-{0}.ps1" -f ([guid]::NewGuid()))
+    try {
+        [System.IO.File]::WriteAllText($probePath, $probe, (New-Object System.Text.UTF8Encoding $false))
+        $out = & $pwsh -NoProfile -NoLogo -File $probePath -Manifest $ManifestPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to import staged manifest at ${ManifestPath} (pwsh exit ${LASTEXITCODE}):`n$($out -join "`n")"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $probePath -ErrorAction SilentlyContinue
+    }
+
+    $report        = ($out | Out-String) | ConvertFrom-Json
+    $actualFns     = @($report.Functions) | Sort-Object -Unique
+    $actualAliases = @($report.Aliases)   | Sort-Object -Unique
+
+    $missingFns     = @(Compare-Object -ReferenceObject $expectedFns -DifferenceObject $actualFns | Where-Object SideIndicator -eq '<=' | ForEach-Object InputObject)
+    $extraFns       = @(Compare-Object -ReferenceObject $expectedFns -DifferenceObject $actualFns | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
+    $missingAliases = @(Compare-Object -ReferenceObject $expectedAliases -DifferenceObject $actualAliases | Where-Object SideIndicator -eq '<=' | ForEach-Object InputObject)
+    $extraAliases   = @(Compare-Object -ReferenceObject $expectedAliases -DifferenceObject $actualAliases | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
+
+    $problems = @()
+    if ($missingFns)     { $problems += "manifest declares but module did not export: $($missingFns -join ', ')" }
+    if ($extraFns)       { $problems += "module exports but manifest did not declare: $($extraFns -join ', ')" }
+    if ($missingAliases) { $problems += "manifest declares aliases but module did not export: $($missingAliases -join ', ')" }
+    if ($extraAliases)   { $problems += "module exports aliases but manifest did not declare: $($extraAliases -join ', ')" }
+    if (('avm' -in $expectedAliases) -and ($report.AvmAliasTarget -ne 'Invoke-Avm')) {
+        $problems += "alias 'avm' resolves to '$($report.AvmAliasTarget)', expected 'Invoke-Avm'"
+    }
+    if ($problems) {
+        throw ("Staged module export verification failed:`n  - " + ($problems -join "`n  - "))
+    }
+
+    [pscustomobject]@{
+        Functions = $actualFns
+        Aliases   = $actualAliases
+    }
+}
+
 # --- tasks ------------------------------------------------------------------
 
 task layout {
@@ -211,7 +279,16 @@ task build layout, {
     # Verify the staged manifest still loads cleanly.
     $stagedManifest = Join-Path $stage 'Avm.Authoring.psd1'
     $null = Test-ModuleManifest -Path $stagedManifest
-    Write-Build Green "  build OK: $stage"
+
+    # Verify exports beyond the manifest's structural validity: every name in
+    # FunctionsToExport / AliasesToExport must actually be exported when the
+    # staged module is imported, and nothing extra may leak out. Runs in a
+    # fresh pwsh so the build runspace stays clean and we exercise the same
+    # import path a downstream user would.
+    $exports = script:Test-AvmStagedModuleExports -ManifestPath $stagedManifest
+    $fnCount    = @($exports.Functions).Count
+    $aliasCount = @($exports.Aliases).Count
+    Write-Build Green "  build OK: $stage ($fnCount functions, $aliasCount aliases verified)"
 }
 
 task clean {

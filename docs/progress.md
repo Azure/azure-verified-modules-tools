@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (Integration tier wired; ci now runs Unit + Integration per spec §18)
+**Last updated**: 2026-05-18 (build task now verifies staged exports match the manifest)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, `coverage`, and `integration` all green (241 unit + 3 integration tests, 78.83% line coverage vs 70% floor); release pipeline ready; remaining items are Smoke tier + case-collision fixture + `build` task export verification |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, `test`, `coverage`, `integration`, and `build` all green (241 unit + 3 integration tests, 78.83% line coverage vs 70% floor; `build` task verifies 12 functions + 1 alias against the staged manifest); release pipeline ready; remaining items are Smoke tier + case-collision fixture |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -97,7 +97,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `.github/workflows/ci.yml` matrix on `ubuntu-latest`, `windows-latest`, `macos-latest`
 - [x] **PSScriptAnalyzer crash diagnosis** — could not reproduce on 2026-05-18; `./build.ps1 lint` returns `lint OK: no findings`. Watching for recurrence on CI.
 - [x] `coverage` task enforces the spec §18 70% line floor as a hard build gate (CI runs `layout + lint + coverage`; current actual 78.83%)
-- [ ] `build` task produces a tested staged module under `out/Avm.Authoring/` (it copies today but doesn't verify exports beyond `Test-ModuleManifest`)
+- [x] `build` task produces a tested staged module under `out/Avm.Authoring/` — in addition to `Test-ModuleManifest`, the task now spawns a fresh child `pwsh` to `Import-Module` the staged manifest and asserts every name in `FunctionsToExport` / `AliasesToExport` is actually reachable on the imported module (and nothing extra leaks out). The `avm` alias is also verified to resolve to `Invoke-Avm`. Failure mode produces an actionable message listing the missing/extra exports; success reports `build OK: <path> (<N> functions, <M> aliases verified)`. Helper lives next to `script:Assert-Module` in `build/avm.build.ps1` as `script:Test-AvmStagedModuleExports`
 
 ### Publish / release
 
