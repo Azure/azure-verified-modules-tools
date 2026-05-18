@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (continuing same day — lint blocker no longer reproduces; `./build.ps1 pre-commit` green end-to-end on Windows)
+**Last updated**: 2026-05-18 (continuing same day — `avm doctor --install` shipped)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -10,7 +10,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, and `test` all green; remaining items are `doctor --install`, coverage gate, release workflow, Integration/Smoke tiers |
+| 0     | Skeleton + parity CI        | **Substantially complete** — `layout`, `lint`, and `test` all green (213 tests); remaining items are coverage gate, release workflow, Integration/Smoke tiers, `AVM_MIRROR` host-rewrite |
 | 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
@@ -107,7 +107,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 ### Verbs that still owe Phase 0
 
-- [ ] `avm doctor --install` (auto-install every managed tool; mentioned in plan §6 / spec §10 but not wired)
+- [x] `avm doctor --install` (auto-install every managed tool; `SupportsShouldProcess`, per-tool `Install-AvmToolFromLock`, `AVM1012` → Skip, optional `-Force`/`-LockPath`/`-AllowFileUrls`; 14 new tests)
 - [ ] `AVM_MIRROR` host-rewrite path through `Invoke-AvmHttp` (lock comments document the contract; resolver does not yet honour it)
 
 ### Test infrastructure
