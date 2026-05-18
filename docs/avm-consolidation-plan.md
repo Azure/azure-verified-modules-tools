@@ -97,6 +97,28 @@ Concretely:
 
 We do **not** commit to Option 2 (pure C#) at any point — the cost of rewriting the Bicep PowerShell estate is not justified by the UX gain.
 
+### Host-language decision — re-confirmed 2026-05
+
+Re-examined mid-Phase 0 against the actual implementation (~3.2K LOC src + ~3.1K LOC tests, 12 public cmdlets, green `./build.ps1 pre-commit`). The original recommendation stands unchanged: **stay on PowerShell, target Option 3 (Hybrid) later if and only if a documented trigger fires.** Reasons the call did not change:
+
+- The Bicep facade (Phase 1) is wrapping ~30 first-party PS scripts catalogued in [avm-tooling-report.md](avm-tooling-report.md). In-process dispatch is free in PS; in C# every call becomes a `pwsh` shell-out or a `Microsoft.PowerShell.SDK` host — i.e. Option 3 with a worse rewrite tax.
+- PSRule.Rules.Azure, the 500-line Pester compliance suite, and the Az PowerShell deployment cmdlets have no first-class .NET SDK.
+- The "value prop" the CLI delivers is the unified verb surface, not the host language. The two surfaces (`avm <verb>` dispatcher + approved-verb cmdlets) are part of the published contract and fall out naturally from a PS module.
+- Performance is not on the critical path — the CLI orchestrates `bicep`, `terraform`, `tflint`, `mapotf`, etc. Host start-up is invisible next to a 30-second `terraform validate`.
+- Maintainer pool: the AVM core team's existing skill is overwhelmingly PowerShell.
+
+### Triggers that would justify reopening this decision
+
+Park the question; reopen it only when one of these is true. Capturing them here so the next session does not relitigate from scratch.
+
+1. **Argv-parser complexity ~2×s** beyond today's `Public/Invoke-Avm.ps1` (kebab→Pascal, `--flag=value`, switches). System.CommandLine then earns its keep.
+2. **A polished TUI lands in scope** (multi-panel progress, live log tailing). Spectre.Console has no peer in PowerShell.
+3. **Start-up latency starts dominating** a real workload — e.g. a tight CI loop calling `avm` thousands of times per run.
+4. **Windows cancellation / `SIGINT` semantics** become a recurring blocker (spec §23 OQ 3 already flags this as an open item).
+5. **Concurrency requirements** appear in Phase 3+ (parallel module operations, telemetry fan-out) that PS runspaces cannot service cleanly.
+
+When any of those fire, the smooth upgrade is Option 3 (C# front-end hosting the same PS engine via `Microsoft.PowerShell.SDK`) — **not** a pivot to Option 2.
+
 ---
 
 ## 4. Unified CLI verb model
