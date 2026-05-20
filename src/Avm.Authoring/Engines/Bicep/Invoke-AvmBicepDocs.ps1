@@ -16,18 +16,22 @@ function Invoke-AvmBicepDocs {
              Format-AvmBicepResourceTypesSection and injects it into
              README.md via Merge-AvmReadmeSection.
           4. Renders the Parameters section (category-grouped summary
-             tables) via Format-AvmBicepParametersSection and injects
-             it into README.md via Merge-AvmReadmeSection.
+             tables from Format-AvmBicepParametersSection plus
+             per-parameter '### Parameter:' detail blocks from
+             Format-AvmBicepParameterDetailsSection, concatenated into
+             one body) and injects it into README.md via
+             Merge-AvmReadmeSection.
           5. Renders the Outputs section via Format-AvmBicepOutputsSection
              and injects it into README.md via Merge-AvmReadmeSection.
 
         This is the first slice of the ARM-JSON walker that replaces the
         legacy Set-ModuleReadMe.ps1 from Azure/bicep-registry-modules.
         Sections rendered today: Resource Types, Parameters (summary
-        tables only — the per-parameter '### Parameter:' detail blocks
-        and UDT recursion are reserved for a follow-on slice), and
-        Outputs. Usage Examples, Cross-references, Navigation, and Data
-        Collection sections are reserved for follow-on slices.
+        tables + top-level detail blocks - nested property
+        recursion and User-Defined-Type resolution are reserved for
+        slices 4b-4e), and Outputs. Usage Examples,
+        Cross-references, Navigation, and Data Collection sections
+        are reserved for follow-on slices.
 
         If README.md does not exist, a minimal skeleton ('# <module>') is
         created before the Outputs section is injected.
@@ -83,7 +87,13 @@ function Invoke-AvmBicepDocs {
     $compiled = Convert-AvmBicepToArm -BicepFilePath $templatePath -AllowPathFallback:$AllowPathFallback
 
     $resourceTypesBody = Format-AvmBicepResourceTypesSection -Arm $compiled.Arm
-    $parametersBody = Format-AvmBicepParametersSection -Arm $compiled.Arm
+    $parametersSummary = Format-AvmBicepParametersSection -Arm $compiled.Arm
+    $parametersDetails = Format-AvmBicepParameterDetailsSection -Arm $compiled.Arm
+    $parametersBody = @($parametersSummary)
+    if ($parametersDetails.Count -gt 0) {
+        $parametersBody += ''
+        $parametersBody += $parametersDetails
+    }
     $outputsBody = Format-AvmBicepOutputsSection -Arm $compiled.Arm
 
     $readmePath = Join-Path $Context.Root $OutputFile

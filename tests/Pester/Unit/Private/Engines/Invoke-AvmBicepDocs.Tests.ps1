@@ -281,4 +281,44 @@ Describe 'Invoke-AvmBicepDocs' {
         $condIdx | Should -BeGreaterThan $reqIdx
         $optIdx  | Should -BeGreaterThan $condIdx
     }
+
+    It 'emits per-parameter detail blocks inside the Parameters section after the summary tables' {
+        $ctx = $script:context
+        $arm = [pscustomobject]@{
+            resources  = @()
+            parameters = [pscustomobject]@{
+                name     = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Required. The name.' } }
+                location = [pscustomobject]@{ type = 'string'; defaultValue = 'eastus'; allowedValues = @('eastus', 'westus'); metadata = [pscustomobject]@{ description = 'Optional. The location.'; example = 'eastus' } }
+            }
+            outputs    = [pscustomobject]@{}
+        }
+        $compiled = [pscustomobject]@{
+            ToolName = 'bicep'; ToolVersion = '0.30.3'; ToolPath = '/fake/bicep'; ToolSource = 'cache'; Arm = $arm
+        }
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $compiled } {
+            param($C, $R)
+            Mock Convert-AvmBicepToArm { $R }
+            Invoke-AvmBicepDocs -Context $C
+        }
+
+        $content = Get-Content -LiteralPath (Join-Path $script:moduleDir 'README.md') -Raw
+        $content | Should -Match '### Parameter: `name`'
+        $content | Should -Match '### Parameter: `location`'
+        $content | Should -Match '- Required: Yes'
+        $content | Should -Match '- Required: No'
+        $content | Should -Match '- Default: `eastus`'
+        $content | Should -Match '- Allowed: `\[ ''eastus'', ''westus'' \]`'
+        $content | Should -Match '- Example: `eastus`'
+
+        # Summary table must come before the first detail block; both must live before the Outputs heading.
+        $paramsIdx  = $content.IndexOf('## Parameters')
+        $summaryIdx = $content.IndexOf('**Required parameters**')
+        $detailIdx  = $content.IndexOf('### Parameter: `location`')
+        $outputsIdx = $content.IndexOf('## Outputs')
+        $paramsIdx  | Should -BeGreaterThan -1
+        $summaryIdx | Should -BeGreaterThan $paramsIdx
+        $detailIdx  | Should -BeGreaterThan $summaryIdx
+        $outputsIdx | Should -BeGreaterThan $detailIdx
+    }
 }
