@@ -39,9 +39,9 @@ jobs:
           }
           Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
           foreach ($pkg in @(
-              @{ Name = 'InvokeBuild';        MinimumVersion = '5.10.0' },
-              @{ Name = 'Pester';             MinimumVersion = '5.5.0'  },
-              @{ Name = 'PSScriptAnalyzer';   MinimumVersion = '1.21.0' }
+              @{ Name = 'InvokeBuild';        Version = '[5.10.0,)' },
+              @{ Name = 'Pester';             Version = '[5.5.0,)'  },
+              @{ Name = 'PSScriptAnalyzer';   Version = '[1.21.0,)' }
           )) {
               Install-PSResource @pkg -Scope CurrentUser -TrustRepository
           }
