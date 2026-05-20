@@ -8,6 +8,20 @@ When this spec and the plan disagree, this spec wins for implementation details 
 
 ---
 
+## Security stance
+
+Security is the **top non-functional priority** for this module, in line with the Microsoft Secure Future Initiative (SFI). Every other rule in this spec is subordinate to it; when a spec rule and a security control disagree, the security control wins, and any change that loosens a security control requires an SFI sign-off recorded in the PR.
+
+The stance has three pillars:
+
+- **Secure by design.** Every new public verb, network call, subprocess invocation, file write, and credential touch is threat-modelled at PR time (what data is handled, which identities are touched, which dependencies are added, what the blast radius is on compromise). New code that fails the threat-model pass is rejected — patches do not happen post-merge.
+- **Secure by default.** Defaults never compromise the user. TLS 1.2 minimum (section 16). `GITHUB_TOKEN: contents: read` unless a write scope is justified job-by-job (section 17). No `-SkipCertificateCheck` (section 16). No plain-text secrets in parameter form (section 17). No `Invoke-Expression`, no `cmd /c`, no `bash -c` on user input (section 9). No PATH-resolved tool execution unless the caller explicitly opts in with `-AllowPathFallback` (section 10).
+- **Secure operations.** Every external dependency is pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Tool binaries are pinned by SHA256 in `Resources/tools.lock.psd1` and verified on every download (section 10). PowerShell module dependencies are floor-pinned in the workflow with the release pipeline as the upgrade gate (section 20). Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
+
+A successful supply-chain attack against any of these dependencies must, by construction, require either a SHA collision (impractical) or a deliberate maintainer-side PR that re-publishes a known-good SHA — never a silent tag-repoint or a transparent version drift.
+
+---
+
 ## 1. Scope and audience
 
 - **Audience**: contributors to this repository (`Azure/azure-verified-modules-tools`).
@@ -521,12 +535,37 @@ Assume the user runs multiple `avm` invocations in parallel against different re
 
 ## 17. Security
 
+This section is the implementation-level expression of the **Security stance** preamble at the top of this spec. Read that first; the bullets below are how it manifests in code, configuration, and the build pipeline.
+
+### Secrets
+
 - No secret ever appears in source, in default config, in test fixtures, in error messages, or in telemetry.
 - API keys, tokens, and similar are accepted via `[SecureString]` parameters or read with `Read-Host -AsSecureString`. Plain-text parameter form is documented as insecure and labelled `[Obsolete]` once a `SecureString` overload exists.
 - The publish script (`scripts/Publish-AvmAuthoring.ps1`) accepts the API key as `[SecureString]` only; the plain-text wrapper exists for `--what-if` dry runs only and warns on use.
-- Process exec uses argv arrays only (§9). No `cmd /c`, no `bash -c`, no `Invoke-Expression` on user-supplied data.
+- Long-lived secrets (e.g. `PSGALLERY_API_KEY`) live in a protected GitHub Environment with required reviewers, never in repo / org variables, never echoed by any `run:` step (no `echo`, no `Write-Host`, no `Write-Output`). Workflows that consume them must declare `environment: <name>` so the approval gate fires before the job touches the secret.
+
+### Subprocess invocation
+
+- Process exec uses argv arrays only (section 9). No `cmd /c`, no `bash -c`, no `Invoke-Expression` on user-supplied data, no string-concatenated command lines anywhere.
 - The CLI never runs `git config --global` on the user's behalf without `-Confirm`.
+
+### Workflow / GitHub Actions hardening
+
+- Every `uses:` reference in `.github/workflows/*.yml` is pinned to a 40-character commit SHA, with the human-readable version as a trailing `# vX.Y.Z` comment. Floating tag references (`@v5`, `@main`, branch refs) are rejected at PR review. Rationale: a single tag-repoint on a compromised maintainer account would deliver attacker-controlled code into every CI run on the next push, and that code runs with `GITHUB_TOKEN`, `secrets.*`, OIDC mint rights, and full write access to the working tree. SHA pinning closes that vector at the cost of needing a maintenance loop for security fixes; that loop is Dependabot.
+- `.github/dependabot.yml` enables the `github-actions` ecosystem on a weekly cadence, batches minor/patch bumps to reduce noise, and keeps major bumps as individual PRs so they get individual review.
+- Every workflow declares an explicit top-level `permissions:` block. Default is `permissions: contents: read`. Write scopes (`contents: write`, `packages: write`, `id-token: write`, etc.) are added job-by-job with an inline comment justifying why.
+- `actions/checkout` is always called with `persist-credentials: false` outside the release pipeline so the cloned repo's `.git/config` doesn't carry a token usable by any subsequent step or any subprocess that reads from the working tree.
+
+### Tool binary supply chain
+
+- Every binary downloaded by `Resolve-AvmTool` is SHA256-verified against `Resources/tools.lock.psd1` (section 10). A mismatch throws `AvmToolException` with both the expected and the actual hash. The lock file is the only sanctioned source of truth.
+- `scripts/Update-AvmToolsLock.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
+- The repo bundles no precompiled binaries. Everything is fetched at first use and cached under the user's standard cache root (section 7).
+
+### Module manifest and release pipeline
+
 - `LICENSE` at the repo root is referenced from the manifest's `LicenseUri`. The manifest fails its own self-check if the file isn't reachable.
+- The release pipeline runs the same `./build.ps1 ci` gate as PR CI, then publishes from a staged module tree under `out/`. There is no path by which a workflow can publish a build artifact that PR CI hasn't verified bit-for-bit.
 
 ---
 

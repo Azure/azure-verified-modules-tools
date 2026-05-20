@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-20 (CI lint retry: `Invoke-ScriptAnalyzer` is wrapped in a narrow NRE-only retry loop in `build/avm.build.ps1` so the known transient analyzer-engine race no longer flakes the build)
+**Last updated**: 2026-05-20 (SFI hardening: workflow actions SHA-pinned, Dependabot enabled for github-actions ecosystem, spec preamble elevates security to top non-functional priority)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
