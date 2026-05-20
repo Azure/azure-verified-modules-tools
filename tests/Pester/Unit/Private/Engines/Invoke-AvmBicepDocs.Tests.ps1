@@ -90,13 +90,16 @@ Describe 'Invoke-AvmBicepDocs' {
         $content | Should -Match '^# '
         $content | Should -Match '## Resource Types'
         $content | Should -Match '`Microsoft\.KeyVault/vaults`'
+        $content | Should -Match '## Parameters'
         $content | Should -Match '## Outputs'
         $content | Should -Match '\| `x` \| string \|'
-        # Resource Types must come before Outputs to match the legacy README layout.
-        $rtIdx  = $content.IndexOf('## Resource Types')
-        $outIdx = $content.IndexOf('## Outputs')
-        $rtIdx | Should -BeGreaterThan -1
-        $outIdx | Should -BeGreaterThan $rtIdx
+        # Resource Types, Parameters, Outputs must appear in the legacy README order.
+        $rtIdx     = $content.IndexOf('## Resource Types')
+        $paramsIdx = $content.IndexOf('## Parameters')
+        $outIdx    = $content.IndexOf('## Outputs')
+        $rtIdx     | Should -BeGreaterThan -1
+        $paramsIdx | Should -BeGreaterThan $rtIdx
+        $outIdx    | Should -BeGreaterThan $paramsIdx
     }
 
     It 'emits _None_ for templates with no outputs' {
@@ -114,10 +117,12 @@ Describe 'Invoke-AvmBicepDocs' {
 
         $content = Get-Content -LiteralPath (Join-Path $script:moduleDir 'README.md') -Raw
         $content | Should -Match '## Resource Types'
+        $content | Should -Match '## Parameters'
         $content | Should -Match '## Outputs'
-        # Both sections should report _None_ when the ARM has no resources and no outputs.
+        # All three sections should report _None_ when the ARM has no resources, no parameters, and no outputs.
         ($content -split '## Resource Types', 2)[1] | Should -Match '_None_'
-        ($content -split '## Outputs', 2)[1]        | Should -Match '_None_'
+        ($content -split '## Parameters', 2)[1]    | Should -Match '_None_'
+        ($content -split '## Outputs', 2)[1]       | Should -Match '_None_'
     }
 
     It 'replaces an existing Outputs section without disturbing later content' {
@@ -237,5 +242,43 @@ Describe 'Invoke-AvmBicepDocs' {
         $content | Should -Not -Match '`old`'
         $content | Should -Match     '## Notes'
         $content | Should -Match     'Keep me intact\.'
+    }
+
+    It 'renders the Parameters section with category subsections grouped from ARM parameters' {
+        $ctx = $script:context
+        $arm = [pscustomobject]@{
+            resources  = @()
+            parameters = [pscustomobject]@{
+                name              = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Required. The name of the resource.' } }
+                location          = [pscustomobject]@{ type = 'string'; defaultValue = 'eastus'; metadata = [pscustomobject]@{ description = 'Optional. The location of the resource.' } }
+                parentName        = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Conditional. The parent name. Required if deployed standalone.' } }
+                enableTelemetry   = [pscustomobject]@{ type = 'bool'; defaultValue = $true; metadata = [pscustomobject]@{ description = 'Optional. Enable/Disable usage telemetry for module.' } }
+            }
+            outputs    = [pscustomobject]@{}
+        }
+        $compiled = [pscustomobject]@{
+            ToolName = 'bicep'; ToolVersion = '0.30.3'; ToolPath = '/fake/bicep'; ToolSource = 'cache'; Arm = $arm
+        }
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $compiled } {
+            param($C, $R)
+            Mock Convert-AvmBicepToArm { $R }
+            Invoke-AvmBicepDocs -Context $C
+        }
+
+        $content = Get-Content -LiteralPath (Join-Path $script:moduleDir 'README.md') -Raw
+        $content | Should -Match '## Parameters'
+        $content | Should -Match '\*\*Required parameters\*\*'
+        $content | Should -Match '\*\*Conditional parameters\*\*'
+        $content | Should -Match '\*\*Optional parameters\*\*'
+        $content | Should -Match '\| \[`name`\]\(#parameter-name\) \| string \| The name of the resource\. \|'
+        $content | Should -Match '\| \[`parentName`\]\(#parameter-parentname\) \| string \| The parent name\. Required if deployed standalone\. \|'
+        # Required must come before Conditional must come before Optional.
+        $reqIdx  = $content.IndexOf('**Required parameters**')
+        $condIdx = $content.IndexOf('**Conditional parameters**')
+        $optIdx  = $content.IndexOf('**Optional parameters**')
+        $reqIdx  | Should -BeGreaterThan -1
+        $condIdx | Should -BeGreaterThan $reqIdx
+        $optIdx  | Should -BeGreaterThan $condIdx
     }
 }

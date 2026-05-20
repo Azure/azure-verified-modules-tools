@@ -15,14 +15,19 @@ function Invoke-AvmBicepDocs {
           3. Renders the Resource Types section via
              Format-AvmBicepResourceTypesSection and injects it into
              README.md via Merge-AvmReadmeSection.
-          4. Renders the Outputs section via Format-AvmBicepOutputsSection
+          4. Renders the Parameters section (category-grouped summary
+             tables) via Format-AvmBicepParametersSection and injects
+             it into README.md via Merge-AvmReadmeSection.
+          5. Renders the Outputs section via Format-AvmBicepOutputsSection
              and injects it into README.md via Merge-AvmReadmeSection.
 
         This is the first slice of the ARM-JSON walker that replaces the
         legacy Set-ModuleReadMe.ps1 from Azure/bicep-registry-modules.
-        Only the Resource Types and Outputs sections are rendered today;
-        Parameters, Usage Examples, Cross-references, Navigation, and
-        Data Collection sections are reserved for follow-on slices.
+        Sections rendered today: Resource Types, Parameters (summary
+        tables only — the per-parameter '### Parameter:' detail blocks
+        and UDT recursion are reserved for a follow-on slice), and
+        Outputs. Usage Examples, Cross-references, Navigation, and Data
+        Collection sections are reserved for follow-on slices.
 
         If README.md does not exist, a minimal skeleton ('# <module>') is
         created before the Outputs section is injected.
@@ -78,6 +83,7 @@ function Invoke-AvmBicepDocs {
     $compiled = Convert-AvmBicepToArm -BicepFilePath $templatePath -AllowPathFallback:$AllowPathFallback
 
     $resourceTypesBody = Format-AvmBicepResourceTypesSection -Arm $compiled.Arm
+    $parametersBody = Format-AvmBicepParametersSection -Arm $compiled.Arm
     $outputsBody = Format-AvmBicepOutputsSection -Arm $compiled.Arm
 
     $readmePath = Join-Path $Context.Root $OutputFile
@@ -97,6 +103,7 @@ function Invoke-AvmBicepDocs {
     }
 
     $merged = Merge-AvmReadmeSection -Content $existing -Heading '## Resource Types' -NewBody $resourceTypesBody
+    $merged = Merge-AvmReadmeSection -Content $merged -Heading '## Parameters' -NewBody $parametersBody
     $merged = Merge-AvmReadmeSection -Content $merged -Heading '## Outputs' -NewBody $outputsBody
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
