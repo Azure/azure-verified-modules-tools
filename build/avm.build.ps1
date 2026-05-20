@@ -63,6 +63,44 @@ function script:Assert-Module {
     Import-Module @importArgs
 }
 
+# PSScriptAnalyzer occasionally throws NullReferenceException from inside its
+# own rule pipeline (no file/line in our code is named). Across runners we
+# have seen the same NRE on both windows-latest and ubuntu-latest on the same
+# commits that pass on re-run, so the failure is a transient analyzer-engine
+# race rather than a lint finding. This wrapper retries ONLY that specific
+# failure (matched by exception type or message), in a fresh analyzer
+# invocation, up to AVM_LINT_MAX_ATTEMPTS times. Real findings come back as
+# DiagnosticRecord objects -- not exceptions -- and never trigger a retry.
+function script:Invoke-ScriptAnalyzerWithRetry {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Params
+    )
+
+    $max = if ($env:AVM_LINT_MAX_ATTEMPTS) { [int]$env:AVM_LINT_MAX_ATTEMPTS } else { 3 }
+    if ($max -lt 1) { $max = 1 }
+
+    for ($attempt = 1; $attempt -le $max; $attempt++) {
+        try {
+            return Invoke-ScriptAnalyzer @Params
+        }
+        catch {
+            $isNre = $false
+            $ex = $_.Exception
+            while ($ex) {
+                if ($ex -is [System.NullReferenceException] -or
+                    $ex.Message -match 'Object reference not set to an instance of an object') {
+                    $isNre = $true
+                    break
+                }
+                $ex = $ex.InnerException
+            }
+            if (-not $isNre -or $attempt -eq $max) { throw }
+            Write-Warning ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max)
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 # Verifies that the staged module under out/Avm.Authoring/ exports exactly
 # what the manifest declares: every name in FunctionsToExport / AliasesToExport
 # is reachable after Import-Module, and nothing extra leaks out. Runs in a
@@ -159,7 +197,7 @@ task lint {
         $params.Settings = $script:settingsPath
     }
 
-    $results = Invoke-ScriptAnalyzer @params
+    $results = script:Invoke-ScriptAnalyzerWithRetry -Params $params
 
     if (-not $results) {
         Write-Build Green '  lint OK: no findings'

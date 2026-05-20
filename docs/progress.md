@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-20 (Phase 1 `avm pr-check` composition lands: full PR gauntlet chains all seven Phase 1 verbs and treats stubbed engines as `skipped`)
+**Last updated**: 2026-05-20 (CI lint retry: `Invoke-ScriptAnalyzer` is wrapped in a narrow NRE-only retry loop in `build/avm.build.ps1` so the known transient analyzer-engine race no longer flakes the build)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -21,6 +21,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 ## Known issues / active blockers
 
 - **Branch is `feat/avm-authoring-initial` but the work is broader** than the initial "scaffold" — consider an interim commit and a clearer PR-ready branch name when the next milestone lands.
+- _(Mitigated 2026-05-20)_ `Invoke-ScriptAnalyzer` occasionally throws `NullReferenceException` from inside its own rule pipeline (no file/line in our code named). Observed on both `windows-latest` (run 26156193662, commit `bd778fd`) and `ubuntu-latest` (run 26156731288, commit `dc5b7f0`); re-run of the same commit always passes. Cause: a transient race in PSSA's rule-discovery / settings-hydration path. Mitigation: `build/avm.build.ps1` now wraps `Invoke-ScriptAnalyzer` in `script:Invoke-ScriptAnalyzerWithRetry`, which retries up to `AVM_LINT_MAX_ATTEMPTS` (default 3) times when, and only when, the caught exception (or any `InnerException`) is a `NullReferenceException` or carries the `Object reference not set to an instance of an object` message. Real findings come back as `DiagnosticRecord` objects and never trigger a retry. Each retry emits a `Write-Warning` so flakes remain visible in build logs.
 - _(Resolved 2026-05-18)_ The PSScriptAnalyzer crash from the prior session no longer reproduces. `./build.ps1 lint` returns `lint OK: no findings`; full `pre-commit` is green (199 tests pass, 2 platform-conditional skips on Windows). Suspect cause: stale analyzer cache or transient state from an in-progress edit when the prior session was interrupted. If it reappears, bisect by running `Invoke-ScriptAnalyzer` per file under `src/Avm.Authoring/`.
 
 ## How to use this file
