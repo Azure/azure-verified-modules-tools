@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (case-collision canary lands; Phase 0 closure items all green)
+**Last updated**: 2026-05-18 (Phase 1 verb stubs land: `avm transform`, `avm check policy`, `avm check convention` reserved with engine plumbing on both ecosystems)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -130,6 +130,9 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `Invoke-AvmLint` public verb + `Invoke-AvmBicepLint` engine (`bicep lint <file> --diagnostics-format defaultV2`, parsed into Issue records) + tests
 - [x] `Invoke-AvmTest` public verb + `Invoke-AvmBicepTest` engine (`bicep build --stdout` per file) + tests
 - [x] `Invoke-AvmDocs` public verb (Bicep engine returns a clear `AvmConfigurationException` until the ARM-JSON walker lands) + tests
+- [x] `Invoke-AvmTransform` public verb + `Invoke-AvmBicepTransform` engine stub (throws `AvmConfigurationException` until the `Set-AVMModule.ps1` replacement lands) + tests; verb registry route `avm transform`
+- [x] `Invoke-AvmCheckPolicy` public verb + `Invoke-AvmBicepCheckPolicy` engine stub (throws `AvmConfigurationException` until the in-process `PSRule.Rules.Azure` invocation lands) + tests; verb registry route `avm check policy`
+- [x] `Invoke-AvmCheckConvention` public verb + `Invoke-AvmBicepCheckConvention` engine stub (throws `AvmConfigurationException` until the `module.tests.ps1` compliance port lands) + tests; verb registry route `avm check convention`
 - [x] `Invoke-AvmPreCommit` composition (`format` → `lint` → `test` → `docs`, fail-soft by default, `-StopOnFail` for early exit)
 - [x] `bicep` entry in `tools.lock.psd1` (0.30.3, six-platform SHA256, `platformAliases` for `bicep-{platform}` asset naming)
 
@@ -159,6 +162,9 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `Invoke-AvmTerraformLint` engine (`tflint --recursive --format=json`, exit 0/2 = OK, anything else throws) + tests
 - [x] `Invoke-AvmTerraformTest` engine (`terraform validate -no-color -json` with auto `terraform init -backend=false`, `-NoInit` opt-out) + tests
 - [x] `Invoke-AvmTerraformDocs` engine (`terraform-docs markdown table --output-mode inject`, README hash diff for `Changed`) + tests
+- [x] `Invoke-AvmTerraformTransform` engine stub (throws `AvmConfigurationException` until `mapotf transform`/`mapotf clean-backup` and the `mapotf` lock entry land) + tests, reached via `avm transform`
+- [x] `Invoke-AvmTerraformCheckPolicy` engine stub (throws `AvmConfigurationException` until the `conftest` invocation against APRL + AVMSEC bundles and the `conftest` lock entry land) + tests, reached via `avm check policy`
+- [x] `Invoke-AvmTerraformCheckConvention` engine stub (throws `AvmConfigurationException` until `grept run` against the pinned `grept-policies` bundle and the `grept` lock entry land) + tests, reached via `avm check convention`
 - [x] `terraform`, `tflint`, `terraform-docs` entries in `tools.lock.psd1` (six-platform SHA256s; `tflint` declares `windows-arm64` `unsupportedPlatforms`)
 
 ### Phase 2 deliverables from plan §7 (not started)

@@ -70,6 +70,21 @@ function Get-AvmVerbRegistry {
             Summary = 'Generate or refresh README docs via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('transform')
+            Cmdlet  = 'Invoke-AvmTransform'
+            Summary = 'Regenerate README + test scaffolding (Phase 1 stub).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('check', 'policy')
+            Cmdlet  = 'Invoke-AvmCheckPolicy'
+            Summary = 'Run policy checks (PSRule.Rules.Azure / Conftest; Phase 1 stub).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('check', 'convention')
+            Cmdlet  = 'Invoke-AvmCheckConvention'
+            Summary = 'Run convention checks (compliance Pester / grept; Phase 1 stub).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
             Summary = 'Run format + lint + test as a pre-commit gauntlet.'

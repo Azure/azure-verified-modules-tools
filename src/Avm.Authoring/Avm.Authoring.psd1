@@ -15,12 +15,15 @@
         'Get-AvmVersion',
         'Install-AvmTool',
         'Invoke-Avm',
+        'Invoke-AvmCheckConvention',
+        'Invoke-AvmCheckPolicy',
         'Invoke-AvmDoctor',
         'Invoke-AvmDocs',
         'Invoke-AvmFormat',
         'Invoke-AvmLint',
         'Invoke-AvmPreCommit',
-        'Invoke-AvmTest'
+        'Invoke-AvmTest',
+        'Invoke-AvmTransform'
     )
     CmdletsToExport      = @()
     VariablesToExport    = @()
