@@ -23,7 +23,10 @@ Describe 'Invoke-AvmBicepDocs' {
 
         # Minimal ARM JSON returned by the mocked Convert-AvmBicepToArm.
         $script:armWithOutputs = [pscustomobject]@{
-            outputs = [pscustomobject]@{
+            resources = @(
+                [pscustomobject]@{ type = 'Microsoft.KeyVault/vaults'; apiVersion = '2024-04-01-preview' }
+            )
+            outputs   = [pscustomobject]@{
                 x = [pscustomobject]@{ type = 'string'; value = "[parameters('x')]" }
             }
         }
@@ -85,8 +88,15 @@ Describe 'Invoke-AvmBicepDocs' {
         Test-Path -LiteralPath $readmePath | Should -BeTrue
         $content = Get-Content -LiteralPath $readmePath -Raw
         $content | Should -Match '^# '
+        $content | Should -Match '## Resource Types'
+        $content | Should -Match '`Microsoft\.KeyVault/vaults`'
         $content | Should -Match '## Outputs'
         $content | Should -Match '\| `x` \| string \|'
+        # Resource Types must come before Outputs to match the legacy README layout.
+        $rtIdx  = $content.IndexOf('## Resource Types')
+        $outIdx = $content.IndexOf('## Outputs')
+        $rtIdx | Should -BeGreaterThan -1
+        $outIdx | Should -BeGreaterThan $rtIdx
     }
 
     It 'emits _None_ for templates with no outputs' {
@@ -103,8 +113,11 @@ Describe 'Invoke-AvmBicepDocs' {
         }
 
         $content = Get-Content -LiteralPath (Join-Path $script:moduleDir 'README.md') -Raw
+        $content | Should -Match '## Resource Types'
         $content | Should -Match '## Outputs'
-        $content | Should -Match '_None_'
+        # Both sections should report _None_ when the ARM has no resources and no outputs.
+        ($content -split '## Resource Types', 2)[1] | Should -Match '_None_'
+        ($content -split '## Outputs', 2)[1]        | Should -Match '_None_'
     }
 
     It 'replaces an existing Outputs section without disturbing later content' {
@@ -187,5 +200,42 @@ Describe 'Invoke-AvmBicepDocs' {
         }
         $result.Changed | Should -Be @('NOTES.md')
         Test-Path -LiteralPath (Join-Path $script:moduleDir 'NOTES.md') | Should -BeTrue
+    }
+
+    It 'replaces an existing Resource Types section without disturbing Outputs or trailing sections' {
+        $readmePath = Join-Path $script:moduleDir 'README.md'
+        Set-Content -LiteralPath $readmePath -Value @(
+            '# my-module', '',
+            '## Resource Types', '',
+            '| Resource Type | API Version | References |',
+            '| :-- | :-- | :-- |',
+            '| `Microsoft.Old/thing` | 2020-01-01 | x |', '',
+            '## Outputs', '',
+            '| Output | Type |',
+            '| :-- | :-- |',
+            '| `old` | int |', '',
+            '## Notes', '', 'Keep me intact.'
+        ) -Encoding utf8
+
+        $ctx = $script:context
+        $arm = $script:armWithOutputs
+        $compiled = [pscustomobject]@{
+            ToolName = 'bicep'; ToolVersion = '0.30.3'; ToolPath = '/fake/bicep'; ToolSource = 'cache'; Arm = $arm
+        }
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $compiled } {
+            param($C, $R)
+            Mock Convert-AvmBicepToArm { $R }
+            Invoke-AvmBicepDocs -Context $C
+        }
+
+        $content = Get-Content -LiteralPath $readmePath -Raw
+        $content | Should -Not -Match 'Microsoft\.Old/thing'
+        $content | Should -Match     '`Microsoft\.KeyVault/vaults`'
+        $content | Should -Match     '## Outputs'
+        $content | Should -Match     '\| `x` \| string \|'
+        $content | Should -Not -Match '`old`'
+        $content | Should -Match     '## Notes'
+        $content | Should -Match     'Keep me intact\.'
     }
 }

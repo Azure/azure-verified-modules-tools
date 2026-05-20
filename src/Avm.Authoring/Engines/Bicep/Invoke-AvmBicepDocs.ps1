@@ -12,13 +12,15 @@ function Invoke-AvmBicepDocs {
              next to README.md).
           2. Compiles it to ARM JSON via Convert-AvmBicepToArm (which
              shells out to 'bicep build --stdout').
-          3. Renders the Outputs section via Format-AvmBicepOutputsSection.
-          4. Injects the rendered section into README.md via
-             Merge-AvmReadmeSection.
+          3. Renders the Resource Types section via
+             Format-AvmBicepResourceTypesSection and injects it into
+             README.md via Merge-AvmReadmeSection.
+          4. Renders the Outputs section via Format-AvmBicepOutputsSection
+             and injects it into README.md via Merge-AvmReadmeSection.
 
         This is the first slice of the ARM-JSON walker that replaces the
         legacy Set-ModuleReadMe.ps1 from Azure/bicep-registry-modules.
-        Only the Outputs section is rendered today; Resource Types,
+        Only the Resource Types and Outputs sections are rendered today;
         Parameters, Usage Examples, Cross-references, Navigation, and
         Data Collection sections are reserved for follow-on slices.
 
@@ -75,6 +77,7 @@ function Invoke-AvmBicepDocs {
 
     $compiled = Convert-AvmBicepToArm -BicepFilePath $templatePath -AllowPathFallback:$AllowPathFallback
 
+    $resourceTypesBody = Format-AvmBicepResourceTypesSection -Arm $compiled.Arm
     $outputsBody = Format-AvmBicepOutputsSection -Arm $compiled.Arm
 
     $readmePath = Join-Path $Context.Root $OutputFile
@@ -93,7 +96,8 @@ function Invoke-AvmBicepDocs {
         $existing = @("# $moduleName", '')
     }
 
-    $merged = Merge-AvmReadmeSection -Content $existing -Heading '## Outputs' -NewBody $outputsBody
+    $merged = Merge-AvmReadmeSection -Content $existing -Heading '## Resource Types' -NewBody $resourceTypesBody
+    $merged = Merge-AvmReadmeSection -Content $merged -Heading '## Outputs' -NewBody $outputsBody
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     $payload = ($merged -join "`n").TrimEnd("`n") + "`n"
