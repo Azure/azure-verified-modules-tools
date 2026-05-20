@@ -21,6 +21,7 @@
         'Invoke-AvmDocs',
         'Invoke-AvmFormat',
         'Invoke-AvmLint',
+        'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
         'Invoke-AvmTest',
         'Invoke-AvmTransform'

@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-18 (Phase 1 verb stubs land: `avm transform`, `avm check policy`, `avm check convention` reserved with engine plumbing on both ecosystems)
+**Last updated**: 2026-05-20 (Phase 1 `avm pr-check` composition lands: full PR gauntlet chains all seven Phase 1 verbs and treats stubbed engines as `skipped`)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -134,6 +134,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `Invoke-AvmCheckPolicy` public verb + `Invoke-AvmBicepCheckPolicy` engine stub (throws `AvmConfigurationException` until the in-process `PSRule.Rules.Azure` invocation lands) + tests; verb registry route `avm check policy`
 - [x] `Invoke-AvmCheckConvention` public verb + `Invoke-AvmBicepCheckConvention` engine stub (throws `AvmConfigurationException` until the `module.tests.ps1` compliance port lands) + tests; verb registry route `avm check convention`
 - [x] `Invoke-AvmPreCommit` composition (`format` → `lint` → `test` → `docs`, fail-soft by default, `-StopOnFail` for early exit)
+- [x] `Invoke-AvmPrCheck` composition (`format` → `transform` → `lint` → `check policy` → `check convention` → `test` → `docs`; verb registry route `avm pr-check`; AvmConfigurationException from stubbed engines is reported as `skipped` so the chain keeps running and overall status is not failed by a skip; `-StopOnFail` opts into fail-fast)
 - [x] `bicep` entry in `tools.lock.psd1` (0.30.3, six-platform SHA256, `platformAliases` for `bicep-{platform}` asset naming)
 
 ### Heavy verbs from plan §4 (not started)

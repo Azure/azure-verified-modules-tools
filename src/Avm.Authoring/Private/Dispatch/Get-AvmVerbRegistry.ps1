@@ -89,5 +89,10 @@ function Get-AvmVerbRegistry {
             Cmdlet  = 'Invoke-AvmPreCommit'
             Summary = 'Run format + lint + test as a pre-commit gauntlet.'
         }
+        [pscustomobject]@{
+            Path    = [string[]]@('pr-check')
+            Cmdlet  = 'Invoke-AvmPrCheck'
+            Summary = 'Run the full PR gauntlet (format + transform + lint + check policy + check convention + test + docs).'
+        }
     )
 }
