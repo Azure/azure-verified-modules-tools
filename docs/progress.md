@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-20 (SFI hardening: workflow actions SHA-pinned, Dependabot enabled for github-actions ecosystem, spec preamble elevates security to top non-functional priority)
+**Last updated**: 2026-05-21 (Phase 1: Bicep docs walker — Outputs section now real; `Invoke-AvmBicepDocs` replaces its `AvmConfigurationException` stub with a working ARM-JSON walker for the Outputs section, backed by two new helpers `Convert-AvmBicepToArm` + `Merge-AvmReadmeSection` + `Format-AvmBicepOutputsSection`)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -11,7 +11,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 | Phase | Theme                       | Status                                                                                   |
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
 | 0     | Skeleton + parity CI        | **Complete** — every Phase 0 closure slice has landed: `layout`, `lint`, `test`, `coverage`, `integration`, `build`, `smoke` all green; release pipeline ready; spec §6.2 case-collision canary added (Linux-only). 241 unit tests pass + 5 Linux-only skip on Windows + 3 integration tests + 1 smoke test, 78.83% line coverage vs 70% floor, `build` task verifies 12 functions + 1 alias against the staged manifest |
-| 1     | Bicep facade                | **Inner-loop scaffolded** — `format`/`lint`/`test` engines wired; heavy verbs not started |
+| 1     | Bicep facade                | **Walker started** — `format`/`lint`/`test` engines wired; `docs` ARM-JSON walker now emits the Outputs section (Resource Types / Parameters / Usage / Cross-refs still TODO); heavier verbs (`avm new`, `avm transform`, policy, convention) not started |
 | 2     | Terraform facade            | **Inner-loop scaffolded** — `format`/`lint`/`test`/`docs` engines wired; pre-commit suite not started |
 | 3     | Replace `porch`             | Not started                                                                              |
 | 4     | Selective `mapotf`/`grept`  | Not started                                                                              |
@@ -130,7 +130,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] `Invoke-AvmFormat` public verb + `Format-AvmBicepModule` engine (`bicep format` per file) + tests
 - [x] `Invoke-AvmLint` public verb + `Invoke-AvmBicepLint` engine (`bicep lint <file> --diagnostics-format defaultV2`, parsed into Issue records) + tests
 - [x] `Invoke-AvmTest` public verb + `Invoke-AvmBicepTest` engine (`bicep build --stdout` per file) + tests
-- [x] `Invoke-AvmDocs` public verb (Bicep engine returns a clear `AvmConfigurationException` until the ARM-JSON walker lands) + tests
+- [x] `Invoke-AvmDocs` public verb (Bicep engine returns a clear `AvmConfigurationException` until the ARM-JSON walker lands) + tests _(superseded 2026-05-21 by `[~] avm docs` slice below — engine now emits a real Outputs section)_
 - [x] `Invoke-AvmTransform` public verb + `Invoke-AvmBicepTransform` engine stub (throws `AvmConfigurationException` until the `Set-AVMModule.ps1` replacement lands) + tests; verb registry route `avm transform`
 - [x] `Invoke-AvmCheckPolicy` public verb + `Invoke-AvmBicepCheckPolicy` engine stub (throws `AvmConfigurationException` until the in-process `PSRule.Rules.Azure` invocation lands) + tests; verb registry route `avm check policy`
 - [x] `Invoke-AvmCheckConvention` public verb + `Invoke-AvmBicepCheckConvention` engine stub (throws `AvmConfigurationException` until the `module.tests.ps1` compliance port lands) + tests; verb registry route `avm check convention`
@@ -142,7 +142,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 - [ ] `avm new` — scaffold new resource/pattern/utility module (replaces `Set-ModuleFileAndFolderSetup.ps1`)
 - [ ] `avm transform` — regenerate README + test scaffolding (the `Set-AVMModule.ps1` replacement)
-- [ ] `avm docs` Bicep engine — **the ARM-JSON walker** that replaces `Set-ModuleReadMe.ps1` (currently stubbed with `AvmConfigurationException`)
+- [~] `avm docs` Bicep engine — **the ARM-JSON walker** that replaces `Set-ModuleReadMe.ps1`. _Slice 1 landed 2026-05-21_: `Invoke-AvmBicepDocs` is no longer a stub; it shells out to `bicep build --stdout` via the new `Convert-AvmBicepToArm` helper, renders the `## Outputs` section via `Format-AvmBicepOutputsSection` (2- or 3-column markdown table, en-US-sorted, `<p>`-folded multi-line descriptions, `_None_` when empty), and injects it via `Merge-AvmReadmeSection` (List-backed, strict-mode-safe; replaces the existing section or appends it when missing; creates a `# <module>` README skeleton if absent). 290 unit tests pass / 7 skipped / 0 failed; lint clean; layout OK. _Still TODO_: Resource Types section, Parameters (flat + recursive UDT walker), Usage Examples (Bicep<>JSON), Cross-references, Navigation, Data Collection telemetry, Notes preservation.
 - [ ] `avm check policy` — PSRule.Rules.Azure in-process invocation
 - [ ] `avm check convention` — port (or wrap) the ~500-line compliance Pester suite (`module.tests.ps1`)
 - [ ] `avm test integration` — ARM what-if via `Test-TemplateDeployment.ps1` (today Phase 0 `avm test` is the cheap build-validate pass only)

@@ -1,29 +1,40 @@
 function Invoke-AvmBicepDocs {
     <#
     .SYNOPSIS
-        Generate README documentation for a Bicep module.
+        Generate README documentation for a Bicep module by walking its
+        compiled ARM JSON.
 
     .DESCRIPTION
         Engine implementation called by Invoke-AvmDocs when the module
-        context is Ecosystem='bicep'. The canonical implementation walks
-        the compiled ARM JSON to surface parameters, outputs, and
-        metadata, then injects the result into README.md between marker
-        comments. That walker is a substantial follow-on slice
-        (replaces Set-ModuleReadMe.ps1 from the legacy AVM tooling) and
-        is intentionally stubbed here so the public verb dispatcher
-        and engine plumbing can land first.
+        context is Ecosystem='bicep'. The engine:
 
-        Track the walker work via the bicep-docs slice in
-        docs/avm-consolidation-plan.md.
+          1. Resolves the module's template file (defaults to 'main.bicep'
+             next to README.md).
+          2. Compiles it to ARM JSON via Convert-AvmBicepToArm (which
+             shells out to 'bicep build --stdout').
+          3. Renders the Outputs section via Format-AvmBicepOutputsSection.
+          4. Injects the rendered section into README.md via
+             Merge-AvmReadmeSection.
+
+        This is the first slice of the ARM-JSON walker that replaces the
+        legacy Set-ModuleReadMe.ps1 from Azure/bicep-registry-modules.
+        Only the Outputs section is rendered today; Resource Types,
+        Parameters, Usage Examples, Cross-references, Navigation, and
+        Data Collection sections are reserved for follow-on slices.
+
+        If README.md does not exist, a minimal skeleton ('# <module>') is
+        created before the Outputs section is injected.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='bicep'.
 
     .PARAMETER AllowPathFallback
-        Reserved for symmetry with the terraform engine. Pass-through
-        for the future Resolve-AvmTool calls (none today since this is
-        pure PowerShell + ARM JSON parsing).
+        Pass through to Resolve-AvmTool when locating the bicep binary.
+
+    .PARAMETER TemplateFile
+        Template path (relative to module root) to compile. Defaults to
+        'main.bicep'.
 
     .PARAMETER OutputFile
         README path (relative to module root) to inject into. Defaults
@@ -31,7 +42,7 @@ function Invoke-AvmBicepDocs {
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
-        FilesProcessed, Changed. (When implemented.)
+        FilesProcessed, Changed.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
@@ -42,6 +53,8 @@ function Invoke-AvmBicepDocs {
         $Context,
 
         [switch] $AllowPathFallback,
+
+        [string] $TemplateFile = 'main.bicep',
 
         [string] $OutputFile = 'README.md'
     )
@@ -54,9 +67,48 @@ function Invoke-AvmBicepDocs {
             "Invoke-AvmBicepDocs requires a bicep context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $null = $AllowPathFallback
-    $null = $OutputFile
+    $templatePath = Join-Path $Context.Root $TemplateFile
+    if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+        throw [AvmConfigurationException]::new(
+            ("Bicep template not found: [{0}]. Pass -TemplateFile to point at a different .bicep entry point." -f $templatePath))
+    }
 
-    throw [AvmConfigurationException]::new(
-        "Bicep docs is not yet wired: the ARM-JSON walker that replaces Set-ModuleReadMe.ps1 is the next bicep-docs slice. Track it in docs/avm-consolidation-plan.md.")
+    $compiled = Convert-AvmBicepToArm -BicepFilePath $templatePath -AllowPathFallback:$AllowPathFallback
+
+    $outputsBody = Format-AvmBicepOutputsSection -Arm $compiled.Arm
+
+    $readmePath = Join-Path $Context.Root $OutputFile
+    $beforeHash = if (Test-Path -LiteralPath $readmePath) {
+        (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
+    }
+    else {
+        ''
+    }
+
+    if (Test-Path -LiteralPath $readmePath) {
+        $existing = @(Get-Content -LiteralPath $readmePath -Encoding utf8)
+    }
+    else {
+        $moduleName = Split-Path -Path $Context.Root -Leaf
+        $existing = @("# $moduleName", '')
+    }
+
+    $merged = Merge-AvmReadmeSection -Content $existing -Heading '## Outputs' -NewBody $outputsBody
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $payload = ($merged -join "`n").TrimEnd("`n") + "`n"
+    [System.IO.File]::WriteAllText($readmePath, $payload, $utf8NoBom)
+
+    $afterHash = (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
+    $changed = if ($beforeHash -ne $afterHash) { , $OutputFile } else { @() }
+
+    return [pscustomobject][ordered]@{
+        Engine         = 'bicep'
+        Tool           = ('{0}/{1}' -f $compiled.ToolName, $compiled.ToolVersion)
+        ToolPath       = $compiled.ToolPath
+        ToolSource     = $compiled.ToolSource
+        Status         = 'pass'
+        FilesProcessed = 1
+        Changed        = $changed
+    }
 }
