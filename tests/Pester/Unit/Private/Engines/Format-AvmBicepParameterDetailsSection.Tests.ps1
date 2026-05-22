@@ -394,4 +394,105 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
             $secondIdx | Should -BeGreaterThan $firstIdx
         }
     }
+
+    Context 'slice 4e: discriminator-driven output' {
+        It 'emits parent, variant, and variant-child blocks in declaration order for a two-variant union' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/ComputeUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Compute spec.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    ComputeUnion  = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/WindowsVmSpec' }
+                                LinuxVM   = [pscustomobject]@{ '$ref' = '#/definitions/LinuxVmSpec' }
+                            }
+                        }
+                    }
+                    WindowsVmSpec = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('WindowsVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                        }
+                    }
+                    LinuxVmSpec   = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('LinuxVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $parentIdx   = [Array]::IndexOf($result, '### Parameter: `computeSpec`')
+            $winIdx      = [Array]::IndexOf($result, '### Parameter: `computeSpec[WindowsVM]`')
+            $winKindIdx  = [Array]::IndexOf($result, '### Parameter: `computeSpec[WindowsVM].kind`')
+            $linIdx      = [Array]::IndexOf($result, '### Parameter: `computeSpec[LinuxVM]`')
+            $linKindIdx  = [Array]::IndexOf($result, '### Parameter: `computeSpec[LinuxVM].kind`')
+            $parentIdx   | Should -BeGreaterThan -1
+            $winIdx      | Should -BeGreaterThan $parentIdx
+            $winKindIdx  | Should -BeGreaterThan $winIdx
+            $linIdx      | Should -BeGreaterThan $winKindIdx
+            $linKindIdx  | Should -BeGreaterThan $linIdx
+        }
+
+        It 'reports a variant block as Required Yes with object type' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/ComputeUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Compute.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    ComputeUnion  = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/WindowsVmSpec' }
+                            }
+                        }
+                    }
+                    WindowsVmSpec = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('WindowsVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $variantIdx = [Array]::IndexOf($result, '### Parameter: `computeSpec[WindowsVM]`')
+            $variantIdx | Should -BeGreaterThan -1
+            # The two lines immediately following the heading describe the block.
+            $body = $result[$variantIdx..($variantIdx + 6)] -join "`n"
+            $body | Should -Match '- Required: Yes'
+            $body | Should -Match '- Type: object'
+        }
+    }
 }

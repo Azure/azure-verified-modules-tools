@@ -63,8 +63,24 @@ function Get-AvmArmParameterDetail {
         children via the existing object branch, 'items.type=array'
         produces 'parent[*][*]', and 'items.$ref' is resolved through
         the same Resolve-AvmArmRefDefinition plumbing (including
-        cycle and depth bailouts). Discriminator dispatch and
-        UDT-only constraints land in slices 4e-4f.
+        cycle and depth bailouts).
+
+        Slice 4e adds discriminator dispatch. When an object record
+        carries a 'discriminator' shape (compiled from Bicep's
+        @discriminator tagged-union UDTs) the helper emits one
+        synthetic child per 'discriminator.mapping' entry, named with
+        '[<variantKey>]' appended to the parent name (e.g.
+        'computeSpec[WindowsVM]', mirroring the slice-4d '[*]'
+        convention). Each variant has IsRequired=$true because every
+        instance MUST conform to one of the declared shapes. Variant
+        targets recurse through the same helper so '$ref'-, inline-
+        and nested-discriminator variants all resolve through the
+        existing slice-4c plumbing. Hybrid objects that carry both
+        'properties' and 'discriminator' resolve as variants
+        (discriminator wins; the parent 'properties' bag is ignored)
+        because Bicep's compiled tagged unions never share keys with
+        the parent. A missing 'discriminator.propertyName' or a null
+        mapping value raises [AvmConfigurationException].
 
         Strict-mode safe via the '.PSObject.Properties[<name>]'
         indexer for every PSObject lookup.
@@ -177,6 +193,21 @@ function Get-AvmArmParameterDetailRecord {
         'parent[*].field1' / 'parent[*].field2' children, and an
         'items.$ref' is resolved through the same cycle / depth
         plumbing.
+
+        When type='object' AND the raw record carries a
+        'discriminator' shape (slice 4e), each entry in
+        'discriminator.mapping' produces a synthetic variant child
+        named '<parent>[<variantKey>]' with IsRequired=$true. The
+        variant raw is recursed through the same helper so '$ref',
+        inline, and nested-discriminator variants all resolve via
+        the existing cycle / depth plumbing. The discriminator key
+        itself (e.g. 'kind') emerges as a normal property child of
+        each variant when the variant's compiled 'properties' bag
+        includes it, with its 'allowedValues' constraint surfaced
+        through the standard scalar extraction. The dispatch branch
+        takes priority over the inline 'properties' walk; hybrid
+        objects (rare in compiled Bicep) ignore the parent
+        'properties' in favour of the variants.
 
         Cycle and depth protection (slice 4c): a per-branch ref stack
         ($RefStack) carries the names of definitions resolved on the
@@ -346,34 +377,69 @@ function Get-AvmArmParameterDetailRecord {
     $children = [System.Collections.Generic.List[pscustomobject]]::new()
     if (-not $isCycleOrDepth -and $nextRefStack.Count -lt $script:AvmMaxRefDepth) {
         if ($effectiveType -eq 'object') {
-            $propsProp = $effectiveRaw.PSObject.Properties['properties']
-            if ($null -ne $propsProp -and $null -ne $propsProp.Value) {
-                foreach ($childProp in $propsProp.Value.PSObject.Properties) {
-                    $childName = '{0}.{1}' -f $Name, [string]$childProp.Name
-                    $childRaw = $childProp.Value
-                    if ($null -eq $childRaw) { continue }
+            $discrimProp = $effectiveRaw.PSObject.Properties['discriminator']
+            if ($null -ne $discrimProp -and $null -ne $discrimProp.Value) {
+                $propNameProp = $discrimProp.Value.PSObject.Properties['propertyName']
+                if ($null -eq $propNameProp -or [string]::IsNullOrWhiteSpace([string]$propNameProp.Value)) {
+                    throw [AvmConfigurationException]::new(
+                        ("Parameter '{0}': discriminator is missing 'propertyName'." -f $Name))
+                }
+                $mappingProp = $discrimProp.Value.PSObject.Properties['mapping']
+                if ($null -ne $mappingProp -and $null -ne $mappingProp.Value) {
+                    foreach ($variantProp in $mappingProp.Value.PSObject.Properties) {
+                        $variantKey = [string]$variantProp.Name
+                        $variantRaw = $variantProp.Value
+                        if ($null -eq $variantRaw) {
+                            throw [AvmConfigurationException]::new(
+                                ("Parameter '{0}': discriminator mapping '{1}' has no value." -f $Name, $variantKey))
+                        }
+                        $variantName = '{0}[{1}]' -f $Name, $variantKey
+                        $variantDescription = Get-AvmArmChildDescription -ChildRaw $variantRaw -Arm $Arm -RefStack $nextRefStack
 
-                    $childDescription = Get-AvmArmChildDescription -ChildRaw $childRaw -Arm $Arm -RefStack $nextRefStack
+                        $variantRecord = Get-AvmArmParameterDetailRecord `
+                            -Name        $variantName `
+                            -Raw         $variantRaw `
+                            -Type        '' `
+                            -Category    $Category `
+                            -Description $variantDescription `
+                            -IsRequired  $true `
+                            -Arm         $Arm `
+                            -RefStack    $nextRefStack
 
-                    $childHasDefault = $null -ne $childRaw.PSObject.Properties['defaultValue']
-                    $childNullable = $false
-                    $childNullableProp = $childRaw.PSObject.Properties['nullable']
-                    if ($null -ne $childNullableProp -and $null -ne $childNullableProp.Value) {
-                        $childNullable = [bool]$childNullableProp.Value
+                        $children.Add($variantRecord)
                     }
-                    $childIsRequired = -not ($childHasDefault -or $childNullable)
+                }
+            }
+            else {
+                $propsProp = $effectiveRaw.PSObject.Properties['properties']
+                if ($null -ne $propsProp -and $null -ne $propsProp.Value) {
+                    foreach ($childProp in $propsProp.Value.PSObject.Properties) {
+                        $childName = '{0}.{1}' -f $Name, [string]$childProp.Name
+                        $childRaw = $childProp.Value
+                        if ($null -eq $childRaw) { continue }
 
-                    $childRecord = Get-AvmArmParameterDetailRecord `
-                        -Name        $childName `
-                        -Raw         $childRaw `
-                        -Type        '' `
-                        -Category    $Category `
-                        -Description $childDescription `
-                        -IsRequired  $childIsRequired `
-                        -Arm         $Arm `
-                        -RefStack    $nextRefStack
+                        $childDescription = Get-AvmArmChildDescription -ChildRaw $childRaw -Arm $Arm -RefStack $nextRefStack
 
-                    $children.Add($childRecord)
+                        $childHasDefault = $null -ne $childRaw.PSObject.Properties['defaultValue']
+                        $childNullable = $false
+                        $childNullableProp = $childRaw.PSObject.Properties['nullable']
+                        if ($null -ne $childNullableProp -and $null -ne $childNullableProp.Value) {
+                            $childNullable = [bool]$childNullableProp.Value
+                        }
+                        $childIsRequired = -not ($childHasDefault -or $childNullable)
+
+                        $childRecord = Get-AvmArmParameterDetailRecord `
+                            -Name        $childName `
+                            -Raw         $childRaw `
+                            -Type        '' `
+                            -Category    $Category `
+                            -Description $childDescription `
+                            -IsRequired  $childIsRequired `
+                            -Arm         $Arm `
+                            -RefStack    $nextRefStack
+
+                        $children.Add($childRecord)
+                    }
                 }
             }
         }

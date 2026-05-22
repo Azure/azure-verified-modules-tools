@@ -1188,4 +1188,449 @@ Describe 'Get-AvmArmParameterDetail' {
             $outerItem.Children[0].Type | Should -Be 'string'
         }
     }
+
+    Context 'slice 4e: discriminator dispatch' {
+        It 'dispatches a top-level $ref union into one synthetic child per mapping entry' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/ComputeUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. The compute spec.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    ComputeUnion   = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/WindowsVmSpec' }
+                                LinuxVM   = [pscustomobject]@{ '$ref' = '#/definitions/LinuxVmSpec' }
+                            }
+                        }
+                    }
+                    WindowsVmSpec  = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind     = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('WindowsVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                            edition  = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Windows edition.' }
+                            }
+                        }
+                    }
+                    LinuxVmSpec    = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind   = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('LinuxVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                            distro = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Linux distro.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type             | Should -Be 'object'
+            $result[0].Children.Count   | Should -Be 2
+            $result[0].Children[0].Name        | Should -Be 'computeSpec[WindowsVM]'
+            $result[0].Children[0].IsRequired  | Should -BeTrue
+            $result[0].Children[0].Children.Count | Should -Be 2
+            $result[0].Children[1].Name        | Should -Be 'computeSpec[LinuxVM]'
+            $result[0].Children[1].IsRequired  | Should -BeTrue
+            $result[0].Children[1].Children.Count | Should -Be 2
+        }
+
+        It 'returns zero children for an empty mapping but emits the parent record' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/EmptyUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Empty union.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    EmptyUnion = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{}
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type           | Should -Be 'object'
+            $result[0].Children.Count | Should -Be 0
+        }
+
+        It 'recurses into an inline variant target without going through definitions' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                Inline = [pscustomobject]@{
+                                    type       = 'object'
+                                    properties = [pscustomobject]@{
+                                        kind  = [pscustomobject]@{
+                                            type          = 'string'
+                                            allowedValues = @('Inline')
+                                            metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                                        }
+                                        field = [pscustomobject]@{
+                                            type     = 'string'
+                                            metadata = [pscustomobject]@{ description = 'Inline field.' }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        metadata      = [pscustomobject]@{ description = 'Required. Inline union.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count             | Should -Be 1
+            $result[0].Children[0].Name           | Should -Be 'computeSpec[Inline]'
+            $result[0].Children[0].Type           | Should -Be 'object'
+            $result[0].Children[0].Children.Count | Should -Be 2
+            $result[0].Children[0].Children[1].Name | Should -Be 'computeSpec[Inline].field'
+        }
+
+        It 'throws an AvmConfigurationException when discriminator.propertyName is missing' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/BadUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Bad union.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    BadUnion = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            mapping = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/WindowsVmSpec' }
+                            }
+                        }
+                    }
+                    WindowsVmSpec = [pscustomobject]@{ type = 'object' }
+                }
+            }
+            $err = $null
+            try {
+                InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                    param($A)
+                    Get-AvmArmParameterDetail -Arm $A
+                }
+            } catch { $err = $_.Exception }
+            $err                | Should -Not -BeNullOrEmpty
+            $err.GetType().Name | Should -Be 'AvmConfigurationException'
+            $err.Message        | Should -Match 'computeSpec'
+            $err.Message        | Should -Match 'propertyName'
+        }
+
+        It 'throws an AvmConfigurationException when a discriminator mapping value is null' {
+            $mapping = [pscustomobject]@{}
+            Add-Member -InputObject $mapping -MemberType NoteProperty -Name 'WindowsVM' -Value $null
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/NullVariantUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Null variant.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    NullVariantUnion = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = $mapping
+                        }
+                    }
+                }
+            }
+            $err = $null
+            try {
+                InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                    param($A)
+                    Get-AvmArmParameterDetail -Arm $A
+                }
+            } catch { $err = $_.Exception }
+            $err                | Should -Not -BeNullOrEmpty
+            $err.GetType().Name | Should -Be 'AvmConfigurationException'
+            $err.Message        | Should -Match 'computeSpec'
+            $err.Message        | Should -Match 'WindowsVM'
+        }
+
+        It 'composes dotted naming when a discriminator is reached through an object property' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    top = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            inner = [pscustomobject]@{
+                                '$ref'   = '#/definitions/Inner'
+                                metadata = [pscustomobject]@{ description = 'The inner union.' }
+                            }
+                        }
+                        metadata   = [pscustomobject]@{ description = 'Required. The top object.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    Inner       = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/Win' }
+                            }
+                        }
+                    }
+                    Win         = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            edition = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Edition.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count                       | Should -Be 1
+            $result[0].Children[0].Name                     | Should -Be 'top.inner'
+            $result[0].Children[0].Children.Count           | Should -Be 1
+            $result[0].Children[0].Children[0].Name         | Should -Be 'top.inner[WindowsVM]'
+            $result[0].Children[0].Children[0].Children[0].Name | Should -Be 'top.inner[WindowsVM].edition'
+        }
+
+        It 'composes array recursion with discriminator dispatch into parent[*][variantKey]' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    specs = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{ '$ref' = '#/definitions/ComputeUnion' }
+                        metadata = [pscustomobject]@{ description = 'Required. The specs.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    ComputeUnion = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/Win' }
+                            }
+                        }
+                    }
+                    Win          = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            edition = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Edition.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count                       | Should -Be 1
+            $result[0].Children[0].Name                     | Should -Be 'specs[*]'
+            $result[0].Children[0].Children.Count           | Should -Be 1
+            $result[0].Children[0].Children[0].Name         | Should -Be 'specs[*][WindowsVM]'
+            $result[0].Children[0].Children[0].Children[0].Name | Should -Be 'specs[*][WindowsVM].edition'
+        }
+
+        It 'recurses into a nested discriminator inside a variant target' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/Outer'
+                        metadata = [pscustomobject]@{ description = 'Required. Nested unions.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    Outer = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                Group = [pscustomobject]@{ '$ref' = '#/definitions/Inner' }
+                            }
+                        }
+                    }
+                    Inner = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'flavour'
+                            mapping      = [pscustomobject]@{
+                                Hot = [pscustomobject]@{ '$ref' = '#/definitions/Leaf' }
+                            }
+                        }
+                    }
+                    Leaf  = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            label = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Label.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count                       | Should -Be 1
+            $result[0].Children[0].Name                     | Should -Be 'computeSpec[Group]'
+            $result[0].Children[0].Children.Count           | Should -Be 1
+            $result[0].Children[0].Children[0].Name         | Should -Be 'computeSpec[Group][Hot]'
+            $result[0].Children[0].Children[0].Children[0].Name | Should -Be 'computeSpec[Group][Hot].label'
+        }
+
+        It 'ignores the parent properties bag when discriminator is also present' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/HybridUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Hybrid.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    HybridUnion = [pscustomobject]@{
+                        type          = 'object'
+                        properties    = [pscustomobject]@{
+                            sharedField = [pscustomobject]@{ type = 'string' }
+                        }
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/Win' }
+                            }
+                        }
+                    }
+                    Win         = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            edition = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Edition.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count       | Should -Be 1
+            $result[0].Children[0].Name     | Should -Be 'computeSpec[WindowsVM]'
+            ($result[0].Children | Where-Object { $_.Name -eq 'computeSpec.sharedField' }) | Should -BeNullOrEmpty
+        }
+
+        It 'surfaces the discriminator key as a constrained string child via the variant properties' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    computeSpec = [pscustomobject]@{
+                        '$ref'   = '#/definitions/ComputeUnion'
+                        metadata = [pscustomobject]@{ description = 'Required. Compute.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    ComputeUnion  = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                WindowsVM = [pscustomobject]@{ '$ref' = '#/definitions/WindowsVmSpec' }
+                            }
+                        }
+                    }
+                    WindowsVmSpec = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            kind = [pscustomobject]@{
+                                type          = 'string'
+                                allowedValues = @('WindowsVM')
+                                metadata      = [pscustomobject]@{ description = 'The kind discriminator.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $variant = $result[0].Children[0]
+            $variant.Name                       | Should -Be 'computeSpec[WindowsVM]'
+            $variant.Children.Count             | Should -Be 1
+            $variant.Children[0].Name           | Should -Be 'computeSpec[WindowsVM].kind'
+            $variant.Children[0].Type           | Should -Be 'string'
+            $variant.Children[0].HasAllowedValues | Should -BeTrue
+            $variant.Children[0].AllowedValues  | Should -Match 'WindowsVM'
+        }
+
+        It 'truncates a cycle reached through a discriminator variant ref' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    node = [pscustomobject]@{
+                        '$ref'   = '#/definitions/Union'
+                        metadata = [pscustomobject]@{ description = 'Required. Recursive union.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    Union = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                recurse = [pscustomobject]@{ '$ref' = '#/definitions/Union' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children.Count       | Should -Be 1
+            $result[0].Children[0].Name     | Should -Be 'node[recurse]'
+            $result[0].Children[0].Children.Count | Should -Be 0
+        }
+    }
 }
