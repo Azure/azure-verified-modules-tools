@@ -271,4 +271,71 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
         $betaIdx    | Should -BeGreaterThan $alphaAaIdx
         $betaBbIdx  | Should -BeGreaterThan $betaIdx
     }
+
+    Context 'slice 4c: $ref-driven output' {
+        It 'emits parent and child blocks when the parent is a $ref to an object UDT' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        '$ref'   = '#/definitions/TagsType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tags.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    TagsType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            environment = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'env.' } }
+                            owner       = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'owner.' } }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $parentIdx = [Array]::IndexOf($result, '### Parameter: `tags`')
+            $envIdx    = [Array]::IndexOf($result, '### Parameter: `tags.environment`')
+            $ownerIdx  = [Array]::IndexOf($result, '### Parameter: `tags.owner`')
+            $parentIdx | Should -BeGreaterThan -1
+            $envIdx    | Should -BeGreaterThan $parentIdx
+            $ownerIdx  | Should -BeGreaterThan $envIdx
+        }
+
+        It 'truncates the children walk at the cycle leaf without emitting a second-level recurrence' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    node = [pscustomobject]@{
+                        '$ref'   = '#/definitions/NodeType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tree root.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    NodeType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            label  = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Label.' } }
+                            parent = [pscustomobject]@{
+                                '$ref'   = '#/definitions/NodeType'
+                                metadata = [pscustomobject]@{ description = 'Parent node.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $nodeIdx        = [Array]::IndexOf($result, '### Parameter: `node`')
+            $labelIdx       = [Array]::IndexOf($result, '### Parameter: `node.label`')
+            $parentIdx      = [Array]::IndexOf($result, '### Parameter: `node.parent`')
+            $grandParentIdx = [Array]::IndexOf($result, '### Parameter: `node.parent.parent`')
+            $nodeIdx        | Should -BeGreaterThan -1
+            $labelIdx       | Should -BeGreaterThan $nodeIdx
+            $parentIdx      | Should -BeGreaterThan $nodeIdx
+            $grandParentIdx | Should -Be -1
+        }
+    }
 }

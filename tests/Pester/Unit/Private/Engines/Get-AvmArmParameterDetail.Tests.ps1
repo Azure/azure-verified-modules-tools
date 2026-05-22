@@ -529,4 +529,412 @@ Describe 'Get-AvmArmParameterDetail' {
         $child = $result[0].Children[0]
         $child.Description | Should -Be ''
     }
+
+    Context 'slice 4c: $ref / definitions resolution' {
+        It 'resolves a top-level $ref to an object UDT and walks its properties' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        '$ref'   = '#/definitions/TagsType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tags applied to the resource.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    TagsType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            environment = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The environment tag.' }
+                            }
+                            owner       = [pscustomobject]@{
+                                type     = 'string'
+                                nullable = $true
+                                metadata = [pscustomobject]@{ description = 'The owner tag.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type           | Should -Be 'object'
+            $result[0].Children.Count | Should -Be 2
+            $result[0].Children[0].Name        | Should -Be 'tags.environment'
+            $result[0].Children[0].Type        | Should -Be 'string'
+            $result[0].Children[0].IsRequired  | Should -BeTrue
+            $result[0].Children[0].Description | Should -Be 'The environment tag.'
+            $result[0].Children[1].Name        | Should -Be 'tags.owner'
+            $result[0].Children[1].IsRequired  | Should -BeFalse
+        }
+
+        It 'resolves a top-level $ref to a scalar UDT and surfaces allowed values' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    sku = [pscustomobject]@{
+                        '$ref'   = '#/definitions/SkuType'
+                        metadata = [pscustomobject]@{ description = 'Required. The SKU.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    SkuType = [pscustomobject]@{
+                        type          = 'string'
+                        allowedValues = @('Basic', 'Standard', 'Premium')
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type             | Should -Be 'string'
+            $result[0].HasAllowedValues | Should -BeTrue
+            $result[0].AllowedValues    | Should -Match 'Basic'
+            $result[0].AllowedValues    | Should -Match 'Premium'
+            $result[0].Children.Count   | Should -Be 0
+        }
+
+        It 'lets a local metadata.description win over the definition description' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        '$ref'   = '#/definitions/TagsType'
+                        metadata = [pscustomobject]@{ description = 'Required. The local description.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    TagsType = [pscustomobject]@{
+                        type     = 'object'
+                        metadata = [pscustomobject]@{ description = 'Definition description.' }
+                    }
+                }
+            }
+            $base = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameter -Arm $A
+            }
+            $base[0].Description | Should -Be 'The local description.'
+        }
+
+        It 'lets a local defaultValue overlay the definition default' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    sku = [pscustomobject]@{
+                        '$ref'        = '#/definitions/SkuType'
+                        defaultValue  = 'Standard'
+                        metadata      = [pscustomobject]@{ description = 'Optional. The SKU.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    SkuType = [pscustomobject]@{
+                        type         = 'string'
+                        defaultValue = 'Basic'
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].HasDefault | Should -BeTrue
+            $result[0].Default    | Should -Be 'Standard'
+        }
+
+        It 'lets local allowedValues, minValue, maxValue, and metadata.example overlay the definition' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    count = [pscustomobject]@{
+                        '$ref'         = '#/definitions/CountType'
+                        allowedValues  = @(10, 20, 30)
+                        minValue       = 10
+                        maxValue       = 30
+                        metadata       = [pscustomobject]@{
+                            description = 'Required. Counter.'
+                            example     = '20'
+                        }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    CountType = [pscustomobject]@{
+                        type          = 'int'
+                        allowedValues = @(1, 2, 3)
+                        minValue      = 1
+                        maxValue      = 3
+                        metadata      = [pscustomobject]@{ example = '1' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].MinValue          | Should -Be 10
+            $result[0].MaxValue          | Should -Be 30
+            $result[0].AllowedValues     | Should -Match '10'
+            $result[0].AllowedValues     | Should -Match '30'
+            $result[0].HasExample        | Should -BeTrue
+            $result[0].ExampleLines[0]   | Should -Be '20'
+        }
+
+        It 'falls back to the definition fields when the local raw carries only $ref and a description' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    sku = [pscustomobject]@{
+                        '$ref'   = '#/definitions/SkuType'
+                        metadata = [pscustomobject]@{ description = 'Required. The SKU.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    SkuType = [pscustomobject]@{
+                        type          = 'string'
+                        allowedValues = @('A', 'B')
+                        metadata      = [pscustomobject]@{ example = 'A' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].HasAllowedValues | Should -BeTrue
+            $result[0].HasExample       | Should -BeTrue
+            $result[0].ExampleLines[0]  | Should -Be 'A'
+        }
+
+        It 'resolves a $ref on a nested property and uses the property key for the dotted name' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    outer = [pscustomobject]@{
+                        type       = 'object'
+                        metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                        properties = [pscustomobject]@{
+                            inner = [pscustomobject]@{
+                                '$ref'   = '#/definitions/InnerType'
+                                metadata = [pscustomobject]@{ description = 'The inner.' }
+                            }
+                        }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    InnerType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            leaf = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The leaf.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $inner = $result[0].Children[0]
+            $inner.Name             | Should -Be 'outer.inner'
+            $inner.Type             | Should -Be 'object'
+            $inner.Children.Count   | Should -Be 1
+            $inner.Children[0].Name | Should -Be 'outer.inner.leaf'
+        }
+
+        It 'detects a self-referential UDT and stops recursion at the cycle leaf' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    node = [pscustomobject]@{
+                        '$ref'   = '#/definitions/NodeType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tree root.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    NodeType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            label  = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Label.' }
+                            }
+                            parent = [pscustomobject]@{
+                                '$ref'   = '#/definitions/NodeType'
+                                metadata = [pscustomobject]@{ description = 'Parent node.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $top = $result[0]
+            $top.Children.Count | Should -Be 2
+            $parent = $top.Children | Where-Object { $_.Name -eq 'node.parent' }
+            $parent              | Should -Not -BeNullOrEmpty
+            $parent.Type         | Should -Be 'object'
+            $parent.Children.Count | Should -Be 0
+        }
+
+        It 'detects an indirect A->B->A cycle and stops the leaf branch' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    a = [pscustomobject]@{
+                        '$ref'   = '#/definitions/A'
+                        metadata = [pscustomobject]@{ description = 'Required. A.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    A = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            toB = [pscustomobject]@{
+                                '$ref'   = '#/definitions/B'
+                                metadata = [pscustomobject]@{ description = 'B.' }
+                            }
+                        }
+                    }
+                    B = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            backToA = [pscustomobject]@{
+                                '$ref'   = '#/definitions/A'
+                                metadata = [pscustomobject]@{ description = 'A again.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $top = $result[0]
+            $top.Children.Count                 | Should -Be 1
+            $top.Children[0].Children.Count     | Should -Be 1
+            $top.Children[0].Children[0].Name              | Should -Be 'a.toB.backToA'
+            $top.Children[0].Children[0].Children.Count    | Should -Be 0
+        }
+
+        It 'throws an AvmConfigurationException when $ref points at a missing definition' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        '$ref'   = '#/definitions/MissingType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tags.' }
+                    }
+                }
+                definitions = [pscustomobject]@{}
+            }
+            $err = $null
+            try {
+                InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                    param($A)
+                    Get-AvmArmParameterDetail -Arm $A
+                }
+            }
+            catch { $err = $_.Exception }
+            $err                | Should -Not -BeNullOrEmpty
+            $err.GetType().Name | Should -Be 'AvmConfigurationException'
+            $err.Message        | Should -Match 'MissingType'
+        }
+
+        It 'throws an AvmConfigurationException for a malformed $ref' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        '$ref'   = '#/types/TagsType'
+                        metadata = [pscustomobject]@{ description = 'Required. Tags.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    TagsType = [pscustomobject]@{ type = 'object' }
+                }
+            }
+            $err = $null
+            try {
+                InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                    param($A)
+                    Get-AvmArmParameterDetail -Arm $A
+                }
+            }
+            catch { $err = $_.Exception }
+            $err                | Should -Not -BeNullOrEmpty
+            $err.GetType().Name | Should -Be 'AvmConfigurationException'
+            $err.Message        | Should -Match 'Malformed'
+        }
+
+        It 'caps recursion at $script:AvmMaxRefDepth on a long linear chain' {
+            $defs = [pscustomobject]@{}
+            for ($i = 0; $i -lt 35; $i++) {
+                $body = if ($i -lt 34) {
+                    [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            next = [pscustomobject]@{
+                                '$ref' = ('#/definitions/T{0}' -f ($i + 1))
+                            }
+                        }
+                    }
+                } else {
+                    [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            leaf = [pscustomobject]@{ type = 'string' }
+                        }
+                    }
+                }
+                $defs.PSObject.Properties.Add(
+                    [System.Management.Automation.PSNoteProperty]::new(('T{0}' -f $i), $body))
+            }
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    root = [pscustomobject]@{
+                        '$ref'   = '#/definitions/T0'
+                        metadata = [pscustomobject]@{ description = 'Required. Root.' }
+                    }
+                }
+                definitions = $defs
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $cursor = $result[0]
+            $depthHit = 0
+            while ($cursor.Children.Count -gt 0 -and $depthHit -lt 100) {
+                $cursor = $cursor.Children[0]
+                $depthHit++
+            }
+            $depthHit | Should -BeLessOrEqual 32
+            $depthHit | Should -BeGreaterThan 0
+        }
+
+        It 'falls back to the definition description when the child $ref has no local metadata' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    outer = [pscustomobject]@{
+                        type       = 'object'
+                        metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                        properties = [pscustomobject]@{
+                            inner = [pscustomobject]@{
+                                '$ref' = '#/definitions/InnerType'
+                            }
+                        }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    InnerType = [pscustomobject]@{
+                        type     = 'string'
+                        metadata = [pscustomobject]@{ description = 'The inner description from the definition.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children[0].Description | Should -Be 'The inner description from the definition.'
+        }
+    }
 }
