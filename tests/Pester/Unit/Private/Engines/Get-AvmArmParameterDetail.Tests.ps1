@@ -1633,4 +1633,272 @@ Describe 'Get-AvmArmParameterDetail' {
             $result[0].Children[0].Children.Count | Should -Be 0
         }
     }
+
+    Context 'slice 4f: special-cases (UDT-only constraints, sentinel values, secureObject)' {
+        It 'passes a top-level securestring type through verbatim without defaultValue' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    adminPassword = [pscustomobject]@{
+                        type     = 'securestring'
+                        metadata = [pscustomobject]@{ description = 'Required. The administrator password.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Type        | Should -Be 'securestring'
+            $r.IsRequired  | Should -BeTrue
+            $r.HasDefault  | Should -BeFalse
+            $r.Children.Count | Should -Be 0
+        }
+
+        It 'preserves a securestring defaultValue verbatim (matches app/managed-environment)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    adminPassword = [pscustomobject]@{
+                        type         = 'securestring'
+                        defaultValue = ''
+                        metadata     = [pscustomobject]@{ description = 'Optional. The administrator password.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Type        | Should -Be 'securestring'
+            $r.IsRequired  | Should -BeFalse
+            $r.HasDefault  | Should -BeTrue
+            $r.Default     | Should -Be ''
+        }
+
+        It 'does not recurse into properties on a top-level secureobject parameter (matches walker scope: only literal type=object recurses)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    secrets = [pscustomobject]@{
+                        type       = 'secureobject'
+                        properties = [pscustomobject]@{
+                            foo = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The foo secret.' }
+                            }
+                            bar = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The bar secret.' }
+                            }
+                        }
+                        metadata   = [pscustomobject]@{ description = 'Required. Secret bag.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Type           | Should -Be 'secureobject'
+            $r.Children.Count | Should -Be 0
+        }
+
+        It 'preserves a nested securestring under an object parent via slice-4b dotted name' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    config = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            secret = [pscustomobject]@{
+                                type     = 'securestring'
+                                metadata = [pscustomobject]@{ description = 'The nested secret.' }
+                            }
+                        }
+                        metadata   = [pscustomobject]@{ description = 'Required. Config blob.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Children.Count | Should -Be 1
+            $r.Children[0].Name | Should -Be 'config.secret'
+            $r.Children[0].Type | Should -Be 'securestring'
+        }
+
+        It 'ignores additionalProperties: false on an object and walks declared properties only' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    closed = [pscustomobject]@{
+                        type                 = 'object'
+                        additionalProperties = $false
+                        properties           = [pscustomobject]@{
+                            only = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The only allowed key.' }
+                            }
+                        }
+                        metadata             = [pscustomobject]@{ description = 'Required. Closed object.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Children.Count   | Should -Be 1
+            $r.Children[0].Name | Should -Be 'closed.only'
+        }
+
+        It 'ignores additionalProperties: { type } open-map schema and emits no synthetic child' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    bag = [pscustomobject]@{
+                        type                 = 'object'
+                        additionalProperties = [pscustomobject]@{ type = 'string' }
+                        properties           = [pscustomobject]@{
+                            known = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The known key.' }
+                            }
+                        }
+                        metadata             = [pscustomobject]@{ description = 'Required. Open-map object.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Children.Count   | Should -Be 1
+            $r.Children[0].Name | Should -Be 'bag.known'
+        }
+
+        It 'does not surface minLength or maxLength on a string parameter (matches legacy contract)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    name = [pscustomobject]@{
+                        type      = 'string'
+                        minLength = 3
+                        maxLength = 24
+                        metadata  = [pscustomobject]@{ description = 'Required. The constrained name.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Type | Should -Be 'string'
+            $r.PSObject.Properties['MinLength'] | Should -BeNullOrEmpty
+            $r.PSObject.Properties['MaxLength'] | Should -BeNullOrEmpty
+            $r.PSObject.Properties['HasMinLength'] | Should -BeNullOrEmpty
+            $r.PSObject.Properties['HasMaxLength'] | Should -BeNullOrEmpty
+        }
+
+        It 'does not surface a regex pattern on a string parameter (matches legacy contract)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    sku = [pscustomobject]@{
+                        type     = 'string'
+                        pattern  = '^[A-Z][a-z]+$'
+                        metadata = [pscustomobject]@{ description = 'Required. The sku name.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Type | Should -Be 'string'
+            $r.PSObject.Properties['Pattern'] | Should -BeNullOrEmpty
+            $r.PSObject.Properties['HasPattern'] | Should -BeNullOrEmpty
+        }
+
+        It 'reports IsRequired = Yes for a top-level nullable: true parameter with no defaultValue (matches legacy)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    optionalTag = [pscustomobject]@{
+                        type     = 'string'
+                        nullable = $true
+                        metadata = [pscustomobject]@{ description = 'Required. Optionally null tag.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.IsRequired | Should -BeTrue
+            $r.HasDefault | Should -BeFalse
+        }
+
+        It 'resolves hybrid properties + discriminator with discriminator wins (re-locks slice 4e decision)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    spec = [pscustomobject]@{
+                        type          = 'object'
+                        discriminator = [pscustomobject]@{
+                            propertyName = 'kind'
+                            mapping      = [pscustomobject]@{
+                                KindA = [pscustomobject]@{
+                                    type       = 'object'
+                                    properties = [pscustomobject]@{
+                                        kind  = [pscustomobject]@{
+                                            type          = 'string'
+                                            allowedValues = @('KindA')
+                                            metadata      = [pscustomobject]@{ description = 'The kind.' }
+                                        }
+                                        valueA = [pscustomobject]@{
+                                            type     = 'string'
+                                            metadata = [pscustomobject]@{ description = 'A value.' }
+                                        }
+                                    }
+                                }
+                                KindB = [pscustomobject]@{
+                                    type       = 'object'
+                                    properties = [pscustomobject]@{
+                                        kind  = [pscustomobject]@{
+                                            type          = 'string'
+                                            allowedValues = @('KindB')
+                                            metadata      = [pscustomobject]@{ description = 'The kind.' }
+                                        }
+                                        valueB = [pscustomobject]@{
+                                            type     = 'string'
+                                            metadata = [pscustomobject]@{ description = 'B value.' }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        properties    = [pscustomobject]@{
+                            ignoredShared = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Should not appear.' }
+                            }
+                        }
+                        metadata      = [pscustomobject]@{ description = 'Required. Hybrid object.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $r = $result[0]
+            $r.Children.Count   | Should -Be 2
+            $childNames = @($r.Children | ForEach-Object { $_.Name })
+            $childNames | Should -Contain 'spec[KindA]'
+            $childNames | Should -Contain 'spec[KindB]'
+            $childNames | Should -Not -Contain 'spec.ignoredShared'
+        }
+    }
 }

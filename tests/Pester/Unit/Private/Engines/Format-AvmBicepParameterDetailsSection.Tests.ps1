@@ -495,4 +495,81 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
             $body | Should -Match '- Type: object'
         }
     }
+
+    Context 'slice 4f: special-cases output (UDT-only constraints, sentinel values, secureObject)' {
+        It 'renders a securestring parameter with an empty defaultValue verbatim' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    adminPassword = [pscustomobject]@{
+                        type         = 'securestring'
+                        defaultValue = ''
+                        metadata     = [pscustomobject]@{ description = 'Optional. The administrator password.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $joined = $result -join "`n"
+            $joined | Should -Match '- Type: securestring'
+            $joined | Should -Match '- Default: ``'
+        }
+
+        It 'renders a secureobject parameter as a single block with no child blocks (locks walker scope: only literal type=object recurses)' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    secrets = [pscustomobject]@{
+                        type       = 'secureobject'
+                        properties = [pscustomobject]@{
+                            foo = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The foo secret.' }
+                            }
+                            bar = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'The bar secret.' }
+                            }
+                        }
+                        metadata   = [pscustomobject]@{ description = 'Required. Secret bag.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $parentIdx = [Array]::IndexOf($result, '### Parameter: `secrets`')
+            $fooIdx    = [Array]::IndexOf($result, '### Parameter: `secrets.foo`')
+            $barIdx    = [Array]::IndexOf($result, '### Parameter: `secrets.bar`')
+            $parentIdx | Should -BeGreaterThan -1
+            $fooIdx    | Should -Be -1
+            $barIdx    | Should -Be -1
+            $endIdx     = [Math]::Min($parentIdx + 6, $result.Length - 1)
+            $parentBody = $result[$parentIdx..$endIdx] -join "`n"
+            $parentBody | Should -Match '- Type: secureobject'
+        }
+
+        It 'does not emit MinLength, MaxLength, or Pattern lines for a constrained string parameter' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    name = [pscustomobject]@{
+                        type      = 'string'
+                        minLength = 3
+                        maxLength = 24
+                        pattern   = '^[A-Z][a-z]+$'
+                        metadata  = [pscustomobject]@{ description = 'Required. The constrained name.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $joined = $result -join "`n"
+            $joined | Should -Not -Match '- MinLength:'
+            $joined | Should -Not -Match '- MaxLength:'
+            $joined | Should -Not -Match '- Pattern:'
+        }
+    }
 }
