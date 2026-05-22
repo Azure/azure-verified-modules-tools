@@ -141,7 +141,7 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
         $oIdx | Should -BeGreaterThan $cIdx
     }
 
-    It 'emits a heading + bullets even for object-typed parameters (no recursion in slice 4a)' {
+    It 'emits a heading + bullets even for object-typed parameters (no recursion when properties is absent)' {
         $arm = [pscustomobject]@{
             parameters = [pscustomobject]@{
                 tags = [pscustomobject]@{
@@ -157,6 +157,7 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
         $joined = $result -join "`n"
         $joined | Should -Match '### Parameter: `tags`'
         $joined | Should -Match '- Type: object'
+        $joined | Should -Not -Match '### Parameter: `tags\.'
     }
 
     It 'separates consecutive parameter blocks with a single blank line' {
@@ -176,5 +177,98 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
         $bIdx | Should -BeGreaterThan $aIdx
         # The line immediately before the second parameter block must be a blank separator.
         $result[$bIdx - 1] | Should -Be ''
+    }
+
+    It 'emits a child block immediately after its parent for an inline object with one scalar child' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                tags = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Tags.' }
+                    properties = [pscustomobject]@{
+                        env = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Env value.' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Format-AvmBicepParameterDetailsSection -Arm $A
+        }
+        $parentIdx = [Array]::IndexOf($result, '### Parameter: `tags`')
+        $childIdx  = [Array]::IndexOf($result, '### Parameter: `tags.env`')
+        $parentIdx | Should -BeGreaterThan -1
+        $childIdx  | Should -BeGreaterThan $parentIdx
+        # Blank line separates parent from child.
+        $result[$childIdx - 1] | Should -Be ''
+        # Child block emits a full heading + body + bullets.
+        $result[$childIdx + 1] | Should -Be ''
+        $result[$childIdx + 2] | Should -Be 'Env value.'
+        $result[$childIdx + 3] | Should -Be ''
+        $result[$childIdx + 4] | Should -Be '- Required: Yes'
+        $result[$childIdx + 5] | Should -Be '- Type: string'
+    }
+
+    It 'recurses two levels and emits the grandchild block after the child block in declaration order' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        middle = [pscustomobject]@{
+                            type       = 'object'
+                            metadata   = [pscustomobject]@{ description = 'Middle child.' }
+                            properties = [pscustomobject]@{
+                                inner = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Inner.' } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Format-AvmBicepParameterDetailsSection -Arm $A
+        }
+        $outerIdx  = [Array]::IndexOf($result, '### Parameter: `outer`')
+        $middleIdx = [Array]::IndexOf($result, '### Parameter: `outer.middle`')
+        $innerIdx  = [Array]::IndexOf($result, '### Parameter: `outer.middle.inner`')
+        $outerIdx  | Should -BeGreaterThan -1
+        $middleIdx | Should -BeGreaterThan $outerIdx
+        $innerIdx  | Should -BeGreaterThan $middleIdx
+    }
+
+    It 'keeps each parent and its child glued together when multiple required parents are present' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                alpha = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Alpha.' }
+                    properties = [pscustomobject]@{
+                        aa = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'aa.' } }
+                    }
+                }
+                beta = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Beta.' }
+                    properties = [pscustomobject]@{
+                        bb = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'bb.' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Format-AvmBicepParameterDetailsSection -Arm $A
+        }
+        $alphaIdx   = [Array]::IndexOf($result, '### Parameter: `alpha`')
+        $alphaAaIdx = [Array]::IndexOf($result, '### Parameter: `alpha.aa`')
+        $betaIdx    = [Array]::IndexOf($result, '### Parameter: `beta`')
+        $betaBbIdx  = [Array]::IndexOf($result, '### Parameter: `beta.bb`')
+        $alphaIdx   | Should -BeGreaterThan -1
+        $alphaAaIdx | Should -BeGreaterThan $alphaIdx
+        $betaIdx    | Should -BeGreaterThan $alphaAaIdx
+        $betaBbIdx  | Should -BeGreaterThan $betaIdx
     }
 }

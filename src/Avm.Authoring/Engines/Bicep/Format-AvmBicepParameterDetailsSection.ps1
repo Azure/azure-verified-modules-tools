@@ -31,12 +31,18 @@ function Format-AvmBicepParameterDetailsSection {
               <body>
               ```
 
-        Slice 4a scope: every top-level parameter gets its heading +
-        bullets (including object, array, and UDT parameters). The
-        recursive walk into '.properties', 'items', '$ref', and
-        'discriminator.mapping' adds nested subsections inside each
-        block in slices 4b\u20134e; it does NOT change the top-level
-        emission.
+        Slice 4b scope: top-level grouping (Required \u2192 Conditional
+        \u2192 Optional \u2192 Generated, en-US alphabetical within)
+        is unchanged. After each top-level block, the per-block
+        emitter recurses into any 'Children' returned by
+        Get-AvmArmParameterDetail (inline 'type=object' +
+        'properties.*' walks) and emits child blocks in declaration
+        order immediately after their parent, with the standard
+        blank-line separator. Child headings use the dotted name
+        from the walker ('parent.child'); the GitHub anchor for
+        such headings strips the dot
+        ('#parameter-parentchild'). Cross-references from the
+        parent block to its children land in a follow-up slice.
 
         Returns an empty array when the template declares no
         parameters \u2014 the summary formatter already emits
@@ -95,40 +101,88 @@ function Format-AvmBicepParameterDetailsSection {
         $rows = @(([System.Collections.Generic.List[pscustomobject]]$groups[$cat]) |
                 Sort-Object -Property Name -Culture 'en-US')
         foreach ($r in $rows) {
-            if ($lines.Count -gt 0) { $lines.Add('') }
-            $lines.Add(('### Parameter: `{0}`' -f $r.Name))
-            $lines.Add('')
-            $lines.Add([string]$r.Description)
-            $lines.Add('')
-            $lines.Add(('- Required: {0}' -f ($(if ($r.IsRequired) { 'Yes' } else { 'No' }))))
-            $lines.Add(('- Type: {0}' -f $r.Type))
-            if ($r.HasDefault) {
-                $lines.Add(('- Default: `{0}`' -f $r.Default))
-            }
-            if ($r.HasAllowedValues) {
-                $lines.Add(('- Allowed: `{0}`' -f $r.AllowedValues))
-            }
-            if ($r.HasMinValue) {
-                $lines.Add(('- MinValue: {0}' -f [string]$r.MinValue))
-            }
-            if ($r.HasMaxValue) {
-                $lines.Add(('- MaxValue: {0}' -f [string]$r.MaxValue))
-            }
-            if ($r.HasExample) {
-                if ($r.ExampleIsSingleLine) {
-                    $lines.Add(('- Example: `{0}`' -f ([string]$r.ExampleLines[0]).Trim()))
-                }
-                else {
-                    $lines.Add('- Example:')
-                    $lines.Add('  ```bicep')
-                    foreach ($ln in $r.ExampleLines) {
-                        $lines.Add(('  {0}' -f [string]$ln))
-                    }
-                    $lines.Add('  ```')
-                }
-            }
+            Add-AvmBicepParameterDetailBlock -Record $r -Lines $lines
         }
     }
 
     return , $lines.ToArray()
+}
+
+function Add-AvmBicepParameterDetailBlock {
+    <#
+    .SYNOPSIS
+        Append a single '### Parameter:' block (and its nested child
+        blocks) onto the supplied line accumulator.
+
+    .DESCRIPTION
+        Internal helper used by Format-AvmBicepParameterDetailsSection.
+        Emits the heading, description, and detail bullets for one
+        record, then recurses into Children in declaration order so
+        nested inline-object properties appear immediately after
+        their parent. The standard blank-line separator is inserted
+        whenever the accumulator already has content, so the parent
+        and each of its children get a blank line between them.
+
+        The helper mutates the supplied List in place \u2014 callers
+        do not need to thread an accumulator through return values.
+
+    .PARAMETER Record
+        A per-parameter record produced by
+        Get-AvmArmParameterDetail (top-level or nested).
+
+    .PARAMETER Lines
+        The shared accumulator that the caller is building up.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Record,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [System.Collections.Generic.List[string]] $Lines
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    if ($Lines.Count -gt 0) { $Lines.Add('') }
+    $Lines.Add(('### Parameter: `{0}`' -f $Record.Name))
+    $Lines.Add('')
+    $Lines.Add([string]$Record.Description)
+    $Lines.Add('')
+    $Lines.Add(('- Required: {0}' -f ($(if ($Record.IsRequired) { 'Yes' } else { 'No' }))))
+    $Lines.Add(('- Type: {0}' -f $Record.Type))
+    if ($Record.HasDefault) {
+        $Lines.Add(('- Default: `{0}`' -f $Record.Default))
+    }
+    if ($Record.HasAllowedValues) {
+        $Lines.Add(('- Allowed: `{0}`' -f $Record.AllowedValues))
+    }
+    if ($Record.HasMinValue) {
+        $Lines.Add(('- MinValue: {0}' -f [string]$Record.MinValue))
+    }
+    if ($Record.HasMaxValue) {
+        $Lines.Add(('- MaxValue: {0}' -f [string]$Record.MaxValue))
+    }
+    if ($Record.HasExample) {
+        if ($Record.ExampleIsSingleLine) {
+            $Lines.Add(('- Example: `{0}`' -f ([string]$Record.ExampleLines[0]).Trim()))
+        }
+        else {
+            $Lines.Add('- Example:')
+            $Lines.Add('  ```bicep')
+            foreach ($ln in $Record.ExampleLines) {
+                $Lines.Add(('  {0}' -f [string]$ln))
+            }
+            $Lines.Add('  ```')
+        }
+    }
+
+    if ($null -ne $Record.PSObject.Properties['Children'] -and $Record.Children.Count -gt 0) {
+        foreach ($child in $Record.Children) {
+            Add-AvmBicepParameterDetailBlock -Record $child -Lines $Lines
+        }
+    }
 }

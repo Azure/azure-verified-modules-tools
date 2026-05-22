@@ -257,4 +257,276 @@ Describe 'Get-AvmArmParameterDetail' {
         $err                | Should -Not -BeNullOrEmpty
         $err.GetType().Name | Should -Be 'AvmConfigurationException'
     }
+
+    It 'returns an empty Children array for a top-level scalar parameter' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                name = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Required. The name.' } }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $result[0].PSObject.Properties['Children'] | Should -Not -BeNullOrEmpty
+        @($result[0].Children).Count               | Should -Be 0
+    }
+
+    It 'returns an empty Children array for an object-typed parameter with no properties key' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                tags = [pscustomobject]@{
+                    type     = 'object'
+                    metadata = [pscustomobject]@{ description = 'Optional. Tags.' }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        @($result[0].Children).Count | Should -Be 0
+    }
+
+    It 'returns an empty Children array for an object-typed parameter with an empty properties bag' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                tags = [pscustomobject]@{
+                    type       = 'object'
+                    properties = [pscustomobject]@{}
+                    metadata   = [pscustomobject]@{ description = 'Optional. Tags.' }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        @($result[0].Children).Count | Should -Be 0
+    }
+
+    It 'walks two scalar children of an inline object and yields dotted names with inherited category' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        first  = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'First child.' } }
+                        second = [pscustomobject]@{ type = 'int';    metadata = [pscustomobject]@{ description = 'Second child.' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $parent = $result[0]
+        $parent.Children.Count          | Should -Be 2
+        $parent.Children[0].Name        | Should -Be 'outer.first'
+        $parent.Children[0].Type        | Should -Be 'string'
+        $parent.Children[0].Category    | Should -Be 'Required'
+        $parent.Children[0].Description | Should -Be 'First child.'
+        $parent.Children[0].IsRequired  | Should -BeTrue
+        $parent.Children[1].Name        | Should -Be 'outer.second'
+        $parent.Children[1].Type        | Should -Be 'int'
+        $parent.Children[1].Category    | Should -Be 'Required'
+    }
+
+    It 'recurses two levels into nested objects with double-dotted names and inherited category' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Optional. Outer.' }
+                    properties = [pscustomobject]@{
+                        middle = [pscustomobject]@{
+                            type       = 'object'
+                            metadata   = [pscustomobject]@{ description = 'Middle child.' }
+                            properties = [pscustomobject]@{
+                                inner = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Inner.' } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $parent = $result[0]
+        $parent.Children.Count                      | Should -Be 1
+        $parent.Children[0].Name                    | Should -Be 'outer.middle'
+        $parent.Children[0].Category                | Should -Be 'Optional'
+        $parent.Children[0].Children.Count          | Should -Be 1
+        $parent.Children[0].Children[0].Name        | Should -Be 'outer.middle.inner'
+        $parent.Children[0].Children[0].Category    | Should -Be 'Optional'
+        $parent.Children[0].Children[0].Type        | Should -Be 'string'
+        $parent.Children[0].Children[0].Description | Should -Be 'Inner.'
+        $parent.Children[0].Children[0].IsRequired  | Should -BeTrue
+    }
+
+    It 'treats a nested property with nullable true and no defaultValue as not required' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        opt = [pscustomobject]@{ type = 'string'; nullable = $true; metadata = [pscustomobject]@{ description = 'Optional child.' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $result[0].Children[0].IsRequired | Should -BeFalse
+    }
+
+    It 'treats a nested property with neither defaultValue nor nullable as required' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        must = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Required child.' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $result[0].Children[0].IsRequired | Should -BeTrue
+    }
+
+    It 'captures a nested property defaultValue and marks the child not required' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        location = [pscustomobject]@{
+                            type         = 'string'
+                            defaultValue = 'eastus'
+                            metadata     = [pscustomobject]@{ description = 'Optional child.' }
+                        }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $child = $result[0].Children[0]
+        $child.IsRequired | Should -BeFalse
+        $child.HasDefault | Should -BeTrue
+        $child.Default    | Should -Be 'eastus'
+    }
+
+    It 'captures nested allowedValues, minValue and maxValue using the same extraction shape as top-level' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        tier = [pscustomobject]@{
+                            type          = 'int'
+                            allowedValues = @(1, 2, 4)
+                            minValue      = 1
+                            maxValue      = 4
+                            metadata      = [pscustomobject]@{ description = 'Tier child.' }
+                        }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $child = $result[0].Children[0]
+        $child.HasAllowedValues | Should -BeTrue
+        $child.AllowedValues    | Should -Be '[ 1, 2, 4 ]'
+        $child.HasMinValue      | Should -BeTrue
+        $child.MinValue         | Should -Be 1
+        $child.HasMaxValue      | Should -BeTrue
+        $child.MaxValue         | Should -Be 4
+    }
+
+    It 'captures a nested single-line metadata example with ExampleIsSingleLine set to true' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        name = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Name child.'; example = 'my-name' } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $child = $result[0].Children[0]
+        $child.HasExample          | Should -BeTrue
+        $child.ExampleIsSingleLine | Should -BeTrue
+        $child.ExampleLines.Count  | Should -Be 1
+        $child.ExampleLines[0]     | Should -Be 'my-name'
+    }
+
+    It 'captures a nested multi-line metadata example preserving line order' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        block = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'Block child.'; example = "first`r`nsecond" } }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $child = $result[0].Children[0]
+        $child.HasExample          | Should -BeTrue
+        $child.ExampleIsSingleLine | Should -BeFalse
+        $child.ExampleLines.Count  | Should -Be 2
+        $child.ExampleLines[0]     | Should -Be 'first'
+        $child.ExampleLines[1]     | Should -Be 'second'
+    }
+
+    It 'emits an empty description and no exception for a nested property with no metadata' {
+        $arm = [pscustomobject]@{
+            parameters = [pscustomobject]@{
+                outer = [pscustomobject]@{
+                    type       = 'object'
+                    metadata   = [pscustomobject]@{ description = 'Required. Outer.' }
+                    properties = [pscustomobject]@{
+                        naked = [pscustomobject]@{ type = 'string' }
+                    }
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+            param($A)
+            Get-AvmArmParameterDetail -Arm $A
+        }
+        $child = $result[0].Children[0]
+        $child.Description | Should -Be ''
+    }
 }
