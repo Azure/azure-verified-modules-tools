@@ -6,11 +6,11 @@ function Get-AvmArmParameterDetail {
         Walk a compiled ARM template's top-level parameters and return
         rich per-parameter records suitable for the per-parameter
         '### Parameter:' detail blocks. Inline object children
-        (type=object + properties.*) are walked recursively and
-        attached as Children. '$ref' values pointing at
-        '#/definitions/<name>' entries are resolved through the
-        template's 'definitions' bag, with cycle detection and a
-        depth cap.
+        (type=object + properties.*) and array element shapes
+        (type=array + items) are walked recursively and attached as
+        Children. '$ref' values pointing at '#/definitions/<name>'
+        entries are resolved through the template's 'definitions'
+        bag, with cycle detection and a depth cap.
 
     .DESCRIPTION
         Internal helper used by the Bicep docs engine. Builds on
@@ -49,8 +49,22 @@ function Get-AvmArmParameterDetail {
         bailout the record is still emitted, but with an empty
         Children array. Malformed '$ref' values and references to
         missing definitions both raise [AvmConfigurationException].
-        Recursion into array 'items', discriminator dispatch, and
-        UDT-only constraints land in slices 4d-4f.
+
+        Slice 4d adds array recursion: when type='array' and 'items'
+        is present, the helper emits exactly one synthetic child
+        whose Name is the parent name with '[*]' appended (e.g.
+        'tags[*]'), matching the AVM published-module README
+        convention. The synthetic child's IsRequired is always
+        $true because array elements have no defaultValue / nullable
+        concept (those live at the array parameter declaration site,
+        not at the item shape). The recursive call walks the items
+        shape exactly like any other record, so 'items.type=object'
+        composes naturally into 'parent[*].field1' / 'parent[*].field2'
+        children via the existing object branch, 'items.type=array'
+        produces 'parent[*][*]', and 'items.$ref' is resolved through
+        the same Resolve-AvmArmRefDefinition plumbing (including
+        cycle and depth bailouts). Discriminator dispatch and
+        UDT-only constraints land in slices 4e-4f.
 
         Strict-mode safe via the '.PSObject.Properties[<name>]'
         indexer for every PSObject lookup.
@@ -125,9 +139,10 @@ function Get-AvmArmParameterDetailRecord {
     <#
     .SYNOPSIS
         Build a single per-parameter detail record (and recurse into
-        inline 'properties.*' children for object-typed entries,
+        inline 'properties.*' children for object-typed entries, or
+        the synthetic '[*]' element for array-typed entries),
         resolving '$ref' through the template's 'definitions' bag
-        along the way).
+        along the way.
 
     .DESCRIPTION
         Internal helper used by Get-AvmArmParameterDetail. At entry
@@ -151,6 +166,17 @@ function Get-AvmArmParameterDetailRecord {
         Nested child descriptions fall back to the referenced
         definition's 'metadata.description' when the local child raw
         has none.
+
+        When type='array' with an 'items' shape, the helper emits a
+        single synthetic child whose Name is the parent name with
+        '[*]' appended (e.g. 'tags[*]'). The synthetic child's
+        IsRequired is hard-coded $true because array elements have
+        no defaultValue / nullable concept at the items site. The
+        recursive call walks the items shape like any other record,
+        so 'items.type=object' composes naturally into
+        'parent[*].field1' / 'parent[*].field2' children, and an
+        'items.$ref' is resolved through the same cycle / depth
+        plumbing.
 
         Cycle and depth protection (slice 4c): a per-branch ref stack
         ($RefStack) carries the names of definitions resolved on the
@@ -318,45 +344,45 @@ function Get-AvmArmParameterDetailRecord {
     }
 
     $children = [System.Collections.Generic.List[pscustomobject]]::new()
-    if (-not $isCycleOrDepth -and $nextRefStack.Count -lt $script:AvmMaxRefDepth -and $effectiveType -eq 'object') {
-        $propsProp = $effectiveRaw.PSObject.Properties['properties']
-        if ($null -ne $propsProp -and $null -ne $propsProp.Value) {
-            foreach ($childProp in $propsProp.Value.PSObject.Properties) {
-                $childName = '{0}.{1}' -f $Name, [string]$childProp.Name
-                $childRaw = $childProp.Value
-                if ($null -eq $childRaw) { continue }
+    if (-not $isCycleOrDepth -and $nextRefStack.Count -lt $script:AvmMaxRefDepth) {
+        if ($effectiveType -eq 'object') {
+            $propsProp = $effectiveRaw.PSObject.Properties['properties']
+            if ($null -ne $propsProp -and $null -ne $propsProp.Value) {
+                foreach ($childProp in $propsProp.Value.PSObject.Properties) {
+                    $childName = '{0}.{1}' -f $Name, [string]$childProp.Name
+                    $childRaw = $childProp.Value
+                    if ($null -eq $childRaw) { continue }
 
-                $childDescription = ''
-                $childMetaProp = $childRaw.PSObject.Properties['metadata']
-                if ($null -ne $childMetaProp -and $null -ne $childMetaProp.Value) {
-                    $childDescProp = $childMetaProp.Value.PSObject.Properties['description']
-                    if ($null -ne $childDescProp -and $null -ne $childDescProp.Value) {
-                        $childDescRaw = [string]$childDescProp.Value
-                        $childDescription = $childDescRaw.Replace("`n- ", '<li>').Replace("`r`n", '<p>').Replace("`n", '<p>')
-                    }
-                }
-                if ([string]::IsNullOrEmpty($childDescription) -and
-                    $null -ne $childRaw.PSObject.Properties['$ref']) {
-                    $peek = Resolve-AvmArmRefDefinition -Raw $childRaw -Arm $Arm -RefStack $nextRefStack
-                    if ($peek.HasRef -and -not $peek.IsCycle -and $null -ne $peek.Resolved) {
-                        $peekMetaProp = $peek.Resolved.PSObject.Properties['metadata']
-                        if ($null -ne $peekMetaProp -and $null -ne $peekMetaProp.Value) {
-                            $peekDescProp = $peekMetaProp.Value.PSObject.Properties['description']
-                            if ($null -ne $peekDescProp -and $null -ne $peekDescProp.Value) {
-                                $peekDescRaw = [string]$peekDescProp.Value
-                                $childDescription = $peekDescRaw.Replace("`n- ", '<li>').Replace("`r`n", '<p>').Replace("`n", '<p>')
-                            }
-                        }
-                    }
-                }
+                    $childDescription = Get-AvmArmChildDescription -ChildRaw $childRaw -Arm $Arm -RefStack $nextRefStack
 
-                $childHasDefault = $null -ne $childRaw.PSObject.Properties['defaultValue']
-                $childNullable = $false
-                $childNullableProp = $childRaw.PSObject.Properties['nullable']
-                if ($null -ne $childNullableProp -and $null -ne $childNullableProp.Value) {
-                    $childNullable = [bool]$childNullableProp.Value
+                    $childHasDefault = $null -ne $childRaw.PSObject.Properties['defaultValue']
+                    $childNullable = $false
+                    $childNullableProp = $childRaw.PSObject.Properties['nullable']
+                    if ($null -ne $childNullableProp -and $null -ne $childNullableProp.Value) {
+                        $childNullable = [bool]$childNullableProp.Value
+                    }
+                    $childIsRequired = -not ($childHasDefault -or $childNullable)
+
+                    $childRecord = Get-AvmArmParameterDetailRecord `
+                        -Name        $childName `
+                        -Raw         $childRaw `
+                        -Type        '' `
+                        -Category    $Category `
+                        -Description $childDescription `
+                        -IsRequired  $childIsRequired `
+                        -Arm         $Arm `
+                        -RefStack    $nextRefStack
+
+                    $children.Add($childRecord)
                 }
-                $childIsRequired = -not ($childHasDefault -or $childNullable)
+            }
+        }
+        elseif ($effectiveType -eq 'array') {
+            $itemsProp = $effectiveRaw.PSObject.Properties['items']
+            if ($null -ne $itemsProp -and $null -ne $itemsProp.Value) {
+                $childName = '{0}[*]' -f $Name
+                $childRaw = $itemsProp.Value
+                $childDescription = Get-AvmArmChildDescription -ChildRaw $childRaw -Arm $Arm -RefStack $nextRefStack
 
                 $childRecord = Get-AvmArmParameterDetailRecord `
                     -Name        $childName `
@@ -364,7 +390,7 @@ function Get-AvmArmParameterDetailRecord {
                     -Type        '' `
                     -Category    $Category `
                     -Description $childDescription `
-                    -IsRequired  $childIsRequired `
+                    -IsRequired  $true `
                     -Arm         $Arm `
                     -RefStack    $nextRefStack
 
@@ -392,6 +418,98 @@ function Get-AvmArmParameterDetailRecord {
         ExampleIsSingleLine = $exampleSingle
         Children            = $children.ToArray()
     }
+}
+
+function Get-AvmArmChildDescription {
+    <#
+    .SYNOPSIS
+        Extract a newline-folded description for a nested child raw
+        (object property value or array items value), with a peek
+        through a child-level '$ref' as a fallback.
+
+    .DESCRIPTION
+        Internal helper used by Get-AvmArmParameterDetailRecord when
+        walking inline object properties (slice 4b) and array items
+        (slice 4d). Reads $childRaw.metadata.description, folds
+        newlines using the standard rules (-`n- ' -> '<li>',
+        '\r\n' and '\n' -> '<p>'), and returns the result. When the
+        child raw has no local metadata.description but does carry a
+        '$ref', the referenced definition's metadata.description is
+        peeked through Resolve-AvmArmRefDefinition (respecting the
+        ref stack so we don't peek through a cycle) and folded
+        the same way. Returns '' when neither side carries a
+        description.
+
+        Strict-mode safe via the '.PSObject.Properties[<name>]'
+        indexer for every PSObject lookup.
+
+    .PARAMETER ChildRaw
+        The nested child's raw definition (PSCustomObject), drawn
+        either from $properties.<name> (object branch) or from
+        $items (array branch).
+
+    .PARAMETER Arm
+        The parsed ARM template (PSCustomObject) carrying the
+        'definitions' bag. Forwarded to Resolve-AvmArmRefDefinition
+        for the peek fallback.
+
+    .PARAMETER RefStack
+        Names of '$ref' definitions already on the path from the
+        top-level walker down to this child. Forwarded to
+        Resolve-AvmArmRefDefinition so the peek doesn't recurse
+        through a cycle.
+
+    .OUTPUTS
+        [string] - newline-folded description, '' when absent.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        $ChildRaw,
+
+        [Parameter(Mandatory)]
+        $Arm,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [string[]] $RefStack
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    if ($null -eq $ChildRaw) { return '' }
+
+    $description = ''
+    $metaProp = $ChildRaw.PSObject.Properties['metadata']
+    if ($null -ne $metaProp -and $null -ne $metaProp.Value) {
+        $descProp = $metaProp.Value.PSObject.Properties['description']
+        if ($null -ne $descProp -and $null -ne $descProp.Value) {
+            $raw = [string]$descProp.Value
+            $description = $raw.Replace("`n- ", '<li>').Replace("`r`n", '<p>').Replace("`n", '<p>')
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($description) -and
+        $ChildRaw -is [pscustomobject] -and
+        $null -ne $ChildRaw.PSObject.Properties['$ref']) {
+
+        $peek = Resolve-AvmArmRefDefinition -Raw $ChildRaw -Arm $Arm -RefStack $RefStack
+        if ($peek.HasRef -and -not $peek.IsCycle -and $null -ne $peek.Resolved) {
+            $peekMetaProp = $peek.Resolved.PSObject.Properties['metadata']
+            if ($null -ne $peekMetaProp -and $null -ne $peekMetaProp.Value) {
+                $peekDescProp = $peekMetaProp.Value.PSObject.Properties['description']
+                if ($null -ne $peekDescProp -and $null -ne $peekDescProp.Value) {
+                    $peekRaw = [string]$peekDescProp.Value
+                    $description = $peekRaw.Replace("`n- ", '<li>').Replace("`r`n", '<p>').Replace("`n", '<p>')
+                }
+            }
+        }
+    }
+
+    return $description
 }
 
 function Resolve-AvmArmRefDefinition {

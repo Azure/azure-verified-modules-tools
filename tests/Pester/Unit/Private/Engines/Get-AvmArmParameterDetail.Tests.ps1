@@ -937,4 +937,255 @@ Describe 'Get-AvmArmParameterDetail' {
             $result[0].Children[0].Description | Should -Be 'The inner description from the definition.'
         }
     }
+
+    Context 'slice 4d: array items recursion' {
+        It 'emits a single parent[*] child for an array of scalars' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{ type = 'string' }
+                        metadata = [pscustomobject]@{ description = 'Required. Tags applied to the resource.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type           | Should -Be 'array'
+            $result[0].Children.Count | Should -Be 1
+            $child = $result[0].Children[0]
+            $child.Name             | Should -Be 'tags[*]'
+            $child.Type             | Should -Be 'string'
+            $child.IsRequired       | Should -BeTrue
+            $child.Category         | Should -Be 'Required'
+            $child.Children.Count   | Should -Be 0
+        }
+
+        It 'emits no children when an array parameter has no items shape' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        type     = 'array'
+                        metadata = [pscustomobject]@{ description = 'Required. Tags.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Type           | Should -Be 'array'
+            $result[0].Children.Count | Should -Be 0
+        }
+
+        It 'recurses into items.properties for an array of inline objects' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    rules = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{
+                            type       = 'object'
+                            properties = [pscustomobject]@{
+                                first  = [pscustomobject]@{
+                                    type     = 'string'
+                                    metadata = [pscustomobject]@{ description = 'First field.' }
+                                }
+                                second = [pscustomobject]@{
+                                    type     = 'int'
+                                    metadata = [pscustomobject]@{ description = 'Second field.' }
+                                }
+                            }
+                        }
+                        metadata = [pscustomobject]@{ description = 'Required. Rules.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $itemRecord = $result[0].Children[0]
+            $itemRecord.Name             | Should -Be 'rules[*]'
+            $itemRecord.Type             | Should -Be 'object'
+            $itemRecord.Children.Count   | Should -Be 2
+            $itemRecord.Children[0].Name | Should -Be 'rules[*].first'
+            $itemRecord.Children[1].Name | Should -Be 'rules[*].second'
+            $itemRecord.Children[0].Type | Should -Be 'string'
+            $itemRecord.Children[1].Type | Should -Be 'int'
+        }
+
+        It 'resolves items.$ref to an object UDT and walks the resolved properties' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    rules = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{ '$ref' = '#/definitions/RuleType' }
+                        metadata = [pscustomobject]@{ description = 'Required. Rules.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    RuleType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            id   = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Rule id.' }
+                            }
+                            kind = [pscustomobject]@{
+                                type     = 'string'
+                                metadata = [pscustomobject]@{ description = 'Rule kind.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $itemRecord = $result[0].Children[0]
+            $itemRecord.Name             | Should -Be 'rules[*]'
+            $itemRecord.Type             | Should -Be 'object'
+            $itemRecord.Children.Count   | Should -Be 2
+            $itemRecord.Children[0].Name | Should -Be 'rules[*].id'
+            $itemRecord.Children[1].Name | Should -Be 'rules[*].kind'
+        }
+
+        It 'detects a cycle when an items.$ref re-enters the same definition' {
+            $arm = [pscustomobject]@{
+                parameters  = [pscustomobject]@{
+                    tree = [pscustomobject]@{
+                        '$ref'   = '#/definitions/NodeType'
+                        metadata = [pscustomobject]@{ description = 'Required. Forest.' }
+                    }
+                }
+                definitions = [pscustomobject]@{
+                    NodeType = [pscustomobject]@{
+                        type       = 'object'
+                        properties = [pscustomobject]@{
+                            children = [pscustomobject]@{
+                                type     = 'array'
+                                items    = [pscustomobject]@{ '$ref' = '#/definitions/NodeType' }
+                                metadata = [pscustomobject]@{ description = 'Child nodes.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $top = $result[0]
+            $top.Type             | Should -Be 'object'
+            $childrenProp = $top.Children | Where-Object { $_.Name -eq 'tree.children' }
+            $childrenProp         | Should -Not -BeNullOrEmpty
+            $childrenProp.Type    | Should -Be 'array'
+            $childrenProp.Children.Count | Should -Be 1
+            $itemRecord = $childrenProp.Children[0]
+            $itemRecord.Name      | Should -Be 'tree.children[*]'
+            $itemRecord.Type      | Should -Be 'object'
+            $itemRecord.Children.Count | Should -Be 0
+        }
+
+        It 'surfaces items.allowedValues on the synthetic parent[*] child' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    levels = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{
+                            type          = 'string'
+                            allowedValues = @('Low', 'Medium', 'High')
+                        }
+                        metadata = [pscustomobject]@{ description = 'Required. Levels.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $child = $result[0].Children[0]
+            $child.Name             | Should -Be 'levels[*]'
+            $child.Type             | Should -Be 'string'
+            $child.HasAllowedValues | Should -BeTrue
+            $child.AllowedValues    | Should -Match 'Low'
+            $child.AllowedValues    | Should -Match 'High'
+        }
+
+        It 'reads items.metadata.description onto the synthetic parent[*] child' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{
+                            type     = 'string'
+                            metadata = [pscustomobject]@{ description = 'A single tag string.' }
+                        }
+                        metadata = [pscustomobject]@{ description = 'Required. Tags.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $result[0].Children[0].Description | Should -Be 'A single tag string.'
+        }
+
+        It 'walks an array property nested inside an object parameter' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    config = [pscustomobject]@{
+                        type       = 'object'
+                        metadata   = [pscustomobject]@{ description = 'Required. Config.' }
+                        properties = [pscustomobject]@{
+                            list = [pscustomobject]@{
+                                type     = 'array'
+                                items    = [pscustomobject]@{ type = 'string' }
+                                metadata = [pscustomobject]@{ description = 'A list of strings.' }
+                            }
+                        }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $listChild = $result[0].Children[0]
+            $listChild.Name             | Should -Be 'config.list'
+            $listChild.Type             | Should -Be 'array'
+            $listChild.Children.Count   | Should -Be 1
+            $listChild.Children[0].Name | Should -Be 'config.list[*]'
+            $listChild.Children[0].Type | Should -Be 'string'
+        }
+
+        It 'composes the synthetic suffix when items is itself an array' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    grid = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{
+                            type  = 'array'
+                            items = [pscustomobject]@{ type = 'string' }
+                        }
+                        metadata = [pscustomobject]@{ description = 'Required. Grid.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Get-AvmArmParameterDetail -Arm $A
+            }
+            $outerItem = $result[0].Children[0]
+            $outerItem.Name             | Should -Be 'grid[*]'
+            $outerItem.Type             | Should -Be 'array'
+            $outerItem.Children.Count   | Should -Be 1
+            $outerItem.Children[0].Name | Should -Be 'grid[*][*]'
+            $outerItem.Children[0].Type | Should -Be 'string'
+        }
+    }
 }

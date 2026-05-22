@@ -338,4 +338,60 @@ Describe 'Format-AvmBicepParameterDetailsSection' {
             $grandParentIdx | Should -Be -1
         }
     }
+
+    Context 'slice 4d: array-driven output' {
+        It 'emits a parent[*] block after the array parent block' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    tags = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{ type = 'string' }
+                        metadata = [pscustomobject]@{ description = 'Required. Tags applied to the resource.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $parentIdx = [Array]::IndexOf($result, '### Parameter: `tags`')
+            $itemIdx   = [Array]::IndexOf($result, '### Parameter: `tags[*]`')
+            $parentIdx | Should -BeGreaterThan -1
+            $itemIdx   | Should -BeGreaterThan $parentIdx
+            $itemRequiredIdx = [Array]::IndexOf($result, '- Required: Yes', $itemIdx)
+            $itemTypeIdx     = [Array]::IndexOf($result, '- Type: string', $itemIdx)
+            $itemRequiredIdx | Should -BeGreaterThan $itemIdx
+            $itemTypeIdx     | Should -BeGreaterThan $itemIdx
+        }
+
+        It 'emits parent, parent[*], and dotted children when the array items are inline objects' {
+            $arm = [pscustomobject]@{
+                parameters = [pscustomobject]@{
+                    rules = [pscustomobject]@{
+                        type     = 'array'
+                        items    = [pscustomobject]@{
+                            type       = 'object'
+                            properties = [pscustomobject]@{
+                                first  = [pscustomobject]@{ type = 'string'; metadata = [pscustomobject]@{ description = 'First field.' } }
+                                second = [pscustomobject]@{ type = 'int';    metadata = [pscustomobject]@{ description = 'Second field.' } }
+                            }
+                        }
+                        metadata = [pscustomobject]@{ description = 'Required. Rules.' }
+                    }
+                }
+            }
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $arm } {
+                param($A)
+                Format-AvmBicepParameterDetailsSection -Arm $A
+            }
+            $parentIdx = [Array]::IndexOf($result, '### Parameter: `rules`')
+            $itemIdx   = [Array]::IndexOf($result, '### Parameter: `rules[*]`')
+            $firstIdx  = [Array]::IndexOf($result, '### Parameter: `rules[*].first`')
+            $secondIdx = [Array]::IndexOf($result, '### Parameter: `rules[*].second`')
+            $parentIdx | Should -BeGreaterThan -1
+            $itemIdx   | Should -BeGreaterThan $parentIdx
+            $firstIdx  | Should -BeGreaterThan $itemIdx
+            $secondIdx | Should -BeGreaterThan $firstIdx
+        }
+    }
 }
