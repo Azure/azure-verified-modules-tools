@@ -298,6 +298,38 @@ Describe 'Test-AvmToolsLock' {
         }
     }
 
+    Context 'platformAliases + archives combined' {
+        # First exercised in the bundled production lock by 'conftest'
+        # (Title-cased OS + x86_64 aliases AND a mixed zip/tar.gz archive
+        # map). The validator handles each map with an independent check;
+        # this fixture proves the combination stays valid.
+        It 'accepts an entry with both platformAliases and archives maps' {
+            $lock = script:NewValidLock
+            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo_{version}_{platform}{ext}'
+            $lock.tools[0].archive = 'tar.gz'
+            $lock.tools[0].platformAliases = @{
+                'windows-amd64' = 'Windows_x86_64'
+                'windows-arm64' = 'Windows_arm64'
+                'linux-amd64'   = 'Linux_x86_64'
+                'linux-arm64'   = 'Linux_arm64'
+                'darwin-amd64'  = 'Darwin_x86_64'
+                'darwin-arm64'  = 'Darwin_arm64'
+            }
+            $lock.tools[0].archives = @{
+                'windows-amd64' = 'zip'
+                'windows-arm64' = 'zip'
+                'linux-amd64'   = 'tar.gz'
+                'linux-arm64'   = 'tar.gz'
+                'darwin-amd64'  = 'tar.gz'
+                'darwin-arm64'  = 'tar.gz'
+            }
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+                param($L)
+                Test-AvmToolsLock -Lock $L | Should -BeTrue
+            }
+        }
+    }
+
     Context 'bundled production lock' {
         It 'is valid under the strict (https-only) schema' {
             $lockPath = Resolve-Path (Join-Path $script:moduleRoot 'Resources' 'tools.lock.psd1')

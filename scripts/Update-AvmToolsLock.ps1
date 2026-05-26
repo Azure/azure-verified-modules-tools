@@ -18,6 +18,11 @@
       - terraform-docs: uses 'terraform-docs-v<v>.sha256sum' published on the
                         terraform-docs GitHub release page. Mixed archives
                         (tar.gz for darwin/linux, zip for windows).
+      - conftest      : uses 'checksums.txt' published on the open-policy-agent
+                        GitHub release page. Title-cased OS + x86_64 arch
+                        naming, mixed archives (tar.gz for darwin/linux, zip
+                        for windows) - first lock entry that needs
+                        platformAliases AND archives together.
       - bicep         : downloads each of the six per-platform binaries from
                         https://github.com/Azure/bicep/releases/download/v<v>/.
                         Each binary is ~10-20 MB, so the whole pass needs
@@ -43,6 +48,10 @@
     terraform-docs version to lock, e.g. '0.20.0' (no leading 'v'). Skip
     the terraform-docs tool when omitted.
 
+.PARAMETER Conftest
+    conftest version to lock, e.g. '0.68.2' (no leading 'v'). Skip the
+    conftest tool when omitted.
+
 .PARAMETER LockPath
     Override the path to tools.lock.psd1. Defaults to the in-tree copy
     under src/Avm.Authoring/Resources/.
@@ -55,6 +64,9 @@
 
 .EXAMPLE
     ./scripts/Update-AvmToolsLock.ps1 -Terraform 1.9.8
+
+.EXAMPLE
+    ./scripts/Update-AvmToolsLock.ps1 -Conftest 0.68.2
 
 .NOTES
     Intended for maintainers and CI 'refresh tools' workflows. Not part
@@ -79,14 +91,18 @@ param(
     [string] $TerraformDocs,
 
     [Parameter()]
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string] $Conftest,
+
+    [Parameter()]
     [string] $LockPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'tools.lock.psd1')
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-if (-not $Terraform -and -not $Bicep -and -not $Tflint -and -not $TerraformDocs) {
-    throw "Specify at least one of -Terraform <version>, -Bicep <version>, -Tflint <version>, or -TerraformDocs <version>."
+if (-not $Terraform -and -not $Bicep -and -not $Tflint -and -not $TerraformDocs -and -not $Conftest) {
+    throw "Specify at least one of -Terraform <version>, -Bicep <version>, -Tflint <version>, -TerraformDocs <version>, or -Conftest <version>."
 }
 
 $LockPath = (Resolve-Path -LiteralPath $LockPath).Path
@@ -274,6 +290,65 @@ function script:Get-TerraformDocsEntry {
         archives    = $archiveMap
         entrypoint  = 'terraform-docs'
         sha256      = $sha
+    }
+}
+
+# ----------------------------------------------------------------------
+# conftest: fetches 'checksums.txt' from the GitHub release. Asset
+# filenames use Title-cased OS (Windows/Linux/Darwin) and x86_64/arm64
+# arch (not the lowercase {os}-{arch} the lock's default placeholders
+# emit), plus a mixed archive map (.zip on Windows, .tar.gz elsewhere),
+# so the entry combines platformAliases AND archives - the first lock
+# entry to need both maps together.
+# ----------------------------------------------------------------------
+function script:Get-ConftestEntry {
+    param([Parameter(Mandatory)] [string] $Version)
+
+    Write-Host "conftest $Version" -ForegroundColor Cyan
+    $shaUrl = "https://github.com/open-policy-agent/conftest/releases/download/v$Version/checksums.txt"
+    $body = script:Invoke-HttpGet -Url $shaUrl
+
+    $aliasMap = [ordered]@{
+        'windows-amd64' = 'Windows_x86_64'
+        'windows-arm64' = 'Windows_arm64'
+        'linux-amd64'   = 'Linux_x86_64'
+        'linux-arm64'   = 'Linux_arm64'
+        'darwin-amd64'  = 'Darwin_x86_64'
+        'darwin-arm64'  = 'Darwin_arm64'
+    }
+    $archiveMap = [ordered]@{
+        'windows-amd64' = 'zip'
+        'windows-arm64' = 'zip'
+        'linux-amd64'   = 'tar.gz'
+        'linux-arm64'   = 'tar.gz'
+        'darwin-amd64'  = 'tar.gz'
+        'darwin-arm64'  = 'tar.gz'
+    }
+    $sha = [ordered]@{}
+    foreach ($p in $script:platforms) {
+        $ext = if ($archiveMap[$p] -eq 'zip') { '.zip' } else { '.tar.gz' }
+        $needle = "conftest_${Version}_$($aliasMap[$p])$ext"
+        $line = ($body -split "`n") | Where-Object { $_ -match "\s$([Regex]::Escape($needle))\s*$" } | Select-Object -First 1
+        if (-not $line) {
+            throw "conftest $Version checksums.txt did not contain entry for $needle (URL: $shaUrl)."
+        }
+        $hash = ($line -split '\s+')[0].ToLowerInvariant()
+        if ($hash -notmatch '^[0-9a-f]{64}$') {
+            throw "Parsed unexpected hash '$hash' for $needle."
+        }
+        $sha[$p] = $hash
+        Write-Host ("    {0,-15} {1}" -f $p, $hash)
+    }
+
+    return [ordered]@{
+        name            = 'conftest'
+        version         = $Version
+        urlTemplate     = 'https://github.com/open-policy-agent/conftest/releases/download/v{version}/conftest_{version}_{platform}{ext}'
+        archive         = 'tar.gz'
+        archives        = $archiveMap
+        entrypoint      = 'conftest'
+        platformAliases = $aliasMap
+        sha256          = $sha
     }
 }
 
@@ -475,6 +550,7 @@ if ($Terraform) { $newEntries.Add((script:Get-TerraformEntry -Version $Terraform
 if ($Bicep) { $newEntries.Add((script:Get-BicepEntry -Version $Bicep)) }
 if ($Tflint) { $newEntries.Add((script:Get-TflintEntry -Version $Tflint)) }
 if ($TerraformDocs) { $newEntries.Add((script:Get-TerraformDocsEntry -Version $TerraformDocs)) }
+if ($Conftest) { $newEntries.Add((script:Get-ConftestEntry -Version $Conftest)) }
 
 # Merge: replace any existing entry with the same name, append otherwise.
 $merged = New-Object System.Collections.Generic.List[hashtable]

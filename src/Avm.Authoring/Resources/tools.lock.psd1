@@ -75,7 +75,7 @@
 #   - The 'tools' list MAY be empty (e.g. for fixture / test lockfiles).
 #
 # Populate canonical entries via:
-#   ./scripts/Update-AvmToolsLock.ps1 -Bicep <ver> -Terraform <ver> -Tflint <ver> -TerraformDocs <ver>
+#   ./scripts/Update-AvmToolsLock.ps1 -Bicep <ver> -Conftest <ver> -Terraform <ver> -TerraformDocs <ver> -Tflint <ver>
 @{
     schemaVersion = 1
     tools         = @(
@@ -100,6 +100,37 @@
                 'linux-arm64'   = '410d6a08a8d82ff43f01879cf93a98e122c3b5b69e733b6921a22f6a80e47f76'
                 'darwin-amd64'  = 'ce164b9099a4eee648edf0e9e788dbb2e5e958f2f2f0f76ba8bd655e7fd80735'
                 'darwin-arm64'  = 'e299492cf1493f6a3d6dfce2b15801342ba043d62a9383da1bcc6d80263d45b5'
+            }
+        }
+        @{
+            name            = 'conftest'
+            version         = '0.68.2'
+            urlTemplate     = 'https://github.com/open-policy-agent/conftest/releases/download/v{version}/conftest_{version}_{platform}{ext}'
+            archive         = 'tar.gz'
+            entrypoint      = 'conftest'
+            platformAliases = @{
+                'windows-amd64' = 'Windows_x86_64'
+                'windows-arm64' = 'Windows_arm64'
+                'linux-amd64'   = 'Linux_x86_64'
+                'linux-arm64'   = 'Linux_arm64'
+                'darwin-amd64'  = 'Darwin_x86_64'
+                'darwin-arm64'  = 'Darwin_arm64'
+            }
+            archives        = @{
+                'windows-amd64' = 'zip'
+                'windows-arm64' = 'zip'
+                'linux-amd64'   = 'tar.gz'
+                'linux-arm64'   = 'tar.gz'
+                'darwin-amd64'  = 'tar.gz'
+                'darwin-arm64'  = 'tar.gz'
+            }
+            sha256          = @{
+                'windows-amd64' = '66a88d02e6c03a714e9f0751c3d86ee9c5591739c367ca1b79c4f9f2f90ac4cb'
+                'windows-arm64' = 'd727e11a9b6fe05ae87c0261aeee7e59ca8be718d80cb7bf6c57206d1523823d'
+                'linux-amd64'   = 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+                'linux-arm64'   = '4005441089655ded475384cb87d57762ae08ebef78305bada49c70530d2f4184'
+                'darwin-amd64'  = '7682c54243d2c16579589f55aac47c51389d26f103f828902880288ba7f0605e'
+                'darwin-arm64'  = 'cdb5445179e0cc42906e2b0233694900f272a501878d416a9c875b1f7bdfd34c'
             }
         }
         @{
