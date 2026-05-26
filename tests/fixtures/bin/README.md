@@ -27,7 +27,20 @@ The stub itself should:
 
 ## Status
 
-Placeholder. The first slice (2026-05-18) wired the Integration tier
-itself (build task, CI step, canary `Process.Tests.ps1` that uses real
-`pwsh` as its subprocess) but did not yet need engine stubs. The stubs
-land alongside the first engine integration test that requires them.
+Shipped. Three Terraform-ecosystem stubs landed 2026-05-27 alongside
+`tests/helpers/Install-AvmStubLauncher.ps1` and the first consumer
+`tests/Pester/Integration/Invoke-AvmPreCommit.Terraform.Integration.Tests.ps1`.
+
+| Stub                  | Argv accepted                                              | Lock version |
+| --------------------- | ---------------------------------------------------------- | ------------ |
+| `terraform.ps1`       | `--version`, `fmt …`, `init …`, `validate …`               | `1.15.3`     |
+| `tflint.ps1`          | `--version`, `--recursive --format=json`                   | `0.55.1`     |
+| `terraform-docs.ps1`  | `--version`, `markdown table …`                            | `0.20.0`     |
+
+The argv-log file (`$env:AVM_STUB_LOG_DIR`) hinted at above is not yet
+emitted — the current consumer only needs the engine wrappers to succeed
+end-to-end, which is asserted via the cmdlet output. Add the logging hook
+if a future Integration test needs argv-level assertions.
+
+Bicep ecosystem stubs (`bicep.ps1`, etc.) will land alongside the first
+Bicep Integration test that needs them.

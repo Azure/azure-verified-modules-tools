@@ -19,7 +19,7 @@ function Read-AvmToolsLock {
     $ErrorActionPreference = 'Stop'
 
     if (-not $Path) {
-        $Path = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath @('Resources', 'tools.lock.psd1')
+        $Path = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath @('..', 'Resources', 'tools.lock.psd1')
     }
 
     $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
