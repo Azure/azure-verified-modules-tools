@@ -180,4 +180,79 @@ Describe 'Invoke-AvmPrCheck' {
             Should -Invoke Invoke-AvmDocs -Times 0
         }
     }
+
+    It 'composes all seven steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
+        $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            $r = Invoke-AvmPrCheck -Path $D
+
+            Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmLint            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckPolicy     -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckConvention -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTest            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+
+            $r
+        }
+
+        $result.Status                    | Should -Be 'pass'
+        $result.Ecosystem                 | Should -Be 'terraform'
+        $result.Steps.Count               | Should -Be 7
+        $result.Steps[0].Step             | Should -Be 'format'
+        $result.Steps[1].Step             | Should -Be 'transform'
+        $result.Steps[2].Step             | Should -Be 'lint'
+        $result.Steps[3].Step             | Should -Be 'check policy'
+        $result.Steps[4].Step             | Should -Be 'check convention'
+        $result.Steps[5].Step             | Should -Be 'test'
+        $result.Steps[6].Step             | Should -Be 'docs'
+        ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+    }
+
+    It 'reports the stub terraform engines (transform/check policy/check convention) as skipped and keeps overall pass' {
+        $dir = Join-Path $TestDrive ("prcheck-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { throw [AvmConfigurationException]::new('transform not wired yet') }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { throw [AvmConfigurationException]::new('check policy not wired yet') }
+            Mock Invoke-AvmCheckConvention { throw [AvmConfigurationException]::new('check convention not wired yet') }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status                                                     | Should -Be 'pass'
+        $result.Ecosystem                                                  | Should -Be 'terraform'
+        $result.Steps.Count                                                | Should -Be 7
+        ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
+        ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'docs').Status              | Should -Be 'pass'
+    }
 }

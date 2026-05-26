@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-26 (Pivot: Bicep docs walker reverted; Terraform `pre-commit` / `pr-check` prioritised)
+**Last updated**: 2026-05-26 (Phase 2 §1 part 1: composition smoke tests landed for `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck` Terraform paths)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -12,7 +12,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 | ----- | --------------------------- | ---------------------------------------------------------------------------------------- |
 | 0     | Skeleton + parity CI        | **Complete** — every Phase 0 closure slice has landed: `layout`, `lint`, `test`, `coverage`, `integration`, `build`, `smoke` all green; release pipeline ready; spec §6.2 case-collision canary added (Linux-only). 241 unit tests pass + 5 Linux-only skip on Windows + 3 integration tests + 1 smoke test, 78.83% line coverage vs 70% floor, `build` task verifies 12 functions + 1 alias against the staged manifest |
 | 1     | Bicep facade                | **Walker reverted; docs deferred pending new CLI command design** (see Pivots) — `format`/`lint`/`test` engines still wired and green; `docs` engine is back to a stub that throws `AvmConfigurationException` (caught by composition verbs as `skipped`); heavier verbs (`avm new`, `avm transform`, policy, convention) not started |
-| 2     | Terraform facade            | **Active — `pre-commit` / `pr-check` compositions next** — `format`/`lint`/`test`/`docs` engines wired; `transform`/`check policy`/`check convention` are still configuration-exception stubs; smoke tests for the composition chain are the next slice |
+| 2     | Terraform facade            | **Active — composition smoke tests landed (Unit tier); engine unblockers (`transform`/`check policy`/`check convention` + `format` `avmfix` chaining) are the next slices** — `format`/`lint`/`test`/`docs` engines wired; `transform`/`check policy`/`check convention` are still configuration-exception stubs; Integration-tier stub binaries deferred |
 | 3     | Replace `porch`             | Not started                                                                              |
 | 4     | Selective `mapotf`/`grept`  | Not started                                                                              |
 | 5     | Governance script port      | Not started                                                                              |
@@ -181,8 +181,9 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 1. **Validate the composition chains first** (highest priority — primary contributor surface):
 
-   - [ ] `avm pre-commit` Terraform path composing `format` + `transform` + `convention` + `validate` + `docs` per plan §4 — Pester smoke test under `tests/Pester/Unit/Public/` (or `tests/Pester/Integration/` if real binaries needed) that runs `Invoke-AvmPreCommit -Ecosystem terraform -Path <fixture>` against a mock Terraform module, with stub binaries under `tests/fixtures/bin/` standing in for `terraform` / `tflint` / `terraform-docs`. Assertion: chain reports `Status='pass'` with `transform` reported as `skipped` (because `Invoke-AvmTerraformTransform` is still the configuration-exception stub). Confirms the existing scaffolding composes correctly without touching engines.
-   - [ ] `avm pr-check` Terraform composition — same shape as above, exercising the full chain (`format` -> `transform` -> `lint` -> `check policy` -> `check convention` -> `test` -> `docs`); `transform` / `check policy` / `check convention` all report as `skipped` until their engines land. Locks in fail-soft behaviour.
+   - [x] `avm pre-commit` Terraform composition Unit smoke test — `tests/Pester/Unit/Public/Invoke-AvmPreCommit.Tests.ps1` (new file, 8 `It` blocks). Mirrors the established `Invoke-AvmPrCheck.Tests.ps1` pattern: `InModuleScope` + `Mock` the four step cmdlets (`Invoke-AvmFormat` / `Invoke-AvmLint` / `Invoke-AvmTest` / `Invoke-AvmDocs`), assert step ordering, ecosystem forwarding (`Should -Invoke … -ParameterFilter { $Ecosystem -eq 'terraform' }` on every step), and the four overall-status branches (pass, skipped-continues, fail-soft, `-StopOnFail`, error-aborts). Covers both bicep and terraform ecosystems. Cmdlet-level mocking is the right tier here — it validates the composition contract without spawning subprocesses; the engine wrappers are already covered by their own Unit tests.
+   - [x] `avm pr-check` Terraform composition Unit smoke test — added 2 `It` blocks to `tests/Pester/Unit/Public/Invoke-AvmPrCheck.Tests.ps1` (existing file). First asserts the full 7-step chain composes for `Ecosystem='terraform'` with ecosystem forwarding to every step; second asserts the three terraform stub engines (`transform`, `check policy`, `check convention`) report as `skipped` while `docs` (wired) reports `pass` and overall stays `pass`. The existing 5 bicep cases are unchanged.
+   - [ ] **Integration-tier follow-up:** stub binaries under `tests/fixtures/bin/` (`terraform.ps1` / `tflint.ps1` / `terraform-docs.ps1`) materialised as launchers on `$env:PATH`, plus a Pester `-Tag Integration` test that actually invokes `Invoke-AvmPreCommit -Ecosystem terraform -Path <fixture>` end-to-end against a tiny mock module. Validates the argv contract every engine wrapper makes to its binary — a different surface than the Unit-tier composition tests above. Out of scope for the current slice; tracked here so it doesn't get lost.
 
 2. **Engine implementation unblockers** (one slice each):
 
