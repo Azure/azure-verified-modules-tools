@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
-**Last updated**: 2026-05-27 (Phase 2 §2 supply-chain audit landed: `conftest` ships proper 6-platform releases; `avmfix`, `mapotf`, `grept` ship Go source only — `tools.lock.psd1` model cannot accommodate 3 of 4 engine-implementation tools without an unresolved architectural decision. See **Known issues** and the new **Phase 2 §2 supply-chain audit** sub-section below for the option matrix.)
+**Last updated**: 2026-05-27 (Pinned-asset config layer landed — slice 1 of 2. `Read-AvmAssetConfig` + `Test-AvmAssetConfig` private helpers under `Private/Assets/`, 28 unit tests green. Per-user `<Config>/avm.config.json` + per-repo `.avm/config.json` with upward walk, per-asset merge (repo wins), schema validation via `[System.Data.DataException]` wrapped in `AvmConfigurationException` with file context. The `Resolve-AvmPinnedAsset` downloader / cache slice is the natural follow-up.)
 **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`, no PR yet)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
@@ -195,7 +195,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
    - [ ] `avm check convention` — `grept run` against pinned `grept-policies` bundle; needs `grept` in `tools.lock.psd1` + pinned `grept-policies` asset. **Blocked**: `Azure/grept` (moved from `lonegunmanb/grept`) has no GitHub Releases — Go source only.
    - [ ] `avm format` enhancement — chain `avmfix` after `terraform fmt` (per plan: "format → `terraform fmt` + `avmfix`"); needs `avmfix` in `tools.lock.psd1`. **Blocked**: `lonegunmanb/avmfix` README says `go install github.com/lonegunmanb/avmfix@latest` — no GitHub Releases.
    - [ ] Add `avmfix`, `mapotf`, `grept`, `conftest` to `tools.lock.psd1` with verified six-platform SHA256s (or, if a tool doesn't ship for every platform, the same `unsupportedPlatforms` treatment we gave `tflint`). **Partially blocked**: `conftest` can be added today; the other three need the architectural decision first.
-   - [ ] Pinned-asset feature: download governance assets (`mapotf-configs/`, `grept-policies/`, `tflint-configs/`, Conftest bundles) at a configurable ref via `avm.config.json`; helper `Resolve-AvmPinnedAsset` + integration with the four engines above. **Unblocked** (independent of the tool-binary question — this is download-and-cache of config bundles, not tool binaries).
+   - [~] Pinned-asset feature: download governance assets (`mapotf-configs/`, `grept-policies/`, `tflint-configs/`, Conftest bundles) at a configurable ref via `avm.config.json`; helper `Resolve-AvmPinnedAsset` + integration with the four engines above. **Unblocked** (independent of the tool-binary question — this is download-and-cache of config bundles, not tool binaries). _Slice 1/2 (config schema + reader) landed 2026-05-27_: `Test-AvmAssetConfig` validator + `Read-AvmAssetConfig` two-layer reader (per-user `<Config>/avm.config.json` + per-repo `.avm/config.json` with upward walk, per-asset merge, repo wins) under `Private/Assets/`; 28 unit tests green. Slice 2/2 (`Resolve-AvmPinnedAsset` downloader + cache materialisation + `.gitignore` write-back) is the natural follow-up.
 
 3. **Validation outward** (after the four wired engines land):
 
