@@ -27,7 +27,7 @@ The stub itself should:
 
 ## Status
 
-Shipped. Three Terraform-ecosystem stubs landed 2026-05-27 alongside
+Shipped. Four Terraform-ecosystem stubs landed 2026-05-27 alongside
 `tests/helpers/Install-AvmStubLauncher.ps1` and the first consumer
 `tests/Pester/Integration/Invoke-AvmPreCommit.Terraform.Integration.Tests.ps1`.
 
@@ -36,11 +36,28 @@ Shipped. Three Terraform-ecosystem stubs landed 2026-05-27 alongside
 | `terraform.ps1`       | `--version`, `fmt …`, `init …`, `validate …`               | `1.15.3`     |
 | `tflint.ps1`          | `--version`, `--recursive --format=json`                   | `0.55.1`     |
 | `terraform-docs.ps1`  | `--version`, `markdown table …`                            | `0.20.0`     |
+| `conftest.ps1`        | `--version`, `test …` (emits `[]` for pass)                | `0.68.2`     |
 
 The argv-log file (`$env:AVM_STUB_LOG_DIR`) hinted at above is not yet
 emitted — the current consumer only needs the engine wrappers to succeed
 end-to-end, which is asserted via the cmdlet output. Add the logging hook
 if a future Integration test needs argv-level assertions.
+
+## Pinned-asset fixture pattern
+
+Engines that load APRL / AVMSEC / other policy bundles through
+`Read-AvmAssetConfig` + `Resolve-AvmPinnedAsset` (currently just
+`Invoke-AvmTerraformCheckPolicy`) need on-disk archives at test time.
+The integration harness avoids real downloads by exploiting
+`Resolve-AvmPinnedAsset`'s cache-hit fast-path: as long as
+`<AVM_HOME>/cache/assets/<name>/<sha>/.verified` plus the resolved Path
+both exist, the resolver returns immediately without ever calling
+`Invoke-AvmHttp`. The descriptor source URL can be any well-formed
+`https://example.invalid/<file>.zip` value (parser validates shape, not
+reachability) and the SHA256 just has to match `^[0-9a-f]{64}$`. The
+Terraform integration test pre-stages `avm-policy-aprl` and
+`avm-policy-avmsec` this way; mirror the pattern for any future
+pinned-asset engine fixtures.
 
 Bicep ecosystem stubs (`bicep.ps1`, etc.) will land alongside the first
 Bicep Integration test that needs them.
