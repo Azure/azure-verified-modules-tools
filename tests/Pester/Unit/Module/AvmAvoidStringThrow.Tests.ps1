@@ -32,12 +32,13 @@ Describe 'AvmAvoidStringThrow' {
 
     It 'is discoverable by PSScriptAnalyzer via -CustomRulePath' {
         $rules = Get-ScriptAnalyzerRule -CustomRulePath $script:rulePath -ErrorAction Stop
-        ($rules | Where-Object { $_.RuleName -eq 'Measure-AvmAvoidStringThrow' }).Count | Should -Be 1
+        $matchedRules = @($rules | Where-Object { $_.RuleName -eq 'Measure-AvmAvoidStringThrow' })
+        $matchedRules.Count | Should -Be 1
     }
 
     Context 'flags string-literal throws' {
         It 'flags a single-quoted string throw' {
-            $records = script:Invoke-AvmRule -Script "throw 'oops'"
+            $records = @(script:Invoke-AvmRule -Script "throw 'oops'")
             $records.Count | Should -Be 1
             $records[0].RuleName | Should -Be 'AvmAvoidStringThrow'
             $records[0].Severity | Should -Be 'Warning'
@@ -45,7 +46,7 @@ Describe 'AvmAvoidStringThrow' {
         }
 
         It 'flags a double-quoted expandable string throw' {
-            $records = script:Invoke-AvmRule -Script 'throw "boom $foo"'
+            $records = @(script:Invoke-AvmRule -Script 'throw "boom $foo"')
             $records.Count | Should -Be 1
             $records[0].RuleName | Should -Be 'AvmAvoidStringThrow'
         }
@@ -55,39 +56,39 @@ Describe 'AvmAvoidStringThrow' {
 throw 'first'
 function Foo { throw "second" }
 '@
-            $records = script:Invoke-AvmRule -Script $source
+            $records = @(script:Invoke-AvmRule -Script $source)
             $records.Count | Should -Be 2
         }
 
         It 'flags a string throw nested inside a catch block' {
             $source = "try { Get-Process } catch { throw 'wrapped' }"
-            $records = script:Invoke-AvmRule -Script $source
+            $records = @(script:Invoke-AvmRule -Script $source)
             $records.Count | Should -Be 1
         }
     }
 
     Context 'allows the canonical typed-exception pattern' {
         It 'allows throw of a constructed exception with a message' {
-            $records = script:Invoke-AvmRule -Script "throw [System.IO.IOException]::new('boom')"
+            $records = @(script:Invoke-AvmRule -Script "throw [System.IO.IOException]::new('boom')")
             $records.Count | Should -Be 0
         }
 
         It 'allows throw of a constructed exception with a message and inner exception' {
             $source = "throw [System.InvalidOperationException]::new('boom', `$inner)"
-            $records = script:Invoke-AvmRule -Script $source
+            $records = @(script:Invoke-AvmRule -Script $source)
             $records.Count | Should -Be 0
         }
     }
 
     Context 'allows other non-literal throw shapes' {
         It 'allows a bare re-throw inside a catch block' {
-            $records = script:Invoke-AvmRule -Script "try { Get-Process } catch { throw }"
+            $records = @(script:Invoke-AvmRule -Script "try { Get-Process } catch { throw }")
             $records.Count | Should -Be 0
         }
 
         It 'allows throwing the caught error variable' {
             $source = "try { Get-Process } catch { throw `$_ }"
-            $records = script:Invoke-AvmRule -Script $source
+            $records = @(script:Invoke-AvmRule -Script $source)
             $records.Count | Should -Be 0
         }
 
@@ -96,7 +97,7 @@ function Foo { throw "second" }
 $ex = [System.ArgumentException]::new('bad')
 throw $ex
 '@
-            $records = script:Invoke-AvmRule -Script $source
+            $records = @(script:Invoke-AvmRule -Script $source)
             $records.Count | Should -Be 0
         }
     }

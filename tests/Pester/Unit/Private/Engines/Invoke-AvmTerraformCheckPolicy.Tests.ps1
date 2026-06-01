@@ -328,7 +328,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             $script:examplesRoot = Join-Path $script:moduleDir 'examples'
         }
 
-        It 'appends each examples/<name>/exceptions/*.rego as additional --policy pairs' {
+        It 'appends each examples/{name}/exceptions/*.rego as additional --policy pairs' {
             $exFoo = Join-Path $script:examplesRoot 'foo' 'exceptions'
             $exBar = Join-Path $script:examplesRoot 'bar' 'exceptions'
             $null = New-Item -ItemType Directory -Path $exFoo -Force
