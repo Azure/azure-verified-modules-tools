@@ -203,6 +203,14 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 - Use PowerShell 7, not Windows PowerShell 5.1. `pwsh` not `powershell`.
 - `Copy-Item` and `Move-Item` are case-preserving but not case-sensitive — renames within the same casing class are silent no-ops. To change a folder or file's casing, rename to a different name first and then to the desired casing.
 - Symlinks need Developer Mode or an elevated shell.
+- The module forces the console to UTF-8 at import time (`[Console]::OutputEncoding` + `$OutputEncoding`) so subprocess stdout/stderr from `terraform`, `bicep`, `tflint`, `conftest`, and friends decode cleanly. The default Windows console code page (1252, 437) mangles UTF-8 bytes. To opt out — for example, you've already configured the console deliberately for non-AVM tooling — set the environment variable **before** importing the module:
+
+   ```pwsh
+   $env:AVM_NO_CONSOLE_CONFIG = '1'
+   Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
+   ```
+
+   The opt-out is Windows-only — Linux and macOS use UTF-8 natively, so the module skips the encoding setup on those platforms regardless of `AVM_NO_CONSOLE_CONFIG`. The mechanism lives in `src/Avm.Authoring/Avm.Authoring.psm1` (top-of-file `if` block).
 
 ### Linux
 
