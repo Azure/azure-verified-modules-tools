@@ -322,4 +322,162 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $result.ToolPath   | Should -Be '/usr/local/bin/conftest'
         $result.ToolSource | Should -Be 'path'
     }
+
+    Context 'per-example exceptions discovery' {
+        BeforeEach {
+            $script:examplesRoot = Join-Path $script:moduleDir 'examples'
+        }
+
+        It 'appends each examples/<name>/exceptions/*.rego as additional --policy pairs' {
+            $exFoo = Join-Path $script:examplesRoot 'foo' 'exceptions'
+            $exBar = Join-Path $script:examplesRoot 'bar' 'exceptions'
+            $null = New-Item -ItemType Directory -Path $exFoo -Force
+            $null = New-Item -ItemType Directory -Path $exBar -Force
+            $fooFile = Join-Path $exFoo 'allow.rego'
+            $barFile = Join-Path $exBar 'allow.rego'
+            Set-Content -LiteralPath $fooFile -Value 'package x' -Encoding utf8
+            Set-Content -LiteralPath $barFile -Value 'package y' -Encoding utf8
+
+            $ctx = $script:context
+            $assets = $script:bothAssets
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
+                param($C, $A)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Read-AvmAssetConfig { $A }
+                Mock Resolve-AvmPinnedAsset {
+                    param($Name, $Asset)
+                    [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
+                }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            InModuleScope 'Avm.Authoring' -Parameters @{ FooFile = $fooFile; BarFile = $barFile } {
+                param($FooFile, $BarFile)
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList.Count -eq 14 -and
+                    $ArgumentList[5] -eq '--policy' -and
+                    $ArgumentList[7] -eq '--policy' -and
+                    $ArgumentList[9] -eq '--output' -and
+                    ($ArgumentList[6] -eq $BarFile -or $ArgumentList[6] -eq $FooFile) -and
+                    ($ArgumentList[8] -eq $BarFile -or $ArgumentList[8] -eq $FooFile) -and
+                    ($ArgumentList[6] -ne $ArgumentList[8])
+                }
+            }
+        }
+
+        It 'sorts discovered exceptions by FullName using ordinal comparison' {
+            $exFoo = Join-Path $script:examplesRoot 'foo' 'exceptions'
+            $null = New-Item -ItemType Directory -Path $exFoo -Force
+            # Filenames chosen so en-US sort and ordinal sort disagree:
+            # ordinal: 'Foo.rego' (0x46) < 'bar.rego' (0x62);
+            # en-US:   'bar.rego' < 'Foo.rego' (case-insensitive then case-sensitive).
+            $upperFile = Join-Path $exFoo 'Foo.rego'
+            $lowerFile = Join-Path $exFoo 'bar.rego'
+            Set-Content -LiteralPath $upperFile -Value 'package u' -Encoding utf8
+            Set-Content -LiteralPath $lowerFile -Value 'package l' -Encoding utf8
+
+            $ctx = $script:context
+            $assets = $script:bothAssets
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
+                param($C, $A)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Read-AvmAssetConfig { $A }
+                Mock Resolve-AvmPinnedAsset {
+                    param($Name, $Asset)
+                    [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
+                }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            InModuleScope 'Avm.Authoring' -Parameters @{ Upper = $upperFile; Lower = $lowerFile } {
+                param($Upper, $Lower)
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList[6] -eq $Upper -and
+                    $ArgumentList[8] -eq $Lower
+                }
+            }
+        }
+
+        It 'emits no exceptions args when examples directory is absent' {
+            $ctx = $script:context
+            $assets = $script:bothAssets
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
+                param($C, $A)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Read-AvmAssetConfig { $A }
+                Mock Resolve-AvmPinnedAsset {
+                    param($Name, $Asset)
+                    [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
+                }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            InModuleScope 'Avm.Authoring' {
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList.Count -eq 10
+                }
+            }
+        }
+
+        It 'emits no exceptions args when an example has no exceptions subdir' {
+            $null = New-Item -ItemType Directory -Path (Join-Path $script:examplesRoot 'foo') -Force
+            $null = New-Item -ItemType Directory -Path (Join-Path $script:examplesRoot 'bar') -Force
+
+            $ctx = $script:context
+            $assets = $script:bothAssets
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
+                param($C, $A)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Read-AvmAssetConfig { $A }
+                Mock Resolve-AvmPinnedAsset {
+                    param($Name, $Asset)
+                    [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
+                }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            InModuleScope 'Avm.Authoring' {
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList.Count -eq 10
+                }
+            }
+        }
+
+        It 'skips non-.rego files inside exceptions directories' {
+            $exFoo = Join-Path $script:examplesRoot 'foo' 'exceptions'
+            $null = New-Item -ItemType Directory -Path $exFoo -Force
+            $kept = Join-Path $exFoo 'allow.rego'
+            Set-Content -LiteralPath $kept -Value 'package x' -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $exFoo 'README.md') -Value '# notes' -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $exFoo 'data.json') -Value '{}' -Encoding utf8
+
+            $ctx = $script:context
+            $assets = $script:bothAssets
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
+                param($C, $A)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Read-AvmAssetConfig { $A }
+                Mock Resolve-AvmPinnedAsset {
+                    param($Name, $Asset)
+                    [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
+                }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            InModuleScope 'Avm.Authoring' -Parameters @{ Kept = $kept } {
+                param($Kept)
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList.Count -eq 12 -and
+                    $ArgumentList[5] -eq '--policy' -and
+                    $ArgumentList[6] -eq $Kept -and
+                    $ArgumentList[7] -eq '--output'
+                }
+            }
+        }
+    }
 }

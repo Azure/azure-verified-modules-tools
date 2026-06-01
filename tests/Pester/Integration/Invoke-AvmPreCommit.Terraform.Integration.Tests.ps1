@@ -103,6 +103,14 @@ BeforeAll {
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'README.md') -Value $readme -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'tests' '.keep') -Value '' -Encoding utf8NoBOM
+
+    # Per-example exception .rego fixture so the integration smoke also
+    # exercises Invoke-AvmTerraformCheckPolicy's per-example exceptions
+    # discovery path end-to-end. The stub conftest does not load the
+    # file; this only proves the engine builds argv without throwing.
+    $exDir = Join-Path $script:fixtureRoot 'examples' 'foo' 'exceptions'
+    $null = New-Item -ItemType Directory -Path $exDir -Force
+    Set-Content -LiteralPath (Join-Path $exDir 'example.rego') -Value "package example`n" -Encoding utf8NoBOM
 }
 
 AfterAll {

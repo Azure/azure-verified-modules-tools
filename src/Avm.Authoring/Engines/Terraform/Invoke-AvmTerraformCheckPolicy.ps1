@@ -27,8 +27,12 @@ function Invoke-AvmTerraformCheckPolicy {
              the on-disk Path.
           5. Run conftest:
                 conftest test --policy <APRL> --policy <AVMSEC>
+                              [--policy <example-exception>]...
                               --output json --parser hcl2 .
-             from CWD=$Context.Root.
+             from CWD=$Context.Root. Per-example exception bundles are
+             discovered as <Root>/examples/<name>/exceptions/*.rego (top-
+             level glob only) and appended in ordinal-sorted order, so
+             argv is stable across operating systems and locale.
           6. Parse the JSON output: an array of per-file/per-namespace
              records each carrying 'failures' (severity=error) and
              'warnings' (severity=warning) lists. Flatten into the shared
@@ -90,9 +94,45 @@ function Invoke-AvmTerraformCheckPolicy {
     $aprlAsset = Resolve-AvmPinnedAsset -Name $aprlName -Asset $assetConfig.Assets[$aprlName]
     $avmsecAsset = Resolve-AvmPinnedAsset -Name $avmsecName -Asset $assetConfig.Assets[$avmsecName]
 
+    # Per-example exceptions: examples/<name>/exceptions/*.rego (top-level glob;
+    # spec wording is one level deep). Each match is appended as an additional
+    # --policy <path> pair after APRL+AVMSEC so the base bundles still win on
+    # ordering. Sorted by FullName with [StringComparer]::Ordinal so argv is
+    # stable across operating systems and locale.
+    $exceptionPolicies = @()
+    $examplesRoot = Join-Path $Context.Root 'examples'
+    if (Test-Path -LiteralPath $examplesRoot -PathType Container) {
+        $exampleDirs = Get-ChildItem -LiteralPath $examplesRoot -Directory -ErrorAction SilentlyContinue
+        $exceptionMatches = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($example in $exampleDirs) {
+            $exceptionsDir = Join-Path $example.FullName 'exceptions'
+            if (-not (Test-Path -LiteralPath $exceptionsDir -PathType Container)) { continue }
+            $regoFiles = Get-ChildItem -LiteralPath $exceptionsDir -File -Filter '*.rego' -ErrorAction SilentlyContinue
+            foreach ($file in $regoFiles) {
+                $exceptionMatches.Add($file.FullName)
+            }
+        }
+        if ($exceptionMatches.Count -gt 0) {
+            $arr = $exceptionMatches.ToArray()
+            [System.Array]::Sort($arr, [System.StringComparer]::Ordinal)
+            $exceptionPolicies = $arr
+        }
+    }
+
+    $argList = New-Object 'System.Collections.Generic.List[string]'
+    $argList.Add('test')
+    $argList.Add('--policy'); $argList.Add($aprlAsset.Path)
+    $argList.Add('--policy'); $argList.Add($avmsecAsset.Path)
+    foreach ($exception in $exceptionPolicies) {
+        $argList.Add('--policy'); $argList.Add($exception)
+    }
+    $argList.Add('--output'); $argList.Add('json')
+    $argList.Add('--parser'); $argList.Add('hcl2')
+    $argList.Add('.')
+
     $result = Invoke-AvmProcess `
         -FilePath $tool.Path `
-        -ArgumentList @('test', '--policy', $aprlAsset.Path, '--policy', $avmsecAsset.Path, '--output', 'json', '--parser', 'hcl2', '.') `
+        -ArgumentList $argList.ToArray() `
         -WorkingDirectory $Context.Root `
         -IgnoreExitCode
 
