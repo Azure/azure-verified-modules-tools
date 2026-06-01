@@ -197,6 +197,15 @@ task lint {
         $params.Settings = $script:settingsPath
     }
 
+    # Custom PSSA rules ship under src/Avm.Authoring/Resources/CustomRules/.
+    # Each rule is a Measure-Avm* function in a .psm1 module file. Pointing
+    # -CustomRulePath at the directory loads every rule module under it.
+    $customRulesPath = Join-Path $script:moduleRoot 'Resources' 'CustomRules'
+    if (Test-Path -LiteralPath $customRulesPath) {
+        $params.CustomRulePath        = $customRulesPath
+        $params.RecurseCustomRulePath = $true
+    }
+
     $results = script:Invoke-ScriptAnalyzerWithRetry -Params $params
 
     if (-not $results) {
