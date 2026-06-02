@@ -15,6 +15,67 @@ fail the workflow before any PSGallery publish runs.
 Tracking work after `0.1.0`. Move bullets into a dated version section when
 cutting a release.
 
+### Added
+
+- `avm check policy` for Terraform: real `conftest` integration that runs the
+  pinned APRL + AVMSEC Rego bundles against the `terraform plan` JSON for each
+  example, with per-example `exceptions/*.rego` discovery. Bundles are
+  materialised on demand from the `pinned-assets.psd1` registry, sha256-verified
+  on first download, cached under `AVM_HOME`, and re-used offline.
+- `pinned-assets.psd1` configuration reader (`Get-AvmPinnedAsset`) and cache
+  materialiser (`Resolve-AvmPinnedAsset`) that honour `AVM_OFFLINE` and
+  `AVM_MIRROR` and reuse the existing `Get-AvmFolder` cache layout.
+- `conftest` (0.68.2) pinned in `tools.lock.psd1` for all six OS/arch
+  platforms; resolvable through the standard managed-tool resolver.
+- `AvmAvoidStringThrow` custom PSScriptAnalyzer rule that flags
+  `throw "string"` in `src/Avm.Authoring/**` and steers code toward the typed
+  `AvmException` hierarchy. Wired into `./build.ps1 lint` (and therefore the
+  `pre-commit` / `ci` chains).
+- `AVM_NO_CONSOLE_CONFIG` env-var opt-out for the host PSReadLine prediction
+  shim, for CI and script callers that can't tolerate console-config probing.
+
+### Changed
+
+- `Invoke-AvmBicepDocs` reverted to a clean `AvmConfigurationException` stub
+  on 2026-05-26 in a deliberate pivot to prioritise Terraform-first delivery.
+  The intervening ARM-JSON walker spike (slices 4a–4f: outputs, resource-types,
+  Parameters summary, per-parameter detail blocks, inline-object recursion,
+  `$ref`/UDT resolution, array `items` traversal, discriminated-union
+  dispatch, and the secure-type contract) was implemented end-to-end and then
+  removed wholesale. A future design will shell out to a dedicated Bicep docs
+  CLI when one is selected.
+- `docs/avm-consolidation-plan.md` verb-table entries for `avm docs` (Bicep),
+  `avm pre-commit`, and `avm pr-check` rewritten to match the engines as
+  wired today (`format → lint → test → docs` for `pre-commit`;
+  `format → transform → lint → check policy → check convention → test → docs`
+  for `pr-check`, with `skipped` semantics for stubbed engines).
+
+### Tests
+
+- Terraform engine stub harness under `tests/Pester/Integration/Terraform/`
+  that exercises `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck` end-to-end
+  against stub `terraform` / `tflint` / `terraform-docs` / `conftest`
+  binaries injected onto the PATH.
+- End-to-end coverage of `Invoke-AvmCheckPolicy` (Terraform) via a stub
+  `conftest` binary that simulates pass, deny, and exception-suppression
+  scenarios.
+- Public-verb smoke test for the `Invoke-AvmPreCommit` composition (covers
+  Terraform alongside the existing Bicep coverage).
+- PSScriptAnalyzer rule-test helper made array-safe to remove a CI flake.
+
+### Docs
+
+- Root `README.md` refreshed to reflect the actual repo state after the
+  2026-05-26 Terraform-first pivot.
+- New `docs/terraform-migration.md` migration guide.
+- `docs/progress.md` audit of Terraform tool binary availability — 3 of 4
+  candidates (`mapotf`, `avmfix`, `grept`) ship no GitHub releases, blocking
+  `avm transform` / `avm check convention` / the `avmfix`-format-chain on an
+  A/B/C supply-chain decision.
+- Confirmed the spec §19 pre-commit Pester suite is ghost-complete (no
+  additional test work required to satisfy that line item).
+- `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
+
 ## [0.1.0] - 2026-05-18
 
 First real release of `Avm.Authoring` — the Phase 0 skeleton from the
