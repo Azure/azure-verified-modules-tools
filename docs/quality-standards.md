@@ -695,3 +695,82 @@ Rationale:
 - Building a custom AVM-specific vault backend (option (a)'s pluggability is good enough).
 - Building the `avm credential` UX before there's a consumer that needs it.
 - File-based store (option (b)) — re-litigate only if (a) is found to have a hard portability or telemetry-CI blocker that this audit's table missed.
+
+## Appendix F. Decision: `dotnet tool` packaging as a Phase 0 distribution channel
+
+### Context
+
+Spec §23 OQ 5 (line 671) verbatim:
+
+> **`dotnet tool` packaging.** Adopt as a Phase 0 distribution channel for future-proofing, or wait for Phase 3 Hybrid mode? Lean: wait — packaging effort isn't justified until Hybrid is real.
+
+Consolidation plan §11 OQ 4 (line 495) re-asks the same question, and the plan's distribution-channel table (lines 460–462) marks `dotnet tool` as **Phase 3+, "Only if Option 3 (Hybrid) is activated"**. This appendix grounds that lean against the module's actual shape and writes the trigger conditions down so a future session doesn't re-litigate it.
+
+### What `dotnet tool` actually distributes
+
+`dotnet tool install -g <id>` consumes a NuGet package built with `<PackAsTool>true</PackAsTool>` (and either `<PackageType>DotnetTool</PackageType>` for global tools or `DotnetCliTool` for tool-manifest local tools). The .NET CLI shells out to a generated wrapper that invokes `dotnet <tool.dll>`. **The package's payload is .NET IL** — managed assemblies, a `.runtimeconfig.json`, and a `tools/<tfm>/any/<id>.dll`. The runtime is the user's installed .NET SDK or runtime; the tool itself is not a single self-contained binary.
+
+There is **no first-class story for packaging a pure-PowerShell module as a `dotnet tool`**. The two community attempts I'm aware of (`PowerShell.DotnetTool.SDK` patterns; one-off projects on GitHub) all wrap a PowerShell host inside a .NET console app that fires up a runspace, imports the embedded module, and dispatches. That's a non-trivial host shim — it's exactly the Hybrid-mode (Option 3) architecture from `docs/avm-consolidation-plan.md` §3, just with a different distribution wrapper around it.
+
+Stated baldly: **`dotnet tool` packaging is the *distribution channel* for the Hybrid (Option 3) shape**. It is not a *separate* decision; it is downstream of the Hybrid-versus-not decision.
+
+### Today's distribution reality
+
+| Channel                | Status                  | Driver                                                                                  |
+| ---------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| **PSGallery**          | ✅ Wired (Slice M closes the publish-script gap; release workflow drives it) | The canonical PowerShell module distribution channel; first-class `Install-Module` / `Install-PSResource` UX |
+| **GitHub Releases (.nupkg)** | 🟡 Implicit (the publish workflow uploads to PSGallery, which is itself .nupkg-based; no separate GH Releases artifact) | Already on the Phase 6 list for parity with the legacy `./avm` shim users |
+| **`dotnet tool`**      | ❌ Not started, not on Phase 0–2 list | Would require the Hybrid host shim — out of scope until Option 3 fires |
+| **Homebrew tap, Scoop bucket** | ❌ Phase 3+ ("Hybrid path only" per plan line 462) | Same dependency: needs a single-binary artifact, which Hybrid produces |
+
+### What we'd actually need to do to ship `dotnet tool` today
+
+To package the current PowerShell module as a `dotnet tool` we would have to:
+
+1. **Build a .NET host shim** — a small C# console project that boots a `PowerShell` runspace (via `Microsoft.PowerShell.SDK` NuGet package), imports the embedded `Avm.Authoring` module, parses argv, and dispatches to `Invoke-Avm`. This is ~200–500 LOC of C# plus a `.csproj` plus a build target that embeds the `src/Avm.Authoring/**` content as a NuGet content folder.
+2. **Decide the runtime story** — `Microsoft.PowerShell.SDK` pulls in **the entire PowerShell 7 runtime** as a dependency (~80 MB unpacked). A `dotnet tool` package shipping the SDK is fat (~50–100 MB compressed) vs. the current `Avm.Authoring.psd1` PSGallery payload (~250 KB). The alternative is documenting `pwsh 7.4+` as a prerequisite and shelling out to it, which is uglier UX than just installing the PSGallery module directly.
+3. **Cross-publish per RID** — `dotnet tool` packages are technically platform-agnostic by default (`tfm=net8.0`, `runtime=any`), but if we embed any platform-specific helper (e.g., the cancellation-on-Windows code from spec §23 OQ 3 once it lands) we'd have to ship per-RID variants. That's a separate complication that PSGallery doesn't have.
+4. **Mirror every release to NuGet.org** — `dotnet tool install -g <id>` resolves from NuGet.org by default. We'd need a NuGet.org account in the `Azure` org, an API key, a publish step in `.github/workflows/release.yml`, and signed packages (NuGet.org requires `--api-key` + recommends Authenticode-signed NuGet packages for verified-publisher status).
+5. **Write per-channel install docs** — README would need separate sections for "Install via PSGallery" (already there), "Install via `dotnet tool`" (new), and the divergence in command surface (none — both should invoke the same `avm` verbs).
+
+### Per-trigger evaluation
+
+| Trigger that might justify `dotnet tool` today | Fires?                            | Why                                                                                                     |
+| ---------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Users without PowerShell installed              | ❌                                 | The CLI *is* a PowerShell module; `pwsh 7.4+` is already a hard prerequisite per spec §2. A `dotnet tool` wrapper still requires either the SDK runtime bundled (fat) or `pwsh` on PATH (same prereq). No net UX win. |
+| Users with `dotnet` already installed, no `pwsh` | ⚠️ Hypothetical                    | Plausible cohort: a developer of a .NET-only repo who's never touched PowerShell. But they still need `pwsh` for the engine to run; the `dotnet tool` wrapper just hides one install step. Net win is one fewer documented prerequisite, not a different runtime. |
+| CI environments where `Install-Module` is awkward | ❌                                 | GitHub Actions, Azure DevOps, GitLab CI all have first-class `Install-Module` / `Install-PSResource` support. No CI environment in 2026 lacks PSGallery access if it has `dotnet`. |
+| Future Hybrid binary distribution               | ✅ but Phase 3                     | This is exactly what the spec lean says — when Option 3 fires, `dotnet tool` joins the channel mix. The work shape changes from "package a PS module as a fat .NET tool" (today: silly) to "package a real .NET binary as a thin .NET tool" (Phase 3: natural). |
+| Avoiding PSGallery dependency                   | ❌                                 | PSGallery is the canonical PowerShell module channel; avoiding it is anti-PowerShell-ecosystem. The plan keeps the PowerShell module on PSGallery even after Hybrid (plan line 84: "GitHub Releases (single binary), `dotnet tool`, plus a PSGallery module for direct PS use"). |
+
+**Zero of the triggers fire today.** The Hybrid trigger is the only one that does, and it's by definition Phase 3+.
+
+### Recommended option: **defer to Phase 3 (matches spec lean — no change)**
+
+Confirm the spec §23 OQ 5 lean and the plan §11 OQ 4 lean. Track no new work. Update the spec/plan only if a Phase 3 trigger surfaces.
+
+Specifically: do **not**
+- Add `<PackAsTool>` plumbing to a `.csproj` we don't have.
+- Build a `Microsoft.PowerShell.SDK`-based host shim.
+- Create a NuGet.org account in the `Azure` org or wire a publish step.
+- Document `dotnet tool install -g Avm.Authoring` anywhere (it would mislead users — it doesn't work and won't work until Phase 3).
+
+### Trigger conditions that would re-open this audit
+
+Any of the following would justify revisiting:
+
+1. **Option 3 (Hybrid) is formally activated.** Plan §3 lists this as Phase 3+; the trigger is "(a) the verb surface is stable and (b) a polished single-binary UX has measurable value over the PS module" (plan line 96). When activated, `dotnet tool` joins Homebrew + Scoop as one of three first-class distribution channels for the Hybrid binary.
+2. **A user-research signal that `pwsh 7.4+` prerequisite is itself the install blocker.** Today there's zero evidence of this — every AVM contributor already has `pwsh` for the legacy `./avm.ps1` shim. If post-Phase 6 telemetry (if it exists by then) shows a meaningful "tried to install, didn't have pwsh, gave up" cohort, the calculation changes.
+3. **Microsoft publishes a `Microsoft.PowerShell.GlobalTool` SDK** that packages a `pwsh` module as a `dotnet tool` with first-class support (i.e., no hand-written host shim). The 2024–2026 .NET 8/9/10 tool work hasn't shipped this; if it does, the cost of (1) and (2) above drops materially.
+
+### Deliberately deferred (do not pre-build)
+
+- Authoring a `.csproj` for a `Microsoft.PowerShell.SDK` host shim. Wait for Hybrid.
+- Reserving the `Avm.Authoring` NuGet.org package ID. Only useful if we actually publish; reserving without publishing creates user confusion about which channel is real.
+- Adding `dotnet tool install` instructions to README. Same reasoning — would mislead users.
+- Building a `.github/workflows/release-dotnet-tool.yml`. Phase 3 deliverable.
+
+### Open follow-ups
+
+- **Telemetry design note** still owes a write-up on whether (and how) we'd know if the `pwsh` prerequisite is hurting adoption. Without telemetry the user-research trigger above is unobservable.
+- When Phase 3 starts and Option 3 is activated, **this appendix should be promoted to a Phase 3 spec section** (or a sibling appendix `Appendix F-1`) covering the actual distribution-channel cut-over plan, not a defer-or-not decision.
