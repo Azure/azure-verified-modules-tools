@@ -7,12 +7,15 @@ governance-repo tooling stack — `./avm` shell shim, runtime-downloaded
 `porch-configs/` pipelines — over to the `Avm.Authoring` PowerShell
 module that lives in this repo.
 
-This module is **partially wired today** for the Terraform ecosystem.
-Concretely: `format`, `lint`, `test`, `docs`, and `check policy` are
-real engine invocations against the upstream binaries; `transform` and
-`check convention` are stub steps that report `skipped` while the
-supply-chain decision in `docs/progress.md` § *Phase 2 §2 supply-chain
-audit* is open. The full status matrix is in [§ 5 Engine status](#5-engine-status)
+This module is **largely wired today** for the Terraform ecosystem.
+Concretely: `format`, `lint`, `test`, `docs`, `check policy`, and
+`check convention` are real engine invocations (the first five against
+upstream binaries, `check convention` against the in-module rule
+framework that ships 7 built-in rules covering the kept grept policies
+plus a hook for per-repo `<root>/.avm/rules/*.psd1` extensions);
+`transform` is a stub step that reports `skipped` while the supply-chain
+decision in `docs/progress.md` § *Phase 2 §2 supply-chain audit* is
+open. The full status matrix is in [§ 5 Engine status](#5-engine-status)
 below.
 
 For the live single-source-of-truth status of every phase and slice,
@@ -48,10 +51,9 @@ in sync, and a custom CA story for corporate networks.
   they are upstream; the module fetches the bundles at the version the
   repo pins via `.avm/config.json`.
 
-The two things that are still legacy-only today are documented in
+The one thing that is still legacy-only today is documented in
 [§ 6 What's not migrated yet](#6-whats-not-migrated-yet) — `transform`
-(needs `mapotf`) and `check convention` (needs `grept`). Both are
-blocked on the same Go-tool packaging decision.
+(needs `mapotf`), which is blocked on the Go-tool packaging decision.
 
 ---
 
@@ -205,7 +207,7 @@ exactly this status today.
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `conftest`              | `test --policy <APRL> --policy <AVMSEC> [--policy <exceptions>...] --output json --parser hcl2 .` from `cwd=<root>`          |   ✅   | Needs `avm-policy-aprl` + `avm-policy-avmsec` declared in `.avm/config.json` (see [§ 4](#4-pinned-asset-config)). Otherwise reports `skipped`.   |
 | `avm transform`       | `mapotf`                | _engine stub, `AvmConfigurationException` → `skipped`_                                                                       |   ❌   | Blocked: `Azure/mapotf` ships no GitHub binary releases; see [§ 6](#6-whats-not-migrated-yet).                                                   |
-| `avm check convention`| `grept`                 | _engine stub, `AvmConfigurationException` → `skipped`_                                                                       |   ❌   | Blocked: `Azure/grept` ships no GitHub binary releases; see [§ 6](#6-whats-not-migrated-yet).                                                    |
+| `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
 The pinned tool versions live in
 `src/Avm.Authoring/Resources/tools.lock.psd1`. Today: `terraform`,
@@ -225,7 +227,6 @@ status here will lag the canonical checklist by at most one slice.
   architectural decision in `progress.md` § *Phase 2 §2 supply-chain
   audit* (options A: build-and-host CI, B: new `goModule` lock kind
   requiring `go` on `$PATH`, C: defer §2). Same blocker affects:
-- **`avm check convention`** — needs `grept` (also `go install`-only).
 - **`avm format` `avmfix` chaining** — the legacy chain is
   `terraform fmt` → `avmfix`. The `avmfix` follow-up step is the same
   blocker (`go install`-only). `avm format` today runs only the
@@ -298,10 +299,9 @@ different config files and write to different caches.
   `avm-policy-aprl` or `avm-policy-avmsec` is missing from your
   effective config. Add both to `<repo-root>/.avm/config.json` per
   [§ 4](#4-pinned-asset-config), then re-run.
-- **"`avm transform` / `avm check convention` always skip."** That's
-  expected today — both engines are stubs pending the Phase 2 §2
-  decision. The composition verbs treat them as `skipped` so the rest
-  of the chain still runs.
+- **"`avm transform` always skips."** That's expected today —
+  the engine is a stub pending the Phase 2 §2 decision. The composition
+  verbs treat it as `skipped` so the rest of the chain still runs.
 - **"PSSA `NullReferenceException` during `./build.ps1 lint`."**
   Known transient; the build wrapper retries automatically. Set
   `$env:AVM_LINT_MAX_ATTEMPTS` higher if needed. See

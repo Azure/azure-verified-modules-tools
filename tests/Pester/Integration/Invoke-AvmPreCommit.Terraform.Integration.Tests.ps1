@@ -111,6 +111,56 @@ BeforeAll {
     $exDir = Join-Path $script:fixtureRoot 'examples' 'foo' 'exceptions'
     $null = New-Item -ItemType Directory -Path $exDir -Force
     Set-Content -LiteralPath (Join-Path $exDir 'example.rego') -Value "package example`n" -Encoding utf8NoBOM
+
+    # Slice D: materialise the files required by the seven built-in
+    # convention rules so Invoke-AvmCheckConvention still reports
+    # Status=pass against the fixture. AppliesTo='all' rules
+    # (terraform-tf-must-exist + header-md-must-exist) require these
+    # files at root AND under each immediate examples/* subdir; the
+    # other Slice D rules either fire at root only (gitignore,
+    # examples/, tests/) or trip only when the wrong filename exists
+    # (output.tf / variable.tf) -- so absence here is the pass state.
+    $terraformTf = @(
+        'terraform {',
+        '  required_version = ">= 1.0"',
+        '}'
+    ) -join "`n"
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot '_header.md') -Value "# Fixture module`n" -Encoding utf8NoBOM
+
+    $exampleDir = Join-Path $script:fixtureRoot 'examples' 'foo'
+    Set-Content -LiteralPath (Join-Path $exampleDir 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $exampleDir '_header.md') -Value "# Fixture example`n" -Encoding utf8NoBOM
+
+    # avm.tf.gitignore-essentials requires all 24 canonical globs from
+    # upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
+    $gitignoreGlobs = @(
+        '.DS_Store',
+        '.terraform.lock.hcl',
+        '.terraformrc',
+        '*.md.tmp',
+        '*.mptfbackup',
+        '*.tfstate.*',
+        '*.tfstate',
+        '*.tfvars.json',
+        '*.tfvars',
+        '**/.terraform/*',
+        '*tfplan*',
+        'avm.tflint_example.hcl',
+        'avm.tflint_example.merged.hcl',
+        'avm.tflint_module.hcl',
+        'avm.tflint_module.merged.hcl',
+        'avm.tflint.hcl',
+        'avm.tflint.merged.hcl',
+        'avmmakefile',
+        'crash.*.log',
+        'crash.log',
+        'examples/*/policy',
+        'README-generated.md',
+        'terraform.rc',
+        '.avm'
+    )
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot '.gitignore') -Value (($gitignoreGlobs -join "`n") + "`n") -Encoding utf8NoBOM
 }
 
 AfterAll {
@@ -176,13 +226,15 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         }
 
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
-        # rather than 'path'. The fixture writes .avm/config.json in BeforeAll, so
-        # the built-in smoke rule (000-avm-config-exists) passes with zero issues.
+        # rather than 'path'. The fixture writes .avm/config.json plus all the
+        # files required by the seven Slice D rules in BeforeAll, so every
+        # built-in rule passes with zero issues end-to-end.
         $byName['check convention'].PSObject.Properties['Status'].Value | Should -Be 'pass'
         $ccResult = $byName['check convention'].PSObject.Properties['Result'].Value
         $ccResult.PSObject.Properties['Engine'].Value     | Should -Be 'terraform'
         $ccResult.PSObject.Properties['Tool'].Value       | Should -Match '^avm-rules/'
         $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
+        @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
 
         # Tool-prefix assertions catch future engine-envelope regressions on
         # the just-wired check-policy engine, which the existing format/lint/

@@ -21,6 +21,31 @@ BeforeAll {
         param([string] $Root)
         return [pscustomobject]@{ Ecosystem = 'terraform'; Root = $Root }
     }
+
+    # Pre-stages the minimum on-disk shape (files + dirs + .gitignore) that
+    # satisfies every error-severity built-in rule shipped under
+    # src/Avm.Authoring/Resources/Rules/. After calling this, the only
+    # built-in rule that should still fire is the warning-severity smoke
+    # rule (avm.smoke.avm-config-exists), because no .avm/config.json is
+    # written. Tests can then layer their own per-repo rules on top.
+    function script:NewBaselineRoot {
+        $root = script:NewRoot
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText((Join-Path $root 'terraform.tf'), '# stub', $utf8)
+        [System.IO.File]::WriteAllText((Join-Path $root '_header.md'), '# header', $utf8)
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'tests') -Force | Out-Null
+        $globs = @(
+            '.DS_Store', '.terraform.lock.hcl', '.terraformrc', '*.md.tmp', '*.mptfbackup',
+            '*.tfstate.*', '*.tfstate', '*.tfvars.json', '*.tfvars', '**/.terraform/*',
+            '*tfplan*', 'avm.tflint_example.hcl', 'avm.tflint_example.merged.hcl',
+            'avm.tflint_module.hcl', 'avm.tflint_module.merged.hcl', 'avm.tflint.hcl',
+            'avm.tflint.merged.hcl', 'avmmakefile', 'crash.*.log', 'crash.log',
+            'examples/*/policy', 'README-generated.md', 'terraform.rc', '.avm'
+        )
+        [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), (($globs -join "`n") + "`n"), $utf8)
+        return $root
+    }
 }
 
 Describe 'Invoke-AvmTerraformCheckConvention engine' {
@@ -42,17 +67,21 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $result.ToolSource | Should -Be 'builtin'
     }
 
-    It 'returns status=pass when the only built-in rule (warning-severity smoke rule) reports a warning' {
-        # Root has no .avm/config.json; smoke rule emits warning; status stays pass.
-        $root = script:NewRoot
+    It 'returns status=pass when every error-severity built-in rule is satisfied (only the smoke warning fires)' {
+        # Baseline root pre-stages files for the Slice D error rules
+        # (terraform.tf, _header.md, examples/, tests/, .gitignore) so the
+        # only built-in rule that still fires is the smoke rule. No
+        # .avm/config.json is written, so the smoke rule emits a warning,
+        # which must not flip Status to fail.
+        $root = script:NewBaselineRoot
         $ctx = script:NewTerraformContext $root
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C) Invoke-AvmTerraformCheckConvention -Context $C
         }
         $result.Status | Should -Be 'pass'
-        @($result.Issues).Count | Should -BeGreaterOrEqual 1
-        $result.Issues[0].Severity | Should -Be 'warning'
-        $result.Issues[0].Code | Should -Be 'avm.smoke.avm-config-exists'
+        $smokeIssues = @($result.Issues | Where-Object Code -eq 'avm.smoke.avm-config-exists')
+        $smokeIssues.Count | Should -BeGreaterOrEqual 1
+        $smokeIssues[0].Severity | Should -Be 'warning'
     }
 
     It 'returns status=fail when at least one issue is severity=error' {
