@@ -176,7 +176,7 @@ AfterAll {
 
 Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Integration' {
 
-    It 'pre-commit composes four steps end-to-end via launcher-resolved stubs' {
+    It 'pre-commit composes the six-step terraform chain end-to-end via launcher-resolved stubs and the in-module check-convention rules' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -184,13 +184,32 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 4
-        ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be @('format', 'lint', 'test', 'docs')
+        $steps.Count | Should -Be 6
+        $expected = @('check convention', 'transform', 'format', 'lint', 'test', 'docs')
+        ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
-        foreach ($s in $steps) {
-            $s.PSObject.Properties['Status'].Value | Should -Be 'pass'
-            $s.PSObject.Properties['Error'].Value | Should -BeNullOrEmpty
-            $engineResult = $s.PSObject.Properties['Result'].Value
+        $byName = @{}
+        foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
+
+        # transform stays AvmConfigurationException -> skipped per Phase 2 audit.
+        $byName['transform'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        $byName['transform'].PSObject.Properties['Error'].Value | Should -Not -BeNullOrEmpty
+
+        # check convention runs the in-module rule framework; reports
+        # ToolSource='builtin' rather than 'path'. Fixture pre-stages
+        # every file the seven Slice D rules require.
+        $byName['check convention'].PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $ccResult = $byName['check convention'].PSObject.Properties['Result'].Value
+        $ccResult.PSObject.Properties['Engine'].Value     | Should -Be 'terraform'
+        $ccResult.PSObject.Properties['Tool'].Value       | Should -Match '^avm-rules/'
+        $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
+        @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+
+        # External-tool passing steps (each shells out via Invoke-AvmProcess).
+        foreach ($passing in @('format', 'lint', 'test', 'docs')) {
+            $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
+            $byName[$passing].PSObject.Properties['Error'].Value | Should -BeNullOrEmpty
+            $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult | Should -Not -BeNullOrEmpty
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'

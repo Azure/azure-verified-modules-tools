@@ -2,16 +2,22 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        format -> lint -> test -> docs.
+        bicep:     format -> lint -> test -> docs.
+        terraform: check convention -> transform -> format -> lint -> test -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
-        Get-AvmModuleContext, then invokes Invoke-AvmFormat, Invoke-AvmLint,
-        Invoke-AvmTest, and Invoke-AvmDocs in sequence against that same
-        module root. Each step's structured result is captured. The overall
-        Status is 'pass' only when every executed step reports
-        Status='pass' (format reports an implicit pass when no errors are
-        thrown).
+        Get-AvmModuleContext, then invokes the per-ecosystem step chain
+        in sequence against that same module root. Each step's structured
+        result is captured. The overall Status is 'pass' only when every
+        executed step reports Status='pass' (format reports an implicit
+        pass when no errors are thrown).
+
+        The Terraform chain mirrors upstream avm-terraform-governance
+        pre-commit.porch.yaml order (check convention -> transform ->
+        format -> docs) and additionally keeps the two checks that
+        already run locally today (lint, test) ahead of docs, so cold
+        modules still get the richer per-run feedback.
 
         Status semantics:
           - 'pass'    : step returned Status='pass' (or didn't throw for
@@ -21,8 +27,9 @@ function Invoke-AvmPreCommit {
                         AvmConfigurationException; the chain aborts.
           - 'skipped' : step threw AvmConfigurationException - the engine
                         is a deliberate placeholder for a future slice
-                        (e.g. bicep-docs). The chain CONTINUES and
-                        overall status is NOT marked failed by a skip.
+                        (e.g. bicep-docs, terraform transform). The
+                        chain CONTINUES and overall status is NOT
+                        marked failed by a skip.
 
         By default the gauntlet is fail-soft: a step that returns
         Status='fail' (e.g. lint diagnostics) does NOT abort subsequent
@@ -83,12 +90,24 @@ function Invoke-AvmPreCommit {
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 
-    $stepDefs = @(
-        [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
-        [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-        [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
-        [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
-    )
+    $stepDefs = if ($context.Ecosystem -eq 'terraform') {
+        @(
+            [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
+            [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
+            [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
+            [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
+            [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
+            [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
+        )
+    }
+    else {
+        @(
+            [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
+            [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
+            [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
+            [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
+        )
+    }
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'

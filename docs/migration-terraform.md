@@ -133,7 +133,9 @@ through the host's own TLS trust store.
 
 The composition cmdlets and the exact order of engines they call:
 
-- **`avm pre-commit`** → `format` → `lint` → `test` → `docs`
+- **`avm pre-commit`** →
+  - **Terraform**: `check convention` → `transform` → `format` → `lint` → `test` → `docs` (re-ordered 2026-06-05 to align with upstream `porch-configs/pre-commit.porch.yaml` per Slice I; Option (b) kept `lint`+`test` for richer local feedback rather than the strict upstream "match porch exactly" Option (a); `transform` stays `skipped` per Phase 2 §2 audit until the supply-chain decision lands)
+  - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
 - **`avm pr-check`** → `format` → `transform` → `lint` → `check policy` → `check convention` → `test` → `docs`
 
 A step that raises `AvmConfigurationException` (e.g. an engine that's
