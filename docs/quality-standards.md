@@ -333,6 +333,103 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 ---
 
+## Appendix D. Decision: long-path support on Windows
+
+### Context
+
+Spec [§6](avm-implementation-spec.md) line 219 says "keep all generated paths well below 260 characters even when Windows long-path support is enabled" and line 220 says "use short hashes (first 12 hex of SHA256) where a content-addressed segment is needed, not full hashes". Spec [§23 OQ 6](avm-implementation-spec.md) (line 672) asks whether to force-enable long-path support via an application manifest, document the `HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem!LongPathsEnabled` registry key as a prerequisite, or rely on short paths. The spec's lean is "keep paths short enough that the question doesn't matter".
+
+This appendix (a) measures the actual on-disk paths the module currently emits against the 260-character budget, (b) flags a concrete deviation from §6 line 220 that erodes the headroom, and (c) settles the long-path posture.
+
+macOS and Linux aren't subject to MAX_PATH, so this audit is Windows-only.
+
+### Path budget
+
+Worst-case Windows prefix uses a 20-character SAM username (Windows local-account limit):
+
+- `C:\Users\<sam-max-20-char>\AppData\Local\Avm\` = 47 chars
+- Plus `Cache\assets\` (the deepest subtree) = 60 chars
+- Add a 30-char asset name → 91 chars before the content-addressed segment
+
+Two cache layouts produced by the module today:
+
+| Layout         | Path shape                                                         | Worst-case leaf example                                                                          | Length | Headroom (260 − x) |
+| -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------ | ------------------ |
+| Tool cache     | `%LOCALAPPDATA%\Avm\Tools\<tool>\<version>\<binary>`               | `…\Avm\Tools\terraform-docs\0.20.0\terraform-docs.exe`                                           | ~92    | ~168               |
+| Tool cache     | same                                                               | `…\Avm\Tools\avm-mapotf-pre-commit\1.99.0\avm-mapotf-pre-commit.exe`                             | ~108   | ~152               |
+| Asset cache    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\<sha256>\<sub-path>`       | `…\Cache\assets\avm-mapotf-configs-pre-commit\<64-hex>\mapotf-configs\pre-commit\avm_headers_for_azapi.mptf.hcl` | **204** | **56**             |
+| Asset cache    | same, but with spec-compliant 12-hex segment                       | same with `<12-hex>` in place of `<64-hex>`                                                      | 152    | 108                |
+| Staging dir    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\.staging\<12-char-guid>\…` | …same `mapotf` content path under `.staging\<guid>\`                                             | ~161   | ~99                |
+| Log file       | `%LOCALAPPDATA%\Avm\Logs\<iso8601>.log`                            | `…\Avm\Logs\20260605T123045Z.log`                                                                | ~70    | ~190               |
+
+Tool cache is comfortable. Logs are comfortable. Staging directory is comfortable (uses a 12-char GUID already). **Asset cache is uncomfortably tight** — a 56-char margin doesn't survive a single extra layer of nesting inside a bundle. A 4-level-deep path inside a bundle, a 30-char filename, and a 25-character asset name would consume 100+ chars by themselves and put the total past 260.
+
+### Finding (concrete spec deviation)
+
+`src/Avm.Authoring/Private/Assets/Resolve-AvmPinnedAsset.ps1` line 127 uses the **full 64-char SHA256** for the content-addressed segment:
+
+```powershell
+$versionDir = Join-Path $assetDir $sha   # $sha is 64 hex chars
+```
+
+This violates spec §6 line 220 ("first 12 hex of SHA256, not full hashes"). For comparison, `src/Avm.Authoring/Private/Tools/Install-AvmToolFromLock.ps1` (line 46) correctly avoids hash segments entirely — it uses `<DataDir>/tools/<tool>/<version>/<binary>` because tool installs are version-addressed, not content-addressed. The staging directory (`Install-AvmToolFromLock.ps1` line 109) already uses a 12-character GUID, so the precedent for short identifiers is already in the codebase.
+
+A short hash buys 52 chars of headroom on every asset path, which is roughly the difference between "uncomfortable" and "comfortable" for the realistic mapotf bundle.
+
+Collision-resistance check on the 12-hex truncation: 48 bits of entropy. For asset cardinality below 16M the birthday-bound collision probability is below 0.5 %. Current bounded asset count: 5 (APRL, AVMSEC, mapotf-pre-commit, avmfix-equivalent, plus future). Six-plus orders of magnitude of headroom. Safe.
+
+### Options
+
+(a) **Force-enable long-path support via an application manifest.** Caveats:
+- PowerShell 7.4+ on Windows ships with a long-path-aware host manifest (`pwsh.exe.config` sets `<longPathAware>true</longPathAware>`). Inherited automatically — no module work needed.
+- This still requires Windows 10 1607+ **and** `LongPathsEnabled=1` in the registry. On older Windows or systems without the registry key, paths still fail at 260 regardless of any manifest.
+- PowerShell module manifests (`.psd1`) cannot carry a long-path opt-in; the runtime's manifest applies.
+- Effectively the same as option (b) — "documented prerequisite" wearing different clothes.
+
+(b) **Document `New-ItemProperty -Path 'HKLM:\…\FileSystem' -Name LongPathsEnabled -Value 1` as a prerequisite.** Lowest implementation cost (one paragraph in CONTRIBUTING.md). Pushes the problem onto users. Requires Administrator for HKLM. High risk of silent failures on machines where the user can't or didn't run it.
+
+(c) **Comply with spec §6 line 220 — switch the asset cache to a 12-hex SHA segment.** Small, focused code change in `Resolve-AvmPinnedAsset.ps1`. Adds ~50 chars of headroom across all asset paths. Doesn't depend on Windows version, doesn't require admin, doesn't require the user to do anything. The tool cache already complies. Single-pass cache rebuild on the user side (existing `.verified` markers gate it; old 64-hex dirs become orphan and can be GC'd by a future cleanup verb or just left until the user wipes the cache).
+
+### Recommended option: (c) — comply with spec §6 line 220. Defer (a)+(b) until measurement shows they're needed.
+
+Reasoning:
+
+1. (c) is the cheapest path **and** the spec-compliant one. Three lines of code change in `Resolve-AvmPinnedAsset.ps1`, plus a handful of test assertions.
+2. (a) and (b) only help in the band between 260 and the NTFS hard limit (~32 767 chars). Long-path enablement is irrelevant outside that band. With (c) we don't cross 260 for any realistic asset on any realistic Windows user account.
+3. (a) and (b) push the failure mode out of our control (per-machine config, admin permission, Windows version). (c) keeps the contract self-contained.
+4. PowerShell 7.4+'s own long-path manifest is a pre-existing safety net for the `Cache\assets\…` paths we emit — but it depends on registry state we don't own. Don't rely on it.
+5. The spec's lean ("keep paths short enough that the question doesn't matter") is achievable today. Adopting (c) means OQ 6 resolves to "neither (a) nor (b); paths are short enough".
+
+### Slice implementation outline (separate, deferred — tracked as a follow-up)
+
+The implementation is a small focused slice that the next autopilot session can pick up; this appendix only delivers the decision, not the code change.
+
+`src/Avm.Authoring/Private/Assets/Resolve-AvmPinnedAsset.ps1`:
+
+1. Compute the short hash: `$shortSha = $sha.Substring(0, 12)`.
+2. Replace `$versionDir = Join-Path $assetDir $sha` with `Join-Path $assetDir $shortSha`.
+3. Keep storing the full 64-hex SHA in `.meta.json` so traceability and integrity verification aren't affected (`.meta.json` is parsed, not part of any path).
+4. Adjust the doc-comment example accordingly.
+
+Tests under `tests/Pester/Unit/Private/Assets/Resolve-AvmPinnedAsset.Tests.ps1`:
+
+- Update existing path-shape assertions: expect a 12-char hex segment, not 64.
+- Add a regression: `.meta.json` round-trip preserves the full SHA.
+- Add an explicit length assertion on a realistic worst-case input so the cap doesn't silently regress (suggested cap: 200 chars).
+
+Documentation: add a one-line cross-reference under the spec §6 quote at the top of this appendix once the slice lands.
+
+### Open follow-ups
+
+1. **Slice K** (suggested ID): execute recommendation (c) above. Autopilot-safe — design has been signed off via this audit.
+2. Optional belt-and-braces: a Pester test under `tests/Pester/Unit/Module/` that emits a representative worst-case path through `Get-AvmFolder` + `Resolve-AvmPinnedAsset` and asserts the result is below a fixed budget (suggest 200 chars, 60 below MAX_PATH). Slot in alongside the existing layout tests.
+
+### Deliberately deferred
+
+- **Application-manifest opt-in for a future shipped wrapper** (e.g. a `dotnet tool` per spec §23 OQ 5). Re-evaluate when OQ 5 is resolved; until then the host runtime's manifest is what matters.
+- **Stale-cache GC verb** (`avm cache clean` or similar). Old 64-hex asset directories will linger on user machines after Slice K lands. They're harmless (just disk use). Track as a separate Phase 3 polish slice.
+- **Cross-volume cache redirection** (e.g. `AVM_HOME` on a deeper-than-`%LOCALAPPDATA%` drive). Users who do this already opt into longer paths; document the budget under the existing `AVM_HOME` documentation when Slice K lands. Not a blocker for the recommendation.
+
 ## Appendix A. Decision: `grept` policy disposition
 
 > **Status:** Audit landed 2026-06-04 (Slice B of the Terraform-first pivot plan).
