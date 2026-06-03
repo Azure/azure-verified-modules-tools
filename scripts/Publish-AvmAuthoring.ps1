@@ -1,7 +1,15 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
+    # Spec section 17 line 548: the publish script accepts the API key as
+    # [SecureString] ONLY. Plain-string callers (e.g. an env var sourced from a
+    # CI secret) must wrap with ConvertTo-SecureString -AsPlainText -Force at
+    # the call site. The PSResourceGet API takes a plain [string] -ApiKey, so
+    # we convert at the boundary below (line 86) with the smallest possible
+    # window of plain-text exposure. The conversion lives inside the
+    # ShouldProcess branch so -WhatIf / -Confirm:$false dry runs never even
+    # extract the secret.
     [Parameter(Mandatory = $true, HelpMessage = 'PowerShell Gallery API key from https://www.powershellgallery.com/account/apikeys')]
-    [string] $ApiKey,
+    [SecureString] $ApiKey,
 
     [Parameter()]
     [string] $ModulePath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring'),
@@ -83,7 +91,18 @@ else {
 
 if ($PSCmdlet.ShouldProcess("$ExpectedPackageId $($manifest.Version)", "Publish to $Repository")) {
     Write-Host "Publishing $ExpectedPackageId $($manifest.Version) to $Repository" -ForegroundColor Cyan
-    Publish-PSResource -Path $ModulePath -Repository $Repository -ApiKey $ApiKey -Verbose
+    # PSResourceGet's -ApiKey parameter takes a plain [string], not a
+    # [SecureString], so we must convert at the boundary. Keep the plain-text
+    # window as short as possible: extract, hand to Publish-PSResource, drop
+    # the variable. (Spec section 17 line 549: no plain-text on disk; this
+    # transient in-memory string is destroyed when the function frame unwinds.)
+    $plainApiKey = ConvertFrom-SecureString -SecureString $ApiKey -AsPlainText
+    try {
+        Publish-PSResource -Path $ModulePath -Repository $Repository -ApiKey $plainApiKey -Verbose
+    }
+    finally {
+        $plainApiKey = $null
+    }
     Write-Host 'Publish complete. It may take a few minutes to appear in the gallery.' -ForegroundColor Green
     Write-Host ("View at https://www.powershellgallery.com/packages/{0}" -f $ExpectedPackageId)
 }

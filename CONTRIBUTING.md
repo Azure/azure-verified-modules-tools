@@ -185,10 +185,9 @@ Invoke-Pester -Path ./tests/Pester/Unit -FullNameFilter '*resolves module contex
 Don't run this unless you're a PSGallery owner of the `Avm.Authoring` package and you intend to ship.
 
 ```pwsh
-$key   = Read-Host -AsSecureString -Prompt 'Paste your PSGallery API key (input is hidden)'
-$plain = [System.Net.NetworkCredential]::new('', $key).Password
-./scripts/Publish-AvmAuthoring.ps1 -ApiKey $plain
-Remove-Variable plain, key
+$key = Read-Host -AsSecureString -Prompt 'Paste your PSGallery API key (input is hidden)'
+./scripts/Publish-AvmAuthoring.ps1 -ApiKey $key
+Remove-Variable key
 Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
 ```
 
