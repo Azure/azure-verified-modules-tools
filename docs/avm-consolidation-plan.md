@@ -1,6 +1,6 @@
 # AVM Tooling Consolidation Plan
 
-A phased plan to consolidate the Azure Verified Modules (AVM) tooling described in [avm-tooling-report.md](avm-tooling-report.md) behind a single CLI. The CLI lives in this repository, starts as a facade over today's tools, and selectively replaces them as the surface stabilises. Once proven, it replaces the existing tooling in [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules) and [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance).
+A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bicep monorepo's `utilities/pipelines/*.ps1` estate, the Terraform governance repo's `./avm` Bash shim plus `Makefile` plus `porch-configs/`, the `mapotf` / `avmfix` / `grept` Go binaries, PSRule.Rules.Azure, the Conftest policy bundles, and the `mcr.microsoft.com/azterraform` container — behind a single CLI. The CLI lives in this repository, starts as a facade over today's tools, and selectively replaces them as the surface stabilises. Once proven, it replaces the existing tooling in [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules) and [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance).
 
 ---
 
@@ -101,7 +101,7 @@ We do **not** commit to Option 2 (pure C#) at any point — the cost of rewritin
 
 Re-examined mid-Phase 0 against the actual implementation (~3.2K LOC src + ~3.1K LOC tests, 12 public cmdlets, green `./build.ps1 pre-commit`). The original recommendation stands unchanged: **stay on PowerShell, target Option 3 (Hybrid) later if and only if a documented trigger fires.** Reasons the call did not change:
 
-- The Bicep facade (Phase 1) is wrapping ~30 first-party PS scripts catalogued in [avm-tooling-report.md](avm-tooling-report.md). In-process dispatch is free in PS; in C# every call becomes a `pwsh` shell-out or a `Microsoft.PowerShell.SDK` host — i.e. Option 3 with a worse rewrite tax.
+- The Bicep facade (Phase 1) is wrapping ~30 first-party PS scripts from the bicep-registry-modules `utilities/pipelines/` tree. In-process dispatch is free in PS; in C# every call becomes a `pwsh` shell-out or a `Microsoft.PowerShell.SDK` host — i.e. Option 3 with a worse rewrite tax.
 - PSRule.Rules.Azure, the 500-line Pester compliance suite, and the Az PowerShell deployment cmdlets have no first-class .NET SDK.
 - The "value prop" the CLI delivers is the unified verb surface, not the host language. The two surfaces (`avm <verb>` dispatcher + approved-verb cmdlets) are part of the published contract and fall out naturally from a PS module.
 - Performance is not on the critical path — the CLI orchestrates `bicep`, `terraform`, `tflint`, `mapotf`, etc. Host start-up is invisible next to a 30-second `terraform validate`.
@@ -376,21 +376,16 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 
 **Exit criteria**: any module repo can remove its `Makefile` and `porch-configs` dependency and rely solely on the CLI, with identical behaviour.
 
-### Phase 4 — Replace simple `mapotf` and `grept` rules
+### Phase 4 — Replace `grept` policies; audit `mapotf` and `avmfix`
 
 **Deliverables**
 
-- Native PowerShell (and later C#) implementations of the rules whose logic is simple:
-  - `required_provider_versions.mptf.hcl` → a small HCL-edit helper that updates `terraform.tf`'s `required_providers` block.
-  - `outputs_tf.grept.hcl`, `variables_tf.grept.hcl` → file rename helpers.
-  - `git_ignore.grept.hcl` → idempotent `.gitignore` enforcement.
-  - `ensure_file_existence.grept.hcl`, `ensure_dir_existence.grept.hcl`, `deprecated_files.grept.hcl` → file presence helpers.
-- Complex transforms stay on the Go binaries:
-  - `main_telemetry_tf.mptf.hcl` (telemetry injection) — requires deep HCL editing.
-  - `avm_headers_for_azapi.mptf.hcl` (AzAPI header rewrite) — same.
-- A rule registry inside the CLI so authors can drop a `*.avmrule.psd1` or `*.avmrule.cs` into a folder and have it loaded automatically.
+- **`grept` is replaced, not ported.** Convention checks become first-party PowerShell rule modules under `src/Avm.Authoring/Engines/Terraform/` plus a rule loader in `Private/Rules/`. Each of the 7 upstream `.grept.hcl` policies (`outputs_tf`, `variables_tf`, `required_files`, `ensure_dir_existence`, `git_ignore`, `deprecated_files`, `managed_files`) is audited individually first and dispositioned as one of: PowerShell rule via the new framework, layout test, `.gitattributes` rule, or dropped entirely. No `grept` binary in `tools.lock.psd1`, no `grept-policies` pinned asset. The per-policy audit and the dispositions live in [`quality-standards.md`](quality-standards.md).
+- **`mapotf` is audited before any implementation.** For each of the 3 upstream `.mptf.hcl` configs (`avm_headers_for_azapi`, `main_telemetry_tf`, `required_provider_versions`), the audit answers: (a) what does it concretely do; (b) is it important to the AVM contract; (c) if important, can it be replaced by PowerShell, a general CLI tool (e.g. `hcledit`), or kept upstream via build-and-host; (d) effort estimate. The audit deliverable also lives in [`quality-standards.md`](quality-standards.md).
+- **`avmfix` is audited before any implementation.** Same shape as `mapotf` — inventory the actual behaviours, cross-reference what `terraform fmt` already covers, decide between drop / replace with general CLI / native PowerShell port / fork-and-release upstream.
+- A rule registry inside the CLI so authors can drop a `*.avmrule.psd1` into a folder (per-repo `.avm/rules/*.psd1` or a pinned-asset bundle) and have it loaded automatically, with built-in rules shipped in `src/Avm.Authoring/Resources/Rules/`.
 
-**Exit criteria**: at least half of today's `mapotf` and `grept` rule files are implemented natively; the rest run via the Go binaries through the same registry.
+**Exit criteria**: every `grept` policy is dispositioned (with the kept ones ported to PowerShell rule modules); `mapotf` and `avmfix` audit deliverables landed in `quality-standards.md` with an approved implementation path; the rule framework loads built-in, pinned-asset, and per-repo rules with precedence rules documented.
 
 ### Phase 5 — Consolidate governance scripts
 
@@ -474,6 +469,8 @@ Versioning: SemVer, one stable minor per quarter, weekly preview tags off `main`
 
 ## 11. Risks and mitigations
 
+Cross-cutting engineering standards (encoding, cross-OS rules, subprocess invocation, PSScriptAnalyzer + Pester traps, networking, test layers, manifest casing, error handling, commit + push protocol) are consolidated in [`quality-standards.md`](quality-standards.md). The spec ([`avm-implementation-spec.md`](avm-implementation-spec.md)) covers them too, but `quality-standards.md` is where the lessons-learned and gotchas live in one read-before-you-touch-it place.
+
 | Risk                                                                   | Likelihood | Impact | Mitigation                                                                                                          |
 | ---------------------------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------- |
 | Supply chain — `avmfix` and `porch` live on personal GitHub accounts   | Medium     | High   | During Phase 2, fork both into `Azure/*`; pin versions by SHA in `tools.lock.psd1`; offer to replace `porch` in Phase 3 |
@@ -484,7 +481,7 @@ Versioning: SemVer, one stable minor per quarter, weekly preview tags off `main`
 | Tool-cache corruption / partial download                               | Low        | Low    | Atomic extract + SHA256 verify; `avm tool install --force` re-downloads; cache layout is per-version so concurrent runs don't collide |
 | Authentication parity                                                  | Low        | Medium | Both ecosystems already use GitHub OIDC — only the helper code needs unifying                                       |
 | Adoption stalls (modules opt out)                                      | Medium     | High   | Parallel coexistence keeps every legacy entry point working unchanged until Phase 6, so trying the module is risk-free. Run the module side-by-side with `./avm` in upstream CI during the transition for confidence; only delete the legacy scripts in Phase 6 once a measurable share of modules has moved over. |
-| Rewriting `mapotf` complex rules                                       | Medium     | Medium | Phase 4 explicitly scopes only the simple rules; complex transforms stay on the Go binary indefinitely if needed     |
+| Rewriting `mapotf` complex rules                                       | Medium     | Medium | Phase 4 audits each `mapotf` config before deciding implementation path (native PS, general CLI like `hcledit`, or kept upstream via build-and-host); complex transforms stay on the Go binary indefinitely if the audit picks that path |
 | Windows / macOS / Linux behaviour drift                                | Low        | Medium | CI matrix from Phase 0 runs every task on all three OSes; same bootstrapped binaries everywhere                     |
 | Loss of the curated `azterraform` image as a known-good environment    | Medium     | Medium | `avm doctor` reproduces the same guarantees by version-checking every managed binary against `tools.lock.psd1`; an opt-in `Dockerfile.dev` is provided as a convenience for users who still want a one-shot environment |
 
@@ -510,7 +507,7 @@ Versioning: SemVer, one stable minor per quarter, weekly preview tags off `main`
 | 1     | Bicep facade                          | Small                | All Bicep workflow steps expressible as `avm` verbs                                  |
 | 2     | Terraform facade                      | Medium               | `avm pre-commit` replaces `./avm pre-commit` in a real module                       |
 | 3     | Replace `porch`                       | Medium               | Module repo can drop `Makefile` + `porch-configs` dependency                        |
-| 4     | Selective `mapotf` / `grept` port     | Small                | Half of today's HCL rules are native; rest still call Go binaries                   |
+| 4     | Replace `grept`; audit `mapotf` + `avmfix` | Medium               | All 7 `grept` policies dispositioned (PS rule / layout test / `.gitattributes` / dropped); `mapotf` + `avmfix` audit deliverables landed in `quality-standards.md` |
 | 5     | Governance script consolidation       | Small                | All `platform.*` workflows invoke `avm governance …`                                 |
 | 6     | Upstream promotion                    | Largest (review)     | Both upstream repos build on the module; legacy `./avm` scripts, `Makefile`s, and the container are deleted |
 
@@ -520,7 +517,8 @@ Versioning: SemVer, one stable minor per quarter, weekly preview tags off `main`
 
 ## 14. References
 
-- Inventory: [avm-tooling-report.md](avm-tooling-report.md)
+- Spec: [avm-implementation-spec.md](avm-implementation-spec.md)
+- Cross-cutting standards: [quality-standards.md](quality-standards.md)
 - Bicep monorepo: [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules)
 - Terraform governance: [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance)
 - AVM specifications: [azure.github.io/Azure-Verified-Modules](https://azure.github.io/Azure-Verified-Modules/)

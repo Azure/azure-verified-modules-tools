@@ -108,7 +108,7 @@ azure-verified-modules-tools/
   docs/
     avm-consolidation-plan.md
     avm-implementation-spec.md    # this file
-    avm-tooling-report.md
+    quality-standards.md          # cross-cutting standards + traps
   .github/
     workflows/
       ci.yml
@@ -128,6 +128,8 @@ Rules:
 ---
 
 ## 5. PowerShell coding standards
+
+> See also: [`quality-standards.md`](quality-standards.md) for the consolidated cross-cutting standards (encoding, cross-OS rules, subprocess invocation, PSScriptAnalyzer + Pester traps).
 
 ### Required at the top of every public function
 
@@ -486,6 +488,8 @@ Both call the same implementation. The dispatcher is generated from a single ver
 
 ## 14. Error handling
 
+> See also: [`quality-standards.md`](quality-standards.md) § 10 for the lessons-learned view of typed exceptions, the `AvmConfigurationException → skipped` convention, and stable error codes.
+
 - Every public function: `Set-StrictMode -Version 3.0` and `$ErrorActionPreference = 'Stop'` in `begin`.
 - Terminating errors use `throw [<SpecificException>]::new(<message>, <innerException>)`. Generic `throw "string"` is reserved for prototype code and is flagged by PSScriptAnalyzer custom rule `AvmAvoidStringThrow`.
 - A small set of exception types lives in `Private/Exceptions/`:
@@ -571,6 +575,8 @@ This section is the implementation-level expression of the **Security stance** p
 
 ## 18. Testing
 
+> See also: [`quality-standards.md`](quality-standards.md) § 6 for Pester 5 traps (`<word>` placeholder collision, auto-var collisions, strict-mode 3.0 property access) and § 8 for the test-layering contract.
+
 ### Test framework
 
 - Pester 5.5+.
@@ -606,6 +612,8 @@ Smoke runs once per release on each of the above.
 ---
 
 ## 19. Static analysis and pre-commit
+
+> See also: [`quality-standards.md`](quality-standards.md) § 5 for the `AvmAvoidStringThrow` custom rule, the transient `NullReferenceException` mitigation and retry wrapper, the cross-platform `@(...)` consumer wrap, and the known PSSA rule conflicts.
 
 - PSScriptAnalyzer settings in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. CI runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path>` and treats `Warning` and above as fixable, `Error` as blocking.
 - A `pre-commit` Pester suite runs:
@@ -646,7 +654,7 @@ Smoke runs once per release on each of the above.
 - `docs/` in this repo holds:
   - `avm-consolidation-plan.md` — the phased plan.
   - `avm-implementation-spec.md` — this file.
-  - `avm-tooling-report.md` — the inventory that grounds the plan.
+  - `quality-standards.md` — cross-cutting standards and traps.
   - `reference/` — generated per-cmdlet reference (Phase 1 onwards).
   - `user-guide.md` — getting started for module authors (Phase 1 onwards).
 - The repo `README.md` points new contributors at this spec and the plan.
@@ -681,7 +689,7 @@ Smoke runs once per release on each of the above.
 ## 25. References
 
 - [avm-consolidation-plan.md](avm-consolidation-plan.md) — the phased plan this spec implements.
-- [avm-tooling-report.md](avm-tooling-report.md) — inventory of existing AVM tooling.
+- [quality-standards.md](quality-standards.md) — cross-cutting standards and traps that apply everywhere in this spec.
 - [XDG Base Directory Spec](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
 - [Apple File System Programming Guide — Standard Directories](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemOverview/FileSystemOverview.html)
 - [Windows Known Folders](https://learn.microsoft.com/windows/win32/shell/knownfolderid)

@@ -7,7 +7,7 @@ This repo is being delivered phase by phase against the plan in [`docs/avm-conso
 1. **[`docs/progress.md`](docs/progress.md)** — the living checklist. Tells you what's done, what's in flight (`[~]`), what's blocked, and what to pick up next. **Always start here.**
 2. **[`docs/avm-implementation-spec.md`](docs/avm-implementation-spec.md)** — wins on implementation details (file layout, encoding, cross-OS rules, error handling, testing layers).
 3. **[`docs/avm-consolidation-plan.md`](docs/avm-consolidation-plan.md)** — wins on scope and sequencing (verb table, phase exit criteria, architecture options).
-4. **[`docs/avm-tooling-report.md`](docs/avm-tooling-report.md)** — inventory of the existing AVM tooling being consolidated; useful when porting a legacy script.
+4. **[`docs/quality-standards.md`](docs/quality-standards.md)** — cross-cutting standards and gotchas (encoding, cross-OS, subprocess, PSScriptAnalyzer + Pester traps, networking, test layers, manifest casing, error handling, commit + push protocol).
 
 ## Working protocol
 

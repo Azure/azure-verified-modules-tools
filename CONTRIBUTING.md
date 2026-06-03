@@ -246,6 +246,6 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 | ------------------------------------------------ | -------------------------------------------------------------------- |
 | Why the module exists and what we're building     | [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md)     |
 | How to write spec-compliant code                  | [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md)   |
-| Inventory of upstream AVM tooling we're replacing | [docs/avm-tooling-report.md](docs/avm-tooling-report.md)             |
+| Cross-cutting standards + traps to know about     | [docs/quality-standards.md](docs/quality-standards.md)               |
 | Module placeholder details                         | [src/Avm.Authoring/README.md](src/Avm.Authoring/README.md)           |
 | The casing incident (mandatory reading)            | [docs/avm-implementation-spec.md §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident) |

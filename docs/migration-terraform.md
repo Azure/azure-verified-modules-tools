@@ -317,7 +317,9 @@ different config files and write to different caches.
   test layers).
 - [`docs/avm-consolidation-plan.md`](avm-consolidation-plan.md) —
   scope and phase sequencing.
-- [`docs/avm-tooling-report.md`](avm-tooling-report.md) — inventory of
-  the legacy AVM tooling being consolidated.
+- [`docs/quality-standards.md`](quality-standards.md) — cross-cutting
+  standards and traps (encoding, cross-OS, subprocess, PSScriptAnalyzer
+  + Pester traps, networking, test layers, manifest casing, error
+  handling, commit + push protocol).
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — dev loop, install path,
   publish process, OS-specific notes.
