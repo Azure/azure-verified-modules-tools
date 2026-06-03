@@ -442,3 +442,68 @@ Concrete reasoning:
 
 - **Reimplementation in PowerShell or `hcledit` if `mapotf` proves unhostable.** If follow-ups #1 + #2 conclude that build-and-host is more expensive than expected, fall back to **(b) `hcledit`** in preference to **(a) PowerShell** — it ships releases, has a stable CLI surface, and the dependency-graph cost is bounded. Track as a new audit slice if it triggers.
 - **Replacing `mapotf clean-backup` with a `Remove-Item *.bak -Recurse`.** Trivial substitution, but only worth it if we're already off mapotf. Same dependency as the above.
+
+## Appendix C. Decision: avmfix replacement strategy
+
+**Context.** Upstream `avm-terraform-governance@65182443` runs `avmfix --folder . --exclude <pattern>` against the module root, then again against each subdir of `./modules` and `./examples` at `depth=1`. avmfix (`lonegunmanb/avmfix@a8d494fe`, ~3 KB main + ~37 files under `pkg/`) is structured as a per-file walker that runs **twice** in succession (file-relocation passes can move blocks between `variables.tf` / `outputs.tf` / `main.tf`, which then need re-walking) over every `*.tf` file in scope. This audit answers, per behaviour: (1) what does it concretely do; (2) is it important to the AVM contract; (3) is it covered by `terraform fmt`; (4) what is the cheapest replacement (drop / general CLI / native PowerShell / keep upstream via build-and-host); (5) effort. Read it before Slice H (`Format-AvmTerraformModule` avmfix-equivalent chain).
+
+### Per-behaviour audit
+
+| # | Behaviour | Schema-dependent? | Important? | `terraform fmt` covers? | Cheapest replacement |
+|---|-----------|--------------------|------------|--------------------------|----------------------|
+| 1 | **Resource / data / ephemeral block ordering** — head-meta (`for_each` / `count` / `provider`) first; then required args (alpha-sorted); then optional args (alpha-sorted); then required nested blocks (alpha); then optional nested blocks (alpha); then tail-meta (`lifecycle` / `depends_on`). Required-vs-optional classification reads the provider plugin's V5 or V6 schema response, fetched by downloading the provider binary from `registry.opentofu.org` and running it as a gRPC subprocess (HashiCorp `go-plugin` framework). Cached per-(namespace, name, version). | **Yes — heavy**. Needs real provider plugin binary + gRPC. | **Yes**. AVM Bicep+TF Codex §TFNFR23 / §TFNFR24 mandates this exact ordering for module-author readability + diff stability. | No — `terraform fmt` is whitespace + alignment only; never reorders. | **(c) Keep avmfix via build-and-host.** Alternatives all break: `hcledit` / `topiary` can't read provider schemas; native PowerShell would need to re-implement Terraform's plugin gRPC protocol. The escape hatch is **(d) shell to `terraform providers schema -json`** (already requires `terraform init`, which avmfix runs anyway) + a PowerShell HCL surface-tree rewriter — viable but ~6× the code of orchestrating the upstream binary. |
+| 2 | **Module block ordering** — head-meta (`for_each` / `count` / `source` / `version` / `providers`), then required module vars (alpha), then optional module vars (alpha), then `depends_on`. Required-vs-optional classification reads the local module via `hashicorp/terraform-config-inspect` (lighter than gRPC — it just parses the target module's `variables.tf`). | **Yes — light**. `tfconfig.LoadModule` only. | **Yes**. Same codex clause as #1, applied to consumer-side `module` blocks. | No. | **(c)**. Could also be **(a) PowerShell** if isolated, since `terraform-config-inspect` is replaceable with a `Read-AvmHclSurface` walker over `variables.tf` files. Bundles for free under (c). |
+| 3 | **azapi schema post-processor** — promotes `name` / `parent_id` / `location` / `resource_id` / `action` / `method` / `query_parameters` to required for `azapi_resource` / `azapi_update_resource` / `azapi_resource_action`, overriding the upstream provider schema (which marks them optional). | **Yes** — overlays on #1's schema fetch. | **Yes**. Without it, the most important `azapi_resource` arguments get sorted into the optional alpha bucket — confusing in long-form modules. | No. | **(c)**. Trivial to keep in PowerShell if we ever own #1, but pointless to split. |
+| 4 | **Variable block attribute ordering + hygiene** — orders attrs `type` / `default` / `description` / `nullable` / `sensitive`; removes `nullable = true` (the default); removes `sensitive = false` (the default). | No. | **Yes**. Codex mandate; removing the defaults keeps `terraform fmt`-clean output and matches generated `Set-AVMModule` baseline. | No — fmt doesn't reorder attributes or strip default-valued ones. | **(a) PowerShell** trivially. Bundles with (c) for free. |
+| 5 | **Variable file block ordering + relocation** — within `variables.tf`: required `variable` blocks (no `default`) first alpha, then optional alpha; any non-`variable` block in `variables.tf` is moved to `main.tf` (creates `main.tf` if needed). | No. | **Yes**. Codex tenet; otherwise `variables.tf` becomes a kitchen sink. | No. | **(a) PowerShell** straightforward (file partitioning + alpha sort by label). Bundles with (c) for free. |
+| 6 | **Output block ordering + hygiene** — alpha-sort attrs; removes `sensitive = false`. | No. | **Yes**. Mirror of #4 for outputs. | No. | **(a)**. Bundles with (c). |
+| 7 | **Output file ordering + relocation** — within `outputs.tf`: alpha-sort `output` blocks by label; move non-`output` blocks to `main.tf`. | No. | **Yes**. Mirror of #5. | No. | **(a)**. Bundles with (c). |
+| 8 | **Locals block ordering** — alpha-sort local attributes within each `locals { }` block. | No. | **Yes**, lower bar (cosmetic; matters for diff stability but no runtime impact). | No. | **(a)** one-liner. Bundles with (c). |
+| 9 | **`moved` / `removed` block ordering** — `moved` blocks: `from` then `to`; `removed` blocks: `from` attr, then `lifecycle` nested block, then `provisioner` nested blocks in order. | No. | **Yes**, low bar — Terraform doesn't care about attribute order in these refactor blocks; the rule exists for human readability of state-migration commits. | No. | **(a)** trivial. Bundles with (c). |
+| 10 | **`terraform` block ordering** — top-level: `required_version` first (then `experiments` if present); then `backend` / `cloud` / `provider_meta` nested blocks; then `required_providers` last. Inside `required_providers`: alpha-sort by provider name. | No. | **Yes**. Codex clause; canonical layout for module heads. | No. | **(a)** trivial. Bundles with (c). |
+
+**Orchestration dependencies that come with avmfix:**
+
+- `terraform init -backend=false` runs first (downloads providers + modules, writes `.terraform.lock.hcl`). Behaviours #1–#3 won't fire correctly without it.
+- HTTPS calls to `registry.terraform.io` (provider version lookup when `.terraform.lock.hcl` omits a version) and `registry.opentofu.org` (provider plugin binary download).
+- gRPC subprocess per (namespace, name, version) tuple, holding the provider plugin open for schema queries. Cached in-process; cleaned up at end.
+- Two-pass `AutoFix` (file-relocation requires re-walk).
+- `--exclude <glob>` for skip-file filtering.
+
+### Recommended option: **(c) keep avmfix via build-and-host** (mirror of mapotf decision)
+
+Concrete reasoning:
+
+1. **Behaviours #1–#3 require provider schemas.** No general CLI (`hcledit`, `topiary`) reads them. A PowerShell port would need to either re-implement Terraform's plugin gRPC protocol (impractical — HashiCorp `go-plugin` framework with mTLS handshake), or shell out to `terraform providers schema -json` (viable — see option (d) below). Both paths are several times more code than packaging the existing Go binary.
+2. **`terraform fmt` covers zero of avmfix's 10 behaviours.** It only normalises whitespace, indentation, brace placement, and alignment. avmfix is purely semantic re-ordering + default-attribute pruning. No double-fixing risk; the two are complementary.
+3. **Behaviours #4–#10 (the schema-free 7) are individually trivial.** They're alpha-sorts and literal-attribute deletions. They could be ported to PowerShell in a few hundred lines. But that doesn't motivate splitting the tool — once we depend on the binary for #1–#3, the schema-free behaviours come for free.
+4. **avmfix the tool is small.** ~37 files under `pkg/` plus a 50-line `main.go`. ~21 KB of `schema_map.go` is the largest single file (the in-memory schema cache). Hosting a release for it costs the same as for mapotf — they're the same shape of decision.
+5. **Both mapotf + avmfix block on the same supply-chain question.** The four open follow-ups from Slice E (mapotf) extend to avmfix verbatim. Resolving them once unblocks both Slice G and Slice H.
+
+### Slice H implementation outline (if option (c) holds)
+
+`Format-AvmTerraformModule` becomes:
+
+1. Ecosystem guard (terraform-only).
+2. `terraform fmt -recursive .` (existing — no change).
+3. `Resolve-AvmTool -Name 'avmfix' -AllowPathFallback:$AllowPathFallback`. Missing tool → `AvmConfigurationException` → chain `skipped`.
+4. `Resolve-AvmTool -Name 'terraform'` — required for avmfix's `terraform init -backend=false`. If absent: same skip path.
+5. `Invoke-AvmProcess` avmfix with argv `--folder . --exclude <pattern-from-config-if-any>` from `$Context.Root` (matches upstream porch step 8 first invocation).
+6. For each subdir of `<Root>/modules` at `depth=1`: same argv with `--folder modules/<name>`.
+7. For each subdir of `<Root>/examples` at `depth=1`: same argv with `--folder examples/<name>`.
+8. Aggregate `Issues` from any non-zero exits into the standard `pscustomobject` envelope (`Engine='terraform'`, `Tool='avmfix/<ver>'`, `Status='pass'|'fail'`, `Issues=...`). avmfix has no JSON output mode — `Issues` parses stderr line-for-line.
+9. `Changed` count = sum of files-modified across the 3 invocations; surface alongside `Status` so the chain knows whether the format step actually mutated anything.
+
+### Open follow-ups before Slice H can land
+
+1. **Confirm `avmfix` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 row in `docs/progress.md`) noted avmfix does not ship releases today. Owner: investigate `lonegunmanb/avmfix` (canonical home; no `Azure/avmfix` fork exists, unlike mapotf). If still absent → resolve next item.
+2. **Pick a hosting strategy for avmfix release artefacts.** Same A/B/C as mapotf: (i) PR a release workflow into upstream `lonegunmanb/avmfix`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — resolve once for both mapotf + avmfix.
+3. **Settle the `tools.lock.psd1` entry shape.** Same shape as `conftest` / `terraform-docs` (binary archive per platform, SHA256-verified). Six platforms: windows/linux/darwin × amd64/arm64. avmfix uses `go-releaser`-style naming if a release workflow is added.
+4. **Decide whether to bundle behaviour #2's `terraform-config-inspect` dependency separately.** avmfix vendors it; if we ever rip the schema-free behaviours into PowerShell as an offline fallback, we'd need an equivalent. Defer until follow-up #2 lands.
+
+### What is deliberately deferred
+
+- **Reimplementation in PowerShell via `terraform providers schema -json`.** Option (d) — shell out to `terraform providers schema -json` (already requires `terraform init`, which avmfix runs anyway) for the schema knowledge needed by behaviours #1–#3, plus pure PowerShell for behaviours #4–#10. Avoids the gRPC re-implementation entirely. Viable as a future replacement if (c) becomes too costly to host. Track as a new audit slice if triggered.
+- **Splitting #4–#10 into a "fmt+" PowerShell helper that runs even when avmfix is absent.** Possible UX win for offline contributors who can live without the schema-aware bits. Defer until we have evidence that #1–#3 unavailability is actually painful.
+- **Replacing avmfix's two-pass loop with our own file-walk.** Trivial substitution, but only worth it if we're already off avmfix. Same dependency as above.
+- **A `Test-AvmTerraformFormat` (check-only, no fixes) mode.** avmfix has no `--check` flag; we'd need a separate `--dry-run` patch to upstream or a diff-based wrapper. Track as a Phase 3 deliverable if `pr-check` ends up wanting a non-mutating format gate.
