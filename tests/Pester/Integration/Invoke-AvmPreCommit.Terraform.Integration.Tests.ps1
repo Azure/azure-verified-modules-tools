@@ -147,7 +147,7 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         }
     }
 
-    It 'pr-check composes seven steps with the two architecturally-blocked engines reported as skipped' {
+    It 'pr-check composes seven steps with the architecturally-blocked transform engine reported as skipped' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -162,17 +162,27 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
 
-        foreach ($skipped in @('transform', 'check convention')) {
+        foreach ($skipped in @('transform')) {
             $byName[$skipped].PSObject.Properties['Status'].Value | Should -Be 'skipped'
             $byName[$skipped].PSObject.Properties['Error'].Value | Should -Not -BeNullOrEmpty
         }
 
+        # External-tool passing steps (each shells out via Invoke-AvmProcess).
         foreach ($passing in @('format', 'lint', 'check policy', 'test', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
+
+        # check convention is pure-PowerShell, so it reports ToolSource='builtin'
+        # rather than 'path'. The fixture writes .avm/config.json in BeforeAll, so
+        # the built-in smoke rule (000-avm-config-exists) passes with zero issues.
+        $byName['check convention'].PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $ccResult = $byName['check convention'].PSObject.Properties['Result'].Value
+        $ccResult.PSObject.Properties['Engine'].Value     | Should -Be 'terraform'
+        $ccResult.PSObject.Properties['Tool'].Value       | Should -Match '^avm-rules/'
+        $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
 
         # Tool-prefix assertions catch future engine-envelope regressions on
         # the just-wired check-policy engine, which the existing format/lint/

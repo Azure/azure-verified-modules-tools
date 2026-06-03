@@ -69,7 +69,7 @@ Describe 'Invoke-AvmCheckConvention' {
         }
     }
 
-    It 'each engine stub throws AvmConfigurationException for its own ecosystem' {
+    It 'the bicep engine still throws AvmConfigurationException for its stub' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -79,15 +79,16 @@ Describe 'Invoke-AvmCheckConvention' {
         }
         $err.GetType().Name        | Should -Be 'AvmConfigurationException'
         $err.Message               | Should -Match 'Bicep convention check is not yet wired'
+    }
 
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmTerraformCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'terraform'; Root = $TestDrive })
-                $null
-            }
-            catch { $_.Exception }
+    It 'the terraform engine returns a real envelope and no longer throws AvmConfigurationException' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Invoke-AvmTerraformCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'terraform'; Root = $TestDrive })
         }
-        $err.GetType().Name        | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Terraform convention check is not yet wired'
+        $result.Engine     | Should -Be 'terraform'
+        $result.Tool       | Should -Be 'avm-rules/1'
+        $result.ToolSource | Should -Be 'builtin'
+        # Status is governed by Issue severities, never throws for missing config.
+        @('pass', 'fail') | Should -Contain $result.Status
     }
 }

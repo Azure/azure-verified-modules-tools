@@ -30,6 +30,11 @@ function Invoke-AvmCheckConvention {
         When set, accept a PATH-resolved tool binary that self-reports the
         lock-pinned version.
 
+    .PARAMETER Fix
+        When set, rule primitives that declare a fix path apply it (e.g.
+        renaming output.tf to outputs.tf, appending missing globs to
+        .gitignore). Without -Fix the verb is check-only.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, Issues. (When implemented.)
@@ -49,7 +54,9 @@ function Invoke-AvmCheckConvention {
         [ValidateSet('auto', 'bicep', 'terraform')]
         [string] $Ecosystem = 'auto',
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [switch] $Fix
     )
 
     Set-StrictMode -Version 3.0
@@ -62,7 +69,7 @@ function Invoke-AvmCheckConvention {
             Invoke-AvmBicepCheckConvention -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformCheckConvention -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmTerraformCheckConvention -Context $context -AllowPathFallback:$AllowPathFallback -Fix:$Fix
         }
         default {
             throw [AvmContextException]::new(
