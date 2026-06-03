@@ -19,6 +19,7 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 | Fixture                              | Provider(s)                                  | Purpose                                                                                            |
 | ------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `terraform-azurerm-avm-res-mock/`    | `hashicorp/azurerm` + `azapi` + `modtm` + `random` | Mock AVM resource module with two examples (`default`, `default-ignore`) and a `tests/unit/` `tftest.hcl`. Validates the full `format → lint → test → docs` + `check policy` chain. |
+| `terraform-azure-avm-res-mock/`      | `Azure/azure` (AzAPI-only) + `modtm`         | Mock AVM resource module with **three** examples (`default`, `ignored_example`, `second_example`), per-example lifecycle hooks (`pre/post/tflint-pre.{sh,ps1}`), example-level setup/teardown (`examples/setup\|teardown.{sh,ps1}`), and **both** `tests/unit/` *and* `tests/integration/` `tftest.hcl` (with `setup.{sh,ps1}` companions). Exercises the broader engine surface — lifecycle hooks, integration test discovery, multi-example sorting. |
 
 ## Source
 
@@ -28,6 +29,7 @@ at commit `651824432565f7d677b3896d06b82e8cb0733705` (default branch
 `main`, 2026-06-02). Upstream paths:
 
 - `tests/terraform-azurerm-avm-res-mock/` → `terraform-azurerm-avm-res-mock/`
+- `tests/terraform-azure-avm-res-mock/` → `terraform-azure-avm-res-mock/`
 
 Upstream is MIT-licensed (Azure org). The repo-root `LICENSE` covers the
 copied content; no per-fixture `LICENSE` shipped.
@@ -47,14 +49,15 @@ the upstream governance pipeline was removed:
   `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`) — would shadow or
   confuse this repo's own copies.
 - Editor / tooling metadata (`.editorconfig`, `.devcontainer/`,
-  `.github/`, `.agents/`, `.vscode/`) — fixture isn't an editable project.
+  `.github/`, `.agents/`, `.vscode/`, `.gitignore`, module-level
+  `.gitattributes`) — fixture isn't an editable project, and our
+  repo-wide `.gitattributes` already enforces LF + UTF-8.
 - All `.gitkeep` files — every directory we kept has at least one real
   file, so the markers are redundant.
 
-The result is the AVM-shape Terraform surface (`main.tf`,
-`main.telemetry.tf`, `variables.tf`, `outputs.tf`, `terraform.tf`,
-`.terraform-docs.yml`, `_header.md`, `_footer.md`, `examples/<name>/`,
-`tests/unit/`, `modules/.terraform-docs.yml`) and nothing else.
+The result is the AVM-shape Terraform surface plus, in the `azure`
+variant, the lifecycle / setup hooks and integration-test fixture that
+exist in the upstream mock.
 
 ## Refreshing from upstream
 
@@ -65,7 +68,9 @@ contract change, new example shape):
 # 1. Shallow-clone upstream into a temp folder with autocrlf off.
 git -c core.autocrlf=false clone --depth 1 --filter=blob:none --sparse `
     https://github.com/Azure/avm-terraform-governance.git "$env:TEMP\avm-tfgov-snapshot"
-git -C "$env:TEMP\avm-tfgov-snapshot" sparse-checkout set tests/terraform-azurerm-avm-res-mock
+git -C "$env:TEMP\avm-tfgov-snapshot" sparse-checkout set `
+    tests/terraform-azurerm-avm-res-mock `
+    tests/terraform-azure-avm-res-mock
 
 # 2. Re-curate the keep list (see top of this README) and copy by path.
 #    Drop the same governance/legacy/editor noise listed above.
@@ -78,18 +83,15 @@ git -C "$env:TEMP\avm-tfgov-snapshot" sparse-checkout set tests/terraform-azurer
 ```
 
 The `.gitattributes` rules at repo root force LF + UTF-8 (no BOM) on
-`*.tf`, `*.md`, `*.yml`, `*.hcl`, etc., so the on-disk encoding will be
-correct as long as the source clone was made with `core.autocrlf=false`.
+`*.tf`, `*.md`, `*.yml`, `*.hcl`, `*.sh`, `*.ps1` etc., so the on-disk
+encoding will be correct as long as the source clone was made with
+`core.autocrlf=false`.
 
 ## What isn't here yet
 
-- A `terraform-azure-avm-res-mock/` sibling (the `Azure/azure` provider
-  variant of the same upstream mock). Add only when a future slice
-  needs both — the `azurerm` variant is the dominant Azure Terraform
-  provider in AVM.
 - Porting `Invoke-AvmPreCommit.Terraform.Integration.Tests.ps1` from
-  its current TestDrive scaffold onto this fixture. Separate follow-up
-  slice; the existing test still has value as a hermetic
+  its current TestDrive scaffold onto either of these fixtures. Separate
+  follow-up slice; the existing test still has value as a hermetic
   fixture-builder smoke.
 - A keyvault-flavoured fixture (`terraform-azurerm-avm-res-keyvault-vault`
   per the Phase 2 §3 demo deliverable in `docs/progress.md`). That
