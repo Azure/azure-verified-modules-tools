@@ -969,3 +969,99 @@ This appendix should be revisited if any of the following becomes true:
 - **README.md update** in Slice T-6: three lines on telemetry under a "Privacy" heading. Surface the opt-in semantics so users don't discover them by accident.
 - **`docs/user-guide.md`** does not exist yet. When it lands (spec §22 calls for it), it gets a Telemetry subsection — captured here so the doc author doesn't omit it.
 - **Cross-link from [Appendix F](#appendix-f-decision-dotnet-tool-packaging-as-a-phase-0-distribution-channel)** open-follow-ups: the line `"Telemetry design note still owes a write-up on whether (and how) we'd know if the pwsh prerequisite is hurting adoption"` is now answered by this Appendix G. A Phase 3 implementation of telemetry would let us observe the Appendix F re-open trigger.
+
+---
+
+## Appendix H. Decision: tool resolver and external version managers
+
+**Status**: 2026-06-07. Resolves [plan §11](../docs/avm-consolidation-plan.md) open question via spec §23 OQ 4. Formalises existing behaviour as the documented contract — **no code changes required**.
+
+### Context
+
+Spec [§23 OQ 4](avm-implementation-spec.md) (line 670, verbatim):
+
+> Tool resolver and external version managers. Honour `mise` / `asdf` / `tenv`'s shims when found on PATH and skip our own install for those tools, or always prefer our cache for determinism? Lean: prefer our cache, but accept the shim's version if it matches the lock exactly.
+
+The plan reference is [§11 OQ table](avm-consolidation-plan.md) (not re-asked there; this Appendix closes the spec OQ directly). The decision is downstream of spec §10's [_Lookup order on every invocation_](avm-implementation-spec.md) (line 389) and the [_Get-AvmFolder_ resolver contract](avm-implementation-spec.md) at §7 (line 271, which calls out mise/asdf/tenv as the integration point for `AVM_HOME`).
+
+### What `mise` / `asdf` / `tenv` concretely do
+
+Three popular per-project version managers. All three install a binary on the user's PATH (a **shim**) whose only job is to dispatch to a per-version copy of the real tool stored under the manager's own data dir:
+
+- `mise` (formerly `rtx`). Shim dir is `$XDG_DATA_HOME/mise/shims/` by default. Selects a version by walking up from cwd looking at `.mise.toml`, `.tool-versions`, and tool-specific files like `.terraform-version`. Tool versions cached under `$XDG_DATA_HOME/mise/installs/<tool>/<version>/`.
+- `asdf`. Shim dir is `~/.asdf/shims/`. Selects via `.tool-versions`. Versions cached under `~/.asdf/installs/<tool>/<version>/`.
+- `tenv`. Terraform-family-only (`terraform`, `terragrunt`, `tofu`, `atmos`). Shim dir is `~/.tenv/bin/`. Selects via `.terraform-version`, `.opentofuversion`, or `TENV_*` env vars. Versions cached under `~/.tenv/<tool>/<version>/`.
+
+The shim is opaque to callers — `terraform --version` invoked against a mise shim execs through mise into the selected per-project version's binary and prints **that binary's** version banner. There is no `--shim` flag; users who haven't activated the manager (`mise activate` / `asdf` rc-source / `tenv` rc-source) see their normal PATH untouched.
+
+### What the resolver does today
+
+`Resolve-AvmTool` ([src/Avm.Authoring/Private/Tools/Resolve-AvmTool.ps1](../src/Avm.Authoring/Private/Tools/Resolve-AvmTool.ps1) lines 82–107) executes this order:
+
+1. **Cache** — `<Data>/tools/<name>/<version>/<entrypoint>[.exe]` + `.verified` marker both present → return `Source='cache'`.
+2. **PATH fallback** (only when caller passes `-AllowPathFallback`) — delegate to `Find-AvmToolOnPath`. If the entrypoint is on PATH **and** the binary's `--version` output contains a semver-shaped substring that string-equals the lock-pinned version (modulo leading `v`), return `Source='path'`.
+3. **Otherwise** — throw `AvmToolException` code `AVM1014` with a remediation hint (`Run: avm tool install <name>`). Note that **the resolver deliberately does not auto-install** (lines 17–19 in the helper's docstring): auto-install is a separate, opt-in policy decision that the verb dispatcher owns. This is a deliberate deviation from spec §10 line 392 ("warn once and fall through to install"); a Phase 0 spike on the auto-install UX is tracked separately.
+
+`Find-AvmToolOnPath` ([src/Avm.Authoring/Private/Tools/Find-AvmToolOnPath.ps1](../src/Avm.Authoring/Private/Tools/Find-AvmToolOnPath.ps1) lines 42–73):
+
+- `Get-Command -CommandType Application -ErrorAction SilentlyContinue` resolves the binary on PATH. A shim binary is indistinguishable from a real binary at this layer; the shim's `Source` path (e.g. `~/.local/share/mise/shims/terraform`) is what we capture.
+- `Invoke-AvmProcess <path> --version -TimeoutSec 10 -IgnoreExitCode` runs the binary. For a shim, the manager intercepts and execs the selected per-project binary, which prints its own version banner.
+- The combined `StdOut + "`n" + StdErr` is regex-matched against `(?<![0-9.])(\d+\.\d+\.\d+(?:[\-+][0-9A-Za-z\.\-]+)?)`. First match wins; leading `v` stripped on both sides; comparison is case-sensitive (`-ceq`) on the normalised pair.
+- If the `--version` invocation throws (e.g. shim segfaults), the `try/catch` at line 50–61 swallows it via `Write-Verbose`. `$detected` stays `$null`, `Matches` resolves `$false`, fall through to cache lookup (which throws `AVM1014` if there's no cache).
+
+### Per-scenario audit
+
+Walking ten realistic shim/non-shim scenarios against today's resolver. "Today" = `Resolve-AvmTool -Name <tool> -AllowPathFallback`.
+
+| # | Scenario | Resolver picks | Behaviour correct? |
+|---|----------|----------------|--------------------|
+| 1 | mise installed + shim on PATH; project selects `1.9.5` (matches lock) | `Source='path'` (mise shim) | ✅ Exact-match accept, per spec lean |
+| 2 | mise installed + shim on PATH; project selects `1.10.0` (mismatch) | `AvmToolException AVM1014` | ✅ Reject + clear remediation |
+| 3 | mise installed + shim on PATH; **no project version selected** (`mise` errors on dispatch) | `AvmToolException AVM1014` | ✅ Graceful fallthrough via `try/catch` |
+| 4 | mise installed; **`mise activate` not sourced**; shim dir not on PATH | `AvmToolException AVM1014` | ✅ Looks identical to "tool not installed" |
+| 5 | asdf installed + shim on PATH; `.tool-versions` selects matching version | `Source='path'` (asdf shim) | ✅ Same as mise scenario 1 |
+| 6 | tenv installed + shim on PATH (terraform); `.terraform-version` matches lock | `Source='path'` (tenv shim) | ✅ Same as mise scenario 1 |
+| 7 | tenv installed for terraform, but `tflint` not shimmed (out-of-scope tool) | Normal PATH or cache for tflint | ✅ tenv only shims its supported tools |
+| 8 | Direct binary on PATH (no version manager); version matches lock | `Source='path'` | ✅ Pre-existing behaviour |
+| 9 | Both cache hit **and** PATH match exist | `Source='cache'` | ✅ Determinism wins — cache evaluated first |
+| 10 | Lock entry declares `unsupportedPlatforms = @('windows-arm64')` and we're on that platform | `AvmToolException AVM1012` | ✅ Pre-check fires before cache or PATH |
+
+All ten scenarios behave correctly with no code change. The shim's identity is irrelevant — we don't try to detect "this is a shim, not a real binary." We measure what the binary's `--version` reports, and if that string matches the lock, we trust it.
+
+### Recommendation
+
+**Option (b): formalise the current behaviour as the documented contract. No code changes.** The implementation already realises the spec §23 OQ 4 lean exactly.
+
+The contract, in plain English: _"`-AllowPathFallback` accepts any binary on PATH whose `--version` output contains the lock-pinned semver. Shims from `mise` / `asdf` / `tenv` (or any other dispatcher) are transparently included because they execute through to a real binary whose `--version` banner is what we measure. The cache is always evaluated first, so a shim selecting a non-matching version never silently overrides a verified cache entry."_
+
+### Why not the alternatives
+
+- **(a) Always prefer cache; ignore PATH entirely (no `-AllowPathFallback`).** Loses the workstation UX where users already have mise/asdf set up with the right Terraform — we'd force them to re-download a redundant copy into our cache. Loses the CI UX where the runner image pre-installs tools at the matching version. Today's `-AllowPathFallback` opt-in already biases towards determinism (cache wins on ties); making PATH unreachable goes too far.
+
+- **(c) Honour shims but skip our own install for shimmed tools.** Inverts the precedence (shim wins on tie). Two failure modes: (i) a project changes its `.terraform-version` mid-PR → silent binary swap, no reproducibility; (ii) a malicious shim wrapper could re-dispatch to an attacker-controlled binary whose `--version` lies. The cache-first ordering blocks both.
+
+- **(d) Add a `-PreferShim` flag that flips precedence on demand.** Speculative — no concrete user need today. Adds API surface and a precedence-debugging matrix. Track as a re-open trigger; do not pre-build.
+
+### Trigger conditions to re-open
+
+This Appendix is correct as long as the assumptions below hold. If any one starts breaking, schedule a follow-up slice:
+
+1. **Shim brands its own `--version` output.** If a future `mise`/`asdf`/`tenv` release prefixes the underlying tool's banner with its own version line (e.g. `mise 2026.5.4\nTerraform v1.9.5...`), the permissive regex picks the first semver — which would be the shim's version, not the tool's. Mitigation: per-tool regex or `MISE_QUIET=1` / `ASDF_VERBOSE=0` env hardening before the `--version` call.
+2. **User-reported false-positive accept.** Shim claims correct version but binary is materially different (e.g. mise resolves to a patched fork at the same semver). Mitigation: extend the lock with an optional `sha256OnPath` field; verify the binary against it when PATH-resolving.
+3. **`tenv` or `mise` adopts a non-semver version scheme.** e.g. nightly builds like `1.10.0-nightly-20260601`. The current regex matches the `1.10.0` prefix, which is the spec'd `[\-+]` suffix handling — should still work, but worth re-confirming if either tool changes its banner shape.
+4. **New managed tool whose `--version` output doesn't match the regex.** The lock schema would need a per-tool `versionMatcher` extension, plus the resolver would have to dispatch on it. Same shape as `unsupportedPlatforms`.
+5. **The auto-install policy spec deviation gets revisited.** The resolver throws on cache+PATH miss today, but spec §10 line 392 implies "fall through to install." If the verb dispatcher gains an `--auto-install` flag, the resolver may need a sibling `Resolve-AvmTool -AutoInstall` shape — handled then, not now.
+
+### Deliberately deferred
+
+- **`-PreferShim` flag** — speculative; no concrete user request. Would invert precedence and complicate the audit table.
+- **Shim-brand allow-list** — overengineering for zero benefit. We measure the binary's reported version, not the shim's identity.
+- **Auto-install when shim missing** — separate policy decision owned by the dispatcher, per spec §10 line 393's `AVM_AUTO_INSTALL=1` heuristic.
+- **Shim chatter suppression (`MISE_QUIET=1` etc.)** — preemptive hardening for a trigger that hasn't fired. Re-evaluate when trigger (1) fires.
+- **Per-call resolution cache** — `Find-AvmToolOnPath` runs `--version` afresh on every call. Cold mise shim startup is ~200ms; a chain that resolves 5 tools pays ~1s of latency at the boundary. Annoying but not wrong; optimise when a user reports it.
+
+### Open follow-ups
+
+- **Regression-test gap.** [tests/Pester/Unit/Private/Find-AvmToolOnPath.Tests.ps1](../tests/Pester/Unit/Private/Find-AvmToolOnPath.Tests.ps1) has 5 `It` blocks today covering the direct-binary happy paths against the live `pwsh` host. No coverage for the shim scenarios in the per-scenario table above. **Proposed slice** (≤30 lines net): add a `Describe 'Find-AvmToolOnPath external version manager shims'` block that mocks `Get-Command` + `Invoke-AvmProcess` (via `InModuleScope` + Pester `Mock`) to simulate scenarios 1, 2, and 3. Locks the contract against future regressions. Not bundled into this Appendix slice because (a) test-only work belongs in its own commit per slice cadence, and (b) it changes test surface, which the doc-only gate skips — landing them separately keeps each gate honest.
+- **Spec §10 cross-link.** Spec §10 lines 389–393 don't yet say "shims work transparently." Append a one-line forward reference to this Appendix the next time spec §10 is edited (e.g. for the auto-install spike). Not worth a standalone slice.
+- **CONTRIBUTING.md note.** When the user-facing CLI README gains a "version managers" section, link here. No `docs/user-guide.md` exists yet; track in the same Phase 3 doc-buildout window as Appendix G's `docs/user-guide.md` line.
