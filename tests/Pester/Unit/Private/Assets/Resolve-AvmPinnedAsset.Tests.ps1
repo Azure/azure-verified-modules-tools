@@ -348,3 +348,115 @@ Describe 'Resolve-AvmPinnedAsset archive type inference' {
         }
     }
 }
+
+Describe 'Resolve-AvmPinnedAsset spec section 6 path-shape compliance' {
+    BeforeEach {
+        $script:sandbox = Join-Path $TestDrive ("avmhome-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $script:sandbox -Force | Out-Null
+        $env:AVM_HOME = $script:sandbox
+
+        $script:workDir = Join-Path $TestDrive ("work-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $script:workDir -Force | Out-Null
+    }
+
+    It 'names the cache directory with the 12-hex prefix of the SHA256, not the full hash' {
+        $zip = script:New-ZipFixture -WorkDir $script:workDir -ArchiveName 'aprl.zip'
+        $asset = [pscustomobject]@{
+            Source = $zip.Url
+            Sha256 = $zip.Sha256
+            Ref    = $null
+            Path   = $null
+            Type   = $null
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $asset } {
+            param($A)
+            Resolve-AvmPinnedAsset -Name 'aprl' -Asset $A -AllowFileUrls
+        }
+
+        $cacheLeaf = Split-Path -Leaf $result.Path
+        $cacheLeaf.Length | Should -Be 12
+        $cacheLeaf | Should -MatchExactly '^[0-9a-f]{12}$'
+        $cacheLeaf | Should -Be $zip.Sha256.Substring(0, 12)
+
+        # Negative assertion: the full SHA must NOT appear as the leaf name.
+        $cacheLeaf | Should -Not -Be $zip.Sha256
+    }
+
+    It 'still records the full 64-char SHA256 in .meta.json (traceability preserved)' {
+        $zip = script:New-ZipFixture -WorkDir $script:workDir -ArchiveName 'aprl.zip'
+        $asset = [pscustomobject]@{
+            Source = $zip.Url
+            Sha256 = $zip.Sha256
+            Ref    = $null
+            Path   = $null
+            Type   = $null
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $asset } {
+            param($A)
+            Resolve-AvmPinnedAsset -Name 'aprl' -Asset $A -AllowFileUrls
+        }
+
+        $metaPath = Join-Path $result.Path '.meta.json'
+        Test-Path -LiteralPath $metaPath | Should -BeTrue
+        $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+        $meta.sha256 | Should -Be $zip.Sha256
+        $meta.sha256.Length | Should -Be 64
+    }
+
+    It 'returns the full 64-char SHA256 on the result object, even though the cache leaf is truncated' {
+        $zip = script:New-ZipFixture -WorkDir $script:workDir -ArchiveName 'aprl.zip'
+        $asset = [pscustomobject]@{
+            Source = $zip.Url
+            Sha256 = $zip.Sha256
+            Ref    = $null
+            Path   = $null
+            Type   = $null
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ A = $asset } {
+            param($A)
+            Resolve-AvmPinnedAsset -Name 'aprl' -Asset $A -AllowFileUrls
+        }
+
+        $result.Sha256.Length | Should -Be 64
+        $result.Sha256 | Should -Be $zip.Sha256
+    }
+
+    It 'short-circuits to cache-hit on the 12-hex layout (no path-shape regression on warm path)' {
+        $zip = script:New-ZipFixture -WorkDir $script:workDir -ArchiveName 'aprl.zip'
+        $asset = [pscustomobject]@{
+            Source = $zip.Url
+            Sha256 = $zip.Sha256
+            Ref    = $null
+            Path   = $null
+            Type   = $null
+        }
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ A = $asset } {
+            param($A)
+            Resolve-AvmPinnedAsset -Name 'aprl' -Asset $A -AllowFileUrls | Out-Null
+        }
+        Remove-Item -LiteralPath $zip.Path -Force
+
+        $second = InModuleScope 'Avm.Authoring' -Parameters @{ A = $asset } {
+            param($A)
+            Resolve-AvmPinnedAsset -Name 'aprl' -Asset $A -AllowFileUrls
+        }
+        $second.Action | Should -Be 'cache-hit'
+        (Split-Path -Leaf $second.Path).Length | Should -Be 12
+    }
+
+    AfterEach {
+        if ($null -eq $script:savedAvmHome) {
+            Remove-Item Env:\AVM_HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AVM_HOME = $script:savedAvmHome
+        }
+        if (Test-Path -LiteralPath $script:sandbox) {
+            Remove-Item -LiteralPath $script:sandbox -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

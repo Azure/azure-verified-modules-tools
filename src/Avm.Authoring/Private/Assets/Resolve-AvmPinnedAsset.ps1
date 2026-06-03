@@ -8,7 +8,12 @@ function Resolve-AvmPinnedAsset {
         returns) plus its asset Name, ensures the referenced archive is
         downloaded, SHA-verified, extracted, and available under
 
-            <Get-AvmFolder Cache>/assets/<name>/<sha256>/
+            <Get-AvmFolder Cache>/assets/<name>/<sha256-prefix12>/
+
+        The 12-hex prefix (first 12 chars of the lowercase SHA256) keeps cache
+        paths short on Windows per spec §6 (260-char budget). The full 64-char
+        SHA is still pinned by the descriptor, verified by Invoke-AvmHttp, and
+        preserved in .meta.json — only the on-disk directory name is truncated.
 
         The install pipeline mirrors Install-AvmToolFromLock: cache-hit
         short-circuit -> cross-process lock -> stage under .staging/<uuid>/
@@ -124,7 +129,11 @@ function Resolve-AvmPinnedAsset {
     $cacheRoot = Get-AvmFolder -Kind Cache
     $assetsRoot = Join-Path $cacheRoot 'assets'
     $assetDir = Join-Path $assetsRoot $Name
-    $versionDir = Join-Path $assetDir $sha
+    # Spec §6 line 220: use a 12-hex prefix of the SHA256 as the content-addressed
+    # segment, not the full 64-char hash. Keeps Windows paths within budget; the
+    # full SHA is still validated by Invoke-AvmHttp and recorded in .meta.json.
+    $shaPrefix = $sha.Substring(0, 12)
+    $versionDir = Join-Path $assetDir $shaPrefix
     $verified = Join-Path $versionDir '.verified'
 
     $resolvedPath = if ([string]::IsNullOrWhiteSpace($subPath)) { $versionDir } else { Join-Path $versionDir $subPath }
