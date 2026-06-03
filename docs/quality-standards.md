@@ -604,3 +604,94 @@ Concrete reasoning:
 - **Splitting #4–#10 into a "fmt+" PowerShell helper that runs even when avmfix is absent.** Possible UX win for offline contributors who can live without the schema-aware bits. Defer until we have evidence that #1–#3 unavailability is actually painful.
 - **Replacing avmfix's two-pass loop with our own file-walk.** Trivial substitution, but only worth it if we're already off avmfix. Same dependency as above.
 - **A `Test-AvmTerraformFormat` (check-only, no fixes) mode.** avmfix has no `--check` flag; we'd need a separate `--dry-run` patch to upstream or a diff-based wrapper. Track as a Phase 3 deliverable if `pr-check` ends up wanting a non-mutating format gate.
+
+## Appendix E. Decision: credential storage on disk
+
+### Context
+
+Spec §23 OQ 1 (line 667) verbatim:
+
+> **Credential storage.** Use `Microsoft.PowerShell.SecretManagement` (well-supported, cross-platform via SecretStore vault) or a simple file-based store under `<Config>/secrets/` with OS-keychain integration later? Lean: SecretManagement when we first need it (probably Phase 3).
+
+Spec §17 (Secrets) already locks in the in-memory contract for any secret the module touches: **`[SecureString]` parameters only, no plain-text persistence anywhere** (line 547), with three blanket prohibitions (line 546): no secret in source, in default config, in test fixtures, in error messages, or in telemetry. This appendix scopes the *persistence* question that §17 leaves open.
+
+### Today's reality (what the module actually persists)
+
+Grep of `src/Avm.Authoring/` for `secret|credential|token|password|api[_-]?key` (case-insensitive) returns **zero hits** outside of CLI argv parsing tokens and one doc comment about `terraform test` not needing real backend credentials. **The module persists no secrets at all today.** Every wired engine is offline-friendly: `format`, `lint`, `test`, `docs`, `check policy` (against pinned-asset bundles, no remote OPA), and the `transform` / `check convention` stubs all run without auth.
+
+The only secret the codebase touches in any form is the PowerShell Gallery API key consumed by `scripts/Publish-AvmAuthoring.ps1`, and that script has been engineered (per spec §17 line 549) to accept the key from the caller's environment + run inside a protected GitHub Environment with required reviewers, so even in CI nothing lands on disk.
+
+### Spec deviation surfaced by this audit
+
+`scripts/Publish-AvmAuthoring.ps1` line 4 declares `[string] $ApiKey`. Spec §17 line 548 mandates `[SecureString]` only ("The publish script (`scripts/Publish-AvmAuthoring.ps1`) accepts the API key as `[SecureString]` only"). Same shape as the §6-line-220 finding that Appendix D surfaced and Slice K closed: a 4-line parameter-type swap + an `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource -ApiKey ...` call site (line 86) to satisfy PSResourceGet's plain-`[string]` `-ApiKey` parameter at the boundary. Tracked as **Slice M** (follow-up to this audit, not part of the audit deliverable).
+
+### Plausible future secrets we might need to persist
+
+| Hypothetical need                            | When                          | Persistence required?                                      |
+| -------------------------------------------- | ----------------------------- | ---------------------------------------------------------- |
+| Telemetry endpoint API key                   | Phase 3 §21 if posts auth     | **Likely** — telemetry must be unattended on every CLI run |
+| Bicep ACR pull/push credentials              | Bicep CLI revival (defocused) | Maybe — ACR usually MSAL/ManagedIdentity, not persisted    |
+| `AVM_MIRROR` host with auth                  | Never (spec §16 HTTPS-only)   | No — URLs would be the wrong shape                         |
+| Conftest OPA bundle pull from private remote | Never (pinned-asset SHA)      | No                                                         |
+| Git mirror auth (e.g. Azure DevOps PAT)      | Never (we never clone in CLI) | No                                                         |
+| PSGallery API key                            | Never (publish runs in CI)    | No                                                         |
+
+**One realistic trigger only: Phase 3 telemetry posting to an authenticated endpoint.** And even that one is conditional — anonymous telemetry endpoints exist, so the trigger only fires if the endpoint design picks an auth model. That decision lives in the open Telemetry design note (spec §21 / §23 OQ 4 / progress.md cross-phase backlog) — not in this audit.
+
+### Options
+
+(a) **`Microsoft.PowerShell.SecretManagement` + `Microsoft.PowerShell.SecretStore`** vault. Cross-platform PSGallery modules, official Microsoft-maintained, ~1.1+ stable. SecretStore backend uses platform-native crypto (DPAPI on Windows, AES-GCM with master password on Linux/macOS). Bootstrap UX is a one-liner: `Set-Secret -Name <n> -SecureStringSecret (Read-Host -AsSecureString)`. CI runs unlock the vault with `-Authentication None -Interaction None` against an env-sourced master password.
+
+(b) **File-based store under `<Config>/secrets/<name>.json`** with OS-keychain integration deferred. POSIX 0o600 on Linux/macOS; Windows DPAPI-wrapped via `ConvertFrom-SecureString` (which is DPAPI on Windows, AES-GCM derived from a key file on Linux/macOS). Requires us to ship `Get-AvmCredential` / `Set-AvmCredential` / `Remove-AvmCredential` helpers and own the schema, the encryption story, the rotation story, the secure-delete story, and the test surface.
+
+(c) **Never persist secrets in the module.** Keep the current "SecureString-in-memory + caller's responsibility to source from elsewhere (env var, prompt, CI secret)" stance. Means every authenticated operation requires the caller to provide the secret at every invocation, either interactively (`Read-Host -AsSecureString`) or via an env-var-to-SecureString conversion at the dispatcher boundary.
+
+### Per-option cost/benefit
+
+| Axis                            | (a) SecretManagement              | (b) File-based                  | (c) Never persist          |
+| ------------------------------- | --------------------------------- | ------------------------------- | -------------------------- |
+| Cross-platform                  | ✅ Native                          | ⚠️ Need to write the porting layer | ✅ N/A                      |
+| OS keychain hand-off            | ✅ Pluggable backends              | ❌ "Later" (deferred indefinitely)  | ✅ N/A                      |
+| Spec §17 line 547 conformance   | ✅ Native (`Get-Secret` is `[SecureString]`) | ⚠️ Must wrap `ConvertFrom-SecureString` correctly | ✅ Trivially  |
+| Module surface to maintain      | ~30 lines (`Get-AvmCredential` wrapper) | ~300 lines + crypto + tests | 0 lines                    |
+| CI bootstrap                    | One env var (`SECRETSTORE_PASSWORD`) | One env var per secret           | One env var per secret     |
+| Module-load cost                | Lazy import of vault module       | Negligible                      | Zero                       |
+| Audit posture                   | Microsoft-maintained, ~5+ years old | Ours; needs threat model + reviews  | N/A                        |
+| Day-1 implementation effort     | ~half a day when needed           | ~3–5 days when needed           | Zero                       |
+
+### Recommended option: **(c) Never persist secrets — until Phase 3 telemetry forces our hand, then (a)**
+
+Rationale:
+
+- Spec lean already says "SecretManagement when we first need it (probably Phase 3)" — this audit confirms the timing: today the module has *no* persisted secrets, and the only plausible trigger is Phase 3 telemetry (and even that's conditional on the endpoint design).
+- (b) loses to (a) on every axis except day-1 dependency footprint, and the dependency footprint argument is weak because `Microsoft.PowerShell.SecretManagement` is a standard Microsoft module already heavily used in PowerShell tooling (cf. Az.Accounts, Microsoft.Graph). It's not exotic.
+- (c) is the cheapest correct option today and keeps the module's surface minimal until we have a real consumer to design against.
+- When Phase 3 telemetry lands, picking (a) over (b) is a 30-line `Get-AvmCredential` wrapper around `Get-Secret` plus one-time bootstrap UX, not a 300-line file-store + crypto + threat-model exercise.
+
+### Slice implementation outline (deferred — fires when Phase 3 telemetry endpoint design picks an authenticated model)
+
+1. Add to `Avm.Authoring.psd1` `RequiredModules`:
+   ```pwsh
+   RequiredModules = @(
+       @{ ModuleName = 'Microsoft.PowerShell.SecretManagement'; ModuleVersion = '1.1.2' }
+       @{ ModuleName = 'Microsoft.PowerShell.SecretStore';      ModuleVersion = '1.0.6' }
+   )
+   ```
+2. New private helper `src/Avm.Authoring/Private/Credentials/Get-AvmCredential.ps1` — thin wrapper over `Get-Secret` that scopes to a vault named `Avm.Authoring`, registers the vault lazily on first use, and returns `[SecureString]`.
+3. New public verb `avm credential set <name>` (handler `Public/Set-AvmCredential.ps1`) that prompts via `Read-Host -AsSecureString` and stores via `Set-Secret`.
+4. New public verb `avm credential remove <name>` (handler `Public/Remove-AvmCredential.ps1`) that wraps `Remove-Secret`.
+5. CI bootstrap: telemetry-posting tests set the SecretStore master password from `${{ secrets.AVM_SECRETSTORE_PASSWORD }}` via `Set-SecretStoreConfiguration -Authentication None -Interaction None` + `Unlock-SecretStore` — same pattern other Microsoft modules use in their integration suites.
+6. Threat-model gate at PR review per spec §1 ("every credential touch is threat-modelled at PR time"): document the secret's lifetime, blast radius, rotation procedure, and revocation steps in the PR description.
+7. Test coverage: unit tests use the `Microsoft.PowerShell.SecretStore` in-memory mode; CI tests use a fresh-per-job vault.
+
+### Open follow-ups
+
+- **Slice M** — convert `scripts/Publish-AvmAuthoring.ps1 $ApiKey` parameter from `[string]` to `[SecureString]` per spec §17 line 548. Mirror of Slice K's pattern: small surface, regression test the parameter type, document the in-memory `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource` boundary (the gallery API requires plain-`[string]`). **Autopilot-safe — tracked separately from this audit.**
+- When telemetry endpoint design lands, confirm whether the endpoint needs auth at all. If anonymous, this audit's recommendation stays (c) indefinitely.
+- When Bicep ACR support is unblocked (defocused per 2026-05-26), audit whether MSAL/ManagedIdentity flows cover the auth without needing a persisted secret.
+
+### Deliberately deferred
+
+- Building a custom AVM-specific vault backend (option (a)'s pluggability is good enough).
+- Building the `avm credential` UX before there's a consumer that needs it.
+- File-based store (option (b)) — re-litigate only if (a) is found to have a hard portability or telemetry-CI blocker that this audit's table missed.
