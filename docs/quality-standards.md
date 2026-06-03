@@ -397,3 +397,48 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 - Per-module overrides for the `GitignoreMustContain` glob set (mechanism above; default list ships in Slice D).
 
 
+## Appendix B. Decision: mapotf replacement strategy
+
+**Context.** Upstream `avm-terraform-governance@65182443` invokes `mapotf transform --mptf-dir <pinned> --tf-dir .` (then `mapotf clean-backup --tf-dir .`) against three configs at `mapotf-configs/pre-commit/*.mptf.hcl`. This audit answers, per config: (1) what does it concretely do; (2) is it important to the AVM contract; (3) what is the cheapest replacement (native PowerShell / general CLI / keep upstream via build-and-host); (4) effort. Read it before Slice G (`Invoke-AvmTerraformTransform`).
+
+### Per-config audit
+
+| # | Config | What it concretely does | Important? | Replacement options | Cheapest |
+|---|--------|-------------------------|------------|---------------------|----------|
+| 1 | `avm_headers_for_azapi.mptf.hcl` (6.4 KB) | (a) Adds or normalises `variable.enable_telemetry` to `bool` / `default = true` / `nullable = false` + the standard description. (b) For every `azapi_resource` + `azapi_data_plane_resource`, rewrites all 4 lifecycle header attributes (`create_headers` / `delete_headers` / `read_headers` / `update_headers`) to inject the AVM User-Agent via a three-state merge: empty → set verbatim; v1-shape string → set verbatim; already mentions `local.avm_azapi_header` → leave alone; otherwise → wrap in `merge(<existing>, ...)`. (c) Same for `azapi_update_resource` but only on `read_headers` + `update_headers`. | **Yes.** AVM telemetry tenet (M5). Without the headers the module makes Azure API calls without the AVM marker, breaking downstream attribution. | (a) PowerShell — needs an HCL parser + manual reimpl of the 3-state merge. (b) `hcledit` — leaf rewrites trivial, dependency ordering + merge synthesis manual. (c) Keep mapotf via build-and-host. | **(c)** |
+| 2 | `main_telemetry_tf.mptf.hcl` (7.9 KB) | Re-emits the whole `main.telemetry.tf` shape: helper locals (`valid_module_source_regex`, `fork_avm`, `avm_azapi_headers`, `avm_azapi_header` with `# tflint-ignore`), removes legacy `data.azurerm_client_config.telemetry`, adds/updates `data.azapi_client_config.telemetry`, `data.modtm_module_source.telemetry`, `resource.random_uuid.telemetry`, `local.main_location` (`var.location` if present else `"unknown"`), and the full `resource.modtm_telemetry.telemetry` `tags = merge(...)` payload — all `count`-gated on `var.enable_telemetry`. | **Yes.** Same tenet as #1; the two together form the AVM telemetry contract. Without it the `modtm_telemetry` resource never updates. | (a) PowerShell — easier than #1 (more deterministic templating) but still needs HCL parsing for the legacy-cleanup branch. (b) `hcledit` — feasible; many small invocations + a removal step. (c) Keep mapotf via build-and-host. | **(c)** |
+| 3 | `required_provider_versions.mptf.hcl` (1.2 KB) | If `terraform.required_providers.azapi.version` is outside `~> 2.4`, rewrites it. If `terraform.required_providers.random.version` is outside `~> 3.0`, rewrites it. Two attribute writes total. | **Yes**, lower bar than #1 / #2 — a wrong pin still works at runtime, just diverges from AVM standard. | (a) PowerShell — trivial (`terraform-config-inspect` for the read; small regex or `hcledit` for the write). (b) `hcledit` — one-liner per provider. (c) Bundled in with (c) above for free. | **(c)** (or trivially (a)/(b) if standalone) |
+
+### Recommended option: **(c) keep mapotf via build-and-host**
+
+Concrete reasoning:
+
+1. **The two big configs are non-trivial to reimplement.** ~250 lines of HCL across configs #1 + #2, with `for_each`, `try()`, three-state merge synthesis, nested `depends_on` between transforms, and multi-line string templating. PowerShell needs an HCL parser (no mature vendorable option exists; `terraform-config-inspect` only emits structure, not attribute bodies). `hcledit` scripts can do leaf rewrites but the cross-config dependency graph (config #1's `var.enable_telemetry` block must land before config #2's data sources) becomes a hand-maintained shell orchestration.
+2. **Configs evolve upstream.** New `azapi_*` resource types, telemetry payload churn, and provider-version drift all happen on `avm-terraform-governance`'s schedule. A verbatim-upstream pin gives us one SHA to bump; a rewrite forks us into perpetual catch-up.
+3. **mapotf the tool is small.** `lonegunmanb/mapotf` is ~3k LoC Go. The cost of adding a release workflow once is much less than the cost of reimplementing 3 configs + maintaining them forever.
+4. **Config #3 is trivial in any path.** It bundles for free under (c), and inlining it as an `hcledit` two-liner stays viable if (c) ever falls through. Doesn't change the recommendation.
+
+### Slice G implementation outline (if option (c) holds)
+
+`Invoke-AvmTerraformTransform` becomes:
+
+1. Ecosystem guard (terraform-only).
+2. `Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback`.
+3. `Read-AvmAssetConfig -Path $Context.Root`; look up asset descriptor `avm-mapotf-configs-pre-commit`.
+4. `Resolve-AvmPinnedAsset -Name 'avm-mapotf-configs-pre-commit' -Asset <descriptor>` → on-disk dir with the 3 configs.
+5. `Invoke-AvmProcess` mapotf with argv `transform --mptf-dir <pinned> --tf-dir .` from `$Context.Root`.
+6. `Invoke-AvmProcess` mapotf with argv `clean-backup --tf-dir .` from `$Context.Root` (removes the `.bak` files mapotf leaves).
+7. Standard `pscustomobject` envelope (`Engine='terraform'`, `Tool='mapotf/<ver>'`, `Status='pass'|'fail'`, `Issues=...`).
+8. Missing pinned asset or missing tool → `AvmConfigurationException` → chain `skipped`.
+
+### Open follow-ups before Slice G can land
+
+1. **Confirm `mapotf` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 row in `docs/progress.md`) noted mapotf does not ship releases today. Owner: investigate `lonegunmanb/mapotf` (canonical home; `Azure/mapotf` is a hard fork not actively releasing). If still absent → resolve next item.
+2. **Pick a hosting strategy for mapotf release artefacts.** Three options: (i) PR a release workflow into upstream `lonegunmanb/mapotf`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — same A/B/C question already open from the 2026-05-27 audit.
+3. **Confirm config pinning approach.** Pinned-asset bundle ships as (i) tarball of upstream `mapotf-configs/pre-commit/` at a specific SHA, or (ii) re-bundled tagged release on our side. (i) keeps drift visible to consumers; (ii) gives us editorial control. **User decision; default = (i).**
+4. **Settle the pinned-asset descriptor name.** Proposed: `avm-mapotf-configs-pre-commit`. Aligns with `avm-policy-aprl` / `avm-policy-avmsec` already in use.
+
+### What is deliberately deferred
+
+- **Reimplementation in PowerShell or `hcledit` if `mapotf` proves unhostable.** If follow-ups #1 + #2 conclude that build-and-host is more expensive than expected, fall back to **(b) `hcledit`** in preference to **(a) PowerShell** — it ships releases, has a stable CLI surface, and the dependency-graph cost is bounded. Track as a new audit slice if it triggers.
+- **Replacing `mapotf clean-backup` with a `Remove-Item *.bak -Recurse`.** Trivial substitution, but only worth it if we're already off mapotf. Same dependency as the above.
