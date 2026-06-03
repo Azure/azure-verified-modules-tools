@@ -772,5 +772,200 @@ Any of the following would justify revisiting:
 
 ### Open follow-ups
 
-- **Telemetry design note** still owes a write-up on whether (and how) we'd know if the `pwsh` prerequisite is hurting adoption. Without telemetry the user-research trigger above is unobservable.
+- **Telemetry design note** is answered by [Appendix G](#appendix-g-decision-telemetry-design). A Phase 3 telemetry implementation lets us observe the "pwsh prerequisite as install blocker" re-open trigger above; without it, the trigger is permanently unobservable.
 - When Phase 3 starts and Option 3 is activated, **this appendix should be promoted to a Phase 3 spec section** (or a sibling appendix `Appendix F-1`) covering the actual distribution-channel cut-over plan, not a defer-or-not decision.
+
+---
+
+## Appendix G. Decision: telemetry design
+
+> **Status (Slice O, 2026-06-06): design locked, implementation deferred to Phase 3 per spec §21.** This appendix resolves plan §11 OQ 5 ("should the CLI emit anonymised usage telemetry to help the AVM team understand adoption, and if so what's the opt-out story?") and fills in the "TBD in the Phase 3 design note" gaps that spec §21 explicitly leaves open (endpoint, storage of install-id, opt-in UX precedence, threat model, failure handling). Nothing in this appendix changes the privacy contract spec §21 already locked. It only adds the engineering detail needed for a future Phase 3 slice to ship an implementation without re-deriving any of these decisions.
+
+### Context
+
+Spec §21 ([`avm-implementation-spec.md`](avm-implementation-spec.md#21-telemetry-deferred-to-phase-3)) locks the **privacy contract** for telemetry:
+
+- **Default**: off.
+- **Opt-in**: `$env:AVM_TELEMETRY = 'on'` or `Set-AvmConfig -Telemetry On`.
+- **Payload**: verb name, exit code, duration in ms, OS, architecture, CLI version, anonymised install ID (UUID v4 generated once and stored in `<Config>/install-id`).
+- **Never sent**: repo paths, module names, env vars, error messages, user identity, file contents, hostnames.
+- **Endpoint and storage**: TBD in the Phase 3 design note.
+
+Plan §11 OQ 5 mirrors the question. The user has not yet signalled either way on whether telemetry should ship at all.
+
+This appendix answers the eight questions a Phase 3 implementer would otherwise have to re-litigate from scratch. It is intentionally implementation-shaped (concrete payloads, file paths, env-var names, fallback rules) — not a re-statement of the spec's privacy paragraph.
+
+### Today's reality
+
+- **Zero telemetry code in the tree.** A repo-wide grep for `AVM_TELEMETRY` / `Set-AvmConfig` / `install-id` / `telemetry` returns no `src/` hits. Spec §21 is a forward-looking contract; nothing is wired.
+- **Zero telemetry endpoint commitment from the AVM team.** No App Insights instrumentation key, no Azure Function URL, no Application Insights resource exists in the Azure subscription used by this repo.
+- **One existing telemetry channel in the AVM contract — but it is *not* this one.** The Terraform AVM module contract requires `main.telemetry.tf` (locals + `data.azapi_client_config.telemetry` + `data.modtm_module_source.telemetry` + `resource.random_uuid.telemetry` + `resource.modtm_telemetry.telemetry`). The `modtm` resource emits a telemetry beacon when `terraform apply` runs against an AVM module. This is **module-deployment telemetry** — it tells the AVM team "module X was deployed once today." It is owned by the AVM Terraform module contract, materialised by the `main_telemetry_tf.mptf.hcl` config that `mapotf transform` writes into the module under test, and emitted by `terraform apply` running against an instrumented module. It is **not** owned by `Avm.Authoring`, and `Avm.Authoring` neither emits it nor reads it. See "Question 7" below for the strict separation rule.
+
+### Question 1 — should we have CLI-level telemetry at all?
+
+**Recommendation: yes, but only as defined by spec §21 (opt-in, anonymous, narrow payload).** Three reasons:
+
+1. **Adoption signal we can't get any other way.** Spec §21 lists the payload as: verb name, exit code, duration, OS, architecture, CLI version, anonymised install ID. That gives the AVM team a coarse-grained read on (a) is anyone using `avm pre-commit` at all, (b) what's the OS/version distribution, (c) what verbs are most-used (so we know where to invest), (d) what verbs fail (so we know what to fix), (e) what verbs are slow (so we know what to optimise). All five questions are unobservable from PSGallery download counts alone, which only tell us "module was downloaded" — not "module was invoked".
+2. **PSGallery download counts are noisy.** CI pipelines mass-install the module on every PR; one user could account for thousands of downloads. Install-ID-deduplicated invocation counts are the only honest measure of *active* users.
+3. **Without it, the Phase 3 distribution-channel cut-over (Hybrid, `dotnet tool`, etc.) is decision-by-vibe.** [Appendix F](#appendix-f-decision-dotnet-tool-packaging-as-a-phase-0-distribution-channel) flagged "user-research signal that `pwsh 7.4+` prerequisite is itself the install blocker" as a re-open trigger. Telemetry is how we'd observe that signal: if `osPlatform=Linux` and `psVersion<7.4` show up frequently in *failed* invocations of `pwsh -Command 'Get-Module -Name Avm.Authoring'`, we know. Without telemetry, the Hybrid trigger condition is permanently unobservable.
+
+**Counter-arguments considered and rejected:**
+
+- "Telemetry is hostile to users." This concern is real but does not generalise. Spec §21's contract — *default off, opt-in only, anonymous payload, never sends paths or env vars or hostnames* — is materially different from the kind of always-on, identifying telemetry that has earned the practice a bad name. The opt-in default is the critical part; this is not "you can disable it if you find the toggle." This is "it does nothing unless you explicitly turn it on."
+- "Opt-in telemetry will return zero signal because no one opts in." Possibly. Acceptable risk: we ship the channel, document it prominently in CONTRIBUTING.md and README, and ask AVM core team members + power users (the population whose feedback we most need) to opt in. Even N=50 opt-in users gives us better signal than N=0.
+- "PSGallery has its own telemetry — that's enough." It is not. PSGallery counts module downloads, not module invocations. A CI matrix that installs the module on 12 OS/architecture combinations per PR registers as 12 downloads per PR — but zero `avm pre-commit` invocations on developer workstations.
+
+### Question 2 — what's the endpoint?
+
+Four candidate endpoints, each with cost / benefit:
+
+| Option                          | What it is                                                                                                                  | Cost                                                                                                       | Benefit                                                                                  | Verdict                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **(a) Azure Application Insights** | Microsoft-owned APM service. Anonymous instrumentation-key beacons are a first-class scenario. KQL for analysis.            | Requires Microsoft AVM team to provision a resource + share the instrumentation key (embedded in module). | First-party, free for our volume, mature KQL query story, integrates with Azure Monitor. | **Recommended.** Keeps data inside Microsoft, no third-party processor, no GDPR data-processing addendum required for AVM team use.   |
+| (b) Custom Azure Function       | Tiny `Out-of-process` HTTP trigger that writes batched events to a Storage Account / Log Analytics workspace.               | We own the code, the auth model, the cost.                                                                 | Full control over rate limiting, payload validation, retention.                          | Defer. App Insights covers the use case with far less work; revisit only if App Insights rate limits become an issue at high volume. |
+| (c) Reuse `modtm` telemetry     | The same endpoint the Terraform AVM `modtm_telemetry` resource emits to.                                                    | Co-mingles CLI-tooling-adoption signal with module-deployment signal. Confuses both data sets.             | Zero new infrastructure.                                                                 | **Rejected.** See Question 7 — CLI and module-deployment are distinct signals and must stay on separate channels.                    |
+| (d) OpenTelemetry collector     | Emit OTLP, let the AVM team point it at whatever back-end they like (App Insights, Honeycomb, self-hosted Tempo).           | Adds an OTel SDK dependency (~ heavy in pwsh).                                                             | Vendor-neutral, future-proof if the AVM team's analytics back-end changes.               | Defer to Phase 3+ if the AVM team ever owns multiple back-ends; today they own zero.                                                 |
+
+**Recommendation: (a) Azure Application Insights**, embedded instrumentation key. Use the Application Insights REST ingestion endpoint directly (`https://dc.applicationinsights.azure.com/v2/track`) rather than the .NET SDK — pure HTTP POST, no SDK dependency, transparent to anyone reading the source. The instrumentation key (a UUID, not a secret in the credential-storage sense — it grants only "post events", not "read events") ships in `Avm.Authoring.psd1`'s `PrivateData` block. Endpoint is read-only at startup; cannot be overridden by env var (closes a redirection-attack vector).
+
+This decision blocks on the AVM core team committing to a specific Application Insights resource and providing the instrumentation key. Captured as an open follow-up below.
+
+### Question 3 — how do we generate and store the install-id?
+
+- **Format**: UUID v4 (RFC 4122). 128 bits of randomness, no PII, no machine-correlation.
+- **Generation**: first run that *would have sent telemetry* (i.e. after the user has opted in) generates the install-id via `[guid]::NewGuid().ToString()`. If telemetry is never opted-in, the install-id is never generated and the file never created.
+- **Storage path**: `<Config>/install-id`, where `<Config>` is the per-user config dir from `Get-AvmFolder -Kind Config` (Windows: `%APPDATA%\Avm`; Linux/macOS: `${XDG_CONFIG_HOME:-$HOME/.config}/avm`).
+- **File format**: a single line containing the UUID, LF-terminated, UTF-8 no BOM, mode `0o600` on POSIX (per [Appendix E](#appendix-e-decision-credential-storage-on-disk) credential-style protections — even though it's not strictly a credential).
+- **Lifecycle**:
+  - Generated once on first opt-in. Never rotated by the CLI.
+  - User-deletable. If the user deletes `<Config>/install-id`, the next opt-in run generates a fresh UUID. We treat the file as user-owned state, not module-owned state.
+  - Never reset by `Update-Module` / `Uninstall-Module` / version bumps. The whole point is a stable correlation key so the AVM team can deduplicate (one user opening `avm pre-commit` 100× in a day shouldn't look like 100 distinct adopters).
+- **What the install-id is *not***: it is **not** a user-identifier. It is a *workstation*-identifier deliberately bounded to a single user account's config dir. A user on three machines registers as three install-ids; a CI runner that recreates its config dir on every job registers as a fresh install-id per job (which is fine — CI invocations are not the population we're measuring).
+
+### Question 4 — what's the opt-in / opt-out UX?
+
+Spec §21 specifies two knobs (env var + `Set-AvmConfig`). A real implementation needs a third (per-repo `.avm/config.json` `telemetry: <bool>` for repos that want to *force-disable* even if the user has opted in globally — e.g. a contractor-owned repo where the contractor has opted in personally but the client's repo policy forbids any outbound network from CI). Precedence rules:
+
+1. **`.avm/.disable` sentinel exists in the repo** → no telemetry, no questions asked. The kill-switch from spec §11 (line 304) is absolute.
+2. **`AVM_OFFLINE=1`** → no telemetry. Same envelope as "do not contact any external endpoint."
+3. **Per-repo `.avm/config.json` `telemetry: false`** → no telemetry for invocations whose `-Path` (or cwd) resolves under that repo root.
+4. **Per-repo `.avm/config.json` `telemetry: true`** → enable telemetry for that repo *even if* (5) says off. (Use case: a repo wants its own CI to phone home; the user/CI environment hasn't globally opted in.)
+5. **Per-user `<Config>/avm.config.json` `telemetry: <bool>`** → user's standing preference. Set by `Set-AvmConfig -Telemetry On|Off`.
+6. **`$env:AVM_TELEMETRY = 'on' | 'off'`** → env-var override for a single shell session; wins over the per-user file but loses to the per-repo file (the repo's policy is more specific than the user's shell).
+7. **Default** if none of the above resolve a value: **off**.
+
+This gives a layered model: repo policy > env-var override > user preference > default. The kill-switches (`.avm/.disable`, `AVM_OFFLINE`) sit above the whole stack.
+
+**`Set-AvmConfig -Telemetry On|Off`** — minimal public cmdlet shape (Phase 3 scope, listed here so the verb is reserved):
+
+```pwsh
+Set-AvmConfig -Telemetry On    # writes <Config>/avm.config.json with telemetry: true
+Set-AvmConfig -Telemetry Off   # writes telemetry: false (explicit off, distinct from "default off")
+Get-AvmConfig | Select-Object Telemetry, TelemetrySource   # shows current value + which precedence layer set it
+```
+
+`TelemetrySource` answers "where is this coming from" (so the user can debug *why* telemetry is on/off without grepping the precedence list above): values are `repo-disable-sentinel` | `offline` | `repo-config` | `env-var` | `user-config` | `default-off`.
+
+### Question 5 — threat model
+
+What could go wrong, and how the design defends:
+
+| Threat                                                                                       | Defence                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repo paths leak via `verb`/`error` fields                                                    | Payload schema is closed (no free-text fields). `verb` is one of a hardcoded enum (`pre-commit`, `pr-check`, `format`, `lint`, …). No `error`/`message` field exists. Exit code is a number.                                                                                            |
+| Hostname leaks via TLS handshake or env                                                     | The HTTP layer uses `Invoke-AvmHttp`, which does not send a `User-Agent` containing hostname. TLS SNI is the endpoint hostname, not the client's. We do not enumerate `$env:COMPUTERNAME` / `hostname` anywhere in the payload pipeline.                                                |
+| User-identity leaks via `$env:USER` / `$env:USERNAME` / `git config user.email`            | None of these are read by the telemetry path. The install-id is the only correlation key, and it is a freshly-generated UUID v4 with no derivation from username/hostname/timezone/etc.                                                                                                |
+| Network calls block CLI exit on opt-in users                                                | Fire-and-forget background job (`Start-ThreadJob`) with a 2-second hard timeout. Job results are never `Receive-Job`'d back to the foreground; failures are swallowed. The CLI exits with its own exit code on its own schedule; the telemetry job lives or dies on its own.            |
+| Proxy credentials leak via TLS                                                              | `Invoke-AvmHttp` does not source proxy credentials from any env var beyond what `[System.Net.WebRequest]::DefaultWebProxy` already does. We do not parse `$env:HTTP_PROXY` ourselves.                                                                                                  |
+| Telemetry is sent from environments where the user did not consent (CI runners)            | Spec §21's "default off" is the primary defence. Plus: when `$env:CI` is set (well-known signal for CI environments) we *additionally* require an explicit per-repo `telemetry: true` to send. User-preference opt-in does not transfer to CI environments without per-repo confirmation. |
+| Endpoint redirect / DNS hijack sends events to a third party                              | The endpoint URL is hardcoded at module-load time from `Avm.Authoring.psd1`'s `PrivateData`. No env var can override it. The instrumentation key is also hardcoded; a hijacked endpoint can't usefully consume the events.                                                              |
+| GDPR Article 9 special-category data leakage                                                | Payload schema is closed; no field can carry health / religion / ethnicity / sexual-orientation / political views / biometrics / union membership. Install-id is randomly generated, not derived from any identifier.                                                                  |
+| Reverse-engineering install-id → user identity                                              | A UUID v4 has 122 bits of randomness. There is no derivable mapping from install-id → user. The AVM team operating App Insights can correlate one install-id's events over time, but cannot resolve it to a person.                                                                    |
+
+### Question 6 — when to send and how to handle failures
+
+- **When**: on CLI exit, *after* the user-visible result has been written to stdout/stderr. Telemetry is fire-and-forget and must never block, delay, or contaminate the visible CLI output.
+- **Mechanism**: `Start-ThreadJob` (built into pwsh 7.4, no extra dep) with the HTTP POST. The main thread does not wait for the job. The job has a 2-second hard timeout via the HTTP client itself, not via `Wait-Job` on the main thread.
+- **Failure handling**: any exception from the job (network, DNS, TLS, 5xx, timeout) is swallowed. No retry. No log. No console output. The user must never see "telemetry failed to send" — that would itself be a UX bug.
+- **Throttling**: no client-side throttling. The endpoint (App Insights) handles rate limiting. If a user runs `avm pre-commit` in a tight loop 1000× a minute, App Insights will rate-limit and we don't care.
+- **Batching**: no client-side batching. Each invocation is one event. Simplifies the code, avoids the "what happens if the CLI is SIGKILL'd before the batch flushes" failure mode entirely.
+- **Offline-mode interaction**: if `AVM_OFFLINE=1` is set, the telemetry job is never started in the first place. Same envelope as every other outbound call.
+- **Verbose output**: `$env:AVM_TELEMETRY_DEBUG = '1'` (a third, debug-only env var, undocumented except in CONTRIBUTING.md) prints the would-be payload to stderr instead of sending. For developer use only; never sends real data when set.
+
+### Question 7 — CLI telemetry vs module-deployment telemetry (the strict separation rule)
+
+Two telemetry channels exist in the AVM contract. They must stay separate.
+
+| Channel                           | Owner                                  | What it measures                                                                          | Emitter                                                                                          | Opt-out                                                                                                    |
+| --------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| **Module-deployment telemetry**   | AVM Terraform module contract          | "module X was deployed once today" (Terraform `apply` against an instrumented AVM module) | `resource.modtm_telemetry.telemetry` in `main.telemetry.tf` (materialised by `mapotf transform`) | `var.enable_telemetry = false` in the consumer's Terraform config                                          |
+| **CLI-tooling telemetry** (this design) | `Avm.Authoring` module                 | "the avm CLI was invoked once today" (`avm <verb>` on a developer workstation)            | `Avm.Authoring` itself, via App Insights ingestion POST                                          | spec §21 layered model (this Appendix § Question 4): `.avm/.disable` / `AVM_OFFLINE` / per-repo / per-user / env var |
+
+**Why the separation matters:**
+
+1. **Different consent populations.** A developer running `avm pre-commit` against a module is making a tooling choice. A user running `terraform apply` against that module is making a deployment choice. Conflating the two means the consent the user gave at deployment time silently applies to the developer's tooling — and vice versa.
+2. **Different signals.** Tooling adoption is about *who is using our CLI*. Module deployment is about *what is being deployed*. Mixing them muddies both data sets.
+3. **Different sustainment.** `Avm.Authoring` is owned by this repo; the `modtm` resource is owned by the AVM Terraform module contract. Changes to one must not require changes to the other.
+
+**Concrete rules this implies:**
+
+- `Avm.Authoring` MUST NOT read or write the `modtm` resource's UUID (`resource.random_uuid.telemetry`).
+- `Avm.Authoring` MUST NOT influence the `var.enable_telemetry` value in any module under test.
+- `Avm.Authoring`'s install-id and the `modtm` UUID are unrelated; they MUST NOT be derived from each other.
+- The two endpoints MUST be different. `modtm` posts to Microsoft's telemetry endpoint (`modtm.azurewebsites.net` as of 2026-06); `Avm.Authoring` will post to a separate Application Insights resource owned by the AVM core team.
+- `avm format` running `mapotf transform` against a module emits the module's `main.telemetry.tf` (because that's the AVM contract). That is *module-side* code-generation, not CLI-side telemetry. The mapotf-emitted file is shipped to the user's module, not invoked by the CLI.
+
+### Question 8 — Phase placement and implementation slice outline
+
+Per spec §21, the implementation is **Phase 3**. This appendix names the slices a future Phase 3 session should land. Each slice independently commits + ships.
+
+| Slice            | Scope                                                                                                                                                       | Estimated size  |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **Slice T-1** (config)   | `Set-AvmConfig` + `Get-AvmConfig` cmdlets. `<Config>/avm.config.json` schema with `telemetry: bool`. Per-repo `.avm/config.json` `telemetry` field. `Get-AvmConfig` resolves precedence layers from this Appendix § Question 4 and reports `TelemetrySource`. | ~150 LOC + tests |
+| **Slice T-2** (install-id) | Install-id generation, storage, lifecycle. `New-AvmInstallId` + `Get-AvmInstallId` private helpers. `<Config>/install-id` file with mode `0o600` on POSIX.  | ~80 LOC + tests  |
+| **Slice T-3** (payload)    | Payload schema + serialiser. Closed enum for `verb`. Field allow-list enforcement test (rejects any field not in the spec §21 list).                       | ~100 LOC + tests |
+| **Slice T-4** (transport)  | `Send-AvmTelemetry` private helper. Fire-and-forget `Start-ThreadJob`. 2-second timeout. Swallow all failures. App Insights ingestion REST POST.            | ~120 LOC + tests |
+| **Slice T-5** (wire-up)    | Public dispatchers (`Invoke-Avm`, `Invoke-AvmPreCommit`, etc.) call `Send-AvmTelemetry` on exit. CI environment requires per-repo opt-in.                   | ~50 LOC + tests  |
+| **Slice T-6** (docs)       | CONTRIBUTING.md telemetry section. README.md three-line summary + link. `docs/user-guide.md` (once it exists) gets a "Telemetry" subsection.                | doc-only         |
+
+**Why six small slices instead of one big one**: each slice is independently reviewable, and the threat model (Question 5) means we want each layer testable in isolation. Slices T-1, T-2, T-3, T-4 are independently shippable behind a feature flag (`PrivateData.TelemetryEnabled = $false` at module level); T-5 is the only slice that *activates* the channel.
+
+### Recommended option (decisions locked by this appendix)
+
+| Decision                       | Choice                                                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ship CLI telemetry at all?     | **Yes** (opt-in, anonymous, narrow payload per spec §21).                                                                                                                              |
+| Endpoint                       | **Azure Application Insights** (direct REST ingestion, no SDK).                                                                                                                       |
+| Storage of install-id          | `<Config>/install-id`; UUID v4; mode `0o600` POSIX; user-deletable; never reset by the CLI.                                                                                            |
+| Opt-in/out precedence          | `.avm/.disable` > `AVM_OFFLINE` > per-repo `.avm/config.json` > `AVM_TELEMETRY` env var > per-user `<Config>/avm.config.json` > **default off**. CI environments require per-repo opt-in. |
+| Send timing                    | After user-visible output, fire-and-forget `Start-ThreadJob`, 2-second hard timeout, errors swallowed.                                                                                |
+| Separation from `modtm`        | Strict. Different endpoints, different IDs, no read/write coupling. Question 7 rules are binding.                                                                                     |
+| Phase placement                | **Phase 3**. Six slices (T-1 through T-6). Spec §21 is unchanged by this appendix.                                                                                                    |
+
+### Trigger conditions to re-open this design
+
+This appendix should be revisited if any of the following becomes true:
+
+1. The AVM core team commits to **a different APM back-end** (Honeycomb, Datadog, self-hosted). Question 2's recommendation flips to (d) OpenTelemetry collector.
+2. **GDPR or AVM legal review** rejects the "instrumentation key embedded in module" model. We'd need a per-tenant key handshake, which is a substantial design change (Question 2 + Question 5 both move).
+3. **Volume exceeds App Insights free tier** for the AVM team's subscription. Question 2 moves to (b) Custom Azure Function with batching, or App Insights with sampling.
+4. The user-base signals that **opt-in produces too low a signal to be useful**. We'd consider promoting to opt-out (default on, opt-out via the same precedence model). **Per spec §21 this would require an explicit spec change, not just an appendix update.**
+5. A **second non-CLI emitter** appears in `Avm.Authoring` (e.g. a long-running daemon or watcher). Question 6's "one event per invocation" assumption breaks; we'd need batching.
+
+### Deliberately deferred (do NOT pre-build before Phase 3)
+
+- The endpoint URL + instrumentation key. Both block on AVM core team commitment. Hardcoding placeholders now would either (a) leak to a real endpoint we don't own (security incident) or (b) cause silent failures users would file bugs about.
+- `Set-AvmConfig` / `Get-AvmConfig` cmdlets. They are Slice T-1; building them now without telemetry to gate would be scope creep.
+- The `install-id` file. Generating it before telemetry ships is a privacy footgun (file appears, user wonders why, files a bug).
+- `Start-ThreadJob` wiring in dispatchers. Slice T-5 only; landing earlier means dead code that confuses readers.
+- CONTRIBUTING.md telemetry section. Slice T-6 only; documenting a feature that does not exist mis-leads contributors.
+- A `tests/Pester/Unit/Private/Telemetry/` test tree. Zero production code = nothing to test.
+
+### Open follow-ups
+
+- **AVM core team commitment.** Need a specific Application Insights resource ID and instrumentation key (or an explicit "we're not doing telemetry"). Block on this for Phase 3 slice T-4.
+- **Privacy / legal review** of the payload schema (Question 5's "no field can carry GDPR Article 9 data" assertion). Block on this for Phase 3 slice T-5 (the activation slice). Should be a short conversation given the closed-enum schema; capturing here so it doesn't get forgotten.
+- **CONTRIBUTING.md update** in Slice T-6: cross-link to this Appendix and to spec §21.
+- **README.md update** in Slice T-6: three lines on telemetry under a "Privacy" heading. Surface the opt-in semantics so users don't discover them by accident.
+- **`docs/user-guide.md`** does not exist yet. When it lands (spec §22 calls for it), it gets a Telemetry subsection — captured here so the doc author doesn't omit it.
+- **Cross-link from [Appendix F](#appendix-f-decision-dotnet-tool-packaging-as-a-phase-0-distribution-channel)** open-follow-ups: the line `"Telemetry design note still owes a write-up on whether (and how) we'd know if the pwsh prerequisite is hurting adoption"` is now answered by this Appendix G. A Phase 3 implementation of telemetry would let us observe the Appendix F re-open trigger.
