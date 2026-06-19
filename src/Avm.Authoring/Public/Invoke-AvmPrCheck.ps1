@@ -92,7 +92,7 @@ function Invoke-AvmPrCheck {
 
     $stepDefs = @(
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
-        [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
+        [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
         [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
@@ -110,10 +110,12 @@ function Invoke-AvmPrCheck {
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
 
         try {
+            $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
             $stepResult = & $def.Cmdlet `
                 -Path $context.Root `
                 -Ecosystem $context.Ecosystem `
-                -AllowPathFallback:$AllowPathFallback
+                -AllowPathFallback:$AllowPathFallback `
+                @extraArgs
 
             if ($stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status') {
                 $stepStatus = $stepResult.Status

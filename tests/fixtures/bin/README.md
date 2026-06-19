@@ -3,8 +3,9 @@
 `tests/Pester/Integration/` tests must not hit the real network, but they
 do exercise real subprocesses against real filesystems. This directory
 holds the cross-platform stubs that stand in for the managed CLIs
-(`bicep`, `terraform`, `tflint`, `terraform-docs`) so the engine wrappers
-can be validated end-to-end without the real binaries.
+(`bicep`, `terraform`, `tflint`, `terraform-docs`, `conftest`, `mapotf`)
+so the engine wrappers can be validated end-to-end without the real
+binaries.
 
 ## Convention
 
@@ -37,6 +38,7 @@ Shipped. Four Terraform-ecosystem stubs landed 2026-05-27 alongside
 | `tflint.ps1`          | `--version`, `--recursive --format=json`                   | `0.55.1`     |
 | `terraform-docs.ps1`  | `--version`, `markdown table …`                            | `0.20.0`     |
 | `conftest.ps1`        | `--version`, `test …` (emits `[]` for pass)                | `0.68.2`     |
+| `mapotf.ps1`          | `--version`, `transform …`, `clean-backup …` (no-op)       | `0.1.4`      |
 
 The argv-log file (`$env:AVM_STUB_LOG_DIR`) hinted at above is not yet
 emitted — the current consumer only needs the engine wrappers to succeed

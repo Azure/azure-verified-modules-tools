@@ -5,8 +5,8 @@
 # Invoke-AvmPreCommit, Invoke-AvmPrCheck, and Invoke-AvmCheckPolicy
 # against a tiny fixture module via real subprocesses (pwsh-backed stub
 # launchers on PATH) instead of cmdlet-level mocks. Proves the argv
-# contracts for terraform, tflint, terraform-docs, and conftest hold
-# end-to-end without the real binaries.
+# contracts for terraform, tflint, terraform-docs, conftest, and mapotf
+# hold end-to-end without the real binaries.
 #
 # How the harness works:
 #   1. The four PowerShell stubs under tests/fixtures/bin/ are wrapped
@@ -52,11 +52,15 @@ BeforeAll {
     # are fine because Resolve-AvmPinnedAsset only re-verifies on
     # download, not on cache hit; both the schema validator and the
     # resolver accept any `^[0-9a-f]{64}$` string.
+    # Resolve-AvmPinnedAsset content-addresses the cache by a 12-hex prefix
+    # of the SHA256 (spec §6 line 220), not the full 64-char hash, so the
+    # pre-staged .verified marker must live under that same prefixed segment
+    # for the cache-hit fast-path to short-circuit the Invoke-AvmHttp download.
     $script:aprlSha = 'a' * 64
     $script:avmsecSha = 'b' * 64
     $cacheRoot = Join-Path $env:AVM_HOME 'cache'
-    $aprlVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-aprl') $script:aprlSha
-    $avmsecVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-avmsec') $script:avmsecSha
+    $aprlVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-aprl') $script:aprlSha.Substring(0, 12)
+    $avmsecVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-avmsec') $script:avmsecSha.Substring(0, 12)
     $null = New-Item -ItemType Directory -Path $aprlVersionDir -Force
     $null = New-Item -ItemType Directory -Path $avmsecVersionDir -Force
     Set-Content -LiteralPath (Join-Path $aprlVersionDir '.verified') -Value '' -Encoding utf8NoBOM
@@ -191,10 +195,6 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
 
-        # transform stays AvmConfigurationException -> skipped per Phase 2 audit.
-        $byName['transform'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
-        $byName['transform'].PSObject.Properties['Error'].Value | Should -Not -BeNullOrEmpty
-
         # check convention runs the in-module rule framework; reports
         # ToolSource='builtin' rather than 'path'. Fixture pre-stages
         # every file the seven Slice D rules require.
@@ -205,8 +205,11 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
         @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
 
+        # transform now wraps the mapotf stub via the launcher PATH-fallback.
+        # The stub is a no-op, so the engine's before/after hash snapshot
+        # finds no changes and reports pass (fix mode, no -CheckDrift here).
         # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('format', 'lint', 'test', 'docs')) {
+        foreach ($passing in @('transform', 'format', 'lint', 'test', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $byName[$passing].PSObject.Properties['Error'].Value | Should -BeNullOrEmpty
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
@@ -214,9 +217,11 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
+
+        $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes seven steps with the architecturally-blocked transform engine reported as skipped' {
+    It 'pr-check composes seven steps with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -231,13 +236,10 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
 
-        foreach ($skipped in @('transform')) {
-            $byName[$skipped].PSObject.Properties['Status'].Value | Should -Be 'skipped'
-            $byName[$skipped].PSObject.Properties['Error'].Value | Should -Not -BeNullOrEmpty
-        }
-
+        # transform runs under -CheckDrift in pr-check; the no-op mapotf stub
+        # leaves the tree untouched so the drift-check finds nothing and passes.
         # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('format', 'lint', 'check policy', 'test', 'docs')) {
+        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'test', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'

@@ -67,7 +67,7 @@ Describe 'Invoke-AvmTransform' {
         }
     }
 
-    It 'each engine stub throws AvmConfigurationException for its own ecosystem' {
+    It 'the bicep engine stub throws AvmConfigurationException for its own ecosystem' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepTransform -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -78,17 +78,6 @@ Describe 'Invoke-AvmTransform' {
         $err                       | Should -Not -BeNullOrEmpty
         $err.GetType().Name        | Should -Be 'AvmConfigurationException'
         $err.Message               | Should -Match 'Bicep transform is not yet wired'
-
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmTerraformTransform -Context ([pscustomobject]@{ Ecosystem = 'terraform'; Root = $TestDrive })
-                $null
-            }
-            catch { $_.Exception }
-        }
-        $err                       | Should -Not -BeNullOrEmpty
-        $err.GetType().Name        | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Terraform transform is not yet wired'
     }
 
     It 'each engine rejects a mismatched ecosystem' {
