@@ -496,6 +496,13 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
+> **UPDATE 2026-06-19 — supply-chain UNBLOCKED; recommendation flips from build-and-host to wrap-the-shipping-release. See [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh) for the authoritative current state.** Three facts changed since this audit was written:
+> 1. **`Azure/mapotf` now ships goreleaser releases.** Latest `v0.1.4` (published 2026-06-10) ships the canonical 6-platform archive shape (`mapotf_0.1.4_{os}_{arch}.{tar.gz|zip}` + `checksums.txt`) — identical to `conftest` / `terraform-docs`. The open follow-up #1 below ("confirm mapotf release-shipping status — the 2026-05-27 audit said no") is now **resolved: yes**. The build-and-host hosting decision (follow-up #2) is **moot** — no Azure-side workflow PR needed; we pin the upstream `Azure/mapotf` release directly in `tools.lock.psd1`.
+> 2. **mapotf gained ordering/sorting transform primitives.** The per-config audit below predates `reorder_attributes`, `sort_blocks_in_file`, `remove_block_element`, and `move_block`. The live governance bundle is now **nine** configs (not three): `avm_headers_for_azapi`, `main_telemetry_tf`, `move_misplaced_blocks`, `order_module_attrs`, `order_resource_attrs`, `order_resource_meta`, `required_provider_versions`, `sort_outputs`, `sort_variables`. Together they realise the **entire** avmfix 10-behaviour catalogue from Appendix C — including the file-partitioning behaviours #5 + #7 that [Appendix I](#appendix-i-decision-hcl2json-adoption-for-narrow-file-layout-enforcement) was going to cover with `hcl2json`.
+> 3. **Recommended option is now: wrap the shipping `Azure/mapotf` release + pin the governance `mapotf-configs/pre-commit` bundle as a pinned-asset.** The "reimplement in PowerShell / `hcledit`" analysis below stands as the reason we don't reimplement — but the build-and-host conclusion is superseded. The Slice G recipe with concrete SHA256s lives in [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh).
+>
+> The per-config audit and reasoning below are retained verbatim as the historical record (they explain *why* wrapping beats reimplementing).
+
 **Context.** Upstream `avm-terraform-governance@65182443` invokes `mapotf transform --mptf-dir <pinned> --tf-dir .` (then `mapotf clean-backup --tf-dir .`) against three configs at `mapotf-configs/pre-commit/*.mptf.hcl`. This audit answers, per config: (1) what does it concretely do; (2) is it important to the AVM contract; (3) what is the cheapest replacement (native PowerShell / general CLI / keep upstream via build-and-host); (4) effort. Read it before Slice G (`Invoke-AvmTerraformTransform`).
 
 ### Per-config audit
@@ -541,6 +548,18 @@ Concrete reasoning:
 - **Replacing `mapotf clean-backup` with a `Remove-Item *.bak -Recurse`.** Trivial substitution, but only worth it if we're already off mapotf. Same dependency as the above.
 
 ## Appendix C. Decision: avmfix replacement strategy
+
+> **UPDATE 2026-06-19 — `avmfix` is DEPRECATED upstream and replaced by `mapotf`. This appendix is now a historical behaviour catalogue, not a live decision.** Per user direction (2026-06-19) and confirmed against the upstream repos: `lonegunmanb/avmfix` is deprecated; AVM Terraform governance now performs **all** of avmfix's reordering/hygiene work via `mapotf transform` with the nine hosted `mapotf-configs/pre-commit/*.mptf.hcl` configs (see [Appendix B](#appendix-b-decision-mapotf-replacement-strategy) update + [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh)). The mapping from this 10-behaviour catalogue to the mapotf configs:
+> - **#1 resource/data/ephemeral block ordering** → `order_resource_attrs` + `order_resource_meta` (`reorder_attributes` primitive).
+> - **#2 module block ordering** → `order_module_attrs`.
+> - **#3 azapi overrides** → `avm_headers_for_azapi`.
+> - **#4 variable attr ordering + hygiene** → `sort_variables` (`reorder_attributes` + `remove_block_element` dropping `nullable=true`/`sensitive=false`/`ephemeral=false`).
+> - **#5 variables-file partitioning + relocation** → `move_misplaced_blocks` (moves non-canonical blocks to `main.tf`) + `sort_variables` (`sort_blocks_in_file`, required-alpha then optional-alpha, per-file `for_each` so multi-file `variables.*.tf` layouts survive).
+> - **#6 output attr ordering + hygiene** → `sort_outputs`.
+> - **#7 outputs-file partitioning + relocation** → `move_misplaced_blocks` + `sort_outputs`.
+> - **#8 locals / #9 moved-removed / #10 terraform-block ordering** → covered by the `order_*` configs + mapotf's writer.
+>
+> **Consequence:** Slice H stays closed (no avmfix chain). The "build-and-host avmfix" recommendation below is **superseded** — avmfix is not adopted in any form; its behaviours come from wrapping mapotf (Slice G). The catalogue is preserved because it is the precise map of *what the mapotf configs now do*, which is invaluable when validating a Slice G run.
 
 **Context.** Upstream `avm-terraform-governance@65182443` runs `avmfix --folder . --exclude <pattern>` against the module root, then again against each subdir of `./modules` and `./examples` at `depth=1`. avmfix (`lonegunmanb/avmfix@a8d494fe`, ~3 KB main + ~37 files under `pkg/`) is structured as a per-file walker that runs **twice** in succession (file-relocation passes can move blocks between `variables.tf` / `outputs.tf` / `main.tf`, which then need re-walking) over every `*.tf` file in scope. This audit answers, per behaviour: (1) what does it concretely do; (2) is it important to the AVM contract; (3) is it covered by `terraform fmt`; (4) what is the cheapest replacement (drop / general CLI / native PowerShell / keep upstream via build-and-host); (5) effort. Read it before Slice H (`Format-AvmTerraformModule` avmfix-equivalent chain).
 
@@ -1068,6 +1087,12 @@ This Appendix is correct as long as the assumptions below hold. If any one start
 
 ## Appendix I. Decision: `hcl2json` adoption for narrow file-layout enforcement
 
+> **UPDATE 2026-06-19 — SUPERSEDED. `hcl2json`/Slice R is dropped; the variables/outputs partitioning it would enforce is now done by mapotf.** When this audit was written (2026-06-03) the plan was: enforce avmfix behaviours #5 + #7 (variables/outputs file partitioning) as a **check-only** PowerShell rule on top of `hcl2json`, because avmfix didn't ship releases and the user preferred "flag rather than fix". As of 2026-06-19 both premises changed:
+> 1. **mapotf now does #5 + #7 directly.** The governance `move_misplaced_blocks.mptf.hcl` config relocates non-canonical blocks out of `variables.tf` / `outputs.tf` to `main.tf`, and `sort_variables.mptf.hcl` / `sort_outputs.mptf.hcl` consolidate stray variable/output blocks into the canonical files (per-file `for_each` keyed on `mptf.range.file_name` preserves multi-file `variables.*.tf` layouts). This is a strict superset of the `hcl2json` two-rule scope — and it **fixes** rather than just flags.
+> 2. **The "flag vs fix" tension is resolved by the upstream pattern, not by a read-only parser.** Upstream `pre-commit.porch.yaml` runs `mapotf transform` (auto-fix); `pr-check.porch.yaml` re-runs `mapotf transform` + `mapotf clean-backup` and then `git status --porcelain` — failing the PR if there is drift. So the canonical AVM model is **fix-in-pre-commit, flag-drift-in-pr-check**. Our engine reproduces both: `Invoke-AvmPreCommit` runs the transform; `Invoke-AvmPrCheck` runs it then asserts no working-tree drift.
+>
+> **Decision (2026-06-19): do NOT pin `hcl2json`, do NOT build Slice R, do NOT add the `Test-AvmRuleTerraformFileLayout` primitive or the `060`/`061` rules.** Building a parallel flag-only PowerShell reimplementation of a subset mapotf already covers would (a) duplicate effort, (b) diverge from the upstream contract, and (c) leave authors with a check that points at a problem mapotf would have auto-fixed. The `hcl2json` landscape analysis below is retained as a useful reference for any *future* read-only HCL-inspection need (e.g. docs-time variable-description extraction) — but it is no longer on the Terraform pre-commit critical path. See [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh).
+
 **Context.** [Appendix C](#appendix-c-decision-avmfix-replacement-strategy) catalogued ten avmfix behaviours. User decision **2026-06-03** narrows our enforcement scope to **two** — behaviour #5 (file-partitioning for `variables*.tf`: only `variable {}` blocks allowed) and behaviour #7 (file-partitioning for `outputs*.tf`: only `output {}` blocks allowed). The remaining eight (#1 resource-arg ordering, #2 module-arg ordering, #3 azapi overrides, #4 variable-attr ordering, #6 output-attr ordering, #8 locals alpha-sort, #9 `moved`/`removed` block ordering, #10 `terraform`-block ordering) become module-author choice. User scope language: *"I think we care about outputs\*.tf and variables\*.tf not containing anything else, but the rest of it can the authors choice. Could the hcl2json tool help to flag a failure for some of these scenarios rather than use attempting to fix them?"* This appendix answers that question. Read it before Slice R (the `Test-AvmRuleTerraformFileLayout` primitive + the two built-in rules that use it).
 
 ### What `hcl2json` is
@@ -1138,3 +1163,96 @@ Concrete reasoning:
 - **`terraform-config-inspect` as a parallel primitive.** Strictly more capable than `hcl2json` for typed module-wide inspection (variables, outputs, resources by-type with attributes). Adopt only if a future use case can't be served by `hcl2json` + a JSON walk. Same build-and-host shape as [Appendix B](#appendix-b-decision-mapotf-replacement-strategy) if adopted.
 - **Replacing Appendix B's mapotf chain with `hcl2json` + PowerShell rewriting.** Theoretically tractable for the `required_provider_versions` config (two attribute writes); not tractable for `main_telemetry_tf` (re-emits ~250 lines of HCL surface) without an HCL **writer**, which `hcl2json` is not. Not authorised; not on roadmap.
 - **An auto-fix mode that moves stray blocks to `main.tf`.** Block relocation is the "fix" half of avmfix #5 + #7 — semantically clear (move every non-`variable` block from `variables.tf` to `main.tf`), but requires an HCL writer (`hcl2json` is read-only). Re-open if a contributor explicitly asks for the fix-on-commit ergonomics. Until then, the rule reports the offending file + block types and the contributor moves them by hand.
+
+---
+
+## Appendix J. 2026-06-19 Terraform pre-commit ground-truth refresh
+
+This appendix is the **authoritative current state** for the Terraform pre-commit pivot. Appendices B, C, and I above carry dated update banners pointing here; where they disagree with this appendix, **this appendix wins**.
+
+### J.1 What changed upstream (the pivot)
+
+Three upstream facts changed since the 2026-05/2026-06 audits, reported by the user on 2026-06-19 and verified against `Azure/avm-terraform-governance` + `Azure/mapotf`:
+
+1. **`avmfix` is deprecated and replaced by `mapotf`.** All block-reordering / hygiene / file-partitioning work (the full Appendix C 10-behaviour catalogue) is now done by `mapotf transform` against the hosted `mapotf-configs/pre-commit/*.mptf.hcl` bundle. avmfix is not adopted in any form. **Slice F is dead; Slice H stays closed.**
+2. **`grept` is gone, replaced by "repo sync" in the governance repo.** Repo-level managed-file synchronisation now lives in `Azure/avm-terraform-governance`'s `tf-repo-mgmt/` PowerShell tooling — a **repo-scaffolding** layer, not a per-module pre-commit step. It is **out of scope** for `avm pre-commit` (see J.6). The custom-instruction "grept → PowerShell modules" is satisfied *upstream* by `tf-repo-mgmt`; our per-module convention rules (Slices C/D, already shipped) cover the per-module subset that does belong in pre-commit.
+3. **`Azure/mapotf` now ships releases.** The Appendix B supply-chain blocker is dead — we pin the upstream release, no build-and-host.
+
+**Net effect on the plan:** the only remaining engine for Terraform pre-commit parity is **`mapotf transform` (Slice G)**, now fully unblocked. **`hcl2json`/Slice R is superseded and dropped.**
+
+### J.2 Canonical upstream chains (snapshot 2026-06-19)
+
+**`pre-commit.porch.yaml` — 5 steps (fix-locally):**
+
+1. `git config --local core.autocrlf false` (LF guard; our `.gitattributes` is authoritative, so N/A for us).
+2. `mapotf transform --mptf-dir "$AVM_MPTF_URL" --tf-dir .` — `AVM_MPTF_URL` defaults to `git::https://github.com/Azure/avm-terraform-governance.git//mapotf-configs/pre-commit`.
+3. `terraform -version` (tfenv install trigger; we already wire `Install-AvmTool terraform`).
+4. `mapotf clean-backup --tf-dir .` — removes the `.tf.mptfbackup` files step 2 leaves behind.
+5. `terraform-docs -c .terraform-docs.yml` over root + `examples/*` + `modules/*` (already wired via `Invoke-AvmTerraformDocs`).
+
+> **There is NO `terraform fmt` in the canonical pre-commit** — mapotf's HCL writer handles formatting. Our `Format-AvmTerraformModule` (`terraform fmt -recursive`) is harmless and can stay, but it is not part of the upstream chain.
+
+**`pr-check.porch.yaml` — full PR gate (flag-drift + policy):**
+
+1. Fail if `git status --porcelain` is non-empty *(pre-condition; the working tree must be clean before checks)*.
+2. terraform install.
+3. **Lint (parallel):** `tflint` on root/examples/modules (configs downloaded from governance `tflint-configs`, `.override.hcl` merged via `hclmerge`) **+ check-mapotf-drift** (re-run `mapotf transform` + `mapotf clean-backup`, then fail if `git status --porcelain` shows drift) **+ check-docs-drift** (re-run terraform-docs, fail on drift).
+4. **Well-architected (conftest):** per example → `terraform init` → `plan -out=tfplan` → `show -json` → download avmsec exemptions → `conftest` against APRL + `conftest` against avmsec (policies fetched via `go-getter` from `Azure/policy-library-avm`); honours `.e2eignore` skip + `pre/post.{sh,ps1}` hooks.
+
+### J.3 The "fix vs flag" model (resolves the long-standing tension)
+
+The earlier flag-only preference (which drove the `hcl2json` Slice Q/R audits) is satisfied **for free** by the upstream pattern:
+
+- **pre-commit FIXES** — `mapotf transform` mutates files in place (leaving `.tf.mptfbackup`, removed by `clean-backup`).
+- **pr-check FLAGS** — re-runs the *same* fixer, then asserts `git status --porcelain` is empty. Any divergence = the author didn't run pre-commit = PR fails.
+
+So the AVM-canonical model is **fix-in-pre-commit, flag-drift-in-pr-check**. Our engine reproduces both halves (`Invoke-AvmPreCommit` transforms; `Invoke-AvmPrCheck` transforms + drift-checks). This is the decision the user signalled on 2026-06-19 by reporting the avmfix→mapotf pivot — but it does reverse the 2026-06-03 flag-only stance, so **confirm before building** (decision B below).
+
+### J.4 `Azure/mapotf` v0.1.4 release — ready-to-pin facts
+
+- Tag `v0.1.4`, published 2026-06-10. 7 assets: `checksums.txt` + 6 platform archives.
+- Asset naming: `mapotf_0.1.4_{os}_{arch}.{ext}`, `ext` = `tar.gz` (darwin/linux), `zip` (windows) — the **mixed-archive** shape `tools.lock.psd1` already supports (same as `terraform-docs`).
+- SHA256 checksums (captured 2026-06-19, ready for `tools.lock.psd1`):
+
+  | Platform | Asset | SHA256 |
+  | --- | --- | --- |
+  | darwin/amd64 | `mapotf_0.1.4_darwin_amd64.tar.gz` | `43b580b480e6e86e54b0811f08c06a02fbcd0053c522b20548b352f82050df6d` |
+  | darwin/arm64 | `mapotf_0.1.4_darwin_arm64.tar.gz` | `4b639d07d5d7cea5934104f2f7c1885d1f32011f5530b2e184b3ac91002e22a5` |
+  | linux/amd64 | `mapotf_0.1.4_linux_amd64.tar.gz` | `3e7bc818c8b08e55f571f5b3561e40fa42807498f4f657fe38a5a4ceeda242cf` |
+  | linux/arm64 | `mapotf_0.1.4_linux_arm64.tar.gz` | `a87462a7f9261bd9d10906bff543560ad58eff379f392958a0aa931933e4beca` |
+  | windows/amd64 | `mapotf_0.1.4_windows_amd64.zip` | `9bf52956808a221423384e4a31eb665ddce24e6e6c06ffcf4d5a518f083491e4` |
+  | windows/arm64 | `mapotf_0.1.4_windows_arm64.zip` | `40c810461af889ca5919b72d7c7ba5cb77887548cb9b95b7940bf3b24b5c4a79` |
+
+  > Re-confirm the latest stable tag + re-pull `checksums.txt` at Slice-G kick-off; the table above is a 2026-06-19 snapshot, not a live pin.
+
+### J.5 The governance config bundle (the `--mptf-dir` payload)
+
+`Azure/avm-terraform-governance//mapotf-configs/pre-commit` — **nine** `.mptf.hcl` configs as of pin SHA `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (2026-06-16):
+
+`avm_headers_for_azapi`, `main_telemetry_tf`, `move_misplaced_blocks`, `order_module_attrs`, `order_resource_attrs`, `order_resource_meta`, `required_provider_versions`, `sort_outputs`, `sort_variables`.
+
+These use mapotf's newer primitives — `reorder_attributes`, `sort_blocks_in_file`, `remove_block_element`, `move_block` — and collectively implement the full Appendix C catalogue (see the mapping in the Appendix C banner).
+
+### J.6 Out of scope: `grept` → `tf-repo-mgmt`
+
+`tf-repo-mgmt/` is **repo-governance scaffolding** (syncing managed files like `.github/`, `CODEOWNERS`, devcontainer config into module repos) — a different layer from per-module pre-commit. It is **not** on the pre-commit critical path and is **not** the next slice. Track it as a future "repo governance" phase if/when the user prioritises it. The per-module convention checks that *do* belong in pre-commit (file naming, required files/dirs) already shipped as Slices C/D.
+
+### J.7 Slice G — the now-unblocked recipe
+
+**Architecture: WRAP `mapotf`** (argv-array subprocess via `Invoke-AvmProcess`, exactly like `conftest`/`terraform-docs`/`terraform`/`tflint`). `Invoke-AvmTerraformTransform.ps1`'s own docstring already documents this design.
+
+Steps:
+
+1. **Pin `Azure/mapotf` v0.1.4 in `tools.lock.psd1`** — six platforms, the six SHA256s in J.4, mixed `archives` map (`tar.gz` + `zip`) with `urlTemplate` using `{version}`/`{os}`/`{arch}`/`{ext}` placeholders. Add a `Get-MapotfEntry` helper to `scripts/Update-AvmToolsLock.ps1` mirroring `Get-ConftestEntry`.
+2. **Supply the configs (decision A below).** Recommended: pin `mapotf-configs/pre-commit` as a pinned-asset via the existing `Resolve-AvmPinnedAsset` (same mechanism as APRL/AVMSEC) — offline-capable, pinned to a governance SHA, descriptor name e.g. `avm-mapotf-pre-commit`.
+3. **Implement `Invoke-AvmTerraformTransform`** — drop the `AvmConfigurationException` stub; resolve the mapotf binary + the configs asset; run `mapotf transform --mptf-dir <asset.Path> --tf-dir <Context.Root>` then `mapotf clean-backup --tf-dir <Context.Root>` via `Invoke-AvmProcess`; return the standard envelope (`Engine='terraform'`, `Tool='mapotf/<version>'`, `Status`, `Issues`). `[CmdletBinding(SupportsShouldProcess)]` — it mutates files.
+4. **pr-check drift-check** — after transform + clean-backup, run `git status --porcelain` (or a `git diff --quiet` equivalent) scoped to `Context.Root`; non-empty ⇒ `Status='fail'` with the drifted files as `Issues`. This is the "flag" half of J.3.
+5. **Tests** — promote `Invoke-AvmTerraformTransform.Tests.ps1` from stub-only (mock `Invoke-AvmProcess`; assert argv shape, clean-backup call, missing-asset → `AvmConfigurationException` → `skipped`); add a `mapotf` stub under `tests/fixtures/bin/` mirroring `conftest.ps1`; extend the Terraform integration smoke.
+6. **Wire** into the `Invoke-AvmPreCommit` Terraform chain (transform step) and the `Invoke-AvmPrCheck` chain (transform + drift-check).
+
+**Two strategic decisions to confirm with the user before building:**
+
+- **(A) How to supply the configs.** (i) **pinned-asset bundle via `Resolve-AvmPinnedAsset`** *(recommended — matches APRL/AVMSEC, offline-capable, pinned to a governance SHA)*; (ii) vendor the nine configs into `src/Avm.Authoring/Resources/`; (iii) pass `mapotf` a `git::` URL directly *(needs network at transform time — not offline; rejected as default)*.
+- **(B) Confirm fix-in-pre-commit + drift-check-in-pr-check semantics (J.3).** This is the upstream-canonical model and the natural reading of the 2026-06-19 pivot, but it reverses the 2026-06-03 flag-only preference, so it's a user call. Recommendation: **follow upstream** (fix + drift-check).
+
+Until (A) and (B) are confirmed, Slice G is **planned but not started** — this appendix + the plan capture everything needed to start it in one session once the user confirms.
