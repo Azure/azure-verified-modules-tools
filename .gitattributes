@@ -20,6 +20,7 @@
 *.sh    text eol=lf
 *.bicep text eol=lf
 *.tf    text eol=lf
+*.hcl   text eol=lf
 
 # Binary assets (no EOL normalisation)
 *.png   binary
