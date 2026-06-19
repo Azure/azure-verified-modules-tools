@@ -25,14 +25,24 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 
 Both fixtures were copied from
 [`Azure/avm-terraform-governance`](https://github.com/Azure/avm-terraform-governance)
-at commit `651824432565f7d677b3896d06b82e8cb0733705` (default branch
-`main`, 2026-06-02). Upstream paths:
+at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
+`main`, 2026-06-16). Upstream paths:
 
 - `tests/terraform-azurerm-avm-res-mock/` → `terraform-azurerm-avm-res-mock/`
 - `tests/terraform-azure-avm-res-mock/` → `terraform-azure-avm-res-mock/`
 
 Upstream is MIT-licensed (Azure org). The repo-root `LICENSE` covers the
 copied content; no per-fixture `LICENSE` shipped.
+
+This SHA matches the governance modules verbatim (modulo the curation
+drop-list below and LF/UTF-8-no-BOM normalisation), so the fixtures are
+"the same modules" the upstream pipeline runs against. Relative to the
+prior `651824…` snapshot the refresh added two files that are now part of
+the canonical AVM Terraform surface — `variables.example.tf` and
+`variables.telemetry.tf` (the telemetry/example variables that the
+`mapotf` `pre-commit` configs partition out of `variables.tf`) — and
+refreshed the content of `main.tf`, `main.telemetry.tf`, `outputs.tf`,
+`variables.tf`, the module `README.md`, and `tests/unit/unit.tftest.hcl`.
 
 ## What was dropped on copy
 
@@ -43,8 +53,6 @@ the upstream governance pipeline was removed:
 - Legacy AVM shim scripts (`avm`, `avm.bat`, `avm.ps1`) — replaced by the
   `Avm.Authoring` CLI in this repo.
 - `Makefile` — replaced by `./build.ps1` and the `avm` verbs.
-- `avm.config.json` — legacy schema, not yet mapped to our
-  `.avm/config.json` shape (separate slice).
 - Repository boilerplate (`LICENSE`, `AGENTS.md`, `CODE_OF_CONDUCT.md`,
   `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`) — would shadow or
   confuse this repo's own copies.
