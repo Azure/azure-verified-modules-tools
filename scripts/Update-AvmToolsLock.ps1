@@ -95,6 +95,10 @@ param(
     [string] $Conftest,
 
     [Parameter()]
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string] $Mapotf,
+
+    [Parameter()]
     [string] $LockPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'tools.lock.psd1')
 )
 
@@ -353,6 +357,56 @@ function script:Get-ConftestEntry {
 }
 
 # ----------------------------------------------------------------------
+# mapotf: fetches 'checksums.txt' from the Azure/mapotf GitHub release.
+# Asset filenames use the lock's default lowercase {os}_{arch} placeholders
+# (mapotf_{version}_darwin_amd64.tar.gz), so no platformAliases map is
+# needed - only a mixed archive map (.zip on Windows, .tar.gz elsewhere),
+# the same shape as terraform-docs.
+# ----------------------------------------------------------------------
+function script:Get-MapotfEntry {
+    param([Parameter(Mandatory)] [string] $Version)
+
+    Write-Host "mapotf $Version" -ForegroundColor Cyan
+    $shaUrl = "https://github.com/Azure/mapotf/releases/download/v$Version/checksums.txt"
+    $body = script:Invoke-HttpGet -Url $shaUrl
+
+    $archiveMap = [ordered]@{
+        'windows-amd64' = 'zip'
+        'windows-arm64' = 'zip'
+        'linux-amd64'   = 'tar.gz'
+        'linux-arm64'   = 'tar.gz'
+        'darwin-amd64'  = 'tar.gz'
+        'darwin-arm64'  = 'tar.gz'
+    }
+    $sha = [ordered]@{}
+    foreach ($p in $script:platforms) {
+        $ext = if ($archiveMap[$p] -eq 'zip') { '.zip' } else { '.tar.gz' }
+        $osArch = $p -replace '-', '_'
+        $needle = "mapotf_${Version}_$osArch$ext"
+        $line = ($body -split "`n") | Where-Object { $_ -match "\s$([Regex]::Escape($needle))\s*$" } | Select-Object -First 1
+        if (-not $line) {
+            throw "mapotf $Version checksums.txt did not contain entry for $needle (URL: $shaUrl)."
+        }
+        $hash = ($line -split '\s+')[0].ToLowerInvariant()
+        if ($hash -notmatch '^[0-9a-f]{64}$') {
+            throw "Parsed unexpected hash '$hash' for $needle."
+        }
+        $sha[$p] = $hash
+        Write-Host ("    {0,-15} {1}" -f $p, $hash)
+    }
+
+    return [ordered]@{
+        name        = 'mapotf'
+        version     = $Version
+        urlTemplate = 'https://github.com/Azure/mapotf/releases/download/v{version}/mapotf_{version}_{os}_{arch}{ext}'
+        archive     = 'tar.gz'
+        archives    = $archiveMap
+        entrypoint  = 'mapotf'
+        sha256      = $sha
+    }
+}
+
+# ----------------------------------------------------------------------
 # Bicep: the project does not ship a checksums file, so download each
 # per-platform binary and compute SHA256 locally. Files are kept in a
 # temp dir and discarded after the loop.
@@ -551,6 +605,7 @@ if ($Bicep) { $newEntries.Add((script:Get-BicepEntry -Version $Bicep)) }
 if ($Tflint) { $newEntries.Add((script:Get-TflintEntry -Version $Tflint)) }
 if ($TerraformDocs) { $newEntries.Add((script:Get-TerraformDocsEntry -Version $TerraformDocs)) }
 if ($Conftest) { $newEntries.Add((script:Get-ConftestEntry -Version $Conftest)) }
+if ($Mapotf) { $newEntries.Add((script:Get-MapotfEntry -Version $Mapotf)) }
 
 # Merge: replace any existing entry with the same name, append otherwise.
 $merged = New-Object System.Collections.Generic.List[hashtable]

@@ -134,6 +134,29 @@
             }
         }
         @{
+            name        = 'mapotf'
+            version     = '0.1.4'
+            urlTemplate = 'https://github.com/Azure/mapotf/releases/download/v{version}/mapotf_{version}_{os}_{arch}{ext}'
+            archive     = 'tar.gz'
+            entrypoint  = 'mapotf'
+            archives    = @{
+                'windows-amd64' = 'zip'
+                'windows-arm64' = 'zip'
+                'linux-amd64'   = 'tar.gz'
+                'linux-arm64'   = 'tar.gz'
+                'darwin-amd64'  = 'tar.gz'
+                'darwin-arm64'  = 'tar.gz'
+            }
+            sha256      = @{
+                'windows-amd64' = '9bf52956808a221423384e4a31eb665ddce24e6e6c06ffcf4d5a518f083491e4'
+                'windows-arm64' = '40c810461af889ca5919b72d7c7ba5cb77887548cb9b95b7940bf3b24b5c4a79'
+                'linux-amd64'   = '3e7bc818c8b08e55f571f5b3561e40fa42807498f4f657fe38a5a4ceeda242cf'
+                'linux-arm64'   = 'a87462a7f9261bd9d10906bff543560ad58eff379f392958a0aa931933e4beca'
+                'darwin-amd64'  = '43b580b480e6e86e54b0811f08c06a02fbcd0053c522b20548b352f82050df6d'
+                'darwin-arm64'  = '4b639d07d5d7cea5934104f2f7c1885d1f32011f5530b2e184b3ac91002e22a5'
+            }
+        }
+        @{
             name        = 'terraform'
             version     = '1.15.3'
             urlTemplate = 'https://releases.hashicorp.com/terraform/{version}/terraform_{version}_{os}_{arch}.zip'
