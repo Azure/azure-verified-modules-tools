@@ -6,10 +6,10 @@ function Invoke-AvmProcess {
 
     .DESCRIPTION
         Wraps System.Diagnostics.Process with argv-array arguments (no shell,
-        no quoting), separate stdout/stderr capture via async event handlers,
-        and an optional timeout. Throws AvmProcessException on non-zero exit
-        unless -IgnoreExitCode is supplied. On timeout the process tree is
-        killed and a TimeoutException is thrown.
+        no quoting), separate stdout/stderr capture via per-stream asynchronous
+        reads (ReadToEndAsync), and an optional timeout. Throws
+        AvmProcessException on non-zero exit unless -IgnoreExitCode is supplied.
+        On timeout the process tree is killed and a TimeoutException is thrown.
 
         Per spec section 9 the CLI never invokes a shell and never quotes
         arguments; every argument is passed verbatim through
@@ -95,32 +95,14 @@ function Invoke-AvmProcess {
         }
     }
 
-    $stdoutBuilder = [System.Text.StringBuilder]::new()
-    $stderrBuilder = [System.Text.StringBuilder]::new()
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $psi
     $process.EnableRaisingEvents = $false
 
-    $outScript = {
-        $line = $args[1]
-        if ($null -ne $line.Data) {
-            $null = $Event.MessageData.AppendLine([string]$line.Data)
-        }
-    }
-    $errScript = {
-        $line = $args[1]
-        if ($null -ne $line.Data) {
-            $null = $Event.MessageData.AppendLine([string]$line.Data)
-        }
-    }
-
-    $outSubscription = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived `
-        -Action $outScript -MessageData $stdoutBuilder
-    $errSubscription = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived `
-        -Action $errScript -MessageData $stderrBuilder
-
     $started = $false
     $timedOut = $false
+    $stdoutTask = $null
+    $stderrTask = $null
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         try {
@@ -133,8 +115,18 @@ function Invoke-AvmProcess {
                 $FilePath, $ArgumentList, -1, '', $_.Exception.Message)
         }
 
-        $process.BeginOutputReadLine()
-        $process.BeginErrorReadLine()
+        # Capture stdout / stderr by reading each stream to end on its own
+        # asynchronous task. A single reader per stream preserves the exact
+        # order of the child's output. The previous Register-ObjectEvent
+        # approach dispatched OutputDataReceived callbacks through the runspace
+        # event queue, which reordered rapid multi-line bursts (e.g. terraform's
+        # `validate -json` payload) and corrupted the captured text because the
+        # shared StringBuilder was appended from multiple job threads. Using one
+        # task per stream also avoids the full-buffer deadlock that a single
+        # synchronous ReadToEnd would risk when a child writes heavily to both
+        # streams at once.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
 
         if ($TimeoutSec -gt 0) {
             $exited = $process.WaitForExit([int]($TimeoutSec * 1000))
@@ -144,23 +136,26 @@ function Invoke-AvmProcess {
                 catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
             }
         }
-        else {
-            $process.WaitForExit()
-        }
-        # Flush any pending async events.
+        # Block until the process has fully exited (also after a kill) so the
+        # exit code is readable and the async stream tasks reach EOF.
         $process.WaitForExit()
     }
     finally {
         $stopwatch.Stop()
-        Unregister-Event -SubscriptionId $outSubscription.Id -ErrorAction SilentlyContinue
-        Unregister-Event -SubscriptionId $errSubscription.Id -ErrorAction SilentlyContinue
-        if ($outSubscription) { Remove-Job -Id $outSubscription.Id -Force -ErrorAction SilentlyContinue }
-        if ($errSubscription) { Remove-Job -Id $errSubscription.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Drain the async readers. After the process has exited (or been killed) the
+    # child's pipe ends are closed, so these tasks complete with whatever was
+    # buffered. Guard against a faulted task (e.g. a stream disposed abruptly on
+    # kill) by falling back to an empty string.
+    $stdOut = ''
+    $stdErr = ''
+    if ($started) {
+        try { $stdOut = $stdoutTask.GetAwaiter().GetResult() } catch { $stdOut = '' }
+        try { $stdErr = $stderrTask.GetAwaiter().GetResult() } catch { $stdErr = '' }
     }
 
     $exitCode = if ($started) { $process.ExitCode } else { -1 }
-    $stdOut = $stdoutBuilder.ToString()
-    $stdErr = $stderrBuilder.ToString()
     $process.Dispose()
 
     if ($timedOut) {
