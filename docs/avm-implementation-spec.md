@@ -546,7 +546,7 @@ This section is the implementation-level expression of the **Security stance** p
 - No secret ever appears in source, in default config, in test fixtures, in error messages, or in telemetry.
 - API keys, tokens, and similar are accepted via `[SecureString]` parameters or read with `Read-Host -AsSecureString`. Plain-text parameter form is documented as insecure and labelled `[Obsolete]` once a `SecureString` overload exists.
 - The publish script (`scripts/Publish-AvmAuthoring.ps1`) accepts the API key as `[SecureString]` only; the plain-text wrapper exists for `--what-if` dry runs only and warns on use.
-- Long-lived secrets (e.g. `PSGALLERY_API_KEY`) live in a protected GitHub Environment with required reviewers, never in repo / org variables, never echoed by any `run:` step (no `echo`, no `Write-Host`, no `Write-Output`). Workflows that consume them must declare `environment: <name>` so the approval gate fires before the job touches the secret.
+- Long-lived secrets (e.g. `POWERSHELL_GALLERY_API_KEY`) live in a protected GitHub Environment with required reviewers (or a repository secret consumed by an environment-gated job), never in repo / org variables, never echoed by any `run:` step (no `echo`, no `Write-Host`, no `Write-Output`). Workflows that consume them must declare `environment: <name>` so the approval gate fires before the job touches the secret.
 
 ### Subprocess invocation
 
