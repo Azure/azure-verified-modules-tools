@@ -6,28 +6,27 @@ name: integration-terraform
 # downloaded into an isolated AVM_HOME -- not the stub launchers the Integration
 # tier uses. The `smoke` build task drives the Pester suite tagged 'Smoke'.
 #
-# Kept OUT of the push / pull_request `ci` gate on purpose: it needs real
-# network (tool + provider downloads) and is slower. Trigger it on demand or on
-# the weekly schedule.
-#
-# NOTE (schedule): scheduled runs only fire from the repository default branch
-# (`main`). Until this file is merged to `main`, use the `workflow_dispatch`
-# button (which runs from whichever branch you pick in the UI).
+# Runs on pull requests targeting `main` (validating the tool chain against the
+# on-disk fixture modules before merge) and on demand (`workflow_dispatch`,
+# which runs from whichever branch you pick in the UI). It needs real network
+# (tool + provider downloads) and is slower than the `ci` gate, so it lives in
+# its own workflow rather than inside that gate. It deliberately does NOT run on
+# merge / push to `main`.
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-  schedule:
-    # Weekly, Monday 05:23 UTC. Off-peak to avoid the top-of-hour runner crunch.
-    - cron: '23 5 * * 1'
 
 permissions:
   id-token: write   # Azure OIDC login
   contents: read
 
 concurrency:
-  # Never cancel an in-flight integration run just because another was queued.
   group: integration-terraform-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # Cancel a superseded PR run when a new commit is pushed (these legs are long
+  # and costly); a manual workflow_dispatch run is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   smoke:
@@ -96,8 +95,8 @@ jobs:
         # forks). Because this job runs in the `avm` GitHub Environment, the OIDC
         # token subject is `repo:Azure/azure-verified-modules-tools:environment:avm`
         # -- the Entra federated credential must be configured against that
-        # environment subject (not a branch ref), so it covers both the weekly
-        # schedule run and any workflow_dispatch regardless of the selected ref.
+        # environment subject (not a branch ref), so it covers the pull_request
+        # and workflow_dispatch runs regardless of the selected ref.
         if: ${{ vars.ARM_CLIENT_ID != '' }}
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
