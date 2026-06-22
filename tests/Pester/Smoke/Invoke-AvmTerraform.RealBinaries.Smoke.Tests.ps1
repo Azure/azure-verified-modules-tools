@@ -218,6 +218,12 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
 
             $result = Invoke-AvmPreCommit -Path $script:StagedModule -Ecosystem terraform
 
+            Write-Host '----- DIAG: pre-commit steps -----'
+            foreach ($s in $result.Steps) {
+                Write-Host ("DIAG step={0} status={1} error={2}" -f $s.Step, $s.Status, $s.Error)
+            }
+            Write-Host '----- END DIAG -----'
+
             ($result.Steps.Step -join ',') | Should -BeExactly 'check convention,transform,format,docs'
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
