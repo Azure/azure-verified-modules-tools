@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # Configure a `psgallery` environment in repo Settings → Environments
-    # with required reviewers + the PSGALLERY_API_KEY secret to gate publishes
-    # behind a manual approval. The workflow refuses to run if the secret is
-    # not present.
+    # Configure a `psgallery` environment in repo Settings → Environments with
+    # required reviewers to gate publishes behind a manual approval. The
+    # POWERSHELL_GALLERY_API_KEY secret may live at repo or environment scope;
+    # the publish step refuses to run if it is not present.
     environment: psgallery
 
     steps:
@@ -131,14 +131,19 @@ jobs:
       - name: Publish to PowerShell Gallery
         shell: pwsh
         env:
-          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+          POWERSHELL_GALLERY_API_KEY: ${{ secrets.POWERSHELL_GALLERY_API_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:PSGALLERY_API_KEY)) {
-              throw 'PSGALLERY_API_KEY secret is not set. Configure it in the `psgallery` GitHub Environment.'
+          if ([string]::IsNullOrWhiteSpace($env:POWERSHELL_GALLERY_API_KEY)) {
+              throw 'POWERSHELL_GALLERY_API_KEY secret is not set. Configure it as a repository secret or on the `psgallery` GitHub Environment.'
           }
+          # Publish-AvmAuthoring.ps1 accepts -ApiKey as [SecureString] only
+          # (spec section 17). Convert the CI secret at the call site; the script
+          # converts back to a plain string internally, inside its ShouldProcess
+          # branch, for the smallest possible plain-text window.
+          $secureKey = ConvertTo-SecureString -String $env:POWERSHELL_GALLERY_API_KEY -AsPlainText -Force
           ./scripts/Publish-AvmAuthoring.ps1 `
-              -ApiKey $env:PSGALLERY_API_KEY `
+              -ApiKey $secureKey `
               -ModulePath ./out/Avm.Authoring `
               -Confirm:$false
 
