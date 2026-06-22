@@ -2,7 +2,10 @@
 
 This module is being built up in phases per [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md). The engineering rules live in [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md) — read that before sending a PR.
 
-The repo currently contains the **placeholder release** (`Avm.Authoring 0.0.1`) and the publish pipeline only. The full build / test / lint scaffolding lands in Phase 0. Sections below marked **(Phase 0+)** describe commands that don't exist yet but will be wired up to the same entry points listed here, so you can write scripts against them today.
+The build, test, and lint scaffolding is live. The two things you most likely want:
+
+- **Run the tests / local gate** — `./build.ps1 pre-commit` (layout + lint + unit tests). See [§6](#6-build-test-lint).
+- **Install / run the module locally in dev mode** — `Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force`, then use the `avm` CLI from source. See [§3](#3-import-the-module-from-source).
 
 ---
 
@@ -13,9 +16,9 @@ The repo currently contains the **placeholder release** (`Avm.Authoring 0.0.1`) 
 | [PowerShell 7](https://aka.ms/powershell)       | 7.4 (LTS)   | Everything                                          |
 | [Git](https://git-scm.com/downloads)            | 2.40        | Cloning, branching                                  |
 | [Microsoft.PowerShell.PSResourceGet](https://learn.microsoft.com/powershell/utility-modules/psresourceget/overview) | 1.0.0 | Publishing (`Publish-PSResource`)                  |
-| [Pester](https://pester.dev)                    | 5.5         | Running tests **(Phase 0+)**                        |
-| [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting **(Phase 0+)**                              |
-| [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks **(Phase 0+)**          |
+| [Pester](https://pester.dev)                    | 5.5         | Running tests (`./build.ps1 test`)                  |
+| [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting (`./build.ps1 lint`)                        |
+| [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks                         |
 | [GitHub CLI](https://cli.github.com/)           | 2.40        | Optional — opening PRs from the terminal            |
 
 Install everything the module needs (one-time, user scope):
@@ -48,8 +51,9 @@ The simplest dev loop. No install, no copy, no symlink — point `Import-Module`
 
 ```pwsh
 Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
-Get-Command -Module Avm.Authoring
-Get-AvmAuthoringPlaceholder | Format-List
+Get-Command -Module Avm.Authoring        # every exported verb + the `avm` alias
+avm version                              # or: Get-AvmVersion
+avm doctor                               # environment diagnosis
 Remove-Module Avm.Authoring -Force
 ```
 
@@ -112,70 +116,74 @@ New-Item -ItemType SymbolicLink -Path $dst -Target $src
 
 ## 5. Validate the module layout
 
-The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)) lands in Phase 0. Until then, the publish script (`scripts/Publish-AvmAuthoring.ps1`) does the same hard casing guards inline. Run it in `-WhatIf` mode any time you want to confirm the on-disk layout matches the manifest:
+The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)) enforces that the on-disk folder / file / manifest casing matches `Avm.Authoring` exactly. Run it any time via the `layout` task (it's also the first step of `pre-commit` and `ci`):
+
+```pwsh
+./build.ps1 layout
+```
+
+Expected output:
+
+```text
+  layout OK: Avm.Authoring 0.1.0 (PS >= 7.4)
+```
+
+The publish script (`scripts/Publish-AvmAuthoring.ps1`) applies the same hard casing guards inline; run it in `-WhatIf` mode for a publish-path dry run:
 
 ```pwsh
 ./scripts/Publish-AvmAuthoring.ps1 -WhatIf
 ```
 
-Expected tail:
-
-```text
-What if: Performing the operation "Publish to PSGallery" on target "Avm.Authoring 0.0.1".
-```
-
-If the script throws before that line, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/avm-implementation-spec.md#case-sensitivity)) before retrying.
+If either throws a casing error, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/avm-implementation-spec.md#case-sensitivity)) before retrying.
 
 ---
 
-## 6. Build, test, lint **(Phase 0+)**
+## 6. Build, test, lint
 
-These commands don't run anything useful yet — the Invoke-Build task graph at `build/avm.build.ps1` lands in Phase 0. The CLI surface is intentionally locked now so PRs and CI scripts can target it:
+The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
-# All Phase 0 tasks
-./build.ps1 ci                # pre-commit + full Pester matrix
+./build.ps1 pre-commit        # layout + lint + unit tests — the local gate
+./build.ps1 ci                # layout + lint + coverage + integration (what CI runs)
 
 # Individual tasks
-./build.ps1 pre-commit        # layout + lint + Pester Unit
-./build.ps1 lint              # PSScriptAnalyzer with project settings
-./build.ps1 test              # Pester Unit + Integration
-./build.ps1 test -Tag Smoke   # adds network-dependent smoke tests
-./build.ps1 coverage          # Pester with coverage gate (70% line)
-./build.ps1 build             # stage the module for packaging
-./build.ps1 clean             # nuke build/output
+./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
+./build.ps1 lint              # PSScriptAnalyzer with repo settings + custom rules
+./build.ps1 test              # Pester unit tests (excludes Integration + Smoke)
+./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
+./build.ps1 integration       # Pester Integration tier (real FS + real subprocess, no network)
+./build.ps1 smoke             # Pester Smoke tier (real network; not part of ci/pre-commit)
+./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
+./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
 ```
 
-Until the build script exists, the closest equivalents are:
+Notes:
 
-```pwsh
-# Smoke import + invoke
-Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
-Get-AvmAuthoringPlaceholder
-Remove-Module Avm.Authoring -Force
-
-# Manifest validation
-Test-ModuleManifest ./src/Avm.Authoring/Avm.Authoring.psd1
-
-# Pre-publish layout + dry run
-./scripts/Publish-AvmAuthoring.ps1 -WhatIf
-```
+- `test` runs the **unit** tier only. The `Integration` and `Smoke` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
+- `smoke` is the only task that touches the network and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
 ---
 
-## 7. Run a single Pester test **(Phase 0+)**
+## 7. Run a single Pester test
 
-Once the test tree exists at `tests/Pester/{Unit,Integration,Smoke}/`:
+The test tree lives at `tests/Pester/{Unit,Integration,Smoke}/`. To run one file directly with Pester (bypassing the build task):
 
 ```pwsh
 Invoke-Pester -Path ./tests/Pester/Unit/Public/Invoke-AvmPreCommit.Tests.ps1 -Output Detailed
 ```
 
-To run one `It` block by name:
+To run one `It` / `Describe` block by name:
 
 ```pwsh
-Invoke-Pester -Path ./tests/Pester/Unit -FullNameFilter '*resolves module context from `$PWD*'
+Invoke-Pester -Path ./tests/Pester/Unit -FullNameFilter '*Invoke-AvmPreCommit*'
+```
+
+Integration and Smoke tests are tagged, so target them with `-Tag`:
+
+```pwsh
+Invoke-Pester -Path ./tests/Pester/Integration -Tag Integration -Output Detailed
 ```
 
 ---
@@ -232,7 +240,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
    ```
 
 2. Make changes, keeping the PR focused on a single concern.
-3. Run the layout check (`./scripts/Publish-AvmAuthoring.ps1 -WhatIf`) and — once Phase 0 lands — `./build.ps1 pre-commit`.
+3. Run the local gate before pushing: `./build.ps1 pre-commit` (layout + lint + unit tests).
 4. Commit. Prefer [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`).
 5. Push and open a PR against `Azure/azure-verified-modules-tools:main`. Link the relevant phase / spec section in the description.
 6. Address review comments via `git commit --fixup` + `git rebase -i --autosquash` before merge, not force-push reflinks.
