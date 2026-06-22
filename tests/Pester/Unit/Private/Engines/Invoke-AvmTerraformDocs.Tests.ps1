@@ -113,4 +113,156 @@ Describe 'Invoke-AvmTerraformDocs' {
         $err.GetType().Name | Should -Be 'AvmProcessException'
         $err.Message        | Should -Match 'no inject markers'
     }
+
+    It 'honours a root .terraform-docs.yml via --config instead of the table fallback' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq '--config' -and `
+                    $ArgumentList[1] -eq '.terraform-docs.yml' -and `
+                    $ArgumentList[-1] -eq '.' -and `
+                    ($ArgumentList -notcontains 'markdown')
+            }
+        }
+    }
+
+    It 'documents the root and each example when examples carry a shared config' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $examplesDir = Join-Path $script:moduleDir 'examples'
+        New-Item -ItemType Directory -Path $examplesDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $examplesDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $defaultDir = Join-Path $examplesDir 'default'
+        New-Item -ItemType Directory -Path $defaultDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $defaultDir 'main.tf') -Value 'variable "y" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $defaultDir 'README.md') `
+            -Value "<!-- BEGIN_TF_DOCS -->`n<!-- END_TF_DOCS -->`n" -Encoding utf8
+
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+        $result.FilesProcessed | Should -Be 2
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 2
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq '--config' -and $ArgumentList[-1] -match 'default$'
+            }
+        }
+    }
+
+    It 'does not walk examples when examples has no .terraform-docs.yml' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $defaultDir = Join-Path $script:moduleDir 'examples' 'default'
+        New-Item -ItemType Directory -Path $defaultDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $defaultDir 'main.tf') -Value 'variable "y" {}' -Encoding utf8
+
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+        $result.FilesProcessed | Should -Be 1
+    }
+
+    It 'skips an example subdirectory that has no .tf files' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $examplesDir = Join-Path $script:moduleDir 'examples'
+        New-Item -ItemType Directory -Path $examplesDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $examplesDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $emptyDir = Join-Path $examplesDir 'empty'
+        New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $emptyDir 'README.md') -Value 'no tf here' -Encoding utf8
+        $realDir = Join-Path $examplesDir 'real'
+        New-Item -ItemType Directory -Path $realDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $realDir 'main.tf') -Value 'variable "z" {}' -Encoding utf8
+
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+        $result.FilesProcessed | Should -Be 2
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                $ArgumentList[-1] -match 'empty$'
+            }
+        }
+    }
+
+    It 'documents submodules when modules carry a shared config' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $modulesDir = Join-Path $script:moduleDir 'modules'
+        New-Item -ItemType Directory -Path $modulesDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $modulesDir '.terraform-docs.yml') `
+            -Value 'formatter: "markdown document"' -Encoding utf8
+        $subDir = Join-Path $modulesDir 'subnet'
+        New-Item -ItemType Directory -Path $subDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $subDir 'main.tf') -Value 'variable "s" {}' -Encoding utf8
+
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+        $result.FilesProcessed | Should -Be 2
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq '--config' -and $ArgumentList[-1] -match 'subnet$'
+            }
+        }
+    }
 }
