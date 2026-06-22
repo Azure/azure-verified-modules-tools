@@ -25,53 +25,58 @@
 # `terraform init -backend=false` + `terraform validate -json` (no plan /
 # apply), so even the azurerm fixture validates offline.
 
-# Compare two on-disk trees and return a list of human-readable differences
-# (added / removed / modified relative paths). Text content is compared with
-# line endings normalised to LF so a tool that emits CRLF on a Windows runner
-# is not reported as drift - the repo standard is LF and `.gitattributes`
-# enforces it on the committed fixture. An empty result means the trees are
-# identical for our purposes.
-function Get-AvmSmokeTreeDiff {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [string] $Reference,
-        [Parameter(Mandatory)] [string] $Difference
-    )
-
-    $relativeFiles = {
-        param([string] $Root)
-        Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
-            ForEach-Object {
-                $_.FullName.Substring($Root.Length).TrimStart([char]'\', [char]'/').Replace('\', '/')
-            }
-    }
-
-    $refFiles = @(& $relativeFiles $Reference)
-    $diffFiles = @(& $relativeFiles $Difference)
-
-    $changes = [System.Collections.Generic.List[string]]::new()
-
-    foreach ($rel in ($refFiles | Where-Object { $_ -notin $diffFiles })) {
-        $changes.Add("removed: $rel")
-    }
-    foreach ($rel in ($diffFiles | Where-Object { $_ -notin $refFiles })) {
-        $changes.Add("added: $rel")
-    }
-    foreach ($rel in ($refFiles | Where-Object { $_ -in $diffFiles })) {
-        $a = ([System.IO.File]::ReadAllText((Join-Path $Reference $rel))) -replace "`r`n", "`n" -replace "`r", "`n"
-        $b = ([System.IO.File]::ReadAllText((Join-Path $Difference $rel))) -replace "`r`n", "`n" -replace "`r", "`n"
-        if ($a -ne $b) { $changes.Add("modified: $rel") }
-    }
-
-    return $changes
-}
-
 Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
 
     BeforeAll {
         $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $script:Manifest = Join-Path $script:RepoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
         Import-Module $script:Manifest -Force
+
+        # Compare two on-disk trees and return a list of human-readable differences
+        # (added / removed / modified relative paths). Text content is compared with
+        # line endings normalised to LF so a tool that emits CRLF on a Windows runner
+        # is not reported as drift - the repo standard is LF and `.gitattributes`
+        # enforces it on the committed fixture. An empty result means the trees are
+        # identical for our purposes.
+        #
+        # Defined here in BeforeAll (not at file scope) so it lives in the run-phase
+        # scope where the `It` blocks execute. A file-scope `function` only exists
+        # during Pester's discovery phase and is NOT visible inside `It`, which would
+        # raise CommandNotFoundException at the drift assertion below.
+        function Get-AvmSmokeTreeDiff {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)] [string] $Reference,
+                [Parameter(Mandatory)] [string] $Difference
+            )
+
+            $relativeFiles = {
+                param([string] $Root)
+                Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
+                    ForEach-Object {
+                        $_.FullName.Substring($Root.Length).TrimStart([char]'\', [char]'/').Replace('\', '/')
+                    }
+            }
+
+            $refFiles = @(& $relativeFiles $Reference)
+            $diffFiles = @(& $relativeFiles $Difference)
+
+            $changes = [System.Collections.Generic.List[string]]::new()
+
+            foreach ($rel in ($refFiles | Where-Object { $_ -notin $diffFiles })) {
+                $changes.Add("removed: $rel")
+            }
+            foreach ($rel in ($diffFiles | Where-Object { $_ -notin $refFiles })) {
+                $changes.Add("added: $rel")
+            }
+            foreach ($rel in ($refFiles | Where-Object { $_ -in $diffFiles })) {
+                $a = ([System.IO.File]::ReadAllText((Join-Path $Reference $rel))) -replace "`r`n", "`n" -replace "`r", "`n"
+                $b = ([System.IO.File]::ReadAllText((Join-Path $Difference $rel))) -replace "`r`n", "`n" -replace "`r", "`n"
+                if ($a -ne $b) { $changes.Add("modified: $rel") }
+            }
+
+            return $changes
+        }
 
         # Preserve ambient env so we can restore it in AfterAll.
         $script:OrigAvmHome = $env:AVM_HOME
