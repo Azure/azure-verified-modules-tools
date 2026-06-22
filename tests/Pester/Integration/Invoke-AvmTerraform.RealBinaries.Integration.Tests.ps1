@@ -1,14 +1,14 @@
 #Requires -Module @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-# Smoke: run the REAL Terraform pre-commit and pr-check chains, end to end,
+# Integration: run the REAL Terraform pre-commit and pr-check chains, end to end,
 # against the on-disk fixture modules using the actual pinned binaries
 # (terraform, terraform-docs, tflint, conftest, mapotf) downloaded into an
 # isolated AVM_HOME. This is the integration-grade proof that the wired
 # Terraform engines compose correctly with real tools - not the stub
-# launchers the Integration tier uses.
+# launchers the Component tier uses.
 #
-# Tagged 'Smoke' so the `smoke` build task picks it up and so it stays out of
-# the Unit / Integration / pre-commit runs (it needs REAL NETWORK to download
+# Tagged 'Integration' so the `integration` build task picks it up and so it stays out of
+# the Unit / Component / pre-commit runs (it needs REAL NETWORK to download
 # tools + Terraform providers).
 #
 # Skips cleanly (never fails red) when:
@@ -25,7 +25,7 @@
 # `terraform init -backend=false` + `terraform validate -json` (no plan /
 # apply), so even the azurerm fixture validates offline.
 
-Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
+Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
     BeforeAll {
         $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
@@ -43,7 +43,7 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
         # scope where the `It` blocks execute. A file-scope `function` only exists
         # during Pester's discovery phase and is NOT visible inside `It`, which would
         # raise CommandNotFoundException at the drift assertion below.
-        function Get-AvmSmokeTreeDiff {
+        function Get-AvmIntegrationTreeDiff {
             [CmdletBinding()]
             param(
                 [Parameter(Mandatory)] [string] $Reference,
@@ -93,7 +93,7 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
             $script:OwnsHome = $false
         }
         else {
-            $script:AvmHome = Join-Path ([IO.Path]::GetTempPath()) ('avm-smoke-home-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+            $script:AvmHome = Join-Path ([IO.Path]::GetTempPath()) ('avm-integration-home-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
             $env:AVM_HOME = $script:AvmHome
             $script:OwnsHome = $true
         }
@@ -112,11 +112,11 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
 
         # Writable staging area for fixture copies (transform/format/docs mutate
         # files in place, so we never touch the checked-in fixtures).
-        $script:WorkRoot = Join-Path ([IO.Path]::GetTempPath()) ('avm-smoke-work-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $script:WorkRoot = Join-Path ([IO.Path]::GetTempPath()) ('avm-integration-work-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         $null = New-Item -ItemType Directory -Path $script:WorkRoot -Force
 
         if ($script:Offline) {
-            $script:SkipReason = 'AVM_OFFLINE=1 - real-binary smoke needs network to download tools and providers.'
+            $script:SkipReason = 'AVM_OFFLINE=1 - real-binary integration needs network to download tools and providers.'
         }
         else {
             # Best-effort: exclude the tools dir from Windows Defender so the
@@ -187,14 +187,14 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
-    # One Context per test module. The set is filtered by $env:AVM_SMOKE_FIXTURE
+    # One Context per test module. The set is filtered by $env:AVM_INTEGRATION_FIXTURE
     # so a CI matrix leg can target a single module (one job per fixture x OS)
-    # while a local `./build.ps1 smoke` with the var unset still covers both in
+    # while a local `./build.ps1 integration` with the var unset still covers both in
     # one process.
     Context 'fixture <name>' -ForEach (@(
             @{ Name = 'terraform-azure-avm-res-mock' }
             @{ Name = 'terraform-azurerm-avm-res-mock' }
-        ) | Where-Object { (-not $env:AVM_SMOKE_FIXTURE) -or ($_.Name -eq $env:AVM_SMOKE_FIXTURE) }) {
+        ) | Where-Object { (-not $env:AVM_INTEGRATION_FIXTURE) -or ($_.Name -eq $env:AVM_INTEGRATION_FIXTURE) }) {
         BeforeAll {
             # Stage a fresh writable copy of this fixture. Guarded by SkipReason
             # so we do not waste a copy when the suite is going to skip.
@@ -227,7 +227,7 @@ Describe 'Smoke: real-binary Terraform chains' -Tag 'Smoke' {
             # Fail the build if pre-commit changed anything: a canonical module
             # (synced from avm-terraform-governance) must survive pre-commit
             # untouched. Any add/remove/modify is real drift worth a red build.
-            $drift = @(Get-AvmSmokeTreeDiff -Reference $script:OriginalModule -Difference $script:StagedModule)
+            $drift = @(Get-AvmIntegrationTreeDiff -Reference $script:OriginalModule -Difference $script:StagedModule)
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 

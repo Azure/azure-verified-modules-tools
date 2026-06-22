@@ -144,15 +144,15 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 
 ```pwsh
 ./build.ps1 pre-commit        # layout + lint + unit tests — the local gate
-./build.ps1 ci                # layout + lint + coverage + integration (what CI runs)
+./build.ps1 ci                # layout + lint + coverage + component (what CI runs)
 
 # Individual tasks
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
 ./build.ps1 lint              # PSScriptAnalyzer with repo settings + custom rules
-./build.ps1 test              # Pester unit tests (excludes Integration + Smoke)
+./build.ps1 test              # Pester unit tests (excludes Component + Integration)
 ./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
-./build.ps1 integration       # Pester Integration tier (real FS + real subprocess, no network)
-./build.ps1 smoke             # Pester Smoke tier (real network; not part of ci/pre-commit)
+./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
+./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
@@ -160,15 +160,15 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 
 Notes:
 
-- `test` runs the **unit** tier only. The `Integration` and `Smoke` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
-- `smoke` is the only task that touches the network and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
+- `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
 ---
 
 ## 7. Run a single Pester test
 
-The test tree lives at `tests/Pester/{Unit,Integration,Smoke}/`. To run one file directly with Pester (bypassing the build task):
+The test tree lives at `tests/Pester/{Unit,Component,Integration}/`. To run one file directly with Pester (bypassing the build task):
 
 ```pwsh
 Invoke-Pester -Path ./tests/Pester/Unit/Public/Invoke-AvmPreCommit.Tests.ps1 -Output Detailed
@@ -180,10 +180,10 @@ To run one `It` / `Describe` block by name:
 Invoke-Pester -Path ./tests/Pester/Unit -FullNameFilter '*Invoke-AvmPreCommit*'
 ```
 
-Integration and Smoke tests are tagged, so target them with `-Tag`:
+Component and Integration tests are tagged, so target them with `-Tag`:
 
 ```pwsh
-Invoke-Pester -Path ./tests/Pester/Integration -Tag Integration -Output Detailed
+Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 ```
 
 ---

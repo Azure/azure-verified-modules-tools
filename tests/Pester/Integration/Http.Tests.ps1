@@ -1,15 +1,15 @@
 #Requires -Module @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-# Smoke: real HTTPS download through Invoke-AvmHttp against the actual
+# Integration: real HTTPS download through Invoke-AvmHttp against the actual
 # upstream release for the smallest tool we manage (terraform-docs).
 # Catches lock-file SHA drift, GitHub URL template breakage, and
 # TLS / network-stack regressions on a runner OS.
 #
-# Tagged 'Smoke' so the smoke task picks it up and so it stays out of
-# the Unit and Integration runs. Honour AVM_OFFLINE so an offline build
-# is never blocked by smoke.
+# Tagged 'Integration' so the integration task picks it up and so it stays out of
+# the Unit and Component runs. Honour AVM_OFFLINE so an offline build
+# is never blocked by integration.
 
-Describe 'Smoke: Invoke-AvmHttp against real upstream releases' -Tag 'Smoke' {
+Describe 'Integration: Invoke-AvmHttp against real upstream releases' -Tag 'Integration' {
     BeforeAll {
         $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $script:moduleManifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
@@ -23,7 +23,7 @@ Describe 'Smoke: Invoke-AvmHttp against real upstream releases' -Tag 'Smoke' {
     # Inline the AVM_OFFLINE check because Pester 5 evaluates -Skip: at
     # discovery time, before BeforeAll has had a chance to set script
     # variables. Honouring AVM_OFFLINE here means an offline runner that
-    # accidentally invokes `./build.ps1 smoke` reports the test as Skipped
+    # accidentally invokes `./build.ps1 integration` reports the test as Skipped
     # rather than failing on the missing network.
     It 'downloads terraform-docs from GitHub and verifies the locked SHA256' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
         $dest = Join-Path $TestDrive 'terraform-docs-archive'

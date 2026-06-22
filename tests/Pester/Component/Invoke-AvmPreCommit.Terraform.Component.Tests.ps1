@@ -1,7 +1,7 @@
 #Requires -Version 7.4
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-# Integration smoke for the Terraform engine wrappers. Exercises
+# Component-tier coverage for the Terraform engine wrappers. Exercises
 # Invoke-AvmPreCommit, Invoke-AvmPrCheck, and Invoke-AvmCheckPolicy
 # against a tiny fixture module via real subprocesses (pwsh-backed stub
 # launchers on PATH) instead of cmdlet-level mocks. Proves the argv
@@ -178,7 +178,7 @@ AfterAll {
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Integration' {
+Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
 
     It 'pre-commit composes the four-step terraform chain end-to-end via launcher-resolved stubs and the in-module check-convention rules' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback

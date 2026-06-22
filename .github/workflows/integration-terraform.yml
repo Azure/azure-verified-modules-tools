@@ -1,10 +1,10 @@
 name: integration-terraform
 
-# Real-binary Terraform integration smoke. Runs the wired `avm pre-commit` and
+# Real-binary Terraform integration tests. Runs the wired `avm pre-commit` and
 # `avm pr-check` chains end to end against the on-disk fixture modules using the
 # actual pinned tools (terraform, terraform-docs, tflint, conftest, mapotf)
-# downloaded into an isolated AVM_HOME -- not the stub launchers the Integration
-# tier uses. The `smoke` build task drives the Pester suite tagged 'Smoke'.
+# downloaded into an isolated AVM_HOME -- not the stub launchers the Component
+# tier uses. The `integration` build task drives the Pester suite tagged 'Integration'.
 #
 # Runs on pull requests targeting `main` (validating the tool chain against the
 # on-disk fixture modules before merge) and on demand (`workflow_dispatch`,
@@ -29,8 +29,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  smoke:
-    name: smoke (${{ matrix.fixture }} on ${{ matrix.os }})
+  integration:
+    name: integration (${{ matrix.fixture }} on ${{ matrix.os }})
     strategy:
       # Cover every test module on every OS independently; one red leg must not
       # cancel the others (we want the full drift picture in one run).
@@ -48,10 +48,10 @@ jobs:
     timeout-minutes: 30
 
     env:
-      # The smoke suite reads AVM_SMOKE_FIXTURE at discovery time and generates a
+      # The integration suite reads AVM_INTEGRATION_FIXTURE at discovery time and generates a
       # Context for only the named module, so each matrix leg exercises exactly
       # one test module.
-      AVM_SMOKE_FIXTURE: ${{ matrix.fixture }}
+      AVM_INTEGRATION_FIXTURE: ${{ matrix.fixture }}
       # OIDC plumbing for `azure/login`. The `test` step today is validate-only
       # (`terraform init -backend=false` + `terraform validate -json`) so it does
       # not actually need Azure auth, but we wire login per the same pattern as
@@ -119,6 +119,6 @@ jobs:
               Install-PSResource @pkg -Scope CurrentUser -TrustRepository
           }
 
-      - name: Run smoke task
+      - name: Run integration task
         shell: pwsh
-        run: ./build.ps1 smoke
+        run: ./build.ps1 integration
