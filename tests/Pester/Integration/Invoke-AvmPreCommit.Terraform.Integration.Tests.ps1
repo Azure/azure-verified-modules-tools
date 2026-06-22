@@ -180,7 +180,7 @@ AfterAll {
 
 Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Integration' {
 
-    It 'pre-commit composes the six-step terraform chain end-to-end via launcher-resolved stubs and the in-module check-convention rules' {
+    It 'pre-commit composes the four-step terraform chain end-to-end via launcher-resolved stubs and the in-module check-convention rules' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -188,8 +188,8 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 6
-        $expected = @('check convention', 'transform', 'format', 'lint', 'test', 'docs')
+        $steps.Count | Should -Be 4
+        $expected = @('check convention', 'transform', 'format', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -208,8 +208,10 @@ Describe 'Integration: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine
         # transform now wraps the mapotf stub via the launcher PATH-fallback.
         # The stub is a no-op, so the engine's before/after hash snapshot
         # finds no changes and reports pass (fix mode, no -CheckDrift here).
-        # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('transform', 'format', 'lint', 'test', 'docs')) {
+        # lint + test are pr-check-only on the terraform chain (they need
+        # `terraform init`); pre-commit stays offline. Each passing step
+        # below shells out via Invoke-AvmProcess.
+        foreach ($passing in @('transform', 'format', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $byName[$passing].PSObject.Properties['Error'].Value | Should -BeNullOrEmpty
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value

@@ -3,7 +3,7 @@ function Invoke-AvmPreCommit {
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
         bicep:     format -> lint -> test -> docs.
-        terraform: check convention -> transform -> format -> lint -> test -> docs.
+        terraform: check convention -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -13,11 +13,14 @@ function Invoke-AvmPreCommit {
         executed step reports Status='pass' (format reports an implicit
         pass when no errors are thrown).
 
-        The Terraform chain mirrors upstream avm-terraform-governance
-        pre-commit.porch.yaml order (check convention -> transform ->
-        format -> docs) and additionally keeps the two checks that
-        already run locally today (lint, test) ahead of docs, so cold
-        modules still get the richer per-run feedback.
+        The Terraform chain follows the upstream avm-terraform-governance
+        pre-commit.porch.yaml philosophy: pre-commit stays fast and fully
+        offline (check convention -> transform -> format -> docs), so it
+        never needs `terraform init`. The two checks that require an
+        initialised working directory - lint (tflint) and test
+        (`terraform validate`) - live in `avm pr-check` instead, mirroring
+        upstream porch, which runs tflint and the policy/plan checks in
+        pr-check rather than pre-commit.
 
         Status semantics:
           - 'pass'    : step returned Status='pass' (or didn't throw for
@@ -95,8 +98,6 @@ function Invoke-AvmPreCommit {
             [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
             [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
-            [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-            [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )
     }

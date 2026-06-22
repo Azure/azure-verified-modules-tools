@@ -51,7 +51,7 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
-    It 'composes all six steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
+    It 'composes all four steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("precommit-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -65,30 +65,32 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            # lint + test are pr-check-only on the terraform chain; pre-commit
+            # must never call them. Mock them so the -Times 0 guard is meaningful.
             Mock Invoke-AvmLint            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPreCommit -Path $D
 
             Should -Invoke Invoke-AvmCheckConvention -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmLint            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTest            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+
+            # lint + test are pr-check-only on the terraform chain; pre-commit must not call them.
+            Should -Invoke Invoke-AvmLint -Times 0
+            Should -Invoke Invoke-AvmTest -Times 0
 
             $r
         }
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 6
+        $result.Steps.Count               | Should -Be 4
         $result.Steps[0].Step             | Should -Be 'check convention'
         $result.Steps[1].Step             | Should -Be 'transform'
         $result.Steps[2].Step             | Should -Be 'format'
-        $result.Steps[3].Step             | Should -Be 'lint'
-        $result.Steps[4].Step             | Should -Be 'test'
-        $result.Steps[5].Step             | Should -Be 'docs'
+        $result.Steps[3].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -106,14 +108,12 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { throw [AvmConfigurationException]::new('transform engine not wired yet') }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
         }
 
         $result.Status                                                 | Should -Be 'pass'
-        $result.Steps.Count                                            | Should -Be 6
+        $result.Steps.Count                                            | Should -Be 4
         ($result.Steps | Where-Object Status -eq 'skipped').Count      | Should -Be 1
         ($result.Steps | Where-Object Step -eq 'transform').Status     | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Error      | Should -Match 'not wired'
@@ -132,17 +132,15 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint            { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
-            Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
         }
 
-        $result.Status                                        | Should -Be 'fail'
-        $result.Steps.Count                                   | Should -Be 6
-        ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
-        ($result.Steps | Where-Object Step -eq 'docs').Status | Should -Be 'pass'
+        $result.Status                                          | Should -Be 'fail'
+        $result.Steps.Count                                     | Should -Be 4
+        ($result.Steps | Where-Object Step -eq 'format').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'docs').Status   | Should -Be 'pass'
     }
 
     It '-StopOnFail aborts the chain after the first Status=fail' {
@@ -158,20 +156,17 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint            { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
-            Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D -StopOnFail
         }
 
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 4
-        $result.Steps[-1].Step               | Should -Be 'lint'
+        $result.Steps.Count                  | Should -Be 3
+        $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTest -Times 0
             Should -Invoke Invoke-AvmDocs -Times 0
         }
     }
@@ -189,21 +184,18 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint            { throw [System.InvalidOperationException]::new('engine blew up') }
-            Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { throw [System.InvalidOperationException]::new('engine blew up') }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
         }
 
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 4
-        $result.Steps[-1].Step               | Should -Be 'lint'
+        $result.Steps.Count                  | Should -Be 3
+        $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTest -Times 0
             Should -Invoke Invoke-AvmDocs -Times 0
         }
     }
