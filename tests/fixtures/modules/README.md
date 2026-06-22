@@ -57,15 +57,29 @@ the upstream governance pipeline was removed:
   `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`) — would shadow or
   confuse this repo's own copies.
 - Editor / tooling metadata (`.editorconfig`, `.devcontainer/`,
-  `.github/`, `.agents/`, `.vscode/`, `.gitignore`, module-level
-  `.gitattributes`) — fixture isn't an editable project, and our
-  repo-wide `.gitattributes` already enforces LF + UTF-8.
+  `.github/`, `.agents/`, `.vscode/`, module-level `.gitattributes`) —
+  fixture isn't an editable project, and our repo-wide `.gitattributes`
+  already enforces LF + UTF-8.
 - All `.gitkeep` files — every directory we kept has at least one real
   file, so the markers are redundant.
 
 The result is the AVM-shape Terraform surface plus, in the `azure`
 variant, the lifecycle / setup hooks and integration-test fixture that
 exist in the upstream mock.
+
+### Kept on purpose: `.gitignore`
+
+Each fixture **does** keep its module-level `.gitignore` (copied verbatim
+from upstream — the same 24-glob canonical AVM line set). It is *not*
+dropped like the rest of the editor/tooling metadata because
+`avm check convention` ships a built-in rule — `avm.tf.gitignore-essentials`
+(`src/Avm.Authoring/Resources/Rules/030-gitignore-essentials.psd1`,
+severity `error`) — that fails a module whose root `.gitignore` is missing
+any of those globs. Dropping `.gitignore` would make the fixture
+non-compliant against our own convention chain, so the real-binary
+`pre-commit` / `pr-check` smoke (`tests/Pester/Smoke/`) would report
+`check convention = fail`. Keeping it lets both chains go green
+end-to-end. Refresh it together with the rest of the module surface.
 
 ## Refreshing from upstream
 
