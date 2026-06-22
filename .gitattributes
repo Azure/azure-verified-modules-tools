@@ -1,0 +1,35 @@
+# Force LF line endings and UTF-8 source encoding for every text file in the
+# repo so that the same byte sequences are checked out on Windows, Linux and
+# macOS. PowerShell on PS 7 reads source files as UTF-8 without a BOM by
+# default; emitting BOMs into .ps1/.psm1/.psd1 files breaks cross-OS test
+# reproducibility and trips PSScriptAnalyzer formatting rules.
+
+* text=auto eol=lf
+
+# PowerShell sources
+*.ps1   text eol=lf
+*.psm1  text eol=lf
+*.psd1  text eol=lf
+
+# Build / config / docs
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.sh    text eol=lf
+*.bicep text eol=lf
+*.tf    text eol=lf
+*.hcl   text eol=lf
+
+# Binary assets (no EOL normalisation)
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
+*.tar.gz binary
+*.exe   binary
+*.dll   binary
+*.bin   binary

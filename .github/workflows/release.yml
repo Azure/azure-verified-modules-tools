@@ -1,0 +1,164 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v0.1.0). Must follow vX.Y.Z.'
+        required: true
+
+permissions:
+  contents: write   # required to create the GitHub Release
+
+concurrency:
+  # Releases are point-in-time and must never race; never cancel an in-flight
+  # release just because someone re-pushed the tag.
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release ${{ github.event.inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Configure a `psgallery` environment in repo Settings → Environments with
+    # required reviewers to gate publishes behind a manual approval. The
+    # POWERSHELL_GALLERY_API_KEY secret may live at repo or environment scope;
+    # the publish step refuses to run if it is not present.
+    environment: psgallery
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
+          foreach ($pkg in @(
+              @{ Name = 'InvokeBuild';      Version = '[5.11.0,)' },
+              @{ Name = 'Pester';           Version = '[5.5.0,)'  },
+              @{ Name = 'PSScriptAnalyzer'; Version = '[1.21.0,)' }
+          )) {
+              Install-PSResource @pkg -Scope CurrentUser -TrustRepository
+          }
+
+      - name: Resolve and verify version
+        id: ver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Tag '$tag' does not match the expected stable-release pattern 'vX.Y.Z'. Prerelease tags (e.g. v0.1.0-preview.1) are not supported by this workflow yet."
+          }
+          $version = $tag -replace '^v', ''
+
+          $manifest = Test-ModuleManifest -Path './src/Avm.Authoring/Avm.Authoring.psd1'
+          $manifestVersion = $manifest.Version.ToString()
+          if ($manifestVersion -ne $version) {
+              throw "Manifest ModuleVersion '$manifestVersion' does not match tag version '$version'. Bump ModuleVersion in src/Avm.Authoring/Avm.Authoring.psd1 before tagging."
+          }
+
+          # Fail fast if the CHANGELOG entry is missing — better here than after the ci gate.
+          $null = & ./scripts/Get-AvmReleaseNotes.ps1 -Version $version
+
+          Write-Host "Releasing Avm.Authoring $version (tag $tag)"
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Run ci gate
+        shell: pwsh
+        run: ./build.ps1 ci
+
+      - name: Build staged module
+        shell: pwsh
+        run: ./build.ps1 build
+
+      - name: Package release artefacts
+        id: pkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.ver.outputs.version }}'
+          $stage   = './out/Avm.Authoring'
+          $zipName = "Avm.Authoring-$version.zip"
+          $zipPath = "./out/$zipName"
+
+          # Zip the staged module folder so the archive root is "Avm.Authoring/...".
+          Compress-Archive -Path $stage -DestinationPath $zipPath -Force
+
+          $hash    = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLower()
+          $sumLine = "$hash *$zipName"
+          $sumPath = './out/SHA256SUMS'
+          # LF + no trailing newline keeps the sums file diffable.
+          [System.IO.File]::WriteAllText(
+              (Resolve-Path -LiteralPath './out').Path + [IO.Path]::DirectorySeparatorChar + 'SHA256SUMS',
+              "$sumLine`n",
+              (New-Object System.Text.UTF8Encoding $false))
+
+          Write-Host "Packaged $zipPath"
+          Write-Host "SHA256:   $hash"
+
+          "zip=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sums=$sumPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version   = '${{ steps.ver.outputs.version }}'
+          $notes     = & ./scripts/Get-AvmReleaseNotes.ps1 -Version $version
+          $notesPath = './out/RELEASE_NOTES.md'
+          [System.IO.File]::WriteAllText(
+              (Resolve-Path -LiteralPath './out').Path + [IO.Path]::DirectorySeparatorChar + 'RELEASE_NOTES.md',
+              "$notes`n",
+              (New-Object System.Text.UTF8Encoding $false))
+          "path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish to PowerShell Gallery
+        shell: pwsh
+        env:
+          POWERSHELL_GALLERY_API_KEY: ${{ secrets.POWERSHELL_GALLERY_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:POWERSHELL_GALLERY_API_KEY)) {
+              throw 'POWERSHELL_GALLERY_API_KEY secret is not set. Configure it as a repository secret or on the `psgallery` GitHub Environment.'
+          }
+          # Publish-AvmAuthoring.ps1 accepts -ApiKey as [SecureString] only
+          # (spec section 17). Convert the CI secret at the call site; the script
+          # converts back to a plain string internally, inside its ShouldProcess
+          # branch, for the smallest possible plain-text window.
+          $secureKey = ConvertTo-SecureString -String $env:POWERSHELL_GALLERY_API_KEY -AsPlainText -Force
+          ./scripts/Publish-AvmAuthoring.ps1 `
+              -ApiKey $secureKey `
+              -ModulePath ./out/Avm.Authoring `
+              -Confirm:$false
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          NOTES: ${{ steps.notes.outputs.path }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+          SUMS: ${{ steps.pkg.outputs.sums }}
+        run: |
+          gh release create "$TAG" \
+            --title "Avm.Authoring $VERSION" \
+            --notes-file "$NOTES" \
+            --verify-tag \
+            "$ZIP" \
+            "$SUMS"

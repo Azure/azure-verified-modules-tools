@@ -1,0 +1,38 @@
+version: 2
+
+# Dependabot configuration.
+#
+# This module pins every workflow action to a full commit SHA (see
+# docs/avm-implementation-spec.md Security stance + section 17). Floating
+# tags such as @v5 or @main are rejected at review time because a single
+# tag-repoint on a compromised maintainer account would deliver malicious
+# code into every CI run on the next push.
+#
+# SHA pinning freezes vulnerabilities as well as features, so Dependabot
+# is the maintenance arm of that policy: it opens PRs that bump both the
+# SHA and the human-readable `# vX.Y.Z` comment together. Without this
+# file, the pins drift and we trade compromise risk for unpatched-CVE
+# risk.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+    # Batch minor + patch bumps into one PR per week to avoid PR spam.
+    # Major bumps stay as individual PRs so they get individual review.
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
