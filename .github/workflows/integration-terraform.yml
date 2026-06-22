@@ -93,7 +93,7 @@ jobs:
         # on: schedule runs on refs/heads/main; workflow_dispatch runs on the ref
         # selected in the UI. Add the matching FC subject if login fails.
         if: ${{ vars.ARM_CLIENT_ID != '' }}
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
