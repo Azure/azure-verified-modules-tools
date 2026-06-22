@@ -80,6 +80,41 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
+    It 'prepends the resolved terraform directory to PATH for the mapotf subprocess' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                if ($Name -eq 'terraform') {
+                    [pscustomobject]@{
+                        Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/tools/terraform/1.15.3/terraform'
+                    }
+                }
+                else {
+                    [pscustomobject]@{
+                        Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/mapotf'
+                    }
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTransform -Context $C
+
+            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'terraform' }
+            # Both mapotf calls (transform + clean-backup) carry the PATH override.
+            # Derive the expected prefix with the same Split-Path the engine uses
+            # so the assertion is OS-agnostic (Windows yields backslashes).
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $expectedDir = Split-Path -Parent '/fake/tools/terraform/1.15.3/terraform'
+                $null -ne $EnvVars -and
+                $EnvVars.ContainsKey('PATH') -and
+                $EnvVars['PATH'].StartsWith($expectedDir + [System.IO.Path]::PathSeparator)
+            }
+        }
+    }
+
     It 'reports the files mapotf changed in the Changed array' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
