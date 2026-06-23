@@ -166,3 +166,4 @@ jobs:
         with:
           check_name: Test results (integration-terraform)
           files: artifacts/**/*.xml
+          report_individual_runs: "true"

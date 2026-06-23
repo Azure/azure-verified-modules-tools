@@ -96,3 +96,4 @@ jobs:
         with:
           check_name: Test results (ci)
           files: artifacts/**/*.xml
+          report_individual_runs: "true"
