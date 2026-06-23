@@ -15,7 +15,13 @@ param(
     [string] $ModulePath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring'),
 
     [Parameter()]
-    [string] $Repository = 'PSGallery'
+    [string] $Repository = 'PSGallery',
+
+    # Idempotent / re-runnable mode for CI. When the module version is already
+    # published on $Repository, warn and return 0 instead of throwing. Local
+    # callers omit this so they still get the loud "bump ModuleVersion" error.
+    [Parameter()]
+    [switch] $SkipIfAlreadyPublished
 )
 
 Set-StrictMode -Version Latest
@@ -80,7 +86,12 @@ $existing = Find-PSResource -Name $ExpectedPackageId -Repository $Repository -Er
 if ($existing) {
     $latestPublished = [string]$existing.Version
     if ($latestPublished -eq [string]$manifest.Version) {
-        throw "Module '$ExpectedPackageId' version $($manifest.Version) is already published on $Repository (latest: $latestPublished). Bump ModuleVersion in $ExpectedManifest before re-running."
+        $alreadyMsg = "Module '$ExpectedPackageId' version $($manifest.Version) is already published on $Repository (latest: $latestPublished)."
+        if ($SkipIfAlreadyPublished) {
+            Write-Warning "$alreadyMsg Skipping publish (idempotent re-run)."
+            return
+        }
+        throw "$alreadyMsg Bump ModuleVersion in $ExpectedManifest before re-running."
     }
     Write-Host ("  Latest published version: {0}" -f $latestPublished) -ForegroundColor Yellow
     Write-Host ("  About to publish new version: {0}" -f $manifest.Version) -ForegroundColor Cyan

@@ -1,4 +1,4 @@
-name: release
+name: Release
 
 on:
   push:
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   release:
-    name: release ${{ github.event.inputs.tag || github.ref_name }}
+    name: Release ${{ github.event.inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -145,9 +145,10 @@ jobs:
           ./scripts/Publish-AvmAuthoring.ps1 `
               -ApiKey $secureKey `
               -ModulePath ./out/Avm.Authoring `
+              -SkipIfAlreadyPublished `
               -Confirm:$false
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
@@ -156,9 +157,20 @@ jobs:
           ZIP: ${{ steps.pkg.outputs.zip }}
           SUMS: ${{ steps.pkg.outputs.sums }}
         run: |
-          gh release create "$TAG" \
-            --title "Avm.Authoring $VERSION" \
-            --notes-file "$NOTES" \
-            --verify-tag \
-            "$ZIP" \
-            "$SUMS"
+          # Idempotent / re-runnable: only *create* the release (and seed its body
+          # from the CHANGELOG) when the tag has no release yet. If a release
+          # already exists -- e.g. a maintainer authored richer notes by hand, or
+          # this workflow is being re-run -- leave the body untouched and just
+          # (re)upload the artefacts with --clobber.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading artefacts only (release notes left untouched)."
+            gh release upload "$TAG" "$ZIP" "$SUMS" --clobber
+          else
+            echo "Release $TAG does not exist; creating it from the CHANGELOG notes."
+            gh release create "$TAG" \
+              --title "Avm.Authoring $VERSION" \
+              --notes-file "$NOTES" \
+              --verify-tag \
+              "$ZIP" \
+              "$SUMS"
+          fi

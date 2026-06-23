@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 # Pull-request gate for the Avm.Authoring module. Runs two test tiers on every
 # PR to `main` (and on demand via workflow_dispatch); neither tier runs on

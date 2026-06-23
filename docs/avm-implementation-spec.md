@@ -633,6 +633,9 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - Release artefacts:
   - PSGallery via `Publish-PSResource` (the only path to PSGallery is `scripts/Publish-AvmAuthoring.ps1`).
   - GitHub Release with the zipped module folder and a `SHA256SUMS` file.
+- The release workflow (`.github/workflows/release.yml`) is **idempotent / re-runnable**:
+  - The PSGallery publish step passes `-SkipIfAlreadyPublished`, so re-running a tag whose version is already on the Gallery warns and exits 0 instead of failing. Local maintainers omit the switch and still get the loud "bump ModuleVersion" error.
+  - The GitHub Release step is create-or-update: it only *creates* the release (seeding the body from the CHANGELOG) when the tag has no release yet; if a release already exists, it leaves any human-authored notes untouched and just re-uploads the artefacts with `--clobber`.
 - `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); release script verifies an entry exists for the new version before publishing.
 - Manifest `Prerelease` field is set by the release script from the git tag; never edited by hand.
 
