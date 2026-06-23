@@ -55,27 +55,44 @@ jobs:
         shell: pwsh
         run: ./build.ps1 ci
 
-      - name: Publish test results
-        # Upload the NUnit result XML even when the ci task fails, so the
-        # results are downloadable per run and consumed by the
-        # publish-test-results companion workflow.
+      - name: Upload test results
+        # Upload the NUnit result XML even when the ci task fails, so the results
+        # are downloadable per run and consumed by the `report` job below, which
+        # aggregates every matrix leg into a single pull-request report.
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-${{ matrix.os }}
           path: out/test-results/*.xml
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload event file
-        # The publish-test-results companion workflow runs in the privileged
-        # workflow_run context and needs the triggering event payload to map
-        # results back to the pull request. Upload it once (artifact names must
-        # be unique within a run), so gate to a single matrix leg.
-        if: always() && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+  report:
+    name: Publish test results
+    needs: build
+    # Run even when a build leg fails (so red tests still get reported), but not
+    # when the run was cancelled. Aggregates every matrix leg into one report.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write          # create the Checks-tab test report
+      pull-requests: write   # post / update the results comment
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: event-file
-          path: ${{ github.event_path }}
-          if-no-files-found: warn
-          retention-days: 7
+          pattern: test-results-*
+          path: artifacts
+
+      - name: Publish test results
+        # Renders a job summary on this run, plus a Checks-tab entry and a
+        # pull-request comment when the token has write access (same-repo PRs).
+        # On fork PRs the token is read-only, so it degrades to the job summary
+        # only; action_fail defaults to false, so reporting never reds the build.
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        if: ${{ !cancelled() }}
+        with:
+          check_name: Test results (ci)
+          files: artifacts/**/*.xml
