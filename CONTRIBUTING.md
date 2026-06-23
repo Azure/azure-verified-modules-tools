@@ -125,7 +125,7 @@ The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/avm-imp
 Expected output:
 
 ```text
-  layout OK: Avm.Authoring 0.1.0 (PS >= 7.4)
+  layout OK: Avm.Authoring <version> (PS >= 7.4)
 ```
 
 The publish script (`scripts/Publish-AvmAuthoring.ps1`) applies the same hard casing guards inline; run it in `-WhatIf` mode for a publish-path dry run:

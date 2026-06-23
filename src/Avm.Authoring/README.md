@@ -2,7 +2,7 @@
 
 Source for the **`Avm.Authoring`** PowerShell module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/Avm.Authoring).
 
-...ame-reservation placeholder; it exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. The development version in this folder is `0.1.0` and adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
+An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
 
 ## Layout
 
@@ -22,7 +22,7 @@ Source for the **`Avm.Authoring`** PowerShell module on the [PowerShell Gallery]
 | `Public/Invoke-AvmTest.ps1`                       | `avm test` -> route to the bicep / terraform engine and run build-validation.      |
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> composition: format -> lint -> test against the same context.  |
-| `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the 0.0.1 placeholder release.                               |
+| `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
 | `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
