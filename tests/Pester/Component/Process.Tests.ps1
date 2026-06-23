@@ -1,9 +1,9 @@
 #Requires -Version 7.4
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-# Canary for the Integration tier (spec section 18). Exercises Invoke-AvmProcess
+# Canary for the Component tier (spec section 18). Exercises Invoke-AvmProcess
 # end-to-end against a real subprocess (pwsh itself) and a real TestDrive
-# filesystem -- no mocks. If this file is the only thing in the Integration/
+# filesystem -- no mocks. If this file is the only thing in the Component/
 # tree on a given commit, that's fine: it proves the tier is wired into the
 # build/CI graph. Engine-level integration tests land alongside their
 # stub-binary harnesses in tests/fixtures/bin/.
@@ -21,7 +21,7 @@ AfterAll {
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Integration: Invoke-AvmProcess against a real subprocess' -Tag 'Integration' {
+Describe 'Component: Invoke-AvmProcess against a real subprocess' -Tag 'Component' {
 
     It 'captures stdout from a real pwsh invocation' {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ Pwsh = $script:pwshPath } {
@@ -52,7 +52,7 @@ Describe 'Integration: Invoke-AvmProcess against a real subprocess' -Tag 'Integr
     }
 
     It 'writes to and reads from a real TestDrive path end-to-end' {
-        $payload = 'integration-tier-canary-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $payload = 'component-tier-canary-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
         $outFile = Join-Path $TestDrive 'canary.txt'
 
         $cmd = "Set-Content -LiteralPath '$($outFile -replace "'", "''")' -Value '$payload' -Encoding utf8 -NoNewline"

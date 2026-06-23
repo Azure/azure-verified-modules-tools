@@ -40,7 +40,7 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 ```pwsh
 ./build.ps1 layout       # casing & manifest guards (fast)
 ./build.ps1 lint         # PSScriptAnalyzer + repo settings
-./build.ps1 test         # Pester unit tests (excludes Smoke + Integration)
+./build.ps1 test         # Pester unit tests (excludes Integration + Component)
 ./build.ps1 pre-commit   # layout + lint + test (the recommended local gate)
 ./build.ps1 ci           # CI entry point (alias for pre-commit, called from .github/workflows/ci.yml)
 ./build.ps1 coverage     # Pester with coverage (JaCoCo XML under out/coverage/)

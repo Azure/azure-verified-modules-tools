@@ -225,18 +225,18 @@ Three layers; each runs with its own tag filter.
 | Layer       | Folder                       | Network | Filesystem | Default? |
 | ----------- | ---------------------------- | ------- | ---------- | -------- |
 | Unit        | `tests/Pester/Unit/`         | No      | No (mocks) | Yes      |
-| Integration | `tests/Pester/Integration/`  | No      | Real (under `TestDrive`); stub binaries via `tests/fixtures/bin/`  | Opt-in via `./build.ps1 integration`   |
-| Smoke       | `tests/Pester/Smoke/`        | Yes (pulls one real managed tool from the resolver) | Real | Opt-in via `-Tag Smoke`; release-branch CI only |
+| Component   | `tests/Pester/Component/`    | No      | Real (under `TestDrive`); stub binaries via `tests/fixtures/bin/`  | Opt-in via `./build.ps1 component`   |
+| Integration | `tests/Pester/Integration/`  | Yes (pulls and runs the real managed tools from the resolver) | Real | Opt-in via `./build.ps1 integration`; PR CI via the `integration` job in the `ci` workflow |
 
-**Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Smoke and Integration via `Filter.ExcludeTag = @('Smoke', 'Integration')`. Run this before every push.
+**Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
 
-**Stub binaries.** `tests/fixtures/bin/*.ps1` (`terraform.ps1`, `tflint.ps1`, `terraform-docs.ps1`, `conftest.ps1`) emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` wires the stub into a temp `$env:PATH` for the Integration tier. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
+**Stub binaries.** `tests/fixtures/bin/*.ps1` (`terraform.ps1`, `tflint.ps1`, `terraform-docs.ps1`, `conftest.ps1`) emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` wires the stub into a temp `$env:PATH` for the Component tier. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
 
-**Pre-staging the pinned-asset cache.** Integration tests that exercise pinned-asset-backed engines write `<AVM_HOME>/cache/assets/<name>/<sha256>/.verified` (empty file) plus the asset payload, then declare a matching `https://example.invalid/...` source URL with a deterministic-but-fake SHA256 in the fixture's `.avm/config.json`. The cache-hit fast-path in `Resolve-AvmPinnedAsset` short-circuits the entire `Invoke-AvmHttp` download, so no real network is touched and the test stays in the Integration tier.
+**Pre-staging the pinned-asset cache.** Component tests that exercise pinned-asset-backed engines write `<AVM_HOME>/cache/assets/<name>/<sha256>/.verified` (empty file) plus the asset payload, then declare a matching `https://example.invalid/...` source URL with a deterministic-but-fake SHA256 in the fixture's `.avm/config.json`. The cache-hit fast-path in `Resolve-AvmPinnedAsset` short-circuits the entire `Invoke-AvmHttp` download, so no real network is touched and the test stays in the Component tier.
 
 **Coverage.** 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor. Tracked per file; new files start at the floor and ratchet up as code matures.
 
-**CI matrix.** Every PR runs Unit + Integration on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Smoke runs once per release on each.
+**CI matrix.** Every PR runs Unit + Component on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Integration runs on every PR via the `integration` job in the `ci` workflow on each.
 
 > See also: [`avm-implementation-spec.md` §18](avm-implementation-spec.md#18-testing), [`avm-implementation-spec.md` §19](avm-implementation-spec.md#19-static-analysis-and-pre-commit).
 
@@ -1138,7 +1138,7 @@ Concrete reasoning:
 4. **Add two built-in rules** under `src/Avm.Authoring/Resources/Rules/` (slot continues the numbering convention from Slice D's 010–050):
    - `060-variables-tf-only-variables.psd1` — `Kind = 'TerraformFileLayout'`, `FilePattern = 'variables*.tf'`, `AllowedBlockType = 'variable'`, `AppliesTo = 'root|examples|modules'`, `Severity = 'error'`.
    - `061-outputs-tf-only-outputs.psd1` — same shape with `FilePattern = 'outputs*.tf'`, `AllowedBlockType = 'output'`.
-5. **Tests.** Unit cover for `Get-AvmHclBlockTypes` (canonical case, empty file, syntax-error file, missing tool, multiple top-level keys); the primitive (pass / fail / multi-file / `AppliesTo` walking); each built-in rule (round-trip via `Read-AvmRuleSet`). Integration: extend the existing Terraform integration smoke (`Invoke-AvmPreCommit.Terraform.Integration.Tests.ps1`) to pre-stage an `hcl2json` stub under `tests/fixtures/bin/` (same shape as `conftest.ps1`) and assert the two new rules pass against both fixture modules (which are upstream-compliant by construction).
+5. **Tests.** Unit cover for `Get-AvmHclBlockTypes` (canonical case, empty file, syntax-error file, missing tool, multiple top-level keys); the primitive (pass / fail / multi-file / `AppliesTo` walking); each built-in rule (round-trip via `Read-AvmRuleSet`). Component: extend the existing Terraform Component test (`Invoke-AvmPreCommit.Terraform.Component.Tests.ps1`) to pre-stage an `hcl2json` stub under `tests/fixtures/bin/` (same shape as `conftest.ps1`) and assert the two new rules pass against both fixture modules (which are upstream-compliant by construction).
 6. **No wiring code change.** `Invoke-AvmTerraformCheckConvention` (Slice C) already discovers rules via `Read-AvmRuleSet` and dispatches by `Kind`. The new primitive registers via the same loader path as existing primitives. No changes to `Invoke-AvmPreCommit`'s chain. No changes to Slice H.
 
 **Out of scope for Slice R:**
@@ -1251,7 +1251,7 @@ Steps:
 2. **Supply the configs (decision A — RESOLVED = vendor, see below).** The nine configs are **vendored** into `config/mapotf/pre-commit/` (top-level `config/`, kept out of the module tree) and mirrored from `Azure/avm-terraform-governance//mapotf-configs/pre-commit` at a pinned SHA via `scripts/Update-AvmMapotfConfig.ps1`. `Invoke-AvmTerraformTransform` resolves this in-repo path directly — no pinned-asset download, fully offline. See [`config/README.md`](../config/README.md).
 3. **Implement `Invoke-AvmTerraformTransform`** — drop the `AvmConfigurationException` stub; resolve the mapotf binary + the configs asset; run `mapotf transform --mptf-dir <asset.Path> --tf-dir <Context.Root>` then `mapotf clean-backup --tf-dir <Context.Root>` via `Invoke-AvmProcess`; return the standard envelope (`Engine='terraform'`, `Tool='mapotf/<version>'`, `Status`, `Issues`). `[CmdletBinding(SupportsShouldProcess)]` — it mutates files.
 4. **pr-check drift-check** — after transform + clean-backup, run `git status --porcelain` (or a `git diff --quiet` equivalent) scoped to `Context.Root`; non-empty ⇒ `Status='fail'` with the drifted files as `Issues`. This is the "flag" half of J.3.
-5. **Tests** — promote `Invoke-AvmTerraformTransform.Tests.ps1` from stub-only (mock `Invoke-AvmProcess`; assert argv shape, clean-backup call, missing-asset → `AvmConfigurationException` → `skipped`); add a `mapotf` stub under `tests/fixtures/bin/` mirroring `conftest.ps1`; extend the Terraform integration smoke.
+5. **Tests** — promote `Invoke-AvmTerraformTransform.Tests.ps1` from stub-only (mock `Invoke-AvmProcess`; assert argv shape, clean-backup call, missing-asset → `AvmConfigurationException` → `skipped`); add a `mapotf` stub under `tests/fixtures/bin/` mirroring `conftest.ps1`; extend the Terraform Component test.
 6. **Wire** into the `Invoke-AvmPreCommit` Terraform chain (transform step) and the `Invoke-AvmPrCheck` chain (transform + drift-check).
 
 **Two strategic decisions — both RESOLVED with the user 2026-06-19:**

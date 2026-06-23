@@ -115,6 +115,17 @@ function Invoke-AvmTerraformTransform {
         those backups. This mirrors the upstream avm-terraform-governance
         pre-commit flow.
 
+        Several of the vendored configs (e.g. order_resource_attrs) read
+        provider schemas, so mapotf shells out to 'terraform init' +
+        'terraform providers schema'. mapotf locates 'terraform' by name on
+        PATH, but GitHub-hosted runners no longer ship terraform on PATH (it
+        was removed from the images). The engine therefore resolves the pinned
+        terraform via Resolve-AvmTool and prepends its directory to PATH for
+        the mapotf subprocess; environment variables propagate to mapotf's own
+        terraform grandchild, so the schema reads succeed against the managed
+        binary. A terraform that cannot be resolved (AvmToolException)
+        propagates so the chain reports 'skipped', matching missing-mapotf.
+
         File-hash snapshots taken before and after the transform populate the
         'Changed' field (relative paths of every '*.tf' mapotf added, removed
         or modified).
@@ -189,10 +200,28 @@ function Invoke-AvmTerraformTransform {
         $before[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
     }
 
+    # mapotf reads provider schemas (order_resource_attrs et al.) by shelling
+    # out to terraform, which it finds by name on PATH. GitHub-hosted runners
+    # no longer ship terraform on PATH, so resolve the pinned terraform the
+    # same way as mapotf (managed cache, not a stray PATH binary) and prepend
+    # its directory to PATH for the mapotf subprocess. The override propagates
+    # to mapotf's terraform grandchild. A missing terraform throws
+    # AvmToolException, which the chain surfaces as 'skipped' just like a
+    # missing mapotf binary.
+    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $mapotfEnv = $null
+    $terraformDir = Split-Path -Parent $terraform.Path
+    if ($terraformDir) {
+        $mapotfEnv = @{
+            PATH = ($terraformDir + [System.IO.Path]::PathSeparator + $env:PATH)
+        }
+    }
+
     $transform = Invoke-AvmProcess `
         -FilePath $tool.Path `
         -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
         -WorkingDirectory $Context.Root `
+        -EnvVars $mapotfEnv `
         -IgnoreExitCode
     if ($transform.ExitCode -ne 0) {
         $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
@@ -205,6 +234,7 @@ function Invoke-AvmTerraformTransform {
         -FilePath $tool.Path `
         -ArgumentList @('clean-backup', '--tf-dir', $Context.Root) `
         -WorkingDirectory $Context.Root `
+        -EnvVars $mapotfEnv `
         -IgnoreExitCode
     if ($clean.ExitCode -ne 0) {
         $stderr = if ($clean.StdErr) { $clean.StdErr.Trim() } else { '' }

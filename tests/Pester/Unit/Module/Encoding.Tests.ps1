@@ -3,7 +3,7 @@
 
 # Spec section 5: "A pre-commit Pester test fails if any file in src/ contains
 # a BOM or a CRLF." This test enforces that invariant. It is intentionally a
-# Unit test (no -Tag Smoke/Integration) so it runs as part of every
+# Unit test (no -Tag Integration/Component) so it runs as part of every
 # ./build.ps1 pre-commit and ./build.ps1 ci invocation.
 #
 # Why this matters even though .gitattributes already enforces LF:

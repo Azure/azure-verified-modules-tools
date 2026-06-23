@@ -77,7 +77,7 @@ dropped like the rest of the editor/tooling metadata because
 severity `error`) — that fails a module whose root `.gitignore` is missing
 any of those globs. Dropping `.gitignore` would make the fixture
 non-compliant against our own convention chain, so the real-binary
-`pre-commit` / `pr-check` smoke (`tests/Pester/Smoke/`) would report
+`pre-commit` / `pr-check` integration (`tests/Pester/Integration/`) would report
 `check convention = fail`. Keeping it lets both chains go green
 end-to-end. Refresh it together with the rest of the module surface.
 

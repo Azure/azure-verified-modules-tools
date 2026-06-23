@@ -9,14 +9,20 @@
     Tasks (Phase 0):
       layout      - Verify on-disk casing and manifest shape.
       lint        - Run PSScriptAnalyzer with repo settings.
-      test        - Run Pester unit tests (excludes Integration and Smoke).
+      test        - Run Pester unit tests (excludes Component and Integration).
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
-      integration - Run Pester tests under tests/Pester/Integration/ (real FS + real subprocess, no network).
-      smoke       - Run Pester tests under tests/Pester/Smoke/ (real FS + REAL NETWORK). Not part of ci/pre-commit; release/on-demand only.
+      component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
+      integration - Run Pester tests under tests/Pester/Integration/ (real FS + REAL NETWORK + real binaries). Not part of ci/pre-commit; PR/on-demand only.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
-      ci          - Composite invoked by the CI workflow: layout + lint + coverage + integration.
+      ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
+
+    The test, coverage, component, and integration tasks write an NUnit result
+    file per tier under out/test-results/. The CI workflows upload it as an
+    artifact, and a companion workflow_run workflow renders the pass/fail report
+    on the pull request and run summary via the publish-test-results action.
+    Locally this is just a file write under the gitignored out/ tree.
 
     The default task (`.`) is `layout`.
 #>
@@ -169,10 +175,25 @@ $avmAlias = if ($mod.ExportedAliases.ContainsKey('avm')) { $mod.ExportedAliases[
     }
 }
 
+# Returns the absolute path of the NUnit test-result file for a given tier,
+# creating out/test-results/ on demand. Pester writes this file when
+# TestResult is enabled; the CI workflows upload it as a build artifact so the
+# results are downloadable and machine-readable per run. out/ is gitignored.
+function script:Get-AvmTestResultPath {
+    param(
+        [Parameter(Mandatory)] [string] $Tier
+    )
+    $dir = Join-Path $script:outRoot 'test-results'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+    }
+    Join-Path $dir ("{0}.xml" -f $Tier)
+}
+
 # --- tasks ------------------------------------------------------------------
 
 task layout {
-    # Reuse the in-module helper so the build, CI, and any future smoke
+    # Reuse the in-module helper so the build, CI, and any future integration
     # tests assert the same invariants from a single implementation. The
     # helper lives under src/Avm.Authoring/Private/Layout and is loaded by
     # importing the module here.
@@ -236,12 +257,14 @@ task test {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path          = $unitPath
-    $config.Run.PassThru      = $true
-    $config.Run.Exit          = $false
-    $config.Output.Verbosity  = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.ExcludeTag  = @('Smoke', 'Integration')
+    $config.Run.Path                = $unitPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'unit'
+    $config.Filter.ExcludeTag       = @('Integration', 'Component')
 
     $result = Invoke-Pester -Configuration $config
     if ($result.FailedCount -gt 0) {
@@ -268,7 +291,10 @@ task coverage {
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = 'Detailed'
-    $config.Filter.ExcludeTag                  = @('Smoke', 'Integration')
+    $config.Filter.ExcludeTag                  = @('Integration', 'Component')
+    $config.TestResult.Enabled                 = $true
+    $config.TestResult.OutputFormat            = 'NUnitXml'
+    $config.TestResult.OutputPath              = script:Get-AvmTestResultPath -Tier 'unit'
     $config.CodeCoverage.Enabled               = $true
     $config.CodeCoverage.Path                  = @(
         (Join-Path $script:moduleRoot 'Public'),
@@ -346,11 +372,46 @@ task clean {
     Write-Build Green '  clean OK'
 }
 
-# Spec section 18 Integration tier: real FS + real subprocess, no network.
-# Tests live under tests/Pester/Integration/ and are tagged `Integration` so
-# they are excluded from `test` / `coverage` (which run the Unit tier only).
-# This task runs them in isolation, with no coverage instrumentation -- the
-# coverage floor is a Unit-tier contract.
+# Spec section 18 Component tier: real FS + real subprocess, stub binaries on
+# PATH, no network. Tests live under tests/Pester/Component/ and are tagged
+# `Component` so they are excluded from `test` / `coverage` (which run the Unit
+# tier only). This task runs them in isolation, with no coverage instrumentation
+# -- the coverage floor is a Unit-tier contract.
+task component {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+
+    $componentPath = Join-Path $script:testsRoot 'Component'
+    if (-not (Test-Path -LiteralPath $componentPath)) {
+        Write-Build Yellow "  no component tests found at $componentPath"
+        return
+    }
+
+    $config = New-PesterConfiguration
+    $config.Run.Path                = $componentPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
+    $config.Filter.Tag              = @('Component')
+
+    $result = Invoke-Pester -Configuration $config
+    if ($result.TotalCount -eq 0) {
+        throw "No Component-tagged tests ran from $componentPath. Tag your It / Describe with -Tag 'Component'."
+    }
+    if ($result.FailedCount -gt 0) {
+        throw "$($result.FailedCount) Component test(s) failed."
+    }
+    Write-Build Green "  component OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
+}
+
+# Spec section 18 Integration tier: real FS + REAL NETWORK + real binaries.
+# Tests live under tests/Pester/Integration/ and are tagged `Integration`. The
+# integration task is the only entry point that runs them; it is NOT part of
+# `pre-commit` or `ci` so routine builds never touch the network. Wire this into
+# a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
+# indirectly -- the tests themselves Skip when offline rather than fail.
 task integration {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 
@@ -361,13 +422,14 @@ task integration {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path           = $integrationPath
-    $config.Run.PassThru       = $true
-    $config.Run.Exit           = $false
-    $config.Output.Verbosity   = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.Tag         = @('Integration')
-    $config.Filter.ExcludeTag  = @('Smoke')
+    $config.Run.Path                = $integrationPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'integration'
+    $config.Filter.Tag              = @('Integration')
 
     $result = Invoke-Pester -Configuration $config
     if ($result.TotalCount -eq 0) {
@@ -379,45 +441,15 @@ task integration {
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
-# Spec section 18 Smoke tier: real FS + real network. Tests live under
-# tests/Pester/Smoke/ and are tagged `Smoke`. The smoke task is the only
-# entry point that runs them; it is NOT part of `pre-commit` or `ci` so
-# routine builds never touch the network. Wire this into a release-branch
-# workflow or invoke on demand. Honours `$env:AVM_OFFLINE` indirectly --
-# the tests themselves Skip when offline rather than fail.
-task smoke {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
-
-    $smokePath = Join-Path $script:testsRoot 'Smoke'
-    if (-not (Test-Path -LiteralPath $smokePath)) {
-        Write-Build Yellow "  no smoke tests found at $smokePath"
-        return
-    }
-
-    $config = New-PesterConfiguration
-    $config.Run.Path           = $smokePath
-    $config.Run.PassThru       = $true
-    $config.Run.Exit           = $false
-    $config.Output.Verbosity   = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.Tag         = @('Smoke')
-
-    $result = Invoke-Pester -Configuration $config
-    if ($result.TotalCount -eq 0) {
-        throw "No Smoke-tagged tests ran from $smokePath. Tag your It / Describe with -Tag 'Smoke'."
-    }
-    if ($result.FailedCount -gt 0) {
-        throw "$($result.FailedCount) Smoke test(s) failed."
-    }
-    Write-Build Green "  smoke OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
-}
-
 task 'pre-commit' layout, lint, test
 
-# CI runs layout + lint + coverage + integration. Coverage runs the Unit tier
+# CI runs layout + lint + coverage + component. Coverage runs the Unit tier
 # with CodeCoverage enabled (so we get the spec section 18 70% floor) and
-# `integration` runs the real-subprocess tier separately. `pre-commit` (the
-# local gate) skips both coverage and integration to stay fast.
-task ci layout, lint, coverage, integration
+# `component` runs the real-subprocess (stub-binary) tier separately. The real
+# `integration` tier (REAL NETWORK + real binaries) is NOT part of the ci task --
+# it runs as a separate `integration` job in the ci workflow on PR / on-demand.
+# `pre-commit` (the local gate) skips coverage, component, and integration to
+# stay fast.
+task ci layout, lint, coverage, component
 
 task . layout

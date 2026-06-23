@@ -123,4 +123,49 @@ Describe 'Invoke-AvmProcess' {
         }
         $result.StdOut.TrimEnd() | Should -Be 'present'
     }
+
+    It 'preserves the order of a rapid multi-line stdout burst' {
+        $exe = $script:pwsh
+        # Emit 200 numbered lines in a single fast burst. The previous
+        # Register-ObjectEvent capture dispatched OutputDataReceived callbacks
+        # through the runspace event queue and could append them out of order,
+        # scrambling rapid bursts. ReadToEndAsync reads the stream on a single
+        # task, preserving order; this guards that regression.
+        $script = '1..200 | ForEach-Object { [Console]::Out.WriteLine($_) }'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S)
+        }
+        $result.ExitCode | Should -Be 0
+        $lines = @($result.StdOut -split "`r?`n" | Where-Object { $_ -ne '' })
+        $lines.Count | Should -Be 200
+        $expected = 1..200 | ForEach-Object { [string]$_ }
+        ($lines -join ',') | Should -Be ($expected -join ',')
+    }
+
+    It 'captures a multi-line JSON payload in order so it round-trips through ConvertFrom-Json' {
+        $exe = $script:pwsh
+        # Mirror the shape of `terraform validate -json`: a small multi-line
+        # JSON document emitted as a fast burst of lines. The old capture
+        # scrambled the lines, producing invalid JSON that failed to parse with
+        # "Additional text encountered after finished reading JSON content".
+        $script = @'
+[Console]::Out.WriteLine('{')
+[Console]::Out.WriteLine('  "format_version": "1.0",')
+[Console]::Out.WriteLine('  "valid": true,')
+[Console]::Out.WriteLine('  "error_count": 0,')
+[Console]::Out.WriteLine('  "warning_count": 0,')
+[Console]::Out.WriteLine('  "diagnostics": []')
+[Console]::Out.WriteLine('}')
+'@
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S)
+        }
+        $result.ExitCode | Should -Be 0
+        $parsed = $result.StdOut.Trim() | ConvertFrom-Json
+        $parsed.format_version | Should -Be '1.0'
+        $parsed.valid | Should -BeTrue
+        @($parsed.diagnostics).Count | Should -Be 0
+    }
 }
