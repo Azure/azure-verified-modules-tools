@@ -23,7 +23,7 @@ Import-Module Avm.Authoring
 avm version
 ```
 
-> **Heads-up on versions.** The package currently published to the Gallery is a `0.0.1` placeholder that reserves the name. The full Bicep + Terraform `avm` CLI (manifest version `0.1.0`) is under active development in this repo and has **not** been published yet, so installing from the Gallery today gives you the placeholder only. Track the slice-level status in [docs/progress.md](docs/progress.md). To run the in-development CLI now, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
+> **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. Track the slice-level status in [docs/progress.md](docs/progress.md). To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Learn more
 

@@ -157,3 +157,28 @@ Describe 'Publish-AvmAuthoring.ps1 spec section 17 SecureString compliance' {
         $hasPlainApiKeyNullOut | Should -BeTrue
     }
 }
+
+Describe 'Publish-AvmAuthoring.ps1 idempotent re-run support' {
+
+    It 'declares a SkipIfAlreadyPublished switch parameter' {
+        $param = $script:ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'SkipIfAlreadyPublished' } |
+            Select-Object -First 1
+
+        $param | Should -Not -BeNullOrEmpty
+        $param.StaticType.FullName | Should -Be 'System.Management.Automation.SwitchParameter'
+    }
+
+    It 'references SkipIfAlreadyPublished in the body (declaration + at least one use)' {
+        $references = @($script:Ast.FindAll(
+                {
+                    param($node)
+                    $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $node.VariablePath.UserPath -eq 'SkipIfAlreadyPublished'
+                },
+                $true
+            ))
+
+        $references.Count | Should -BeGreaterThan 1
+    }
+}
