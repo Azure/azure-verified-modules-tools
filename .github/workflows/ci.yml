@@ -54,3 +54,28 @@ jobs:
       - name: Run ci task
         shell: pwsh
         run: ./build.ps1 ci
+
+      - name: Publish test results
+        # Upload the NUnit result XML even when the ci task fails, so the
+        # results are downloadable per run and consumed by the
+        # publish-test-results companion workflow.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload event file
+        # The publish-test-results companion workflow runs in the privileged
+        # workflow_run context and needs the triggering event payload to map
+        # results back to the pull request. Upload it once (artifact names must
+        # be unique within a run), so gate to a single matrix leg.
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: event-file
+          path: ${{ github.event_path }}
+          if-no-files-found: warn
+          retention-days: 7

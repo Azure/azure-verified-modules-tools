@@ -1,0 +1,65 @@
+name: publish-test-results
+
+# Renders the Pester results produced by the `ci` and `integration-terraform`
+# workflows onto the pull request: a results comment, a Checks-tab entry, and
+# per-failure annotations.
+#
+# Why a separate workflow_run workflow rather than a step inside ci /
+# integration-terraform? Those workflows run with a read-only GITHUB_TOKEN on
+# pull requests from forks, so they cannot post comments or write checks.
+# `workflow_run` runs in the context of the base repository AFTER the test
+# workflow finishes, with a read-write token, but it never executes untrusted
+# fork code -- it only downloads the artifacts (test-result XML + the event
+# payload) the test workflow uploaded. This is GitHub's supported pattern for
+# publishing results from fork pull requests. The elevated `checks` /
+# `pull-requests` permissions therefore live ONLY here; the test workflows keep
+# their minimal `contents: read`.
+
+on:
+  workflow_run:
+    workflows: [ci, integration-terraform]
+    types: [completed]
+
+# No ambient permissions; the publish job grants itself exactly what it needs.
+permissions: {}
+
+concurrency:
+  # One publish per source run; a superseded source run's publish can be
+  # cancelled because a newer run will publish fresher results.
+  group: publish-test-results-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish test results
+    runs-on: ubuntu-latest
+    # Skip cancelled source runs (they produce no meaningful results). Failed
+    # and successful runs both publish, so red builds still get an annotated
+    # report on the pull request.
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    permissions:
+      checks: write          # create the Checks-tab test report
+      pull-requests: write   # post / update the results comment
+      actions: read          # download artifacts from the source run
+      contents: read
+    steps:
+      - name: Download artifacts
+        # Pulls the artifacts the source run uploaded (test-results-* + the
+        # single event-file artifact) into ./artifacts/<name>/.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        if: ${{ !cancelled() }}
+        with:
+          # Distinct check per source workflow ("ci" / "integration-terraform")
+          # so both reports coexist on the pull request.
+          check_name: Test results (${{ github.event.workflow_run.name }})
+          commit: ${{ github.event.workflow_run.head_sha }}
+          event_file: artifacts/event-file/event.json
+          event_name: ${{ github.event.workflow_run.event }}
+          files: artifacts/**/*.xml

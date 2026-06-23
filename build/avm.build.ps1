@@ -18,6 +18,12 @@
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
       ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
 
+    The test, coverage, component, and integration tasks write an NUnit result
+    file per tier under out/test-results/. The CI workflows upload it as an
+    artifact, and a companion workflow_run workflow renders the pass/fail report
+    on the pull request and run summary via the publish-test-results action.
+    Locally this is just a file write under the gitignored out/ tree.
+
     The default task (`.`) is `layout`.
 #>
 
@@ -169,6 +175,21 @@ $avmAlias = if ($mod.ExportedAliases.ContainsKey('avm')) { $mod.ExportedAliases[
     }
 }
 
+# Returns the absolute path of the NUnit test-result file for a given tier,
+# creating out/test-results/ on demand. Pester writes this file when
+# TestResult is enabled; the CI workflows upload it as a build artifact so the
+# results are downloadable and machine-readable per run. out/ is gitignored.
+function script:Get-AvmTestResultPath {
+    param(
+        [Parameter(Mandatory)] [string] $Tier
+    )
+    $dir = Join-Path $script:outRoot 'test-results'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+    }
+    Join-Path $dir ("{0}.xml" -f $Tier)
+}
+
 # --- tasks ------------------------------------------------------------------
 
 task layout {
@@ -236,12 +257,14 @@ task test {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path          = $unitPath
-    $config.Run.PassThru      = $true
-    $config.Run.Exit          = $false
-    $config.Output.Verbosity  = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.ExcludeTag  = @('Integration', 'Component')
+    $config.Run.Path                = $unitPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'unit'
+    $config.Filter.ExcludeTag       = @('Integration', 'Component')
 
     $result = Invoke-Pester -Configuration $config
     if ($result.FailedCount -gt 0) {
@@ -269,6 +292,9 @@ task coverage {
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = 'Detailed'
     $config.Filter.ExcludeTag                  = @('Integration', 'Component')
+    $config.TestResult.Enabled                 = $true
+    $config.TestResult.OutputFormat            = 'NUnitXml'
+    $config.TestResult.OutputPath              = script:Get-AvmTestResultPath -Tier 'unit'
     $config.CodeCoverage.Enabled               = $true
     $config.CodeCoverage.Path                  = @(
         (Join-Path $script:moduleRoot 'Public'),
@@ -361,12 +387,14 @@ task component {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path           = $componentPath
-    $config.Run.PassThru       = $true
-    $config.Run.Exit           = $false
-    $config.Output.Verbosity   = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.Tag         = @('Component')
+    $config.Run.Path                = $componentPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
+    $config.Filter.Tag              = @('Component')
 
     $result = Invoke-Pester -Configuration $config
     if ($result.TotalCount -eq 0) {
@@ -394,12 +422,14 @@ task integration {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path           = $integrationPath
-    $config.Run.PassThru       = $true
-    $config.Run.Exit           = $false
-    $config.Output.Verbosity   = 'Detailed'
-    $config.TestResult.Enabled = $false
-    $config.Filter.Tag         = @('Integration')
+    $config.Run.Path                = $integrationPath
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'integration'
+    $config.Filter.Tag              = @('Integration')
 
     $result = Invoke-Pester -Configuration $config
     if ($result.TotalCount -eq 0) {
