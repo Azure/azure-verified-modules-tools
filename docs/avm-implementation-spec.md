@@ -590,7 +590,7 @@ This section is the implementation-level expression of the **Security stance** p
 | Component   | `tests/Pester/Component/`    | Real FS under `TestDrive`; stub binaries via fixture scripts in `tests/fixtures/bin/` | No | Real            |
 | Integration | `tests/Pester/Integration/`  | Pulls and runs the real managed tools from the resolver against the on-disk fixtures | Yes | Real |
 
-- Integration tests are tagged `-Tag Integration` and excluded from default runs. CI runs them on pull requests via the `integration-terraform` workflow.
+- Integration tests are tagged `-Tag Integration` and excluded from default runs. CI runs them on pull requests via the `integration` job in the `ci` workflow.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
 
 ### Coverage
@@ -607,7 +607,7 @@ Every PR runs Unit + Component on:
 - `ubuntu-24.04-arm` (`arm64`)
 - `macos-15` (`arm64`)
 
-Integration runs on every pull request via the `integration-terraform` workflow on each of the above.
+Integration runs on every pull request via the `integration` job in the `ci` workflow on each of the above.
 
 ---
 

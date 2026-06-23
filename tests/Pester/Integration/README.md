@@ -7,7 +7,7 @@ of increasing realism:
 | ----------- | ---------- | ------- | ------------- | --------------------------------------- |
 | Unit        | None (no `TestDrive`) | None | _(untagged)_ | `./build.ps1 test`, `./build.ps1 coverage`, every PR via `ci` |
 | Component   | Real (`TestDrive`) + stub binaries on `PATH` | None | `Component` | `./build.ps1 component`, every PR via `ci` |
-| Integration | Real | **Real** | `Integration` | `./build.ps1 integration` (PR via the `integration-terraform` workflow / on-demand) |
+| Integration | Real | **Real** | `Integration` | `./build.ps1 integration` (PR via the `integration` job in the `ci` workflow / on-demand) |
 
 ## What lives here
 
@@ -45,9 +45,9 @@ Every integration test **must** be tagged `-Tag 'Integration'`. The
 ./build.ps1 integration
 ```
 
-In CI this tier is driven by the `integration-terraform` workflow, which runs
-on `pull_request` and `workflow_dispatch` (not on merge to `main`). The
-workflow can target a single fixture per matrix leg via
+In CI this tier is driven by the `integration` job in the `ci` workflow, which
+runs on `pull_request` and `workflow_dispatch` (not on merge to `main`). The
+job can target a single fixture per matrix leg via
 `$env:AVM_INTEGRATION_FIXTURE`; with the var unset, a local run covers every
 fixture in one process.
 

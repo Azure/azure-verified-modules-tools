@@ -1,5 +1,27 @@
 name: ci
 
+# Pull-request gate for the Avm.Authoring module. Runs two test tiers on every
+# PR to `main` (and on demand via workflow_dispatch); neither tier runs on
+# merge / push to `main`:
+#
+#   * build       -- the fast offline gate (`./build.ps1 ci`: layout, lint,
+#                    coverage, component) across three OSes.
+#   * integration -- real-binary Terraform integration tests (`./build.ps1
+#                    integration`) that run the wired `avm pre-commit` and
+#                    `avm pr-check` chains end to end against the on-disk fixture
+#                    modules using the actual pinned tools (terraform,
+#                    terraform-docs, tflint, conftest, mapotf) downloaded into an
+#                    isolated AVM_HOME -- not the stub launchers the Component
+#                    tier uses. It needs real network (tool + provider downloads)
+#                    and Azure OIDC, so it is slower than the build gate and runs
+#                    as its own 3 OS x 2 fixture job matrix here.
+#
+# A single `report` job aggregates every leg of both tiers into one pull-request
+# test-results report. Keeping both tiers in one workflow (one check suite) means
+# that report renders as a single "Test results" check, instead of the two tiers
+# fighting over check-suite attribution when they ran as separate workflows on
+# the same commit.
+
 on:
   pull_request:
     branches: [main]
@@ -57,21 +79,132 @@ jobs:
 
       - name: Upload test results
         # Upload the NUnit result XML even when the ci task fails, so the results
-        # are downloadable per run and consumed by the `report` job below, which
-        # aggregates every matrix leg into a single pull-request report.
+        # are downloadable per leg and consumed by the `report` job below, which
+        # aggregates every leg of both tiers into a single pull-request report.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-${{ matrix.os }}
+          name: test-results-ci-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  integration:
+    name: integration (${{ matrix.fixture }} on ${{ matrix.os }})
+    strategy:
+      # Cover every test module on every OS independently; one red leg must not
+      # cancel the others (we want the full drift picture in one run).
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        fixture:
+          - terraform-azure-avm-res-mock
+          - terraform-azurerm-avm-res-mock
+    runs-on: ${{ matrix.os }}
+    # Run in the `avm` GitHub Environment so the job resolves its environment-scoped
+    # OIDC federated credential and ARM_* variables. The Entra federated credential
+    # is configured against this environment's subject (see the Azure login step).
+    environment: avm
+    timeout-minutes: 30
+    permissions:
+      id-token: write   # Azure OIDC login
+      contents: read
+
+    env:
+      # The integration suite reads AVM_INTEGRATION_FIXTURE at discovery time and generates a
+      # Context for only the named module, so each matrix leg exercises exactly
+      # one test module.
+      AVM_INTEGRATION_FIXTURE: ${{ matrix.fixture }}
+      # OIDC plumbing for `azure/login`. The `test` step today is validate-only
+      # (`terraform init -backend=false` + `terraform validate -json`) so it does
+      # not actually need Azure auth, but we wire login per the same pattern as
+      # avm-terraform-governance so the chain is ready when test grows to plan.
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool + provider cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # runner.temp is not available in job-level env, so resolve the cache
+          # dirs here and export them to GITHUB_ENV for later steps.
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $tfCache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $tfCache | Out-Null
+          "AVM_HOME=$avmHome"            | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TF_PLUGIN_CACHE_DIR=$tfCache" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Exclude AVM tools from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # mapotf's Go binary is a known Defender false positive ("virus or
+          # potentially unwanted software") and is quarantined at exec time on
+          # Windows. GitHub-hosted Windows runners let us add an exclusion (an
+          # un-elevated dev box cannot), so CI gets a real pass instead of a skip.
+          Add-MpPreference -ExclusionPath $env:AVM_HOME -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'mapotf.exe' -ErrorAction SilentlyContinue
+
+      - name: Azure login (OIDC)
+        # Only when the federated-identity vars are provisioned (skips cleanly on
+        # forks). Because this job runs in the `avm` GitHub Environment, the OIDC
+        # token subject is `repo:Azure/azure-verified-modules-tools:environment:avm`
+        # -- the Entra federated credential must be configured against that
+        # environment subject (not a branch ref), so it covers the pull_request
+        # and workflow_dispatch runs regardless of the selected ref.
+        if: ${{ vars.ARM_CLIENT_ID != '' }}
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
+          foreach ($pkg in @(
+              @{ Name = 'InvokeBuild'; Version = '[5.11.0,)' },
+              @{ Name = 'Pester';      Version = '[5.5.0,)'  }
+          )) {
+              Install-PSResource @pkg -Scope CurrentUser -TrustRepository
+          }
+
+      - name: Run integration task
+        shell: pwsh
+        run: ./build.ps1 integration
+
+      - name: Upload test results
+        # Upload the NUnit result XML even when the integration task fails, so
+        # the results are downloadable per matrix leg and consumed by the
+        # `report` job below, which aggregates every leg into one report.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-integration-${{ matrix.fixture }}-${{ matrix.os }}
           path: out/test-results/*.xml
           if-no-files-found: warn
           retention-days: 7
 
   report:
     name: Publish test results
-    needs: build
-    # Run even when a build leg fails (so red tests still get reported), but not
-    # when the run was cancelled. Aggregates every matrix leg into one report.
+    needs: [build, integration]
+    # Run even when a build or integration leg fails (so red tests still get
+    # reported), but not when the run was cancelled. Aggregates every leg of both
+    # tiers into one report. Runs outside the `avm` environment with no id-token
+    # -- it only reads the result artifacts, never Azure.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -91,9 +224,12 @@ jobs:
         # pull-request comment when the token has write access (same-repo PRs).
         # On fork PRs the token is read-only, so it degrades to the job summary
         # only; action_fail defaults to false, so reporting never reds the build.
+        # report_individual_runs keeps each matrix leg distinct, so a test that
+        # fails on one OS / fixture is reported as a real failure on that leg
+        # instead of being de-duplicated and mislabelled flaky.
         uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
         if: ${{ !cancelled() }}
         with:
-          check_name: Test results (ci)
+          check_name: Test results
           files: artifacts/**/*.xml
           report_individual_runs: "true"

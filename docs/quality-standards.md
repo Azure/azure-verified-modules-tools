@@ -226,7 +226,7 @@ Three layers; each runs with its own tag filter.
 | ----------- | ---------------------------- | ------- | ---------- | -------- |
 | Unit        | `tests/Pester/Unit/`         | No      | No (mocks) | Yes      |
 | Component   | `tests/Pester/Component/`    | No      | Real (under `TestDrive`); stub binaries via `tests/fixtures/bin/`  | Opt-in via `./build.ps1 component`   |
-| Integration | `tests/Pester/Integration/`  | Yes (pulls and runs the real managed tools from the resolver) | Real | Opt-in via `./build.ps1 integration`; PR CI via the `integration-terraform` workflow |
+| Integration | `tests/Pester/Integration/`  | Yes (pulls and runs the real managed tools from the resolver) | Real | Opt-in via `./build.ps1 integration`; PR CI via the `integration` job in the `ci` workflow |
 
 **Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
 
@@ -236,7 +236,7 @@ Three layers; each runs with its own tag filter.
 
 **Coverage.** 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor. Tracked per file; new files start at the floor and ratchet up as code matures.
 
-**CI matrix.** Every PR runs Unit + Component on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Integration runs on every PR via the `integration-terraform` workflow on each.
+**CI matrix.** Every PR runs Unit + Component on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Integration runs on every PR via the `integration` job in the `ci` workflow on each.
 
 > See also: [`avm-implementation-spec.md` §18](avm-implementation-spec.md#18-testing), [`avm-implementation-spec.md` §19](avm-implementation-spec.md#19-static-analysis-and-pre-commit).
 
