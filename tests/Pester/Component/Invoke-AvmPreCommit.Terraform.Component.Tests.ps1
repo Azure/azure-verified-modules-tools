@@ -253,7 +253,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes seven steps with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -261,12 +261,27 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 7
-        $expected = @('format', 'transform', 'lint', 'check policy', 'check convention', 'test', 'docs')
+        $steps.Count | Should -Be 8
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'test', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
+
+        # sync runs FIRST under -CheckDrift (drift-check mode) against the empty
+        # local managed-files source (AVM_MANAGED_FILES_LOCAL_PATH -> an empty
+        # root/), so it writes nothing and finds no drift: Status='pass',
+        # ToolSource='local', zero files processed and no add/update/remove.
+        $byName['sync'].PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $syncResult = $byName['sync'].PSObject.Properties['Result'].Value
+        $syncResult.PSObject.Properties['Engine'].Value         | Should -Be 'terraform'
+        $syncResult.PSObject.Properties['Tool'].Value           | Should -Be 'managed-files'
+        $syncResult.PSObject.Properties['ToolSource'].Value     | Should -Be 'local'
+        $syncResult.PSObject.Properties['FilesProcessed'].Value | Should -Be 0
+        @($syncResult.PSObject.Properties['Added'].Value).Count   | Should -Be 0
+        @($syncResult.PSObject.Properties['Updated'].Value).Count | Should -Be 0
+        @($syncResult.PSObject.Properties['Removed'].Value).Count | Should -Be 0
+        @($syncResult.PSObject.Properties['Issues'].Value).Count  | Should -Be 0
 
         # transform runs under -CheckDrift in pr-check; the no-op mapotf stub
         # leaves the tree untouched so the drift-check finds nothing and passes.

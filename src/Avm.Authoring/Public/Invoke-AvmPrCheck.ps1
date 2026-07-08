@@ -2,8 +2,8 @@ function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
         Run the full pull-request gauntlet against the resolved module:
-        format -> transform -> lint -> check policy -> check convention
-        -> test -> docs.
+        sync -> format -> transform -> lint -> check policy ->
+        check convention -> test -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -18,6 +18,15 @@ function Invoke-AvmPrCheck {
         lint, test, docs), pr-check runs **every check that runs in
         CI** (per plan section 4), including the convention-policy
         steps that compare the module against the AVM specs.
+
+        The chain opens with the managed-files sync step (terraform
+        only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
+        which reconciles the governed files by writing them, pr-check
+        writes nothing and instead treats any needed add/update/remove
+        as Status='fail'. This makes stale governed files a hard CI
+        failure so the module is refreshed before merge rather than
+        silently rewritten in CI. For bicep the sync step throws
+        AvmConfigurationException and is skipped.
 
         Status semantics (same as Invoke-AvmPreCommit):
           - 'pass'    : step returned Status='pass' (or didn't throw for
@@ -91,6 +100,7 @@ function Invoke-AvmPrCheck {
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 
     $stepDefs = @(
+        [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
         [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }

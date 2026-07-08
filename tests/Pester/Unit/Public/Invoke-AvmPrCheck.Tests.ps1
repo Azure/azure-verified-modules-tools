@@ -23,7 +23,7 @@ Describe 'Invoke-AvmPrCheck' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPrCheck'
     }
 
-    It 'composes all seven steps in the expected order on a passing chain' {
+    It 'composes all eight steps in order on a passing chain; the terraform-only sync step is skipped for bicep' {
         $dir = Join-Path $TestDrive ("prcheck-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -34,6 +34,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
@@ -46,15 +47,17 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 7
-        $result.Steps[0].Step             | Should -Be 'format'
-        $result.Steps[1].Step             | Should -Be 'transform'
-        $result.Steps[2].Step             | Should -Be 'lint'
-        $result.Steps[3].Step             | Should -Be 'check policy'
-        $result.Steps[4].Step             | Should -Be 'check convention'
-        $result.Steps[5].Step             | Should -Be 'test'
-        $result.Steps[6].Step             | Should -Be 'docs'
-        ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+        $result.Steps.Count               | Should -Be 8
+        $result.Steps[0].Step             | Should -Be 'sync'
+        $result.Steps[0].Status           | Should -Be 'skipped'
+        $result.Steps[1].Step             | Should -Be 'format'
+        $result.Steps[2].Step             | Should -Be 'transform'
+        $result.Steps[3].Step             | Should -Be 'lint'
+        $result.Steps[4].Step             | Should -Be 'check policy'
+        $result.Steps[5].Step             | Should -Be 'check convention'
+        $result.Steps[6].Step             | Should -Be 'test'
+        $result.Steps[7].Step             | Should -Be 'docs'
+        ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
     It 'reports a stubbed engine (AvmConfigurationException) as skipped and continues the chain' {
@@ -68,6 +71,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { throw [AvmConfigurationException]::new('transform not wired yet') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
@@ -79,8 +83,9 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                  | Should -Be 'pass'
-        $result.Steps.Count                             | Should -Be 7
-        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 3
+        $result.Steps.Count                             | Should -Be 8
+        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 4
+        ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
@@ -98,6 +103,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'fail' } }
@@ -109,7 +115,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                | Should -Be 'fail'
-        $result.Steps.Count                           | Should -Be 7
+        $result.Steps.Count                           | Should -Be 8
         ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status | Should -Be 'pass'
     }
@@ -125,6 +131,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'fail' } }
@@ -135,8 +142,9 @@ Describe 'Invoke-AvmPrCheck' {
             Invoke-AvmPrCheck -Path $D -StopOnFail
         }
 
+        # sync(skipped) -> format(pass) -> transform(pass) -> lint(fail) -> abort
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 3
+        $result.Steps.Count                  | Should -Be 4
         $result.Steps[-1].Step               | Should -Be 'lint'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
@@ -159,6 +167,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { throw [System.InvalidOperationException]::new('engine blew up') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
@@ -169,8 +178,9 @@ Describe 'Invoke-AvmPrCheck' {
             Invoke-AvmPrCheck -Path $D
         }
 
+        # sync(skipped) -> format(pass) -> transform(error) -> abort
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 2
+        $result.Steps.Count                  | Should -Be 3
         $result.Steps[-1].Step               | Should -Be 'transform'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
@@ -181,7 +191,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'composes all seven steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
+    It 'composes all eight steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -192,6 +202,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -201,6 +212,9 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPrCheck -Path $D
 
+            # sync runs first in drift-check mode: -CheckDrift is forwarded via
+            # the step's ExtraArgs so CI treats stale governed files as a fail.
+            Should -Invoke Invoke-AvmSync            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
             Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmLint            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
@@ -214,18 +228,19 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 7
-        $result.Steps[0].Step             | Should -Be 'format'
-        $result.Steps[1].Step             | Should -Be 'transform'
-        $result.Steps[2].Step             | Should -Be 'lint'
-        $result.Steps[3].Step             | Should -Be 'check policy'
-        $result.Steps[4].Step             | Should -Be 'check convention'
-        $result.Steps[5].Step             | Should -Be 'test'
-        $result.Steps[6].Step             | Should -Be 'docs'
+        $result.Steps.Count               | Should -Be 8
+        $result.Steps[0].Step             | Should -Be 'sync'
+        $result.Steps[1].Step             | Should -Be 'format'
+        $result.Steps[2].Step             | Should -Be 'transform'
+        $result.Steps[3].Step             | Should -Be 'lint'
+        $result.Steps[4].Step             | Should -Be 'check policy'
+        $result.Steps[5].Step             | Should -Be 'check convention'
+        $result.Steps[6].Step             | Should -Be 'test'
+        $result.Steps[7].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
-    It 'reports the stub terraform engines (transform/check policy/check convention) as skipped and keeps overall pass' {
+    It 'reports the stub terraform engines (transform/check policy/check convention) as skipped and keeps overall pass; the terraform sync step runs' {
         $dir = Join-Path $TestDrive ("prcheck-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -236,6 +251,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
             }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform { throw [AvmConfigurationException]::new('transform not wired yet') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -248,8 +264,9 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                                                     | Should -Be 'pass'
         $result.Ecosystem                                                  | Should -Be 'terraform'
-        $result.Steps.Count                                                | Should -Be 7
+        $result.Steps.Count                                                | Should -Be 8
         ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
+        ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'pass'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
