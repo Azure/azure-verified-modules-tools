@@ -39,8 +39,18 @@ BeforeAll {
 
     $script:originalPath = $env:PATH
     $script:originalAvmHome = $env:AVM_HOME
+    $script:originalManagedFilesLocalPath = $env:AVM_MANAGED_FILES_LOCAL_PATH
     $env:PATH = $script:launcherDir + [IO.Path]::PathSeparator + $env:PATH
     $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
+
+    # Point the managed-files sync engine at an empty local source so the
+    # sync step (now first in the pre-commit chain) is a deterministic
+    # offline no-op: an empty 'root/' yields zero desired files, so the
+    # engine reports Status='pass' with FilesProcessed=0 and never fetches
+    # the governance repo over the network.
+    $script:managedFilesLocal = Join-Path $TestDrive 'managed-files-src'
+    $null = New-Item -ItemType Directory -Path (Join-Path $script:managedFilesLocal 'root') -Force
+    $env:AVM_MANAGED_FILES_LOCAL_PATH = $script:managedFilesLocal
 
     $script:fixtureRoot = Join-Path $TestDrive 'module'
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
@@ -175,12 +185,18 @@ AfterAll {
     else {
         $env:AVM_HOME = $script:originalAvmHome
     }
+    if ($null -eq $script:originalManagedFilesLocalPath) {
+        Remove-Item Env:\AVM_MANAGED_FILES_LOCAL_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:AVM_MANAGED_FILES_LOCAL_PATH = $script:originalManagedFilesLocalPath
+    }
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
 
-    It 'pre-commit composes the four-step terraform chain end-to-end via launcher-resolved stubs and the in-module check-convention rules' {
+    It 'pre-commit composes the five-step terraform chain end-to-end (sync first) via launcher-resolved stubs and the in-module check-convention rules' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -188,12 +204,26 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 4
-        $expected = @('check convention', 'transform', 'format', 'docs')
+        $steps.Count | Should -Be 5
+        $expected = @('sync', 'check convention', 'transform', 'format', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
+
+        # sync runs FIRST against an empty local managed-files source
+        # (AVM_MANAGED_FILES_LOCAL_PATH -> TestDrive/managed-files-src with an
+        # empty root/), so it is an offline no-op: zero desired files, nothing
+        # added/updated/removed, Status='pass', ToolSource='local'.
+        $byName['sync'].PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $syncResult = $byName['sync'].PSObject.Properties['Result'].Value
+        $syncResult.PSObject.Properties['Engine'].Value         | Should -Be 'terraform'
+        $syncResult.PSObject.Properties['Tool'].Value           | Should -Be 'managed-files'
+        $syncResult.PSObject.Properties['ToolSource'].Value     | Should -Be 'local'
+        $syncResult.PSObject.Properties['FilesProcessed'].Value | Should -Be 0
+        @($syncResult.PSObject.Properties['Added'].Value).Count   | Should -Be 0
+        @($syncResult.PSObject.Properties['Updated'].Value).Count | Should -Be 0
+        @($syncResult.PSObject.Properties['Removed'].Value).Count | Should -Be 0
 
         # check convention runs the in-module rule framework; reports
         # ToolSource='builtin' rather than 'path'. Fixture pre-stages
