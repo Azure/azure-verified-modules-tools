@@ -65,6 +65,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Build/validate the current module via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('test', 'unit')
+            Cmdlet  = 'Invoke-AvmTestUnit'
+            Summary = 'Run the terraform unit test tier (tests/unit).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('docs')
             Cmdlet  = 'Invoke-AvmDocs'
             Summary = 'Generate or refresh README docs via the resolved engine.'

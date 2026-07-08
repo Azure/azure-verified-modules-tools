@@ -31,6 +31,14 @@ switch ($args[0]) {
         Write-Output '{"format_version":"1.0","valid":true,"error_count":0,"warning_count":0,"diagnostics":[]}'
         exit 0
     }
+    'test' {
+        # Emit a minimal newline-delimited JSON stream that the suite engine
+        # tolerates. No test_run failures and no error diagnostics => the
+        # engine reports Status=pass. Exit 0 = every run passed.
+        Write-Output '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"stub","status":"pass"}}'
+        Write-Output '{"@level":"info","type":"test_summary","test_summary":{"status":"pass","passed":1,"failed":0,"errored":0,"skipped":0}}'
+        exit 0
+    }
     default {
         Write-Error "stub terraform: unhandled verb '$($args[0])' (full args: $($args -join ' '))"
         exit 64

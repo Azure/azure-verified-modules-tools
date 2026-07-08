@@ -24,6 +24,7 @@
         'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
         'Invoke-AvmTest',
+        'Invoke-AvmTestUnit',
         'Invoke-AvmTransform'
     )
     CmdletsToExport      = @()
