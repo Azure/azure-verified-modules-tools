@@ -75,6 +75,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Run the terraform integration test tier (tests/integration).'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('test', 'e2e')
+            Cmdlet  = 'Invoke-AvmTestE2e'
+            Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('docs')
             Cmdlet  = 'Invoke-AvmDocs'
             Summary = 'Generate or refresh README docs via the resolved engine.'

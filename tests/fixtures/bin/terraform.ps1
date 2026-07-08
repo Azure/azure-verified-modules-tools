@@ -39,6 +39,23 @@ switch ($args[0]) {
         Write-Output '{"@level":"info","type":"test_summary","test_summary":{"status":"pass","passed":1,"failed":0,"errored":0,"skipped":0}}'
         exit 0
     }
+    'apply' {
+        # e2e engine invokes 'apply -auto-approve ...'. Report a clean deploy.
+        Write-Output 'Apply complete! Resources: 1 added, 0 changed, 0 destroyed.'
+        exit 0
+    }
+    'plan' {
+        # e2e idempotency check runs 'plan -detailed-exitcode ...'. Exit 0 =
+        # no changes (idempotent). The engine treats exit 2 as drift; the stub
+        # always reports a clean, idempotent plan.
+        Write-Output 'No changes. Your infrastructure matches the configuration.'
+        exit 0
+    }
+    'destroy' {
+        # e2e engine always tears down with 'destroy -auto-approve ...'.
+        Write-Output 'Destroy complete! Resources: 1 destroyed.'
+        exit 0
+    }
     default {
         Write-Error "stub terraform: unhandled verb '$($args[0])' (full args: $($args -join ' '))"
         exit 64
