@@ -23,6 +23,7 @@
         'Invoke-AvmLint',
         'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
+        'Invoke-AvmSync',
         'Invoke-AvmTest',
         'Invoke-AvmTestE2e',
         'Invoke-AvmTestIntegration',

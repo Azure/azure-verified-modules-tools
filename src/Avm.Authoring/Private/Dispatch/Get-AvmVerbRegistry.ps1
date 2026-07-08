@@ -85,6 +85,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Generate or refresh README docs via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('sync')
+            Cmdlet  = 'Invoke-AvmSync'
+            Summary = 'Sync managed files from the AVM governance source (terraform).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('transform')
             Cmdlet  = 'Invoke-AvmTransform'
             Summary = 'Regenerate README + test scaffolding (Phase 1 stub).'
