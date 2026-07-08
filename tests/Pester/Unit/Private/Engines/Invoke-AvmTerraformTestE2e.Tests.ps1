@@ -236,4 +236,197 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues.Count      | Should -Be 1
         $result.Issues[0].Message | Should -Match 'destroy'
     }
+
+    It 'runs the pre.ps1 hook before terraform and the post.ps1 hook after' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.ps1') -Value 'exit 0' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'post.ps1') -Value 'exit 0' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+        $result.Issues         | Should -BeNullOrEmpty
+
+        InModuleScope 'Avm.Authoring' {
+            # Hooks run as 'pwsh ... -File <hook>' subprocesses, one each.
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*pre.ps1')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*post.ps1')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'init' }
+        }
+    }
+
+    It 'still runs the post.ps1 hook after a terraform init failure' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'post.ps1') -Value 'exit 0' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'init boom' } }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status            | Should -Be 'fail'
+        $result.Issues.Count      | Should -Be 1
+        $result.Issues[0].Message | Should -Match 'init'
+
+        InModuleScope 'Avm.Authoring' {
+            # post.ps1 always runs, even though init failed.
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*post.ps1')
+            }
+            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+        }
+    }
+
+    It 'skips terraform when the pre.ps1 hook fails but still runs post.ps1' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.ps1') -Value 'exit 3' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'post.ps1') -Value 'exit 0' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if (($ArgumentList -join ' ') -like '*pre.ps1')  { return [pscustomobject]@{ ExitCode = 3; StdOut = ''; StdErr = 'pre boom' } }
+                if (($ArgumentList -join ' ') -like '*post.ps1') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                throw "terraform must not run after a failed pre-hook: $($ArgumentList[0])"
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status            | Should -Be 'fail'
+        $result.Issues.Count      | Should -Be 1
+        $result.Issues[0].File    | Should -Be 'examples/default/pre.ps1'
+        $result.Issues[0].Message | Should -Match 'pre\.ps1 hook failed'
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'init' }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*post.ps1')
+            }
+        }
+    }
+
+    It 'records an Issue when the post.ps1 hook exits non-zero' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'post.ps1') -Value 'exit 4' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if (($ArgumentList -join ' ') -like '*post.ps1') { return [pscustomobject]@{ ExitCode = 4; StdOut = ''; StdErr = 'post boom' } }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status            | Should -Be 'fail'
+        $result.Issues.Count      | Should -Be 1
+        $result.Issues[0].File    | Should -Be 'examples/default/post.ps1'
+        $result.Issues[0].Message | Should -Match 'post\.ps1 hook failed'
+    }
+
+    It 'throws a configuration error when a shell hook is present' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.sh') -Value 'echo hi' -Encoding utf8
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { throw 'should not shell out when a .sh hook is rejected' }
+            { Invoke-AvmTerraformTestE2e -Context $C } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*convert these shell hooks*'
+            Should -Invoke Invoke-AvmProcess -Times 0
+        }
+    }
+
+    It 'parses a .env file and passes its values to every terraform step via -EnvVars' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' '.env') -Value @(
+            '# secrets written by pre.ps1'
+            'ARM_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000'
+            'export TF_VAR_name="quoted value"'
+        ) -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'init' -and
+                $EnvVars['ARM_SUBSCRIPTION_ID'] -eq '00000000-0000-0000-0000-000000000000' -and
+                $EnvVars['TF_VAR_name'] -eq 'quoted value'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'apply' -and
+                $EnvVars['ARM_SUBSCRIPTION_ID'] -eq '00000000-0000-0000-0000-000000000000' -and
+                $EnvVars['TF_VAR_name'] -eq 'quoted value'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'plan' -and
+                $EnvVars['ARM_SUBSCRIPTION_ID'] -eq '00000000-0000-0000-0000-000000000000' -and
+                $EnvVars['TF_VAR_name'] -eq 'quoted value'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'destroy' -and
+                $EnvVars['ARM_SUBSCRIPTION_ID'] -eq '00000000-0000-0000-0000-000000000000' -and
+                $EnvVars['TF_VAR_name'] -eq 'quoted value'
+            }
+        }
+    }
 }

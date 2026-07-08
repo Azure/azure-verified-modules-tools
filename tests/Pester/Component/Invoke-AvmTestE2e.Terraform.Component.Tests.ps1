@@ -103,4 +103,56 @@ Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Co
         $result.PSObject.Properties['FilesProcessed'].Value  | Should -Be 0
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
+
+    It 'runs per-example pre.ps1/post.ps1 hooks and skips hooks in .e2eignore examples' {
+        $hookModule = Join-Path $TestDrive 'hook-module'
+        $null = New-Item -ItemType Directory -Path $hookModule -Force
+        $mainTf = @(
+            'terraform {',
+            '  required_version = ">= 1.0"',
+            '}'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $hookModule 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        $null = New-Item -ItemType Directory -Path (Join-Path $hookModule 'tests') -Force
+
+        # An example that runs: pre.ps1 and post.ps1 each drop a marker file
+        # (via $PSScriptRoot so the path is independent of the hook's cwd).
+        $hookedDir = Join-Path $hookModule 'examples' 'hooked'
+        $null = New-Item -ItemType Directory -Path $hookedDir -Force
+        Set-Content -LiteralPath (Join-Path $hookedDir 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        $preScript = @(
+            '$marker = Join-Path $PSScriptRoot ''pre.marker''',
+            'Set-Content -LiteralPath $marker -Value ''pre ran'' -Encoding utf8NoBOM',
+            'exit 0'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $hookedDir 'pre.ps1') -Value $preScript -Encoding utf8NoBOM
+        $postScript = @(
+            '$marker = Join-Path $PSScriptRoot ''post.marker''',
+            'Set-Content -LiteralPath $marker -Value ''post ran'' -Encoding utf8NoBOM',
+            'exit 0'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $hookedDir 'post.ps1') -Value $postScript -Encoding utf8NoBOM
+
+        # An example that must be skipped entirely: its pre.ps1 must NOT run.
+        $skippedDir = Join-Path $hookModule 'examples' 'skipme'
+        $null = New-Item -ItemType Directory -Path $skippedDir -Force
+        Set-Content -LiteralPath (Join-Path $skippedDir 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $skippedDir '.e2eignore') -Value '' -Encoding utf8NoBOM
+        $skipPre = @(
+            '$marker = Join-Path $PSScriptRoot ''pre.marker''',
+            'Set-Content -LiteralPath $marker -Value ''should not run'' -Encoding utf8NoBOM',
+            'exit 0'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $skippedDir 'pre.ps1') -Value $skipPre -Encoding utf8NoBOM
+
+        $result = Invoke-AvmTestE2e -Path $hookModule -Ecosystem terraform -AllowPathFallback
+
+        $result.PSObject.Properties['Status'].Value          | Should -Be 'pass'
+        $result.PSObject.Properties['FilesProcessed'].Value  | Should -Be 1
+        @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+
+        Test-Path -LiteralPath (Join-Path $hookedDir 'pre.marker')  | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $hookedDir 'post.marker') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $skippedDir 'pre.marker') | Should -BeFalse
+    }
 }
