@@ -272,4 +272,139 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $err.GetType().Name | Should -Be 'AvmProcessException'
         $err.Message        | Should -Match 'internal error'
     }
+
+    It 'fans out over modules/* submodules, aggregates FilesProcessed and prefixes submodule issue paths' {
+        $subDir = Join-Path $script:moduleDir 'modules' 'foo'
+        New-Item -ItemType Directory -Path (Join-Path $subDir 'tests' 'unit') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $subDir 'tests' 'unit' 'sub.tftest.hcl') -Value 'run "s" {}' -Encoding utf8
+        $ctx = $script:context
+        $passJson = '{"type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"x","status":"pass"}}'
+        $subJson = '{"type":"test_run","test_run":{"path":"tests/unit/sub.tftest.hcl","run":"s","status":"fail"}}'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; PassJson = $passJson; SubJson = $subJson } {
+            param($C, $PassJson, $SubJson)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList, $WorkingDirectory)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                if ((Split-Path $WorkingDirectory -Leaf) -eq 'foo') { return [pscustomobject]@{ ExitCode = 1; StdOut = $SubJson; StdErr = '' } }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $PassJson; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+        $result.Status         | Should -Be 'fail'
+        $result.FilesProcessed | Should -Be 2
+        $result.Issues.Count   | Should -Be 1
+        $result.Issues[0].File | Should -Be 'modules/foo/tests/unit/sub.tftest.hcl'
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter { $ArgumentList[0] -eq 'test' }
+        }
+    }
+
+    It 'runs an isolated setup.ps1 hook before terraform' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.ps1') -Value '"noop"' -Encoding utf8
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-NoProfile') -and ($ArgumentList -contains '-File') -and
+                ($ArgumentList[-1] -like '*setup.ps1')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'test' }
+        }
+    }
+
+    It 'records an issue and skips terraform when setup.ps1 fails' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.ps1') -Value 'exit 3' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList -contains '-File') { return [pscustomobject]@{ ExitCode = 3; StdOut = ''; StdErr = 'setup boom' } }
+                throw 'terraform should not run when setup.ps1 fails'
+            }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+        $result.Status            | Should -Be 'fail'
+        $result.Issues.Count      | Should -Be 1
+        $result.Issues[0].File    | Should -Be 'tests/unit/setup.ps1'
+        $result.Issues[0].Message | Should -Match 'setup.ps1 hook failed'
+        $result.Issues[0].Message | Should -Match 'setup boom'
+    }
+
+    It 'throws AvmConfigurationException when a shell setup/teardown hook is present' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.sh') -Value 'echo hi' -Encoding utf8
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/terraform'
+                    }
+                }
+                Mock Invoke-AvmProcess { throw 'should not shell out' }
+                Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            }
+        }
+        catch {
+            $err = $_.Exception
+        }
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmConfigurationException'
+        $err.Message        | Should -Match 'setup.sh'
+        $err.Message        | Should -Match '\.ps1'
+    }
+
+    It 'skips a modules/* subdirectory that ships no tests for the tier' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'modules' 'empty') -Force | Out-Null
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'test' }
+        }
+    }
 }

@@ -98,18 +98,20 @@ the `Avm.Authoring` verb you call instead.
 | `make pre-commit`         | `avm pre-commit -Ecosystem terraform`                |
 | `make pr-check`           | `avm pr-check -Ecosystem terraform`                  |
 | `make docs`               | `avm docs -Ecosystem terraform`                      |
-| `make tf-test-unit`       | `avm test -Ecosystem terraform`  (¹)                 |
-| `make tf-test-integration`| _Not migrated yet — see [§ 6](#6-whats-not-migrated-yet)_ |
-| `make test-examples`      | _Not migrated yet — see [§ 6](#6-whats-not-migrated-yet)_ |
-| `make globalsetup`        | _Not migrated yet — see [§ 6](#6-whats-not-migrated-yet)_ |
-| `make globaltearown`      | _Not migrated yet — see [§ 6](#6-whats-not-migrated-yet)_ |
+| `make tf-test-unit`       | `avm test unit -Ecosystem terraform`                 |
+| `make tf-test-integration`| `avm test integration -Ecosystem terraform`          |
+| `make test-examples`      | `avm test e2e -Ecosystem terraform`                  |
+| `make globalsetup`        | _No global equivalent — see [§ 6](#6-whats-not-migrated-yet)_ |
+| `make globaltearown`      | _No global equivalent — see [§ 6](#6-whats-not-migrated-yet)_ |
 
-> (¹) `avm test` currently runs `terraform init -backend=false` then
-> `terraform validate -json` against the module root. The
-> `terraform test`-based unit-vs-integration split (`tests/unit/*.tftest.hcl`
-> versus `tests/integration/*.tftest.hcl`) is a Phase 2 follow-up
-> ([`progress.md` line 202](progress.md)). Today, `avm test` is the
-> equivalent of `terraform validate` only.
+> (¹) Bare `avm test` (no tier) runs `terraform init -backend=false`
+> then `terraform validate -json` against the module root, and is the
+> validate-only step wired into `pre-commit` and `pr-check`. The
+> `terraform test`-based tiers are separate commands: `avm test unit`
+> runs `tests/unit/*.tftest.hcl`, `avm test integration` runs
+> `tests/integration/*.tftest.hcl`, and `avm test e2e` deploys each
+> `examples/*` directory. Each tier also fans out over `modules/*`
+> submodules and runs an optional isolated `setup.ps1` hook per target.
 
 ### From `./avm <command>` / `./avm.ps1 <command>`
 
@@ -205,7 +207,10 @@ exactly this status today.
 | --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `avm format`          | `terraform fmt`         | `fmt -recursive -list=true -write=true <root>`                                                                               |   ✅   | Returns `Changed` list of rewritten files.                                                                                                       |
 | `avm lint`            | `tflint`                | `--recursive --format=json` from `cwd=<root>`                                                                                |   ✅   | Exit `2` with `severity=error` issues → `Status='fail'`; warnings flatten into the same `Issues` array.                                          |
-| `avm test`            | `terraform validate`    | `init -backend=false -upgrade=false -input=false -no-color` then `validate -no-color -json` from `cwd=<root>`                |   ✅   | Validate-only today. `terraform test` (with the `tests/unit/*.tftest.hcl` split) is a follow-up.                                                  |
+| `avm test`            | `terraform validate`    | `init -backend=false -upgrade=false -input=false -no-color` then `validate -no-color -json` from `cwd=<root>`                |   ✅   | Bare `avm test` is validate-only and is the step wired into `pre-commit` / `pr-check`.                                                            |
+| `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess.                  |
+| `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented).                                                                          |
+| `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → init → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. `setup.sh` / `teardown.sh` hooks are rejected.                                            |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `conftest`              | `test --policy <APRL> --policy <AVMSEC> [--policy <exceptions>...] --output json --parser hcl2 .` from `cwd=<root>`          |   ✅   | Needs `avm-policy-aprl` + `avm-policy-avmsec` declared in `.avm/config.json` (see [§ 4](#4-pinned-asset-config)). Otherwise reports `skipped`.   |
 | `avm transform`       | `mapotf`                | _engine stub, `AvmConfigurationException` → `skipped`_                                                                       |   ❌   | Blocked: `Azure/mapotf` ships no GitHub binary releases; see [§ 6](#6-whats-not-migrated-yet).                                                   |
@@ -233,15 +238,14 @@ status here will lag the canonical checklist by at most one slice.
   `terraform fmt` → `avmfix`. The `avmfix` follow-up step is the same
   blocker (`go install`-only). `avm format` today runs only the
   `terraform fmt` step.
-- **`terraform test` runner** — `tests/unit/*.tftest.hcl` vs
-  `tests/integration/*.tftest.hcl` split, `setup.sh` invocation, and
-  the `command = apply` against mocked providers are all on the Phase 2
-  follow-up list ([`progress.md` line 202](progress.md)).
-- **Example deployment pipelines** — `make test-examples`,
-  `globalsetup` / `globaltearown`, the per-example pre/post hooks, and
-  the idempotency-check second-`plan` step that the porch
-  `test-examples.porch.yaml` pipeline performs. These are part of the
-  Phase 3 "Replace `porch`" work and have not started.
+- **Global setup / teardown** — the porch `globalsetup` /
+  `globaltearown` targets that provisioned one shared fixture for a
+  whole test run have no direct equivalent. State and secrets are
+  provisioned per target instead: `avm test unit` / `integration` run
+  an optional `tests/<tier>/setup.ps1` per module, and `avm test e2e`
+  runs an optional `pre.ps1` / `post.ps1` per example. Setup hooks must
+  be PowerShell — a `setup.sh` / `teardown.sh` is rejected with an
+  `AvmConfigurationException`.
 - **Default APRL / AVMSEC descriptors bundled with the module** — for
   now both must be declared per-repo in `.avm/config.json`. Bundling
   the canonical Azure-owned descriptors is a deliberate follow-up
