@@ -129,6 +129,15 @@ the `Avm.Authoring` verb you call instead.
 | `./avm pre-commit`                 | `avm pre-commit -Ecosystem terraform`             |
 | `./avm pr-check`                   | `avm pr-check -Ecosystem terraform`               |
 
+One behavioural difference worth knowing when porting a call site:
+`./avm pre-commit` exits non-zero whenever it rewrites a file, so callers
+run it twice (`./avm pre-commit || ./avm pre-commit` — fix, then verify).
+`avm pre-commit` needs no such double-run. It is fail-soft, still reports
+`Status='pass'` after a successful regeneration, and names the rewritten
+paths per step under `.Steps.Result.Changed`, so a caller can detect
+"docs were regenerated" from the result object instead of from an exit
+code or a `git status --porcelain` probe.
+
 The container mount, `CONTAINER_RUNTIME`, `CONTAINER_IMAGE`,
 `CONTAINER_PULL_POLICY`, and the SSL-cert / `mkcert` plumbing the shim
 provides are not needed — the cmdlets call the host's own
@@ -259,6 +268,20 @@ status here will lag the canonical checklist by at most one slice.
   (`terraform plan -out=tfplan && terraform show -json | conftest test --parser json`)
   is a follow-up; it needs real provider auth, so it's out of scope
   for the unit-tier coverage today.
+- **Governance-side fleet automation** — three workflows in
+  `Azure/avm-terraform-governance` shell out to the repo-local `./avm`
+  shim rather than to this module: `dependabot-precommit.yml` (added
+  upstream 2026-07-22 — runs pre-commit against open Terraform Dependabot
+  PR branches across the fleet and pushes the regenerated docs back so
+  the module's own PR check goes green), `pre-commit-cron.yml`, and
+  `governance-test.yml`. All three are central to the governance repo and
+  are deliberately **not** synced into module repos, so there is nothing
+  to port into this repo. The migration dependency runs the other way: a
+  module repo that deletes `./avm` drops out of their coverage until they
+  are taught to `Install-PSResource Avm.Authoring` and call
+  `avm pre-commit`. The synced
+  `managed-files/root/.agents/skills/avm-terraform-module-development/SKILL.md`
+  likewise still documents `./avm` to coding agents.
 
 ---
 
