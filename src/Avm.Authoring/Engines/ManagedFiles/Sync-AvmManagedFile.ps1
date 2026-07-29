@@ -152,7 +152,6 @@ function Sync-AvmManagedFile {
 
     $source = Resolve-AvmManagedFilesSource -Settings $settings -GitPath $gitPath
 
-    # Resolve overlay/exclusions/deprecated from the (optional) config folder.
     $overlay = ''
     $excluded = @()
     $deprecated = @()
@@ -187,7 +186,6 @@ function Sync-AvmManagedFile {
         if ($deprecatedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
     }
 
-    # Read the on-disk state for every desired path (blob SHA + index mode).
     $targetModes = Get-AvmGitIndexMode -Dir $root -GitPath $gitPath
     $existingBlobs = @{}
     $existingModes = @{}
@@ -255,9 +253,6 @@ function Sync-AvmManagedFile {
                     }
                     [System.IO.File]::WriteAllBytes($full, $desired[$p].Bytes)
 
-                    # Best-effort: propagate the executable bit for 100755 files
-                    # when the target is a git working tree. Harmless no-op on
-                    # Windows / when the file is not yet tracked.
                     if ($desired[$p].Mode -eq '100755' -and $gitPath) {
                         try {
                             Invoke-AvmProcess -FilePath $gitPath -ArgumentList @('-C', $root, 'add', '--', $p) -IgnoreExitCode | Out-Null
@@ -330,7 +325,6 @@ function Resolve-AvmManagedFilesSetting {
     $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'managed-files'
     $localPath = & $pick $ManagedFilesLocalPath 'AVM_MANAGED_FILES_LOCAL_PATH' 'localPath' ''
 
-    # Config folder defaults to the same repo/ref as the managed files.
     $configRepoValue = & $pick $ConfigRepo 'AVM_MANAGED_FILES_CONFIG_REPO' 'configRepo' $repo
     $configRefValue = & $pick $ConfigRef 'AVM_MANAGED_FILES_CONFIG_REF' 'configRef' $ref
     $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'tf-repo-mgmt/repository-config'
@@ -568,8 +562,7 @@ function Add-AvmManagedFilesFromDir {
     $prefixLength = $baseDirAbsolute.Length + 1
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
-    # -Force so dot-prefixed entries (.github/, .editorconfig, ...) are not
-    # silently skipped as hidden on Linux/macOS.
+    # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
     Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | ForEach-Object {
         $relativePath = $_.FullName.Substring($prefixLength) -replace '\\', '/'
         $absoluteSource = $_.FullName -replace '\\', '/'

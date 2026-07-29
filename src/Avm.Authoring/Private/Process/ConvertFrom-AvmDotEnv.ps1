@@ -66,7 +66,6 @@ function ConvertFrom-AvmDotEnv {
 
         $eq = $trimmed.IndexOf('=')
         if ($eq -lt 1) {
-            # No '=' separator, or the key is empty ('=value'). Skip.
             continue
         }
 

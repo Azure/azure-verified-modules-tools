@@ -80,8 +80,6 @@ function Invoke-AvmTerraformTestSuite {
 
     $targets = @(Get-AvmTerraformTestTarget -Root $Context.Root -Tier $Tier)
 
-    # A module may ship only one tier, or none. No runnable target -> nothing to
-    # run; report a clean pass so callers treat "tier absent" as "tier green".
     if ($targets.Count -eq 0) {
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
@@ -94,10 +92,6 @@ function Invoke-AvmTerraformTestSuite {
         }
     }
 
-    # This engine runs PowerShell setup hooks only. A legacy shell hook needs
-    # bash - absent on stock Windows - and would otherwise be silently ignored,
-    # so reject it fail-fast, BEFORE any terraform runs, and tell the author to
-    # port it to '.ps1'.
     $shHooks = New-Object System.Collections.Generic.List[string]
     foreach ($target in $targets) {
         $relPrefix = if ($target.Rel) { $target.Rel + '/' } else { '' }
@@ -113,9 +107,6 @@ function Invoke-AvmTerraformTestSuite {
             ("The terraform {0} test engine runs PowerShell setup hooks only; convert these shell hooks to '.ps1': {1}" -f $Tier, ($shHooks -join ', ')))
     }
 
-    # Resolve the running pwsh once. setup.ps1 hooks execute as isolated
-    # 'pwsh -File' subprocesses so a hook's 'exit', secrets, or environment
-    # changes cannot corrupt the runner or bleed into the next target.
     $pwshPath = [Environment]::ProcessPath
     if ([string]::IsNullOrWhiteSpace($pwshPath)) {
         $pwshCmd = Get-Command -Name 'pwsh' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -133,10 +124,6 @@ function Invoke-AvmTerraformTestSuite {
         $relPrefix = if ($target.Rel) { $target.Rel + '/' } else { '' }
         $filesProcessed += $target.Files.Count
 
-        # 1. setup.ps1 hook (optional), isolated in its own pwsh subprocess. By
-        #    convention it writes any secrets terraform needs into a '.env' file
-        #    next to the target. A failing hook fails this target soft and skips
-        #    its terraform (there is nothing safely provisioned to unwind).
         $setup = Invoke-AvmTerraformSetupHook `
             -PwshPath $pwshPath `
             -HookPath (Join-Path $targetDir (Join-Path 'tests' (Join-Path $Tier 'setup.ps1'))) `
@@ -155,8 +142,6 @@ function Invoke-AvmTerraformTestSuite {
             continue
         }
 
-        # 2. .env bridge - values written by setup.ps1 flow into every terraform
-        #    subprocess below via -EnvVars (empty hashtable when the file absent).
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $targetDir '.env')
 
         $terraformDir = Join-Path $targetDir '.terraform'

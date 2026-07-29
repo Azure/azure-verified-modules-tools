@@ -131,8 +131,6 @@ function Invoke-AvmTerraformTestE2e {
         )
     }
 
-    # A module may ship no examples (or only ignored ones). Nothing to run ->
-    # report a clean pass so callers treat "no examples" the same as "green".
     if ($exampleDirs.Count -eq 0) {
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
@@ -145,11 +143,6 @@ function Invoke-AvmTerraformTestE2e {
         }
     }
 
-    # This engine runs PowerShell hooks only. A legacy shell hook (pre.sh /
-    # post.sh) needs bash - absent on stock Windows - and would otherwise be
-    # silently ignored, so reject it fail-fast, BEFORE we provision any real
-    # infrastructure, and tell the author to port it to '.ps1'. Only runnable
-    # (non-ignored) examples are scanned; an ignored example's hooks never run.
     $shHooks = New-Object System.Collections.Generic.List[string]
     foreach ($example in $exampleDirs) {
         foreach ($shName in @('pre.sh', 'post.sh')) {
@@ -163,9 +156,6 @@ function Invoke-AvmTerraformTestE2e {
             ("The terraform e2e engine runs PowerShell hooks only; convert these shell hooks to '.ps1': {0}" -f ($shHooks -join ', ')))
     }
 
-    # Resolve the running pwsh once. Hooks execute as isolated 'pwsh -File'
-    # subprocesses so a hook's 'exit', secrets, or environment changes cannot
-    # corrupt the runner or bleed into the next example.
     $pwshPath = [Environment]::ProcessPath
     if ([string]::IsNullOrWhiteSpace($pwshPath)) {
         $pwshCmd = Get-Command -Name 'pwsh' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -178,11 +168,6 @@ function Invoke-AvmTerraformTestE2e {
         $exampleDir = $example.FullName
         $rel = ('examples/{0}' -f $example.Name)
 
-        # 1. pre.ps1 hook (optional). Runs before terraform in its own pwsh
-        #    subprocess; by convention it writes any secrets terraform needs
-        #    into a '.env' file next to the example. A failing pre-hook skips
-        #    the terraform steps (there is nothing safely provisioned to tear
-        #    down) but the post-hook still runs below.
         $preOk = $true
         $preHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'pre.ps1') -WorkingDirectory $exampleDir
         if ($null -ne $preHook -and $preHook.ExitCode -ne 0) {
@@ -192,11 +177,8 @@ function Invoke-AvmTerraformTestE2e {
         }
 
         if ($preOk) {
-            # 2. .env bridge - values written by pre.ps1 flow into every
-            #    terraform subprocess below via -EnvVars (empty when absent).
             $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $exampleDir '.env')
 
-            # 3. init against a real backend (e2e deploys real infrastructure).
             $init = Invoke-AvmProcess `
                 -FilePath $tool.Path `
                 -ArgumentList @('init', '-input=false', '-no-color') `
@@ -207,14 +189,8 @@ function Invoke-AvmTerraformTestE2e {
             if ($init.ExitCode -ne 0) {
                 $detail = if ($init.StdErr) { $init.StdErr.Trim() } elseif ($init.StdOut) { $init.StdOut.Trim() } else { '' }
                 $issues.Add((New-AvmE2eIssue -File $rel -Message ('terraform init failed (exit {0}): {1}' -f $init.ExitCode, $detail)))
-                # Nothing was initialised, so there is nothing to destroy.
             }
             else {
-                # 4. apply, retried on a transient capacity failure. Every
-                #    retry destroys first: that drops random_integer.region_index
-                #    from state so the next plan re-rolls the region, and it
-                #    avoids replacing the resource group under a name-only
-                #    dependent graph. See .DESCRIPTION for the full rationale.
                 $applyArgs = @('apply', '-auto-approve', '-input=false', '-no-color')
                 $destroyArgs = @('destroy', '-auto-approve', '-input=false', '-no-color')
 
@@ -270,7 +246,6 @@ function Invoke-AvmTerraformTestE2e {
                 }
 
                 if ($applyOk) {
-                    # 5. idempotency: a second plan must report no changes.
                     $plan = Invoke-AvmProcess `
                         -FilePath $tool.Path `
                         -ArgumentList @('plan', '-detailed-exitcode', '-input=false', '-no-color') `
@@ -288,9 +263,6 @@ function Invoke-AvmTerraformTestE2e {
                     }
                 }
 
-                # 6. destroy - always attempt once init has succeeded, even
-                #    after a failed apply or an aborted retry, so a broken run
-                #    does not leak real Azure resources.
                 $destroy = Invoke-AvmProcess `
                     -FilePath $tool.Path `
                     -ArgumentList @('destroy', '-auto-approve', '-input=false', '-no-color') `
@@ -305,9 +277,6 @@ function Invoke-AvmTerraformTestE2e {
             }
         }
 
-        # 7. post.ps1 hook (optional). Always runs - after a pre-hook failure,
-        #    an init failure, or a clean pass - so teardown/cleanup happens on
-        #    every path.
         $postHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'post.ps1') -WorkingDirectory $exampleDir
         if ($null -ne $postHook -and $postHook.ExitCode -ne 0) {
             $detail = if ($postHook.StdErr) { $postHook.StdErr.Trim() } elseif ($postHook.StdOut) { $postHook.StdOut.Trim() } else { '' }
