@@ -10,6 +10,14 @@
 # an AVM-pinned tool), there is no stub launcher / PATH shim to install
 # here - the offline local-source path is fully deterministic.
 
+# Windows 8.3 short components survive Resolve-Path but are expanded by
+# Get-ChildItem. Only a filesystem that produces that length delta can
+# reproduce the relative-key regression guarded below.
+BeforeDiscovery {
+    $tempRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+    $script:NoShortPathDelta = ((Resolve-Path -LiteralPath $tempRoot).Path.Length -eq (Get-Item -LiteralPath $tempRoot -Force).FullName.Length)
+}
+
 BeforeAll {
     $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     $script:moduleManifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
@@ -86,17 +94,11 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
         $onDisk | Should -Not -Match 'terraform'
     }
 
-    It 'resolves managed-file relative paths from the enumerated children, not from string arithmetic' {
-        # Windows 8.3 short components survive Resolve-Path but are expanded by
-        # Get-ChildItem, so any length-based prefix strip corrupts every key.
-        $probe = Join-Path $env:TEMP ('avm-sync-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    It 'resolves managed-file relative paths from the enumerated children, not from string arithmetic' -Skip:$script:NoShortPathDelta {
+        $tempRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+        $probe = Join-Path $tempRoot ('avm-sync-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
         $null = New-Item -ItemType Directory -Path $probe -Force
         try {
-            if ((Resolve-Path -LiteralPath $probe).Path.Length -eq (Get-Item -LiteralPath $probe -Force).FullName.Length) {
-                Set-ItResult -Skipped -Because 'this filesystem does not produce a short-path length delta'
-                return
-            }
-
             $moduleDir = Join-Path $probe 'terraform-azurerm-avm-res-shortpath'
             $root = Join-Path $probe 'gov' 'root'
             $null = New-Item -ItemType Directory -Path $moduleDir -Force
