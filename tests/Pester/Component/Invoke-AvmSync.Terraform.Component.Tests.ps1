@@ -85,4 +85,36 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
         $onDisk = Get-Content -Raw -LiteralPath (Join-Path $fx.ModuleDir '.gitignore')
         $onDisk | Should -Not -Match 'terraform'
     }
+
+    It 'resolves managed-file relative paths from the enumerated children, not from string arithmetic' {
+        # Windows 8.3 short components survive Resolve-Path but are expanded by
+        # Get-ChildItem, so any length-based prefix strip corrupts every key.
+        $probe = Join-Path $env:TEMP ('avm-sync-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $null = New-Item -ItemType Directory -Path $probe -Force
+        try {
+            if ((Resolve-Path -LiteralPath $probe).Path.Length -eq (Get-Item -LiteralPath $probe -Force).FullName.Length) {
+                Set-ItResult -Skipped -Because 'this filesystem does not produce a short-path length delta'
+                return
+            }
+
+            $moduleDir = Join-Path $probe 'terraform-azurerm-avm-res-shortpath'
+            $root = Join-Path $probe 'gov' 'root'
+            $null = New-Item -ItemType Directory -Path $moduleDir -Force
+            $null = New-Item -ItemType Directory -Path (Join-Path $moduleDir 'tests') -Force
+            $null = New-Item -ItemType Directory -Path (Join-Path $root 'nested') -Force
+            Set-Content -LiteralPath (Join-Path $moduleDir 'main.tf') -Value "terraform {}`n" -NoNewline
+            Set-Content -LiteralPath (Join-Path $root '.gitignore') -Value "*.tfstate`n" -NoNewline
+            Set-Content -LiteralPath (Join-Path $root 'nested' 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+            $result = Invoke-AvmSync -Path $moduleDir -Ecosystem terraform -ManagedFilesLocalPath (Join-Path $probe 'gov')
+
+            $result.PSObject.Properties['Status'].Value   | Should -Be 'pass'
+            @($result.PSObject.Properties['Added'].Value) | Should -Be @('.gitignore', 'nested/SECURITY.md')
+            Test-Path (Join-Path $moduleDir '.gitignore')                | Should -BeTrue
+            Test-Path (Join-Path $moduleDir 'nested' 'SECURITY.md')      | Should -BeTrue
+        }
+        finally {
+            Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

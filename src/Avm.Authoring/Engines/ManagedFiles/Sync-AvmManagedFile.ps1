@@ -558,13 +558,14 @@ function Add-AvmManagedFilesFromDir {
         return
     }
 
-    $baseDirAbsolute = (Resolve-Path -LiteralPath $BaseDir).Path
-    $prefixLength = $baseDirAbsolute.Length + 1
+    # Get-Item (not Resolve-Path) so the prefix matches Get-ChildItem FullName:
+    # Resolve-Path preserves 8.3 short components, Get-ChildItem expands them.
+    $baseDirAbsolute = (Get-Item -LiteralPath $BaseDir -Force).FullName
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
     Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | ForEach-Object {
-        $relativePath = $_.FullName.Substring($prefixLength) -replace '\\', '/'
+        $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
         $absoluteSource = $_.FullName -replace '\\', '/'
         $mode = $modeMap[$relativePath]
         if (-not $mode) { $mode = '100644' }
