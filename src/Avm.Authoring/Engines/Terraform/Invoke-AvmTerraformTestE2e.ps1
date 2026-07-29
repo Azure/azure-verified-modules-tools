@@ -37,11 +37,29 @@ function Invoke-AvmTerraformTestE2e {
                c. terraform init -input=false -no-color
                   (a REAL backend init - e2e provisions real resources, so this
                   is NOT the '-backend=false' init the test tiers use).
-               d. terraform apply -auto-approve -input=false -no-color
+               d. terraform apply -auto-approve -input=false -no-color, with
+                  up to -MaxRetry retries on a transient failure. e2e deploys
+                  real infrastructure, so an apply fails intermittently on
+                  region/SKU capacity rather than on a module defect. When the
+                  combined apply output matches the capacity/quota patterns in
+                  Test-AvmTerraformTransientError, the example is destroyed and
+                  redeployed. Destroying first is required, not cosmetic:
+                  example names come from module.naming and do not depend on
+                  the region, so re-planning in place would replace the
+                  resource group under the same name while name-only dependents
+                  (subnets, for example) are planned as unchanged - Azure
+                  cascade-deletes those and the apply fails with 'Root object
+                  was present, but now absent'. Destroying also drops
+                  random_integer.region_index from state, so the next plan
+                  re-rolls the region by itself. A retry that fails to destroy
+                  aborts rather than deploying over partial state. Each retry
+                  records a warning-level Issue, so a recovered example stays
+                  green but the flake is still visible.
                e. idempotency: terraform plan -detailed-exitcode -input=false
                   -no-color. Exit 2 means the second plan still reports pending
                   changes (the module is not idempotent) and is recorded as a
-                  failure.
+                  failure. Never retried: retrying would hide a module that is
+                  genuinely not idempotent.
                f. terraform destroy -auto-approve -input=false -no-color. Run
                   whenever init succeeded - including after a failed apply - so
                   a broken run does not leak real Azure resources.
@@ -52,7 +70,9 @@ function Invoke-AvmTerraformTestE2e {
 
         Every terraform or hook failure is captured as an Issue; the aggregate
         Status is 'fail' if any example produced an error-level Issue, otherwise
-        'pass'. FilesProcessed counts the examples that were processed.
+        'pass'. Warning-level Issues (a recovered transient apply, for example)
+        are reported without failing the run. FilesProcessed counts the examples
+        that were processed.
 
         e2e provisions and destroys real cloud resources, so it needs valid
         credentials at runtime (an authenticated 'az' session or ARM_*
@@ -66,6 +86,11 @@ function Invoke-AvmTerraformTestE2e {
     .PARAMETER AllowPathFallback
         Pass through to Resolve-AvmTool.
 
+    .PARAMETER MaxRetry
+        How many times to retry an example whose 'terraform apply' failed with
+        a transient capacity/quota error. Defaults to 2 (up to three attempts
+        in total). 0 disables retries.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, Issues.
@@ -76,7 +101,10 @@ function Invoke-AvmTerraformTestE2e {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [ValidateRange(0, 10)]
+        [int] $MaxRetry = 2
     )
 
     Set-StrictMode -Version 3.0
@@ -182,19 +210,66 @@ function Invoke-AvmTerraformTestE2e {
                 # Nothing was initialised, so there is nothing to destroy.
             }
             else {
-                # 4. apply.
-                $apply = Invoke-AvmProcess `
-                    -FilePath $tool.Path `
-                    -ArgumentList @('apply', '-auto-approve', '-input=false', '-no-color') `
-                    -WorkingDirectory $exampleDir `
-                    -EnvVars $envVars `
-                    -IgnoreExitCode
+                # 4. apply, retried on a transient capacity failure. Every
+                #    retry destroys first: that drops random_integer.region_index
+                #    from state so the next plan re-rolls the region, and it
+                #    avoids replacing the resource group under a name-only
+                #    dependent graph. See .DESCRIPTION for the full rationale.
+                $applyArgs = @('apply', '-auto-approve', '-input=false', '-no-color')
+                $destroyArgs = @('destroy', '-auto-approve', '-input=false', '-no-color')
 
-                if ($apply.ExitCode -ne 0) {
-                    $detail = if ($apply.StdErr) { $apply.StdErr.Trim() } elseif ($apply.StdOut) { $apply.StdOut.Trim() } else { '' }
-                    $issues.Add((New-AvmE2eIssue -File $rel -Message ('terraform apply failed (exit {0}): {1}' -f $apply.ExitCode, $detail)))
+                $attempt = 0
+                $applyOk = $false
+                $retryAborted = $false
+                $apply = $null
+
+                while ($true) {
+                    $apply = Invoke-AvmProcess `
+                        -FilePath $tool.Path `
+                        -ArgumentList $applyArgs `
+                        -WorkingDirectory $exampleDir `
+                        -EnvVars $envVars `
+                        -IgnoreExitCode
+
+                    if ($apply.ExitCode -eq 0) {
+                        $applyOk = $true
+                        break
+                    }
+
+                    $combined = [string]$apply.StdOut + "`n" + [string]$apply.StdErr
+                    if ($attempt -ge $MaxRetry -or -not (Test-AvmTerraformTransientError -Output $combined)) {
+                        break
+                    }
+
+                    $attempt++
+
+                    $retryDestroy = Invoke-AvmProcess `
+                        -FilePath $tool.Path `
+                        -ArgumentList $destroyArgs `
+                        -WorkingDirectory $exampleDir `
+                        -EnvVars $envVars `
+                        -IgnoreExitCode
+
+                    if ($retryDestroy.ExitCode -ne 0) {
+                        $detail = if ($retryDestroy.StdErr) { $retryDestroy.StdErr.Trim() } elseif ($retryDestroy.StdOut) { $retryDestroy.StdOut.Trim() } else { '' }
+                        $message = 'retry {0} aborted: terraform destroy failed (exit {1}), refusing to redeploy over partial state: {2}' -f $attempt, $retryDestroy.ExitCode, $detail
+                        $issues.Add((New-AvmE2eIssue -File $rel -Message $message))
+                        $retryAborted = $true
+                        break
+                    }
+
+                    $message = 'terraform apply hit a transient capacity error (exit {0}); destroyed and retrying ({1} of {2}).' -f $apply.ExitCode, $attempt, $MaxRetry
+                    $issues.Add((New-AvmE2eIssue -File $rel -Severity 'warning' -Message $message))
                 }
-                else {
+
+                if (-not $applyOk -and -not $retryAborted) {
+                    $detail = if ($apply.StdErr) { $apply.StdErr.Trim() } elseif ($apply.StdOut) { $apply.StdOut.Trim() } else { '' }
+                    $exhausted = if ($attempt -gt 0) { (' after {0} retries' -f $attempt) } else { '' }
+                    $message = 'terraform apply failed (exit {0}){1}: {2}' -f $apply.ExitCode, $exhausted, $detail
+                    $issues.Add((New-AvmE2eIssue -File $rel -Message $message))
+                }
+
+                if ($applyOk) {
                     # 5. idempotency: a second plan must report no changes.
                     $plan = Invoke-AvmProcess `
                         -FilePath $tool.Path `
@@ -214,8 +289,8 @@ function Invoke-AvmTerraformTestE2e {
                 }
 
                 # 6. destroy - always attempt once init has succeeded, even
-                #    after a failed apply, so a broken run does not leak real
-                #    Azure resources.
+                #    after a failed apply or an aborted retry, so a broken run
+                #    does not leak real Azure resources.
                 $destroy = Invoke-AvmProcess `
                     -FilePath $tool.Path `
                     -ArgumentList @('destroy', '-auto-approve', '-input=false', '-no-color') `
@@ -240,7 +315,7 @@ function Invoke-AvmTerraformTestE2e {
         }
     }
 
-    $status = if ($issues.Count -gt 0) { 'fail' } else { 'pass' }
+    $status = if ($issues | Where-Object { $_.Severity -eq 'error' }) { 'fail' } else { 'pass' }
 
     return [pscustomobject][ordered]@{
         Engine         = 'terraform'
@@ -257,6 +332,11 @@ function New-AvmE2eIssue {
     <#
     .SYNOPSIS
         Build a shared-shape Issue object for the e2e engine.
+
+    .DESCRIPTION
+        Defaults to 'error' severity. Pass -Severity 'warning' for something
+        worth reporting that must not fail the run, such as an apply that was
+        recovered by a retry.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -268,17 +348,80 @@ function New-AvmE2eIssue {
         [string] $File,
 
         [Parameter(Mandatory)]
-        [string] $Message
+        [string] $Message,
+
+        [ValidateSet('error', 'warning')]
+        [string] $Severity = 'error'
     )
 
     [pscustomobject][ordered]@{
         File     = $File
         Line     = 0
         Column   = 0
-        Severity = 'error'
+        Severity = $Severity
         Code     = ''
         Message  = $Message
     }
+}
+
+function Test-AvmTerraformTransientError {
+    <#
+    .SYNOPSIS
+        Decide whether terraform output describes a transient capacity failure
+        that is worth retrying.
+
+    .DESCRIPTION
+        e2e deploys real infrastructure, so an apply fails intermittently on
+        region and SKU capacity rather than on a module defect. The patterns
+        below are matched case-insensitively against terraform's combined
+        stdout+stderr and are deliberately anchored to capacity and quota
+        wording.
+
+        Broad Azure codes are excluded on purpose. 'OperationNotAllowed', for
+        example, covers both quota exhaustion and 'cannot delete resource while
+        nested resources exist'; only the former should ever be retried, and
+        matching the code would mask the latter.
+
+        $env:AVM_E2E_RETRY_PATTERN adds one further regex to the list. It is
+        additive, never a replacement, so a module hitting a capacity error the
+        built-in list does not know about can opt in without weakening the
+        defaults.
+
+    .PARAMETER Output
+        Combined terraform output to classify.
+
+    .OUTPUTS
+        System.Boolean
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Output
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Output)) {
+        return $false
+    }
+
+    $patterns = @(
+        'SkuNotAvailable'
+        'Capacity Restrictions'
+        'is currently not available in location'
+        'sku_selector found no deployable VM size'
+        'Allocation ?Failed'
+        'results in exceeding approved'
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
+        $patterns += $env:AVM_E2E_RETRY_PATTERN
+    }
+
+    return [regex]::IsMatch(
+        $Output,
+        ($patterns -join '|'),
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 }
 
 function Invoke-AvmE2eHook {

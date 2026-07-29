@@ -112,6 +112,10 @@ the `Avm.Authoring` verb you call instead.
 > `tests/integration/*.tftest.hcl`, and `avm test e2e` deploys each
 > `examples/*` directory. Each tier also fans out over `modules/*`
 > submodules and runs an optional isolated `setup.ps1` hook per target.
+> An `avm test e2e` apply that fails on region or SKU capacity is
+> destroyed and retried (up to `-MaxRetry`, default 2) rather than
+> failing the run; add extra retryable patterns with
+> `$env:AVM_E2E_RETRY_PATTERN`.
 
 ### From `./avm <command>` / `./avm.ps1 <command>`
 
@@ -210,7 +214,7 @@ exactly this status today.
 | `avm test`            | `terraform validate`    | `init -backend=false -upgrade=false -input=false -no-color` then `validate -no-color -json` from `cwd=<root>`                |   ✅   | Bare `avm test` is validate-only and is the step wired into `pre-commit` / `pr-check`.                                                            |
 | `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess.                  |
 | `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented).                                                                          |
-| `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → init → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. `setup.sh` / `teardown.sh` hooks are rejected.                                            |
+| `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → init → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `setup.sh` / `teardown.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `conftest`              | `test --policy <APRL> --policy <AVMSEC> [--policy <exceptions>...] --output json --parser hcl2 .` from `cwd=<root>`          |   ✅   | Needs `avm-policy-aprl` + `avm-policy-avmsec` declared in `.avm/config.json` (see [§ 4](#4-pinned-asset-config)). Otherwise reports `skipped`.   |
 | `avm transform`       | `mapotf`                | _engine stub, `AvmConfigurationException` → `skipped`_                                                                       |   ❌   | Blocked: `Azure/mapotf` ships no GitHub binary releases; see [§ 6](#6-whats-not-migrated-yet).                                                   |
