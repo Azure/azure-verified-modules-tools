@@ -75,7 +75,7 @@ function Invoke-AvmSync {
         Direct local path to the config folder. Skips the config repo fetch.
 
     .PARAMETER RepoId
-        Repository id used to look up overlay/exclusions in config.json.
+        Repository id used to look up overlays/exclusions in config.json.
         Defaults to the leaf of the module root with a leading
         'terraform-azurerm-' / 'terraform-azapi-' prefix stripped.
 

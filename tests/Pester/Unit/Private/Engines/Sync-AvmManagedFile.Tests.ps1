@@ -170,6 +170,50 @@ Describe 'Sync-AvmManagedFile' {
         Test-Path (Join-Path $script:moduleDir 'common.tf') | Should -BeTrue
     }
 
+    It 'stacks multiple overlays in declaration order, last one winning' {
+        $canary = Join-Path $script:base 'canary'
+        $tooling = Join-Path $script:base 'canary-tooling'
+        New-Item -ItemType Directory -Path $canary -Force | Out-Null
+        New-Item -ItemType Directory -Path $tooling -Force | Out-Null
+
+        Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "root-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'pr-check.yml') -Value "root-check`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'common.tf') -Value "# common`n" -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $canary '.gitignore') -Value "canary-version`n" -NoNewline
+        # Placeholder that keeps an otherwise-empty overlay tracked in git.
+        Set-Content -LiteralPath (Join-Path $canary '.gitkeep') -Value '' -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $tooling '.gitignore') -Value "tooling-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $tooling 'pr-check.yml') -Value "tooling-check`n" -NoNewline
+
+        $cfg = Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $cfg -Force | Out-Null
+        $config = @{ repositoryGroups = @(
+                @{ name = 'canary'; managedFilesAdditional = 'canary'; repositories = @('avm-res-foo') }
+                @{ name = 'canary-tooling'; managedFilesAdditional = 'canary-tooling'; repositories = @('avm-res-foo') }
+            ) } | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath (Join-Path $cfg 'config.json') -Value $config -NoNewline
+        Set-Content -LiteralPath (Join-Path $cfg 'deprecated-files.json') -Value '[]' -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -HaveCount 3
+
+        # Last overlay wins over both the earlier overlay and root.
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')).Trim() | Should -Be 'tooling-version'
+        # An overlay-only override of a root file wins.
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'pr-check.yml')).Trim() | Should -Be 'tooling-check'
+        # Root-only file still lands.
+        Test-Path (Join-Path $script:moduleDir 'common.tf') | Should -BeTrue
+        # '.gitkeep' placeholders are never synced into the target repo.
+        Test-Path (Join-Path $script:moduleDir '.gitkeep') | Should -BeFalse
+    }
+
     It 'removes deprecated files listed in deprecated-files.json' {
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "*.tfstate`n" -NoNewline
 

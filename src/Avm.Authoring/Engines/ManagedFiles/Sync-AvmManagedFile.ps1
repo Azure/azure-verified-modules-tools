@@ -25,9 +25,10 @@ function Sync-AvmManagedFile {
         is what the offline tests use. Otherwise the source repo is shallow
         cloned (or fetched, if already cached) into $env:AVM_HOME/cache.
 
-        The managed-file map is built from '<base>/root' plus an optional
-        overlay ('<base>/<overlay>') where overlay files win, minus any
-        excluded paths. Overlay and exclusions are resolved from the config
+        The managed-file map is built from '<base>/root' plus zero or more
+        overlays ('<base>/<overlay>') stacked in declaration order, where later
+        sources win, minus any excluded paths. Overlays and exclusions are
+        resolved from the config
         folder's 'config.json' by matching the repository id against
         'repositoryGroups'. 'deprecated-files.json' lists paths that must be
         removed from every target repo; deprecated removals win over managed
@@ -91,7 +92,7 @@ function Sync-AvmManagedFile {
         fetched.
 
     .PARAMETER RepoId
-        The repository id used to look up overlay/exclusions in config.json.
+        The repository id used to look up overlays/exclusions in config.json.
         Defaults to the leaf of $Context.Root with a leading
         'terraform-azurerm-' / 'terraform-azapi-' prefix stripped.
 
@@ -152,7 +153,7 @@ function Sync-AvmManagedFile {
 
     $source = Resolve-AvmManagedFilesSource -Settings $settings -GitPath $gitPath
 
-    $overlay = ''
+    $overlays = @()
     $excluded = @()
     $deprecated = @()
     if ($source.ConfigDir -and (Test-Path -LiteralPath $source.ConfigDir -PathType Container)) {
@@ -160,7 +161,7 @@ function Sync-AvmManagedFile {
         if (Test-Path -LiteralPath $configFile -PathType Leaf) {
             $repositoryConfig = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
             $resolved = Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $settings.RepoId
-            $overlay = $resolved.ManagedFilesAdditional
+            $overlays = $resolved.ManagedFilesAdditional
             $excluded = $resolved.ExcludedManagedFiles
         }
         $deprecatedFile = Join-Path $source.ConfigDir 'deprecated-files.json'
@@ -171,7 +172,7 @@ function Sync-AvmManagedFile {
 
     $map = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
-        -Overlay $overlay `
+        -Overlays $overlays `
         -Excluded $excluded `
         -RepoId $settings.RepoId `
         -GitPath $gitPath
@@ -537,7 +538,7 @@ function Add-AvmManagedFilesFromDir {
     .SYNOPSIS
         Add every file under a base directory to a managed-files map keyed by
         forward-slash relative path, capturing the source path and git index
-        mode. Dotfiles are included.
+        mode. Dotfiles are included; '.gitkeep' placeholders are not.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -564,7 +565,14 @@ function Add-AvmManagedFilesFromDir {
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
-    Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | ForEach-Object {
+    Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
+        # '.gitkeep' files exist only to keep otherwise-empty overlay
+        # directories tracked in git. They are placeholders, never real managed
+        # content, so they must not be synced into target repos. The upstream
+        # avm-terraform-governance sync applies the same filter; omitting it
+        # here would make every drift check demand a file the sync never writes.
+        $_.Name -ne '.gitkeep'
+    } | ForEach-Object {
         $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
         $absoluteSource = $_.FullName -replace '\\', '/'
         $mode = $modeMap[$relativePath]
@@ -579,8 +587,14 @@ function Add-AvmManagedFilesFromDir {
 function Build-AvmManagedFilesMap {
     <#
     .SYNOPSIS
-        Build the managed-files map from '<base>/root' plus an optional overlay
-        (overlay wins), minus any excluded paths.
+        Build the managed-files map from '<base>/root' plus zero or more
+        overlays, minus any excluded paths.
+
+    .DESCRIPTION
+        Overlays are applied in the order supplied, after 'root'. A file
+        present in more than one source is taken from the last source that
+        declares it, so later overlays win over earlier ones and every overlay
+        wins over 'root'.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -591,7 +605,7 @@ function Build-AvmManagedFilesMap {
         [Parameter(Mandatory)]
         [string] $BaseDir,
 
-        [string] $Overlay = '',
+        [string[]] $Overlays = @(),
 
         [string[]] $Excluded = @(),
 
@@ -601,15 +615,12 @@ function Build-AvmManagedFilesMap {
     )
 
     $rootDir = Join-Path $BaseDir 'root'
-    $overlayDir = ''
-    if ($Overlay -ne '') {
-        $overlayDir = Join-Path $BaseDir $Overlay
-    }
 
     $map = @{}
     Add-AvmManagedFilesFromDir -BaseDir $rootDir -Map $map -GitPath $GitPath
-    if ($overlayDir -ne '') {
-        Add-AvmManagedFilesFromDir -BaseDir $overlayDir -Map $map -GitPath $GitPath
+    foreach ($overlay in $Overlays) {
+        if ([string]::IsNullOrWhiteSpace($overlay)) { continue }
+        Add-AvmManagedFilesFromDir -BaseDir (Join-Path $BaseDir $overlay) -Map $map -GitPath $GitPath
     }
 
     foreach ($excludedPath in $Excluded) {
@@ -619,16 +630,22 @@ function Build-AvmManagedFilesMap {
         }
     }
 
-    Write-Verbose "Resolved $($map.Count) managed file(s) for repository '$RepoId' (overlay='$Overlay', exclusions=$($Excluded.Count))."
+    Write-Verbose "Resolved $($map.Count) managed file(s) for repository '$RepoId' (overlays='$($Overlays -join ', ')', exclusions=$($Excluded.Count))."
     return $map
 }
 
 function Resolve-AvmManagedFilesRepositorySetting {
     <#
     .SYNOPSIS
-        Resolve the per-repository managed-files overlay and exclusions from a
+        Resolve the per-repository managed-files overlays and exclusions from a
         parsed config.json by matching the repository id against
         'repositoryGroups'.
+
+    .DESCRIPTION
+        A repository may belong to several groups that each declare a
+        'managedFilesAdditional' overlay. All of them apply, stacked in the
+        order the groups are declared in config.json, so a later group's files
+        win over an earlier one's.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -648,18 +665,13 @@ function Resolve-AvmManagedFilesRepositorySetting {
         $repositoryGroups = @($RepositoryConfig.repositoryGroups | Where-Object { $_.repositories -contains $RepoId })
     }
 
-    $managedFilesAdditionalValues = @()
+    $managedFilesAdditional = @()
     foreach ($repositoryGroup in $repositoryGroups) {
         if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesAdditional' -and $repositoryGroup.managedFilesAdditional) {
-            $managedFilesAdditionalValues += $repositoryGroup.managedFilesAdditional
+            $managedFilesAdditional += $repositoryGroup.managedFilesAdditional
         }
     }
-    $managedFilesAdditionalValues = @($managedFilesAdditionalValues | Select-Object -Unique)
-    if ($managedFilesAdditionalValues.Count -gt 1) {
-        throw [System.InvalidOperationException]::new(
-            "Repository '$RepoId' belongs to multiple repository groups that declare conflicting 'managedFilesAdditional' overlay sets: $($managedFilesAdditionalValues -join ', '). At most one is allowed.")
-    }
-    $managedFilesAdditional = if ($managedFilesAdditionalValues.Count -eq 1) { $managedFilesAdditionalValues[0] } else { '' }
+    $managedFilesAdditional = @($managedFilesAdditional | Select-Object -Unique)
 
     $excludedManagedFiles = @()
     foreach ($repositoryGroup in $repositoryGroups) {
