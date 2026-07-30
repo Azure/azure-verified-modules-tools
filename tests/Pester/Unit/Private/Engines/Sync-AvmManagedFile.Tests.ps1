@@ -248,3 +248,97 @@ Describe 'Sync-AvmManagedFile' {
         $result.Issues         | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
+    BeforeAll {
+        # Round-trip through JSON so the shape matches production exactly: the
+        # function inspects PSObject.Properties, which behaves differently on a
+        # raw hashtable than on the PSCustomObject ConvertFrom-Json produces.
+        function script:New-TestConfig {
+            param([object[]] $Groups)
+            return (@{ repositoryGroups = $Groups } | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+        }
+
+        function script:Resolve-Overlays {
+            param([object] $Config, [string] $RepoId)
+            $settings = InModuleScope 'Avm.Authoring' -Parameters @{ C = $Config; R = $RepoId } {
+                param($C, $R)
+                Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $C -RepoId $R
+            }
+            return @($settings.ManagedFilesAdditional)
+        }
+    }
+
+    It 'falls back to declaration order when no managedFilesOrder is set' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'lets an explicit managedFilesOrder override declaration order' {
+        # 'alpha' is declared FIRST but carries a higher order, so it must sort
+        # last and therefore win. This is the whole point of the field.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; managedFilesOrder = 99; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; managedFilesOrder = 1; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta', 'alpha')
+    }
+
+    It 'treats a missing managedFilesOrder as 0' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'ordered'; managedFilesAdditional = 'alpha'; managedFilesOrder = 5; repositories = @('repo-x') }
+            @{ name = 'unordered'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta', 'alpha')
+    }
+
+    It 'breaks ties on declaration order' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; managedFilesOrder = 10; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; managedFilesOrder = 10; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'ignores groups the repository does not belong to' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'other'; managedFilesAdditional = 'alpha'; managedFilesOrder = 1; repositories = @('repo-y') }
+            @{ name = 'mine'; managedFilesAdditional = 'beta'; managedFilesOrder = 2; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta')
+    }
+
+    It 'counts declaration index across groups that declare no overlay' {
+        # The middle group contributes no overlay but must still advance the
+        # tie-break index, so 'alpha' and 'beta' stay in declaration order.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; repositories = @('repo-x') }
+            @{ name = 'tier'; repositories = @('repo-x') }
+            @{ name = 'third'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'pins the canary cohort to canary then canary-tooling regardless of declaration order' {
+        # Mirrors the real config.json, but with the groups declared in the
+        # WRONG order on purpose. managedFilesOrder must still put
+        # 'canary-tooling' last so its pr-check.yml / avm shims win.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'canary-tooling'; managedFilesAdditional = 'canary-tooling'; managedFilesOrder = 20; repositories = @('avm-ptn-example-repo') }
+            @{ name = 'canary'; managedFilesAdditional = 'canary'; managedFilesOrder = 10; repositories = @('avm-ptn-example-repo') }
+            @{ name = 'azure-verified-modules-tier-1'; repositories = @('avm-ptn-example-repo') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'avm-ptn-example-repo' |
+            Should -Be @('canary', 'canary-tooling')
+    }
+}

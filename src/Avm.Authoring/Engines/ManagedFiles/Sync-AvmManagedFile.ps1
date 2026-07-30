@@ -643,9 +643,20 @@ function Resolve-AvmManagedFilesRepositorySetting {
 
     .DESCRIPTION
         A repository may belong to several groups that each declare a
-        'managedFilesAdditional' overlay. All of them apply, stacked in the
-        order the groups are declared in config.json, so a later group's files
-        win over an earlier one's.
+        'managedFilesAdditional' overlay. All of them apply, stacked so that a
+        later overlay's files win over an earlier one's.
+
+        Stacking order is explicit: each group may carry an integer
+        'managedFilesOrder' (default 0). Overlays sort by that value ascending,
+        with ties broken by declaration order in config.json. A lower order is
+        applied earlier and therefore *loses* to a higher order. Relying on
+        declaration order alone was fragile - reordering config.json for tidiness
+        silently changed precedence.
+
+        This ordering must stay identical to Get-RepositorySettings in
+        tf-repo-mgmt/scripts/lib/RepositoryConfig.ps1 in avm-terraform-governance,
+        or 'avm pr-check' drift detection will disagree with what the sync
+        pipeline actually writes.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -665,13 +676,31 @@ function Resolve-AvmManagedFilesRepositorySetting {
         $repositoryGroups = @($RepositoryConfig.repositoryGroups | Where-Object { $_.repositories -contains $RepoId })
     }
 
-    $managedFilesAdditional = @()
+    $overlayEntries = @()
+    $declarationIndex = 0
     foreach ($repositoryGroup in $repositoryGroups) {
         if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesAdditional' -and $repositoryGroup.managedFilesAdditional) {
-            $managedFilesAdditional += $repositoryGroup.managedFilesAdditional
+            $order = 0
+            if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesOrder' -and $null -ne $repositoryGroup.managedFilesOrder) {
+                $order = [int] $repositoryGroup.managedFilesOrder
+            }
+            foreach ($overlay in @($repositoryGroup.managedFilesAdditional)) {
+                $overlayEntries += [pscustomobject]@{
+                    Overlay = $overlay
+                    Order   = $order
+                    Index   = $declarationIndex
+                }
+            }
         }
+        $declarationIndex++
     }
-    $managedFilesAdditional = @($managedFilesAdditional | Select-Object -Unique)
+
+    $managedFilesAdditional = @(
+        $overlayEntries |
+            Sort-Object -Property Order, Index |
+            Select-Object -ExpandProperty Overlay |
+            Select-Object -Unique
+    )
 
     $excludedManagedFiles = @()
     foreach ($repositoryGroup in $repositoryGroups) {
