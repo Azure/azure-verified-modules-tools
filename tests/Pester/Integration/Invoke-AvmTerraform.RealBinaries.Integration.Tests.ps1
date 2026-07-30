@@ -81,6 +81,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         # Preserve ambient env so we can restore it in AfterAll.
         $script:OrigAvmHome = $env:AVM_HOME
         $script:OrigPluginCache = $env:TF_PLUGIN_CACHE_DIR
+        $script:OrigManagedFilesLocal = $env:AVM_MANAGED_FILES_LOCAL_PATH
 
         $script:Offline = ((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1'))
         $script:SkipReason = $null
@@ -183,6 +184,8 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         else { $env:AVM_HOME = $script:OrigAvmHome }
         if ($null -eq $script:OrigPluginCache) { Remove-Item Env:\TF_PLUGIN_CACHE_DIR -ErrorAction SilentlyContinue }
         else { $env:TF_PLUGIN_CACHE_DIR = $script:OrigPluginCache }
+        if ($null -eq $script:OrigManagedFilesLocal) { Remove-Item Env:\AVM_MANAGED_FILES_LOCAL_PATH -ErrorAction SilentlyContinue }
+        else { $env:AVM_MANAGED_FILES_LOCAL_PATH = $script:OrigManagedFilesLocal }
 
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
@@ -204,6 +207,14 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
                 $dest = Join-Path $script:WorkRoot $name
                 Copy-Item -LiteralPath $script:OriginalModule -Destination $dest -Recurse -Force
                 $script:StagedModule = $dest
+
+                # Both chains run `sync` first. Point it at a local governance
+                # source seeded from this fixture so the chain never reaches the
+                # network and the module is already in sync (no drift).
+                $managedRoot = Join-Path (Join-Path $script:WorkRoot "$name-managed-files") 'root'
+                $null = New-Item -ItemType Directory -Path $managedRoot -Force
+                Copy-Item -LiteralPath (Join-Path $script:OriginalModule '.gitignore') -Destination $managedRoot -Force
+                $env:AVM_MANAGED_FILES_LOCAL_PATH = Split-Path -Parent $managedRoot
             }
         }
 
@@ -218,7 +229,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $result = Invoke-AvmPreCommit -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'check convention,transform,format,docs'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs'
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
             }
@@ -236,7 +247,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'format,transform,lint,check policy,check convention,test,docs'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
 
             foreach ($step in $result.Steps) {
                 if ($step.Step -eq 'check policy') {

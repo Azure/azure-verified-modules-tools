@@ -1,0 +1,594 @@
+# Reusable CI workflow for Azure Verified Modules (AVM) Terraform module repos.
+#
+# This is the PowerShell-Gallery replacement for the governance-managed
+# `Azure/avm-terraform-governance` `managed-pr-check.yml` template. Instead of
+# running the toolchain inside a Docker image via make + porch, it installs the
+# `Avm.Authoring` module from the PowerShell Gallery and drives the same test
+# tiers through the `avm` CLI. The runner is assumed to have PowerShell 7.4+
+# available (the `ubuntu-latest` image ships it).
+#
+# Consuming module repos call it like:
+#
+#   jobs:
+#     ci:
+#       uses: Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@<ref>
+#       permissions:
+#         id-token: write
+#         contents: read
+#       secrets: inherit
+#
+# `secrets: inherit` is REQUIRED: the "Prepare test environment" step fans the
+# full secret + variable sets into $GITHUB_ENV so terraform and example hooks
+# inherit them. This replaces the governance cred-prep script's curated
+# `AVM_*` / `TF_VAR_*` subset forwarding - and makes the old `AVM_BARE_` prefix
+# escape hatch redundant, so it is intentionally dropped here.
+#
+# Divergences from the governance template (tracked as follow-ups):
+#   * e2e runs as a single job; the engine loops every runnable example
+#     internally and has no per-example targeting, so the governance per-example
+#     matrix + round-robin subscription fan-out is not reproduced.
+#   * There is no global setup/teardown stage; the module implements per-example
+#     pre.ps1 / post.ps1 hooks only.
+#   * The tiers emit structured envelopes to the log rather than JUnit XML, so
+#     there is no separate test-report publishing job.
+
+name: AVM Terraform Module
+
+on:
+  workflow_call:
+    inputs:
+      avm-authoring-version:
+        description: >-
+          Optional version (or version range) of the Avm.Authoring module to
+          install from the PowerShell Gallery. Defaults to the latest published
+          version.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  # Exposed to the "Prepare test environment" step, which fans these out into
+  # $GITHUB_ENV. Requires the caller to invoke this workflow with
+  # `secrets: inherit`.
+  SECRETS_CONTEXT: ${{ toJson(secrets) }}
+  VARS_CONTEXT: ${{ toJson(vars) }}
+  # terraform automation defaults (parity with the governance template).
+  ARM_USE_OIDC: 'true'
+  TF_IN_AUTOMATION: '1'
+  TF_VAR_enable_telemetry: 'false'
+  FORCE_COLOR: '1'
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  subscriptions:
+    name: Select test subscription
+    if: github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    environment: no-approval
+    outputs:
+      subscriptionId: ${{ steps.pick.outputs.subscriptionId }}
+      subscriptionName: ${{ steps.pick.outputs.subscriptionName }}
+    steps:
+      - name: Shuffle and select a test subscription
+        id: pick
+        shell: pwsh
+        env:
+          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $raw = $env:TEST_SUBSCRIPTION_IDS
+          if (-not [string]::IsNullOrWhiteSpace($raw)) {
+              # TEST_SUBSCRIPTION_IDS is a JSON array of { id, name } objects.
+              $subs = @($raw | ConvertFrom-Json)
+              if ($subs.Count -eq 0) {
+                  throw 'TEST_SUBSCRIPTION_IDS parsed to an empty array.'
+              }
+              $subs = @($subs | Get-Random -Shuffle)
+          }
+          else {
+              $fallback = $env:FALLBACK_SUBSCRIPTION_ID_SECRET
+              if ([string]::IsNullOrWhiteSpace($fallback)) {
+                  $fallback = $env:FALLBACK_SUBSCRIPTION_ID_VAR
+              }
+              if ([string]::IsNullOrWhiteSpace($fallback)) {
+                  throw 'No test subscriptions configured. Set the TEST_SUBSCRIPTION_IDS secret (JSON array of { id, name }) or an ARM_SUBSCRIPTION_ID secret/variable.'
+              }
+              $subs = @([pscustomobject]@{ id = $fallback; name = $fallback })
+          }
+
+          $chosen = $subs[0]
+          if ([string]::IsNullOrWhiteSpace([string]$chosen.id)) {
+              throw "Selected subscription entry has no 'id' property."
+          }
+
+          # Subscription ids are not secrets, but keep them out of the logs to
+          # match the governance behaviour.
+          Write-Host "::add-mask::$($chosen.id)"
+
+          "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "subscriptionName=$($chosen.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Selected test subscription '$($chosen.name)'."
+
+  unit-test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    environment: no-approval
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare test environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Runner-critical names that must never be overwritten by exposed
+          # secrets/variables.
+          $protected = @(
+              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
+              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
+              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
+              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
+              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
+              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
+              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
+          )
+
+          function ConvertFrom-Context {
+              param([string] $Json)
+              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
+              return ($Json | ConvertFrom-Json -AsHashtable)
+          }
+
+          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
+          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
+
+          # Expose variables first, then secrets, so a secret wins when both
+          # define the same name.
+          $combined = @{}
+          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
+          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          foreach ($key in $combined.Keys) {
+              if ($key -eq 'github_token') { continue }
+              if ($protected -contains $key.ToUpperInvariant()) {
+                  Write-Host "Skipping protected name '$key'."
+                  continue
+              }
+              $value = [string] $combined[$key]
+              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
+              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+          Import-Module Avm.Authoring
+          avm version
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          $result = avm test unit
+          $result | Format-List | Out-String | Write-Host
+          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
+          if (-not $result -or $result.Status -ne 'pass') {
+              $status = if ($result) { $result.Status } else { '<none>' }
+              throw "avm test unit failed (status: $status)."
+          }
+
+  pr-check:
+    name: PR check
+    if: github.event.pull_request.head.repo.fork == false
+    needs: subscriptions
+    runs-on: ubuntu-latest
+    environment: pr-check
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare test environment
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $protected = @(
+              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
+              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
+              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
+              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
+              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
+              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
+              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
+          )
+
+          function ConvertFrom-Context {
+              param([string] $Json)
+              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
+              return ($Json | ConvertFrom-Json -AsHashtable)
+          }
+
+          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
+          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
+
+          $combined = @{}
+          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
+          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          foreach ($key in $combined.Keys) {
+              if ($key -eq 'github_token') { continue }
+              if ($protected -contains $key.ToUpperInvariant()) {
+                  Write-Host "Skipping protected name '$key'."
+                  continue
+              }
+              $value = [string] $combined[$key]
+              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
+              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          # Azure OIDC plumbing for terraform (ARM_USE_OIDC=true).
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
+              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
+              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          # ARM_*_OVERRIDE precedence (governance convention).
+          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
+              $override = [string] $combined["${name}_OVERRIDE"]
+              if (-not [string]::IsNullOrWhiteSpace($override)) {
+                  "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              }
+          }
+
+          # Selected test subscription wins unless an explicit override was set.
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
+              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+          Import-Module Avm.Authoring
+          avm version
+
+      - name: Run pr-check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          $result = avm pr-check
+          $result | Format-List | Out-String | Write-Host
+          if ($result.Steps) {
+              $result.Steps | Format-Table -AutoSize | Out-String | Write-Host
+              foreach ($step in $result.Steps | Where-Object { $_.Status -notin 'pass', 'skipped' }) {
+                  Write-Host "::error::pr-check step failed -> $($step | ConvertTo-Json -Compress)"
+              }
+          }
+          if (-not $result -or $result.Status -ne 'pass') {
+              $status = if ($result) { $result.Status } else { '<none>' }
+              throw "avm pr-check failed (status: $status)."
+          }
+
+  integration-test:
+    name: Integration tests
+    if: github.event.pull_request.head.repo.fork == false
+    needs: subscriptions
+    runs-on: ubuntu-latest
+    environment: integration-test
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare test environment
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $protected = @(
+              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
+              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
+              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
+              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
+              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
+              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
+              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
+          )
+
+          function ConvertFrom-Context {
+              param([string] $Json)
+              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
+              return ($Json | ConvertFrom-Json -AsHashtable)
+          }
+
+          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
+          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
+
+          $combined = @{}
+          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
+          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          foreach ($key in $combined.Keys) {
+              if ($key -eq 'github_token') { continue }
+              if ($protected -contains $key.ToUpperInvariant()) {
+                  Write-Host "Skipping protected name '$key'."
+                  continue
+              }
+              $value = [string] $combined[$key]
+              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
+              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
+              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
+              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
+              $override = [string] $combined["${name}_OVERRIDE"]
+              if (-not [string]::IsNullOrWhiteSpace($override)) {
+                  "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              }
+          }
+
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
+              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+          Import-Module Avm.Authoring
+          avm version
+
+      - name: Run integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          $result = avm test integration
+          $result | Format-List | Out-String | Write-Host
+          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
+          if (-not $result -or $result.Status -ne 'pass') {
+              $status = if ($result) { $result.Status } else { '<none>' }
+              throw "avm test integration failed (status: $status)."
+          }
+
+  e2e-test:
+    name: End-to-end tests
+    if: github.event.repository.name != 'terraform-azurerm-avm-template' && github.event.pull_request.head.repo.fork == false
+    needs: subscriptions
+    runs-on: ubuntu-latest
+    environment: examples-test
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare test environment
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $protected = @(
+              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
+              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
+              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
+              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
+              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
+              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
+              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
+          )
+
+          function ConvertFrom-Context {
+              param([string] $Json)
+              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
+              return ($Json | ConvertFrom-Json -AsHashtable)
+          }
+
+          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
+          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
+
+          $combined = @{}
+          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
+          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          foreach ($key in $combined.Keys) {
+              if ($key -eq 'github_token') { continue }
+              if ($protected -contains $key.ToUpperInvariant()) {
+                  Write-Host "Skipping protected name '$key'."
+                  continue
+              }
+              $value = [string] $combined[$key]
+              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
+              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
+              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
+              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
+              $override = [string] $combined["${name}_OVERRIDE"]
+              if (-not [string]::IsNullOrWhiteSpace($override)) {
+                  "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              }
+          }
+
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
+              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+          Import-Module Avm.Authoring
+          avm version
+
+      - name: Run end-to-end tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          $result = avm test e2e
+          $result | Format-List | Out-String | Write-Host
+          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
+          if (-not $result -or $result.Status -ne 'pass') {
+              $status = if ($result) { $result.Status } else { '<none>' }
+              throw "avm test e2e failed (status: $status)."
+          }

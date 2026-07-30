@@ -65,9 +65,29 @@ function Get-AvmVerbRegistry {
             Summary = 'Build/validate the current module via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('test', 'unit')
+            Cmdlet  = 'Invoke-AvmTestUnit'
+            Summary = 'Run the terraform unit test tier (tests/unit).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('test', 'integration')
+            Cmdlet  = 'Invoke-AvmTestIntegration'
+            Summary = 'Run the terraform integration test tier (tests/integration).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('test', 'e2e')
+            Cmdlet  = 'Invoke-AvmTestE2e'
+            Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('docs')
             Cmdlet  = 'Invoke-AvmDocs'
             Summary = 'Generate or refresh README docs via the resolved engine.'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('sync')
+            Cmdlet  = 'Invoke-AvmSync'
+            Summary = 'Sync managed files from the AVM governance source (terraform).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('transform')

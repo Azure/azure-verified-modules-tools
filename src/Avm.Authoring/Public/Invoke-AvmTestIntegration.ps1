@@ -1,0 +1,83 @@
+function Invoke-AvmTestIntegration {
+    <#
+    .SYNOPSIS
+        Run the module's integration test tier (terraform test against
+        tests/integration/).
+
+    .DESCRIPTION
+        Terraform-only test tier. Resolves the enclosing module via
+        Get-AvmModuleContext, then runs 'terraform test' against the
+        module's tests/integration/ directory through
+        Invoke-AvmTerraformTestSuite -Tier integration.
+
+        Unlike the bare 'avm test' verb (which is the cheap, offline
+        'terraform validate' build pass wired into pre-commit), this tier
+        executes real 'terraform test' HCL run blocks. Integration tests
+        typically provision real Azure resources, so they need cloud
+        credentials at runtime (for example an authenticated 'az' session
+        or ARM_* environment variables). Authentication is left to
+        terraform and its providers; this verb performs no preflight.
+
+        Modules that ship no tests/integration/*.tftest.hcl report a clean
+        pass with FilesProcessed = 0.
+
+        This verb is a standalone command; it is NOT part of the offline
+        pre-commit / pr-check chains, which keep the validate-only 'test'.
+
+        Routed by the dispatcher: 'avm test integration'.
+
+    .PARAMETER Path
+        Working directory whose enclosing module to test. Defaults to the
+        current location.
+
+    .PARAMETER Ecosystem
+        Force the ecosystem selector. Defaults to 'auto'. Bicep modules are
+        rejected: the integration test tier is terraform-only.
+
+    .PARAMETER AllowPathFallback
+        When set, accept a PATH-resolved tool binary that self-reports the
+        lock-pinned version.
+
+    .PARAMETER NoInit
+        Skip the auto 'terraform init -backend=false' step even when
+        '.terraform/' is missing.
+
+    .OUTPUTS
+        pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
+        Status, FilesProcessed, Issues.
+
+    .EXAMPLE
+        avm test integration
+
+    .EXAMPLE
+        Invoke-AvmTestIntegration -Path C:\repos\terraform-azurerm-avm-res-foo
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Position = 0)]
+        [string] $Path = $PWD.Path,
+
+        [ValidateSet('auto', 'bicep', 'terraform')]
+        [string] $Ecosystem = 'auto',
+
+        [switch] $AllowPathFallback,
+
+        [switch] $NoInit
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+
+    switch ($context.Ecosystem) {
+        'terraform' {
+            Invoke-AvmTerraformTestSuite -Context $context -Tier 'integration' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
+        }
+        default {
+            throw [AvmConfigurationException]::new(
+                "avm test integration is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep integration-test tiers are not implemented.")
+        }
+    }
+}

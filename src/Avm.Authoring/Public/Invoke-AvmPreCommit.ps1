@@ -3,7 +3,7 @@ function Invoke-AvmPreCommit {
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
         bicep:     format -> lint -> test -> docs.
-        terraform: check convention -> transform -> format -> docs.
+        terraform: sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -14,9 +14,15 @@ function Invoke-AvmPreCommit {
         pass when no errors are thrown).
 
         The Terraform chain follows the upstream avm-terraform-governance
-        pre-commit.porch.yaml philosophy: pre-commit stays fast and fully
-        offline (check convention -> transform -> format -> docs), so it
-        never needs `terraform init`. The two checks that require an
+        pre-commit.porch.yaml philosophy: after an initial managed-files
+        sync it stays fast and fully offline
+        (check convention -> transform -> format -> docs), so it
+        never needs `terraform init`. The `sync` step runs FIRST so the
+        rest of the chain sees the freshest governed files; it fetches the
+        managed-file source (the Azure/avm-terraform-governance repo by
+        default, overridable or pinned to a local path - see Invoke-AvmSync)
+        and writes any adds/updates/removals straight into the working tree.
+        The two checks that require an
         initialised working directory - lint (tflint) and test
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
         upstream porch, which runs tflint and the policy/plan checks in
@@ -95,6 +101,7 @@ function Invoke-AvmPreCommit {
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
+            [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync' }
             [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
             [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
