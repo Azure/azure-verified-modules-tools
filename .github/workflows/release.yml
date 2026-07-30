@@ -32,10 +32,38 @@ jobs:
     environment: psgallery
 
     steps:
+      - name: Resolve release tag
+        id: ver
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Tag '$tag' does not match the expected stable-release pattern 'vX.Y.Z'. Prerelease tags (e.g. v0.1.0-preview.1) are not supported by this workflow yet."
+          }
+          $version = $tag -replace '^v', ''
+
+          # A dispatch run names a tag that may not exist yet. Fail here with a
+          # clear message instead of letting the checkout step fail obscurely.
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+              gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Tag '$tag' does not exist in $env:GITHUB_REPOSITORY. Publish the GitHub Release (which creates the tag) or push the tag first, then re-run this workflow."
+              }
+          }
+
+          Write-Host "Releasing Avm.Authoring $version (tag $tag)"
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ steps.ver.outputs.tag }}
           persist-credentials: false
 
       - name: Install build prerequisites
@@ -54,37 +82,25 @@ jobs:
               Install-PSResource @pkg -Scope CurrentUser -TrustRepository
           }
 
-      - name: Resolve and verify version
-        id: ver
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
-          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-              throw "Tag '$tag' does not match the expected stable-release pattern 'vX.Y.Z'. Prerelease tags (e.g. v0.1.0-preview.1) are not supported by this workflow yet."
-          }
-          $version = $tag -replace '^v', ''
-
-          $manifest = Test-ModuleManifest -Path './src/Avm.Authoring/Avm.Authoring.psd1'
-          $manifestVersion = $manifest.Version.ToString()
-          if ($manifestVersion -ne $version) {
-              throw "Manifest ModuleVersion '$manifestVersion' does not match tag version '$version'. Bump ModuleVersion in src/Avm.Authoring/Avm.Authoring.psd1 before tagging."
-          }
-
-          # Fail fast if the CHANGELOG entry is missing — better here than after the ci gate.
-          $null = & ./scripts/Get-AvmReleaseNotes.ps1 -Version $version
-
-          Write-Host "Releasing Avm.Authoring $version (tag $tag)"
-          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
       - name: Run ci gate
         shell: pwsh
         run: ./build.ps1 ci
 
       - name: Build staged module
         shell: pwsh
-        run: ./build.ps1 build
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.ver.outputs.version }}'
+
+          # The tag drives the published version: `build` stamps it into the
+          # staged manifest under out/, leaving the in-repo manifest untouched.
+          ./build.ps1 build -ReleaseVersion $version
+
+          $staged = (Test-ModuleManifest -Path ./out/Avm.Authoring/Avm.Authoring.psd1).Version.ToString()
+          if ($staged -ne $version) {
+              throw "Staged manifest version '$staged' does not match tag version '$version'. Version stamping in build/avm.build.ps1 did not take effect."
+          }
+          Write-Host "Staged Avm.Authoring $staged"
 
       - name: Package release artefacts
         id: pkg
@@ -114,19 +130,33 @@ jobs:
           "zip=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "sums=$sumPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Extract release notes from CHANGELOG
+      - name: Resolve release notes
         id: notes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $version   = '${{ steps.ver.outputs.version }}'
-          $notes     = & ./scripts/Get-AvmReleaseNotes.ps1 -Version $version
-          $notesPath = './out/RELEASE_NOTES.md'
-          [System.IO.File]::WriteAllText(
-              (Resolve-Path -LiteralPath './out').Path + [IO.Path]::DirectorySeparatorChar + 'RELEASE_NOTES.md',
-              "$notes`n",
-              (New-Object System.Text.UTF8Encoding $false))
-          "path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $version = '${{ steps.ver.outputs.version }}'
+
+          # A CHANGELOG section is a bonus, not a gate. Releases are usually cut
+          # from the GitHub UI, which already authors a body; without a section
+          # the release falls back to GitHub's auto-generated notes.
+          $notes = & ./scripts/Get-AvmReleaseNotes.ps1 -Version $version -AllowMissing
+          $notesText = ($notes | Out-String).Trim()
+
+          if ($notesText) {
+              [System.IO.File]::WriteAllText(
+                  (Join-Path (Resolve-Path -LiteralPath './out').Path 'RELEASE_NOTES.md'),
+                  "$notesText`n",
+                  (New-Object System.Text.UTF8Encoding $false))
+              Write-Host "Using the CHANGELOG section for $version as the release body."
+              "path=./out/RELEASE_NOTES.md" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "has_notes=true"              | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+          else {
+              Write-Host "::notice::No CHANGELOG section for $version; the release body will use GitHub's auto-generated notes."
+              "path="           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "has_notes=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
 
       - name: Publish to PowerShell Gallery
         shell: pwsh
@@ -149,28 +179,37 @@ jobs:
               -Confirm:$false
 
       - name: Create or update GitHub Release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
           VERSION: ${{ steps.ver.outputs.version }}
           NOTES: ${{ steps.notes.outputs.path }}
+          HAS_NOTES: ${{ steps.notes.outputs.has_notes }}
           ZIP: ${{ steps.pkg.outputs.zip }}
           SUMS: ${{ steps.pkg.outputs.sums }}
         run: |
-          # Idempotent / re-runnable: only *create* the release (and seed its body
-          # from the CHANGELOG) when the tag has no release yet. If a release
-          # already exists -- e.g. a maintainer authored richer notes by hand, or
-          # this workflow is being re-run -- leave the body untouched and just
-          # (re)upload the artefacts with --clobber.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; uploading artefacts only (release notes left untouched)."
-            gh release upload "$TAG" "$ZIP" "$SUMS" --clobber
-          else
-            echo "Release $TAG does not exist; creating it from the CHANGELOG notes."
-            gh release create "$TAG" \
-              --title "Avm.Authoring $VERSION" \
-              --notes-file "$NOTES" \
-              --verify-tag \
-              "$ZIP" \
-              "$SUMS"
-          fi
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          # Idempotent / re-runnable: only *create* the release when the tag has
+          # no release yet. If one already exists -- the common case, since
+          # releases are cut from the GitHub UI -- leave the body untouched and
+          # just (re)upload the artefacts with --clobber.
+          gh release view $env:TAG 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "Release $env:TAG already exists; uploading artefacts only (release notes left untouched)."
+              gh release upload $env:TAG $env:ZIP $env:SUMS --clobber
+          }
+          elseif ($env:HAS_NOTES -eq 'true') {
+              Write-Host "Creating release $env:TAG from the CHANGELOG section."
+              gh release create $env:TAG --title "Avm.Authoring $env:VERSION" --notes-file $env:NOTES --verify-tag $env:ZIP $env:SUMS
+          }
+          else {
+              Write-Host "Creating release $env:TAG with auto-generated notes."
+              gh release create $env:TAG --title "Avm.Authoring $env:VERSION" --generate-notes --verify-tag $env:ZIP $env:SUMS
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "The gh release command failed with exit code $LASTEXITCODE."
+          }
