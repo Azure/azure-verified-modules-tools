@@ -92,17 +92,17 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('transform')
             Cmdlet  = 'Invoke-AvmTransform'
-            Summary = 'Regenerate README + test scaffolding (Phase 1 stub).'
+            Summary = 'Apply the mapotf pre-commit transforms to the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'policy')
             Cmdlet  = 'Invoke-AvmCheckPolicy'
-            Summary = 'Run policy checks (PSRule.Rules.Azure / Conftest; Phase 1 stub).'
+            Summary = 'Run the pinned AVM policy bundles (APRL, AVMSEC) with conftest.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'convention')
             Cmdlet  = 'Invoke-AvmCheckConvention'
-            Summary = 'Run convention checks (compliance Pester / grept; Phase 1 stub).'
+            Summary = 'Run the built-in AVM convention rules against the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
