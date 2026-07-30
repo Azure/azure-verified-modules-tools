@@ -204,6 +204,21 @@ function Sync-AvmManagedFile {
         if ($deprecatedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
     }
 
+    # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
+    # overwritten wholesale, so the consumer keeps its own additions. The spec
+    # stacks across root + overlays like the files themselves. A path owned by
+    # the line spec must not also be whole-file managed (line-merge wins), and a
+    # deprecated removal still trumps a line merge.
+    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -Overlays $overlays
+    foreach ($p in @($lineSpec.Keys)) {
+        if ($deprecatedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
+    }
+    foreach ($p in @($lineSpec.Keys)) {
+        if ($desired.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
+    }
+    $linePlans = @(Get-AvmManagedLinePlan -Root $root -Spec $lineSpec)
+    $changedLinePlans = @($linePlans | Where-Object { $_.Changed })
+
     $targetModes = Get-AvmGitIndexMode -Dir $root -GitPath $gitPath
     $existingBlobs = @{}
     $existingModes = @{}
@@ -237,6 +252,9 @@ function Sync-AvmManagedFile {
     }
     $toRemove = @($matchedDeprecated | Sort-Object)
 
+    $lineAdded = @($changedLinePlans | Where-Object { -not $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
+    $lineUpdated = @($changedLinePlans | Where-Object { $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
+
     $issues = @()
     if ($CheckDrift) {
         $issueList = New-Object System.Collections.Generic.List[object]
@@ -249,13 +267,17 @@ function Sync-AvmManagedFile {
         foreach ($p in $toUpdate) {
             $issueList.Add((New-AvmSyncIssue -File $p -Message 'managed file is out of date; it should be updated.'))
         }
+        foreach ($plan in $changedLinePlans) {
+            $detail = ('managed lines out of date; {0} to add, {1} to remove.' -f $plan.AddedLines.Count, $plan.RemovedLines.Count)
+            $issueList.Add((New-AvmSyncIssue -File $plan.Path -Message $detail))
+        }
         $issues = $issueList.ToArray()
         $status = if ($issueList.Count -gt 0) { 'fail' } else { 'pass' }
     }
     else {
-        $hasChanges = ($toAdd.Count + $toUpdate.Count + $toRemove.Count) -gt 0
+        $hasChanges = ($toAdd.Count + $toUpdate.Count + $toRemove.Count + $changedLinePlans.Count) -gt 0
         if ($hasChanges) {
-            $applyDesc = ('sync managed files (add {0}, update {1}, remove {2})' -f $toAdd.Count, $toUpdate.Count, $toRemove.Count)
+            $applyDesc = ('sync managed files (add {0}, update {1}, remove {2}, merge-lines {3})' -f $toAdd.Count, $toUpdate.Count, $toRemove.Count, $changedLinePlans.Count)
             if ($PSCmdlet.ShouldProcess($root, $applyDesc)) {
                 foreach ($p in $toRemove) {
                     $full = Join-Path $root ($p.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
@@ -275,6 +297,14 @@ function Sync-AvmManagedFile {
                         Set-AvmManagedFileExecutableBit -Path $full
                     }
                 }
+                $lineEncoding = [System.Text.UTF8Encoding]::new($false)
+                foreach ($plan in $changedLinePlans) {
+                    $parent = Split-Path -Parent $plan.Full
+                    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                    }
+                    [System.IO.File]::WriteAllText($plan.Full, $plan.NewText, $lineEncoding)
+                }
             }
         }
         $status = 'pass'
@@ -286,10 +316,10 @@ function Sync-AvmManagedFile {
         ToolPath       = $source.ToolPath
         ToolSource     = $source.SourceKind
         Status         = $status
-        FilesProcessed = $desired.Count
+        FilesProcessed = $desired.Count + $linePlans.Count
         Issues         = $issues
-        Added          = $toAdd
-        Updated        = $toUpdate
+        Added          = @($toAdd + $lineAdded)
+        Updated        = @($toUpdate + $lineUpdated)
         Removed        = $toRemove
     }
 }
@@ -505,7 +535,7 @@ function Resolve-AvmManagedFilesRepoId {
     .SYNOPSIS
         Resolve the managed-files repository id using the F11 resolution order:
         explicit value, validated git-origin candidate, validated folder-leaf
-        candidate, interactive prompt, then a hard failure — never a silent
+        candidate, interactive prompt, then a hard failure - never a silent
         zero-overlay sync.
 
     .DESCRIPTION
@@ -816,6 +846,8 @@ function Add-AvmManagedFilesFromDir {
     $baseDirAbsolute = (Get-Item -LiteralPath $BaseDir -Force).FullName
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
+    $lineSpecName = Get-AvmManagedLineSpecFileName
+
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
     Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
         # '.gitkeep' files exist only to keep otherwise-empty overlay
@@ -823,7 +855,9 @@ function Add-AvmManagedFilesFromDir {
         # content, so they must not be synced into target repos. The upstream
         # avm-terraform-governance sync applies the same filter; omitting it
         # here would make every drift check demand a file the sync never writes.
-        $_.Name -ne '.gitkeep'
+        # The line-managed-file spec is tooling metadata consumed separately, so
+        # it is filtered here for the same reason.
+        $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
     } | ForEach-Object {
         $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
         $absoluteSource = $_.FullName -replace '\\', '/'

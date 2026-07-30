@@ -247,6 +247,107 @@ Describe 'Sync-AvmManagedFile' {
         $result.Added          | Should -BeNullOrEmpty
         $result.Issues         | Should -BeNullOrEmpty
     }
+
+    It 'creates a line-managed file when it is missing and classifies it as Added' {
+        $spec = '{ ".gitignore": { "required": ["*.tfstate", ".terraform/"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match '\*\.tfstate'
+        $onDisk | Should -Match '\.terraform/'
+        # The spec sentinel is tooling metadata and must never be synced.
+        Test-Path (Join-Path $script:moduleDir '.avm-managed-lines.json') | Should -BeFalse
+    }
+
+    It 'merges required lines into an existing file, preserving the user additions' {
+        $spec = '{ ".gitignore": { "required": ["*.tfstate"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        # The consumer already has a hand-authored entry that must survive.
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "my-custom-secret.txt`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status  | Should -Be 'pass'
+        $result.Updated | Should -Contain '.gitignore'
+        $result.Added   | Should -Not -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'my-custom-secret\.txt'
+        $onDisk | Should -Match '\*\.tfstate'
+    }
+
+    It 'removes a deprecated line while preserving the rest' {
+        $spec = '{ ".gitignore": { "required": [], "removed": ["obsolete-entry"] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "keep-me`nobsolete-entry`nkeep-me-too`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status  | Should -Be 'pass'
+        $result.Updated | Should -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'keep-me'
+        $onDisk | Should -Match 'keep-me-too'
+        $onDisk | Should -Not -Match 'obsolete-entry'
+    }
+
+    It 'reports drift for a line-managed file under -CheckDrift and writes nothing' {
+        $spec = '{ ".gitignore": { "required": [".terraform/"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "existing`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -CheckDrift
+        }
+
+        $result.Status       | Should -Be 'fail'
+        $result.Issues.Count | Should -BeGreaterThan 0
+
+        # Nothing was written: the missing required line is still absent.
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Not -Match '\.terraform/'
+    }
+
+    It 'lets a line spec take over a path that also exists as a whole-file managed file' {
+        # Root ships .gitignore as a whole file, but the line spec claims the same
+        # path: the line merge must win so the consumer keeps its own additions.
+        Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "whole-file-version`n" -NoNewline
+        $spec = '{ ".gitignore": { "required": ["line-managed-entry"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "user-line`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status | Should -Be 'pass'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'user-line'
+        $onDisk | Should -Match 'line-managed-entry'
+        $onDisk | Should -Not -Match 'whole-file-version'
+    }
 }
 
 Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
