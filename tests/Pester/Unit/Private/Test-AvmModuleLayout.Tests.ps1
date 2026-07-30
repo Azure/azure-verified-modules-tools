@@ -60,3 +60,23 @@ Describe 'Test-AvmModuleLayout' {
         $err.Message | Should -Match "expected 'Avm.Authoring'"
     }
 }
+
+Describe 'Module Resources packaging' {
+    It 'ships the three vendored AVM tflint rulesets under Resources/tflint' {
+        $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        $tflintDir | Should -Exist
+        foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+            $path = Join-Path $tflintDir $file
+            $path | Should -Exist
+            (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'pins the AVM tflint ruleset plugin in the vendored configs' {
+        $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+            $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
+            $content | Should -Match 'plugin\s+"avm"'
+        }
+    }
+}

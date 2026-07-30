@@ -1,19 +1,179 @@
+function Resolve-AvmTflintConfigDir {
+    <#
+    .SYNOPSIS
+        Resolve the directory holding the vendored AVM tflint configs.
+
+    .DESCRIPTION
+        Returns the absolute path to the directory that ships the three AVM
+        tflint rulesets ('avm.tflint.hcl', 'avm.tflint_module.hcl',
+        'avm.tflint_example.hcl'). Resolution order:
+
+          1. $env:AVM_TFLINT_CONFIG_DIR - explicit override (test injection and
+             power users pointing at a locally-checked-out governance copy).
+          2. <ModuleRoot>/Resources/tflint - the configs vendored inside the
+             module, kept byte-for-byte in sync with the governance
+             tflint-configs/ folder.
+
+        The chosen candidate must be a directory containing all three files.
+        Throws AvmConfigurationException when none resolve, so the lint engine
+        surfaces a clear package-integrity error rather than linting with no
+        AVM rules.
+
+    .OUTPUTS
+        [string] absolute path to the resolved config directory.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $required = @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:AVM_TFLINT_CONFIG_DIR) {
+        $candidates.Add($env:AVM_TFLINT_CONFIG_DIR)
+    }
+    $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' 'tflint')))
+
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) { continue }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
+        $present = $true
+        foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $candidate $file) -PathType Leaf)) {
+                $present = $false
+                break
+            }
+        }
+        if ($present) {
+            return (Resolve-Path -LiteralPath $candidate).ProviderPath
+        }
+    }
+
+    throw [AvmConfigurationException]::new(
+        ("Cannot resolve the AVM tflint config bundle (looked in: {0}). " -f ($candidates -join '; ')) +
+        'Set the AVM_TFLINT_CONFIG_DIR environment variable or reinstall Avm.Authoring so Resources/tflint is present.')
+}
+
+function Get-AvmTflintScope {
+    <#
+    .SYNOPSIS
+        Build the ordered list of directories tflint should lint, each paired
+        with the AVM ruleset that applies to it.
+
+    .DESCRIPTION
+        The AVM tflint rulesets are directory-specific: the repository root and
+        every nested module use the strict rulesets, while examples use a
+        relaxed ruleset (interface/docs rules disabled). A single recursive
+        tflint invocation cannot express that, so the lint engine runs tflint
+        once per scope with the matching '--config'.
+
+        Scope order (deterministic):
+          1. the repository root         -> avm.tflint.hcl
+          2. each direct modules/*  dir  -> avm.tflint_module.hcl  (sorted by name)
+          3. each direct examples/* dir  -> avm.tflint_example.hcl (sorted by name)
+
+        modules/ and examples/ are enumerated one level deep (matching the
+        governance 'foreachdirectory depth:1' behaviour) and skipped entirely
+        when absent.
+
+    .PARAMETER Root
+        The Terraform repository root.
+
+    .PARAMETER ConfigDir
+        The directory returned by Resolve-AvmTflintConfigDir.
+
+    .OUTPUTS
+        [object[]] of hashtables with keys Dir (absolute), Config (absolute),
+        Label, and RelPath ('.' for the root).
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [string] $ConfigDir
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $scopes = New-Object System.Collections.Generic.List[object]
+
+    $scopes.Add(@{
+            Dir     = $rootFull
+            Config  = (Join-Path $ConfigDir 'avm.tflint.hcl')
+            Label   = 'root'
+            RelPath = '.'
+        })
+
+    $groups = @(
+        @{ Name = 'modules'; Config = 'avm.tflint_module.hcl' }
+        @{ Name = 'examples'; Config = 'avm.tflint_example.hcl' }
+    )
+    foreach ($group in $groups) {
+        $groupDir = Join-Path $rootFull $group.Name
+        if (-not (Test-Path -LiteralPath $groupDir -PathType Container)) { continue }
+        $children = @(Get-ChildItem -LiteralPath $groupDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
+        foreach ($child in $children) {
+            $scopes.Add(@{
+                    Dir     = $child.FullName
+                    Config  = (Join-Path $ConfigDir $group.Config)
+                    Label   = ('{0}/{1}' -f $group.Name, $child.Name)
+                    RelPath = ('{0}/{1}' -f $group.Name, $child.Name)
+                })
+        }
+    }
+
+    return $scopes.ToArray()
+}
+
 function Invoke-AvmTerraformLint {
     <#
     .SYNOPSIS
-        Run 'tflint' against the resolved terraform module root.
+        Run the AVM tflint rulesets against a Terraform repository, one scope
+        at a time, and fail on warnings by default.
 
     .DESCRIPTION
-        Engine implementation called by Invoke-AvmLint when the module
-        context is Ecosystem='terraform'. Resolves 'tflint' via
-        Resolve-AvmTool, runs '--recursive --format=json' against
-        $Context.Root, then parses the JSON 'issues' array into the
-        shared Issue record shape used by Invoke-AvmBicepLint.
+        Engine implementation called by Invoke-AvmLint when the module context
+        is Ecosystem='terraform'. Resolves 'tflint' via Resolve-AvmTool and the
+        vendored AVM rulesets via Resolve-AvmTflintConfigDir, then, for every
+        scope produced by Get-AvmTflintScope (repository root, each modules/*,
+        each examples/*):
 
-        tflint exit codes:
-          0  - no issues
-          2  - issues found (treated as 'fail' only when severity=error)
-          1  - tflint itself failed (treated as throw)
+            tflint --init   --config=<absolute ruleset>          (install plugins)
+            tflint --config=<absolute ruleset> --format=json \
+                   --minimum-failure-severity=<threshold>        (lint)
+
+        This mirrors the upstream avm-terraform-governance pre-check flow, which
+        applies the strict rulesets to the root and modules and the relaxed
+        ruleset to examples. A single recursive invocation with no '--config'
+        (the previous behaviour) applied none of the AVM rules and could not
+        express the per-directory rulesets.
+
+        The failure threshold defaults to 'warning', so any warning-severity
+        rule fails the gauntlet - most built-in tflint rules are warnings, so an
+        'error'-only threshold reported false confidence. The threshold is
+        passed to tflint (via --minimum-failure-severity, driving its exit code)
+        and used to compute Status from the parsed issues, so both agree. All
+        issues are still parsed and returned for reporting regardless of the
+        threshold.
+
+        tflint exit codes for the lint call:
+          0  - no issues at or above the threshold
+          2  - issues found (parsed; drives Status via the threshold)
+          other - tflint itself failed (throws AvmProcessException)
+
+        Note: unlike the governance porch flow, this engine does not run
+        'terraform init' before tflint. The vendored AVM rulesets are satisfied
+        by tflint's plugin '--init' alone; keeping lint free of a terraform
+        backend/network round-trip makes 'avm lint' fast and offline-friendly.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -21,6 +181,10 @@ function Invoke-AvmTerraformLint {
 
     .PARAMETER AllowPathFallback
         Pass through to Resolve-AvmTool.
+
+    .PARAMETER MinimumFailureSeverity
+        The lowest tflint severity that fails the run. One of 'error',
+        'warning' (default), or 'notice'.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
@@ -32,7 +196,10 @@ function Invoke-AvmTerraformLint {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [ValidateSet('error', 'warning', 'notice')]
+        [string] $MinimumFailureSeverity = 'warning'
     )
 
     Set-StrictMode -Version 3.0
@@ -44,69 +211,107 @@ function Invoke-AvmTerraformLint {
     }
 
     $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
+    $configDir = Resolve-AvmTflintConfigDir
+    $scopes = Get-AvmTflintScope -Root $Context.Root -ConfigDir $configDir
 
-    # Discover .tf files just for the FilesProcessed count; tflint walks
-    # the working directory itself when given --recursive.
-    $discovered = Get-ChildItem -LiteralPath $Context.Root -Recurse -File -Filter '*.tf' -ErrorAction SilentlyContinue |
-        Where-Object {
-            $rel = [System.IO.Path]::GetRelativePath($Context.Root, $_.FullName)
-            $parts = $rel -split '[\\/]'
-            -not ($parts | Where-Object { $_.StartsWith('.') -or $_ -eq 'node_modules' })
-        }
-    $files = @($discovered)
-
-    $result = Invoke-AvmProcess `
-        -FilePath $tool.Path `
-        -ArgumentList @('--recursive', '--format=json') `
-        -WorkingDirectory $Context.Root `
-        -IgnoreExitCode
-
-    # exit 0 = no issues; 2 = issues; anything else = tflint itself misbehaved.
-    if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 2) {
-        $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
-        $tail = if ($stderr) { ": $stderr" } else { '.' }
-        throw [AvmProcessException]::new(
-            ('tflint exited with code {0}{1}' -f $result.ExitCode, $tail))
+    # Severities at or above the threshold fail the run. tflint emits lowercase
+    # 'error' / 'warning' / 'notice'.
+    $failSeverities = switch ($MinimumFailureSeverity) {
+        'error' { @('error') }
+        'warning' { @('error', 'warning') }
+        'notice' { @('error', 'warning', 'notice') }
     }
 
     $issues = New-Object System.Collections.Generic.List[object]
-    $payload = if ($result.StdOut) { $result.StdOut.Trim() } else { '' }
-    if ($payload) {
+    $filesProcessed = 0
+
+    foreach ($scope in $scopes) {
+        # Count only the top-level '*.tf' in this scope - tflint is invoked
+        # non-recursively per scope, and nested modules/examples are their own
+        # scopes, so this does not double-count.
+        $filesProcessed += @(Get-ChildItem -LiteralPath $scope.Dir -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count
+
+        # Install the plugins the ruleset declares (terraform + avm). Idempotent
+        # and cached under the shared tflint plugin dir, so repeat scopes are
+        # cheap. A non-zero exit here means plugin acquisition failed outright.
+        $init = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList @('--init', ('--config={0}' -f $scope.Config)) `
+            -WorkingDirectory $scope.Dir `
+            -IgnoreExitCode
+        if ($init.ExitCode -ne 0) {
+            $stderr = if ($init.StdErr) { $init.StdErr.Trim() } else { '' }
+            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            throw [AvmProcessException]::new(
+                ("tflint --init for scope '{0}' exited with code {1}{2}" -f $scope.Label, $init.ExitCode, $tail))
+        }
+
+        $run = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList @(
+                ('--config={0}' -f $scope.Config),
+                '--format=json',
+                ('--minimum-failure-severity={0}' -f $MinimumFailureSeverity)
+            ) `
+            -WorkingDirectory $scope.Dir `
+            -IgnoreExitCode
+
+        # exit 0 = clean; 2 = issues found; anything else = tflint misbehaved.
+        if ($run.ExitCode -ne 0 -and $run.ExitCode -ne 2) {
+            $stderr = if ($run.StdErr) { $run.StdErr.Trim() } else { '' }
+            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            throw [AvmProcessException]::new(
+                ("tflint for scope '{0}' exited with code {1}{2}" -f $scope.Label, $run.ExitCode, $tail))
+        }
+
+        $payload = if ($run.StdOut) { $run.StdOut.Trim() } else { '' }
+        if (-not $payload) { continue }
+
         try {
             $parsed = $payload | ConvertFrom-Json -ErrorAction Stop
         }
         catch {
             throw [AvmProcessException]::new(
-                "Could not parse tflint --format=json output: $($_.Exception.Message)")
+                ("Could not parse tflint --format=json output for scope '{0}': {1}" -f $scope.Label, $_.Exception.Message))
         }
-        if ($parsed -and ($parsed.PSObject.Properties.Name -contains 'issues')) {
-            foreach ($issue in @($parsed.issues)) {
-                $sev = if ($issue.rule -and $issue.rule.severity) { [string]$issue.rule.severity } else { 'warning' }
-                $code = if ($issue.rule -and $issue.rule.name) { [string]$issue.rule.name } else { '' }
-                $msg = if ($issue.message) { [string]$issue.message } else { '' }
-                $file = ''
-                $line = 0
-                $col = 0
-                if ($issue.range) {
-                    if ($issue.range.filename) { $file = [string]$issue.range.filename }
-                    if ($issue.range.start) {
-                        if ($issue.range.start.line) { $line = [int]$issue.range.start.line }
-                        if ($issue.range.start.column) { $col = [int]$issue.range.start.column }
-                    }
+
+        if (-not ($parsed -and ($parsed.PSObject.Properties.Name -contains 'issues'))) { continue }
+
+        foreach ($issue in @($parsed.issues)) {
+            $sev = if ($issue.rule -and $issue.rule.severity) { ([string]$issue.rule.severity).ToLowerInvariant() } else { 'warning' }
+            $code = if ($issue.rule -and $issue.rule.name) { [string]$issue.rule.name } else { '' }
+            $msg = if ($issue.message) { [string]$issue.message } else { '' }
+            $file = ''
+            $line = 0
+            $col = 0
+            if ($issue.range) {
+                if ($issue.range.filename) { $file = [string]$issue.range.filename }
+                if ($issue.range.start) {
+                    if ($issue.range.start.line) { $line = [int]$issue.range.start.line }
+                    if ($issue.range.start.column) { $col = [int]$issue.range.start.column }
                 }
-                $issues.Add([pscustomobject][ordered]@{
-                        File     = $file
-                        Line     = $line
-                        Column   = $col
-                        Severity = $sev.ToLowerInvariant()
-                        Code     = $code
-                        Message  = $msg
-                    })
             }
+            # Tag the file with its scope so root/module/example issues are
+            # distinguishable; tflint reports filenames relative to its own
+            # working directory.
+            if ($scope.RelPath -ne '.' -and $file) {
+                $file = ('{0}/{1}' -f $scope.RelPath, $file)
+            }
+            $file = $file -replace '\\', '/'
+
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = $file
+                    Line     = $line
+                    Column   = $col
+                    Severity = $sev
+                    Code     = $code
+                    Message  = $msg
+                    Scope    = $scope.Label
+                })
         }
     }
 
-    $status = if ($issues | Where-Object { $_.Severity -eq 'error' }) { 'fail' } else { 'pass' }
+    $status = if ($issues | Where-Object { $failSeverities -contains $_.Severity }) { 'fail' } else { 'pass' }
 
     return [pscustomobject][ordered]@{
         Engine         = 'terraform'
@@ -114,7 +319,7 @@ function Invoke-AvmTerraformLint {
         ToolPath       = $tool.Path
         ToolSource     = $tool.Source
         Status         = $status
-        FilesProcessed = $files.Count
+        FilesProcessed = $filesProcessed
         Issues         = $issues.ToArray()
     }
 }

@@ -331,7 +331,34 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 > See also: [`AGENTS.md`](../AGENTS.md) § Commit & push protocol.
 
----
+## 12. Packaged governance assets
+
+Some governance-authored assets are **vendored into the module** under `src/Avm.Authoring/Resources/` because the engines need them at runtime and cannot reach the consumer repo's synced copies (they run before or independently of `avm sync`). These are copies, so they can drift from their upstream source in `Azure/avm-terraform-governance`.
+
+Currently vendored:
+
+- `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`, `avm.tflint_example.hcl` — from governance `tflint-configs/`, applied per scope by `Invoke-AvmTerraformLint` (root / `modules/*` / `examples/*`).
+- `Resources/mapotf/pre-commit/*.mptf.hcl` — from governance `mapotf-configs/pre-commit/`, used by `Invoke-AvmTerraformTransform`.
+
+**Update process.** When governance moves ahead:
+
+1. Compare the vendored files against upstream `main`:
+   ```powershell
+   'avm.tflint.hcl','avm.tflint_module.hcl','avm.tflint_example.hcl' | ForEach-Object {
+     $u = "https://raw.githubusercontent.com/Azure/avm-terraform-governance/main/tflint-configs/$_"
+     $local = Get-Content "src/Avm.Authoring/Resources/tflint/$_" -Raw
+     $remote = (Invoke-WebRequest $u -UseBasicParsing).Content
+     "{0}: {1}" -f $_, ($(if ($local -eq $remote) { 'up-to-date' } else { 'DRIFTED' }))
+   }
+   ```
+2. Re-fetch drifted files with `curl.exe -sSL <url> -o <path>`, normalise CRLF → LF, save UTF-8 no-BOM, keep ASCII-only.
+3. Run `./build.ps1 pre-commit`; the packaging guard in `Test-AvmModuleLayout.Tests.ps1` asserts the tflint configs exist and still pin the `avm` plugin.
+4. Note the refresh (and the upstream commit SHA) in the changelog so releases don't silently drift.
+
+**Deliberate deviations from the governance chain** (documented so a future reader doesn't "fix" them as bugs):
+
+- Lint does **not** run `terraform init` per scope. It relies on `tflint --init` (plugin acquisition) only. If real-world provider-schema-dependent rules start erroring, the follow-up is a per-scope `terraform init`, tracked as a new finding rather than assumed here.
+- No `*.override.hcl` merge and no `AVM_TFLINT_CONFIG_URL`-style remote fetch. The only supported override is `AVM_TFLINT_CONFIG_DIR` pointing at a directory that contains all three configs; otherwise the vendored copies are authoritative.
 
 ## Appendix D. Decision: long-path support on Windows
 

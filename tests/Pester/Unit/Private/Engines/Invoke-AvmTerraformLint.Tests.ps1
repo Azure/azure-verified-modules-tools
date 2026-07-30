@@ -10,6 +10,91 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Resolve-AvmTflintConfigDir' {
+    AfterEach {
+        Remove-Item Env:\AVM_TFLINT_CONFIG_DIR -ErrorAction SilentlyContinue
+    }
+
+    It 'resolves the vendored Resources/tflint directory by default' {
+        $dir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
+        $dir | Should -Not -BeNullOrEmpty
+        (Join-Path $dir 'avm.tflint.hcl')         | Should -Exist
+        (Join-Path $dir 'avm.tflint_module.hcl')  | Should -Exist
+        (Join-Path $dir 'avm.tflint_example.hcl') | Should -Exist
+    }
+
+    It 'honours AVM_TFLINT_CONFIG_DIR when it holds all three configs' {
+        $override = Join-Path $TestDrive 'override-cfg'
+        New-Item -ItemType Directory -Path $override -Force | Out-Null
+        foreach ($f in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+            Set-Content -LiteralPath (Join-Path $override $f) -Value 'config {}' -Encoding utf8
+        }
+        $env:AVM_TFLINT_CONFIG_DIR = $override
+
+        $dir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
+        (Resolve-Path -LiteralPath $dir).ProviderPath | Should -Be (Resolve-Path -LiteralPath $override).ProviderPath
+    }
+
+    It 'ignores an incomplete AVM_TFLINT_CONFIG_DIR and falls back to Resources' {
+        $override = Join-Path $TestDrive 'incomplete-cfg'
+        New-Item -ItemType Directory -Path $override -Force | Out-Null
+        # Only two of the three required configs.
+        Set-Content -LiteralPath (Join-Path $override 'avm.tflint.hcl') -Value 'config {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $override 'avm.tflint_module.hcl') -Value 'config {}' -Encoding utf8
+        $env:AVM_TFLINT_CONFIG_DIR = $override
+
+        $dir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
+        (Resolve-Path -LiteralPath $dir).ProviderPath | Should -Not -Be (Resolve-Path -LiteralPath $override).ProviderPath
+        (Join-Path $dir 'avm.tflint_example.hcl') | Should -Exist
+    }
+}
+
+Describe 'Get-AvmTflintScope' {
+    BeforeEach {
+        $script:root = Join-Path $TestDrive ("scope-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $script:root -Force | Out-Null
+        $script:cfg = Join-Path $TestDrive 'cfgdir'
+    }
+
+    It 'returns only the root scope when modules/ and examples/ are absent' {
+        $scopes = @(InModuleScope 'Avm.Authoring' -Parameters @{ R = $script:root; C = $script:cfg } {
+            param($R, $C)
+            Get-AvmTflintScope -Root $R -ConfigDir $C
+        })
+        $scopes.Count | Should -Be 1
+        $scopes[0].Label  | Should -Be 'root'
+        $scopes[0].RelPath | Should -Be '.'
+        $scopes[0].Config  | Should -BeLike '*avm.tflint.hcl'
+    }
+
+    It 'orders scopes root -> modules (sorted) -> examples (sorted) with matching configs' {
+        # Create out of alphabetical order to prove sorting.
+        foreach ($m in @('foo', 'bar')) {
+            New-Item -ItemType Directory -Path (Join-Path $script:root (Join-Path 'modules' $m)) -Force | Out-Null
+        }
+        foreach ($e in @('default', 'alt')) {
+            New-Item -ItemType Directory -Path (Join-Path $script:root (Join-Path 'examples' $e)) -Force | Out-Null
+        }
+
+        $scopes = InModuleScope 'Avm.Authoring' -Parameters @{ R = $script:root; C = $script:cfg } {
+            param($R, $C)
+            Get-AvmTflintScope -Root $R -ConfigDir $C
+        }
+
+        @($scopes).Count | Should -Be 5
+        $scopes[0].Label | Should -Be 'root'
+        $scopes[1].Label | Should -Be 'modules/bar'
+        $scopes[2].Label | Should -Be 'modules/foo'
+        $scopes[3].Label | Should -Be 'examples/alt'
+        $scopes[4].Label | Should -Be 'examples/default'
+
+        $scopes[1].Config | Should -BeLike '*avm.tflint_module.hcl'
+        $scopes[2].Config | Should -BeLike '*avm.tflint_module.hcl'
+        $scopes[3].Config | Should -BeLike '*avm.tflint_example.hcl'
+        $scopes[4].Config | Should -BeLike '*avm.tflint_example.hcl'
+    }
+}
+
 Describe 'Invoke-AvmTerraformLint' {
     BeforeEach {
         $script:moduleDir = Join-Path $TestDrive ("tf-mod-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -41,7 +126,7 @@ Describe 'Invoke-AvmTerraformLint' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'invokes tflint once with --recursive --format=json and the module root as CWD' {
+    It 'runs --init then a JSON lint for the root scope with the root ruleset' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -51,8 +136,27 @@ Describe 'Invoke-AvmTerraformLint' {
                     Source = 'cache'; Path = '/fake/tflint'
                 }
             }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-            Invoke-AvmTerraformLint -Context $C
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $r = Invoke-AvmTerraformLint -Context $C
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -eq '/fake/tflint' -and
+                ($ArgumentList -contains '--init') -and
+                (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -eq '/fake/tflint' -and
+                ($ArgumentList -contains '--format=json') -and
+                ($ArgumentList -contains '--minimum-failure-severity=warning') -and
+                (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
+            }
+            $r
         }
         $result.Engine         | Should -Be 'terraform'
         $result.Tool           | Should -Be 'tflint/0.55.1'
@@ -60,100 +164,255 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
         $result.FilesProcessed | Should -Be 2
+    }
 
-        InModuleScope 'Avm.Authoring' {
+    It 'applies the module and example rulesets to nested scopes' {
+        $ctx = $script:context
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir (Join-Path 'modules' 'foo')) -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir (Join-Path 'modules' (Join-Path 'foo' 'main.tf'))) -Value 'output "o" { value = 1 }' -Encoding utf8
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir (Join-Path 'examples' 'default')) -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir (Join-Path 'examples' (Join-Path 'default' 'main.tf'))) -Value 'module "m" {}' -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformLint -Context $C
+            $result.Status | Should -Be 'pass'
+            # 3 scopes: root (2 tf) + modules/foo (1 tf) + examples/default (1 tf).
+            $result.FilesProcessed | Should -Be 4
+
+            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter { $ArgumentList -contains '--init' }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $FilePath -eq '/fake/tflint' -and
-                $ArgumentList.Count -eq 2 -and
-                $ArgumentList[0] -eq '--recursive' -and
-                $ArgumentList[1] -eq '--format=json'
+                ($ArgumentList -contains '--format=json') -and (($ArgumentList -join '|') -like '*avm.tflint_module.hcl*')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '--format=json') -and (($ArgumentList -join '|') -like '*avm.tflint_example.hcl*')
             }
         }
     }
 
-    It 'parses JSON issues into structured Issue records' {
+    It 'tags issue filenames with the scope relative path for nested scopes' {
         $ctx = $script:context
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir (Join-Path 'modules' 'foo')) -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir (Join-Path 'modules' (Join-Path 'foo' 'main.tf'))) -Value 'output "o" { value = 1 }' -Encoding utf8
+
         $json = @'
-{
-  "issues": [
-    {
-      "rule": { "name": "terraform_unused_declarations", "severity": "warning" },
-      "message": "variable \"y\" is declared but not used",
-      "range": { "filename": "variables.tf", "start": { "line": 1, "column": 1 } }
-    }
-  ]
-}
+{ "issues": [ { "rule": { "name": "terraform_unused_declarations", "severity": "warning" }, "message": "unused", "range": { "filename": "main.tf", "start": { "line": 3, "column": 1 } } } ] }
 '@
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{
-                    Name = 'tflint'; Version = '0.55.1'; Platform = 'linux-amd64'
-                    Source = 'cache'; Path = '/fake/tflint'
-                }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' } }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            # Only the module scope reports an issue; the root scope is clean.
+            Mock Invoke-AvmProcess -ParameterFilter {
+                ($ArgumentList -contains '--format=json') -and (($ArgumentList -join '|') -like '*avm.tflint_module.hcl*')
+            } { [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' } }
+            Mock Invoke-AvmProcess -ParameterFilter {
+                ($ArgumentList -contains '--format=json') -and (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
+            } { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformLint -Context $C
         }
-        $result.Status         | Should -Be 'pass' # warnings only
+        $result.Status         | Should -Be 'fail'
         $result.Issues.Count   | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'terraform_unused_declarations'
-        $result.Issues[0].Severity | Should -Be 'warning'
-        $result.Issues[0].File | Should -Be 'variables.tf'
-        $result.Issues[0].Line | Should -Be 1
+        $result.Issues[0].File  | Should -Be 'modules/foo/main.tf'
+        $result.Issues[0].Scope | Should -Be 'modules/foo'
+        $result.Issues[0].Line  | Should -Be 3
     }
 
-    It 'marks Status=fail when any issue has severity=error' {
+    It 'fails on a warning-severity issue by default (F17)' {
         $ctx = $script:context
         $json = @'
-{
-  "issues": [
-    {
-      "rule": { "name": "terraform_typed_variables", "severity": "error" },
-      "message": "boom",
-      "range": { "filename": "main.tf", "start": { "line": 5, "column": 3 } }
-    }
-  ]
-}
+{ "issues": [ { "rule": { "name": "terraform_deprecated_interpolation", "severity": "warning" }, "message": "deprecated", "range": { "filename": "main.tf", "start": { "line": 1, "column": 1 } } } ] }
 '@
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{
-                    Name = 'tflint'; Version = '0.55.1'; Platform = 'linux-amd64'
-                    Source = 'cache'; Path = '/fake/tflint'
-                }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' } }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+            }
             Invoke-AvmTerraformLint -Context $C
         }
-        $result.Status            | Should -Be 'fail'
+        $result.Status             | Should -Be 'fail'
+        $result.Issues[0].Severity | Should -Be 'warning'
+    }
+
+    It 'passes when only notice issues exist at the default threshold, fails when threshold is notice' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_comment_syntax", "severity": "notice" }, "message": "note", "range": { "filename": "main.tf", "start": { "line": 1, "column": 1 } } } ] }
+'@
+        $atDefault = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+            }
+            Invoke-AvmTerraformLint -Context $C
+        }
+        $atDefault.Status | Should -Be 'pass'
+
+        $atNotice = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+            }
+            $r = Invoke-AvmTerraformLint -Context $C -MinimumFailureSeverity notice
+
+            Should -Invoke Invoke-AvmProcess -ParameterFilter {
+                $ArgumentList -contains '--minimum-failure-severity=notice'
+            }
+            $r
+        }
+        $atNotice.Status | Should -Be 'fail'
+    }
+
+    It 'fails on an error-severity issue even at the error threshold' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_required_version", "severity": "error" }, "message": "boom", "range": { "filename": "main.tf", "start": { "line": 5, "column": 3 } } } ] }
+'@
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+            }
+            Invoke-AvmTerraformLint -Context $C -MinimumFailureSeverity error
+        }
+        $result.Status             | Should -Be 'fail'
         $result.Issues[0].Severity | Should -Be 'error'
         $result.Issues[0].Line     | Should -Be 5
         $result.Issues[0].Column   | Should -Be 3
     }
 
-    It 'throws AvmProcessException on unexpected tflint exit codes' {
+    It 'passes a clean scope with no issues' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformLint -Context $C
+        }
+        $result.Status       | Should -Be 'pass'
+        $result.Issues.Count | Should -Be 0
+    }
+
+    It 'throws AvmProcessException when tflint --init fails' {
         $ctx = $script:context
         $err = $null
         try {
             InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
                 param($C)
                 Mock Resolve-AvmTool {
-                    [pscustomobject]@{
-                        Name = 'tflint'; Version = '0.55.1'; Platform = 'linux-amd64'
-                        Source = 'cache'; Path = '/fake/tflint'
-                    }
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'tflint blew up' } }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'plugin download failed' }
+                }
                 Invoke-AvmTerraformLint -Context $C
             }
         }
-        catch {
-            $err = $_.Exception
+        catch { $err = $_.Exception }
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'plugin download failed'
+    }
+
+    It 'throws AvmProcessException on unexpected tflint lint exit codes' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'tflint blew up' }
+                }
+                Invoke-AvmTerraformLint -Context $C
+            }
         }
+        catch { $err = $_.Exception }
         $err                | Should -Not -BeNullOrEmpty
         $err.GetType().Name | Should -Be 'AvmProcessException'
         $err.Message        | Should -Match 'tflint blew up'
+    }
+
+    It 'throws AvmProcessException on malformed tflint JSON' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{ ExitCode = 2; StdOut = 'not json {'; StdErr = '' }
+                }
+                Invoke-AvmTerraformLint -Context $C
+            }
+        }
+        catch { $err = $_.Exception }
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'parse tflint'
     }
 }
