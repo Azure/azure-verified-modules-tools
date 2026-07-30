@@ -85,7 +85,7 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
-## [0.1.5] - 2026-08-06
+## [0.1.5] - 2026-07-30
 
 Remediation of the 18 defects (F01–F18) found while end-to-end testing `0.1.4`
 against the canary repo `Azure/terraform-azurerm-avm-ptn-example-repo`.
