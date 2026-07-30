@@ -1,4 +1,4 @@
-# AVM test-only stub for `tflint`. Pinned to tools.lock version 0.55.1.
+# AVM test-only stub for `tflint`. Pinned to avm.pins version 0.55.1.
 # Handles only --version and the Invoke-AvmTerraformLint argv shape.
 
 if ($args.Count -eq 0) {

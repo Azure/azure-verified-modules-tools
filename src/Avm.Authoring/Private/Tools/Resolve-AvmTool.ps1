@@ -12,7 +12,7 @@ function Resolve-AvmTool {
           2. On PATH and reporting the lock-pinned version (-AllowPathFallback).
 
         On a cache miss the helper installs the pinned tool on demand
-        through the verified Install-AvmToolFromLock pipeline (SHA256 +
+        through the verified Install-AvmToolFromPins pipeline (SHA256 +
         atomic rename + cross-process lock, honouring AVM_HOME), then
         re-resolves. This keeps `avm` self-sufficient: consumers never
         have to run `avm tool install` first, locally or in CI.
@@ -23,9 +23,9 @@ function Resolve-AvmTool {
         `avm tool install <name>`.
 
     .PARAMETER Name
-        The tool name as it appears in tools.lock.psd1 (lowercase).
+        The tool name as it appears in avm.pins.jsonc (lowercase).
 
-    .PARAMETER LockPath
+    .PARAMETER PinsPath
         Override the bundled lock file. For tests.
 
     .PARAMETER AllowPathFallback
@@ -39,7 +39,7 @@ function Resolve-AvmTool {
         installing. For locked-down environments and tests.
 
     .PARAMETER AllowFileUrls
-        Test-only escape hatch passed through to Read-AvmToolsLock.
+        Test-only escape hatch passed through to Read-AvmPins.
 
     .OUTPUTS
         pscustomobject with: Name, Version, Platform, Source, Path.
@@ -50,7 +50,7 @@ function Resolve-AvmTool {
         [Parameter(Mandatory)]
         [string] $Name,
 
-        [string] $LockPath,
+        [string] $PinsPath,
 
         [switch] $AllowPathFallback,
 
@@ -63,17 +63,17 @@ function Resolve-AvmTool {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $lock = if ($LockPath) {
-        Read-AvmToolsLock -Path $LockPath -AllowFileUrls:$AllowFileUrls
+    $lock = if ($PinsPath) {
+        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmToolsLock
+        Read-AvmPins
     }
 
     $tool = $lock.tools | Where-Object { $_.name -eq $Name } | Select-Object -First 1
     if (-not $tool) {
         throw [System.ArgumentException]::new(
-            "Unknown tool '$Name' (not in tools.lock).")
+            "Unknown tool '$Name' (not in avm.pins).")
     }
 
     $platform = Get-AvmToolPlatform
@@ -120,7 +120,7 @@ function Resolve-AvmTool {
     }
 
     Write-Information ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -InformationAction Continue
-    $installed = Install-AvmToolFromLock -Tool $tool -Platform $platform
+    $installed = Install-AvmToolFromPins -Tool $tool -Platform $platform
 
     if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {
         throw [AvmToolException]::new(

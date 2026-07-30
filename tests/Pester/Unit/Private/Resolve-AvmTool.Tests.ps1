@@ -16,31 +16,26 @@ BeforeAll {
     if ($urlPath -notmatch '^/') { $urlPath = '/' + $urlPath }
     $script:fileUrl = "file://$urlPath"
 
-    # Build a lock with a single 'fake-tool' entry.
-    $script:lockPath = Join-Path $script:fixtureDir 'tools.lock.psd1'
-    $lockText = @"
-@{
-    schemaVersion = 1
-    tools = @(
-        @{
-            name = 'fake-tool'
-            version = '1.0.0'
-            urlTemplate = '$script:fileUrl'
-            archive = 'raw'
-            entrypoint = 'fake-tool'
-            sha256 = @{
-                'windows-amd64' = '$script:sha'
-                'windows-arm64' = '$script:sha'
-                'linux-amd64' = '$script:sha'
-                'linux-arm64' = '$script:sha'
-                'darwin-amd64' = '$script:sha'
-                'darwin-arm64' = '$script:sha'
+    # Build a pin manifest with a single 'fake-tool' entry.
+    $script:pinsPath = Join-Path $script:fixtureDir 'avm.pins.jsonc'
+    $shaMap = [ordered]@{}
+    foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+        $shaMap[$p] = $script:sha
+    }
+    $pins = [ordered]@{
+        schemaVersion = 1
+        tools         = @(
+            [ordered]@{
+                name        = 'fake-tool'
+                version     = '1.0.0'
+                urlTemplate = $script:fileUrl
+                archive     = 'raw'
+                entrypoint  = 'fake-tool'
+                sha256      = $shaMap
             }
-        }
-    )
-}
-"@
-    Set-Content -LiteralPath $script:lockPath -Value $lockText -Encoding utf8
+        )
+    }
+    Set-Content -LiteralPath $script:pinsPath -Value ($pins | ConvertTo-Json -Depth 8) -Encoding utf8
 
     $script:savedAvmHome = if (Test-Path Env:\AVM_HOME) { $env:AVM_HOME } else { $null }
 }
@@ -64,22 +59,22 @@ Describe 'Resolve-AvmTool' {
     }
 
     It 'throws ArgumentException when the tool name is not in the lock' {
-        $lockPath = $script:lockPath
+        $pinsPath = $script:pinsPath
         {
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
                 param($L)
-                Resolve-AvmTool -Name 'no-such-thing' -LockPath $L -AllowFileUrls
+                Resolve-AvmTool -Name 'no-such-thing' -PinsPath $L -AllowFileUrls
             }
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
     It 'throws AvmToolException with code AVM1014 when missing and auto-install is disabled' {
-        $lockPath = $script:lockPath
+        $pinsPath = $script:pinsPath
         $err = $null
         try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
                 param($L)
-                Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls -NoAutoInstall
+                Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls -NoAutoInstall
             }
         }
         catch {
@@ -93,11 +88,11 @@ Describe 'Resolve-AvmTool' {
     }
 
     It 'returns Source=cache and the entrypoint path after Install-AvmTool plants it' {
-        Install-AvmTool -LockPath $script:lockPath -AllowFileUrls | Out-Null
-        $lockPath = $script:lockPath
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+        Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls | Out-Null
+        $pinsPath = $script:pinsPath
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
             param($L)
-            Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+            Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
         }
         $result.Name | Should -Be 'fake-tool'
         $result.Version | Should -Be '1.0.0'
@@ -109,12 +104,12 @@ Describe 'Resolve-AvmTool' {
 
     It 'does NOT fall back to PATH by default even when -AllowPathFallback is omitted' {
         # pwsh is definitely on PATH; we use it as a stand-in for a missing managed binary.
-        $lockPath = $script:lockPath
+        $pinsPath = $script:pinsPath
         $err = $null
         try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
                 param($L)
-                Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls -NoAutoInstall
+                Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls -NoAutoInstall
             }
         }
         catch {
@@ -125,10 +120,10 @@ Describe 'Resolve-AvmTool' {
     }
 
     It 'auto-installs a missing tool on demand and returns Source=installed' {
-        $lockPath = $script:lockPath
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+        $pinsPath = $script:pinsPath
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
             param($L)
-            Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+            Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
         }
         $result.Name | Should -Be 'fake-tool'
         $result.Version | Should -Be '1.0.0'
@@ -139,14 +134,14 @@ Describe 'Resolve-AvmTool' {
     }
 
     It 'reuses the cache on a second resolve instead of reinstalling' {
-        $lockPath = $script:lockPath
-        $first = InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+        $pinsPath = $script:pinsPath
+        $first = InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
             param($L)
-            Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+            Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
         }
-        $second = InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+        $second = InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
             param($L)
-            Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+            Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
         }
         $first.Source | Should -Be 'installed'
         $second.Source | Should -Be 'cache'
@@ -155,12 +150,12 @@ Describe 'Resolve-AvmTool' {
 
     It 'honours AVM_NO_AUTO_INSTALL=1 and hard-fails without downloading' {
         $env:AVM_NO_AUTO_INSTALL = '1'
-        $lockPath = $script:lockPath
+        $pinsPath = $script:pinsPath
         $err = $null
         try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lockPath } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pinsPath } {
                 param($L)
-                Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+                Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
             }
         }
         catch {
@@ -176,36 +171,31 @@ Describe 'Resolve-AvmTool' {
     }
 
     It 'surfaces an installer failure when the payload hash does not match' {
-        $badLock = Join-Path $script:sandbox 'bad.lock.psd1'
+        $badLock = Join-Path $script:sandbox 'bad.pins.jsonc'
         $badSha = '0' * 64
-        $badText = @"
-@{
-    schemaVersion = 1
-    tools = @(
-        @{
-            name = 'fake-tool'
-            version = '1.0.0'
-            urlTemplate = '$script:fileUrl'
-            archive = 'raw'
-            entrypoint = 'fake-tool'
-            sha256 = @{
-                'windows-amd64' = '$badSha'
-                'windows-arm64' = '$badSha'
-                'linux-amd64' = '$badSha'
-                'linux-arm64' = '$badSha'
-                'darwin-amd64' = '$badSha'
-                'darwin-arm64' = '$badSha'
-            }
+        $badShaMap = [ordered]@{}
+        foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+            $badShaMap[$p] = $badSha
         }
-    )
-}
-"@
-        Set-Content -LiteralPath $badLock -Value $badText -Encoding utf8
+        $badPins = [ordered]@{
+            schemaVersion = 1
+            tools         = @(
+                [ordered]@{
+                    name        = 'fake-tool'
+                    version     = '1.0.0'
+                    urlTemplate = $script:fileUrl
+                    archive     = 'raw'
+                    entrypoint  = 'fake-tool'
+                    sha256      = $badShaMap
+                }
+            )
+        }
+        Set-Content -LiteralPath $badLock -Value ($badPins | ConvertTo-Json -Depth 8) -Encoding utf8
         $err = $null
         try {
             InModuleScope 'Avm.Authoring' -Parameters @{ L = $badLock } {
                 param($L)
-                Resolve-AvmTool -Name 'fake-tool' -LockPath $L -AllowFileUrls
+                Resolve-AvmTool -Name 'fake-tool' -PinsPath $L -AllowFileUrls
             }
         }
         catch {

@@ -59,7 +59,7 @@ fixture in one process.
   `terraform-docs` at ~5 MB compressed) where a smaller surface still proves
   the path.
 - Use real, stable URLs. Anything you assert on (URL, SHA) must come
-  from `src/Avm.Authoring/Resources/tools.lock.psd1` so a vendor
+  from `src/Avm.Authoring/Resources/avm.pins.jsonc` so a vendor
   re-publish is caught here, not in production.
 - Honour `$env:AVM_OFFLINE` — when it is `'1'`, skip the test (don't
   fail). The integration runner should never be the reason an offline build

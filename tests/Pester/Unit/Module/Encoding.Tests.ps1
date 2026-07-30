@@ -29,7 +29,7 @@ BeforeAll {
         '.ps1', '.psm1', '.psd1',
         '.md',
         '.yml', '.yaml',
-        '.json', '.toml',
+        '.json', '.jsonc', '.toml',
         '.sh',
         '.bicep', '.tf'
     )

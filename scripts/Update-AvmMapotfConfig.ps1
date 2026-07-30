@@ -1,14 +1,15 @@
 <#
 .SYNOPSIS
     Mirror (or verify) the Azure/avm-terraform-governance mapotf pre-commit
-    configs vendored under config/mapotf/pre-commit/.
+    configs vendored under src/Avm.Authoring/Resources/mapotf/pre-commit/.
 
 .DESCRIPTION
-    Until Avm.Authoring ships its own canonical copy, the mapotf
-    'pre-commit' transform configs (mapotf-configs/pre-commit/*.mptf.hcl in
-    Azure/avm-terraform-governance) are vendored into this repo so that
-    'mapotf transform --mptf-dir config/mapotf/pre-commit --tf-dir .' runs
-    fully offline against a pinned, reviewed set.
+    Avm.Authoring owns the canonical copy of the mapotf 'pre-commit' transform
+    configs. They originate upstream as mapotf-configs/pre-commit/*.mptf.hcl in
+    Azure/avm-terraform-governance and are vendored into the module's Resources
+    so the transform engine runs 'mapotf transform' fully offline against a
+    pinned, reviewed set. This script refreshes that vendored copy from
+    upstream.
 
     Run with no switches to (re-)mirror every config at -Ref, writing each
     file LF-normalised and UTF-8 (no BOM), overwriting the in-tree copies and
@@ -26,7 +27,8 @@
 .PARAMETER Ref
     Commit SHA (recommended), branch, or tag in Azure/avm-terraform-governance
     to mirror from. Defaults to the recorded pin. Re-point it (and update the
-    default + config/README.md) when intentionally moving the pin.
+    default + docs/quality-standards.md section 12) when intentionally moving
+    the pin.
 
 .PARAMETER Check
     Verify-only. Do not write. Exit 1 on any drift (missing / extra / changed
@@ -34,7 +36,7 @@
 
 .PARAMETER DestinationPath
     Override the local config directory. Defaults to
-    <repo>/config/mapotf/pre-commit.
+    <repo>/src/Avm.Authoring/Resources/mapotf/pre-commit.
 
 .PARAMETER Token
     Optional GitHub token used for the contents API (raises the anonymous
@@ -53,10 +55,11 @@
     CI drift gate: fail if the vendored copy no longer matches governance main.
 
 .NOTES
-    Sync obligation: this vendored bundle is a temporary mirror. Once
-    Avm.Authoring ships and owns the canonical copy, the upstream
-    mapotf-configs/pre-commit/ directory is expected to be deleted and this
-    becomes the source of truth. Until then, keep them in sync via this script.
+    Avm.Authoring is the source of truth for this bundle. Upstream
+    Azure/avm-terraform-governance is expected to drop its
+    mapotf-configs/pre-commit/ copy once every consumer moves onto the module;
+    until then, use this script (and -Check in CI) to keep the vendored copy
+    aligned with the pinned upstream revision.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -68,7 +71,7 @@ param(
     [switch] $Check,
 
     [Parameter()]
-    [string] $DestinationPath = (Join-Path $PSScriptRoot '..' 'config' 'mapotf' 'pre-commit'),
+    [string] $DestinationPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'mapotf' 'pre-commit'),
 
     [Parameter()]
     [string] $Token
@@ -224,4 +227,4 @@ foreach ($name in $localNames) {
 
 Write-Host ""
 Write-Host "Mirrored $written config(s) from $($script:Owner)/$($script:Repo)//$($script:UpstreamDir)@$Ref." -ForegroundColor Green
-Write-Host "Review the diff and commit. If the pin moved, update the -Ref default in this script and config/README.md." -ForegroundColor Cyan
+Write-Host "Review the diff and commit. If the pin moved, update the -Ref default in this script and docs/quality-standards.md section 12." -ForegroundColor Cyan

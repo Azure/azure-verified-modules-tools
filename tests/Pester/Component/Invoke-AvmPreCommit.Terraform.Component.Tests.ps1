@@ -18,10 +18,10 @@
 #      -AllowPathFallback to take effect and the launchers to be used.
 #   4. A minimal terraform module (main.tf + tests/ + README.md with
 #      terraform-docs markers) is materialised under TestDrive/module.
-#   5. The pinned-asset cache for avm-policy-aprl and avm-policy-avmsec
-#      is pre-staged under $env:AVM_HOME/cache/assets/ (cache-hit
-#      fast-path) and a matching .avm/config.json is written under the
-#      fixture root so Invoke-AvmTerraformCheckPolicy resolves both
+#   5. The pinned policy-library cache for avm-policy-aprl and
+#      avm-policy-avmsec is pre-staged under $env:AVM_HOME/cache/assets/
+#      (cache-hit fast-path) with AVM_POLICY_LIBRARY_REF/_SHA256 overriding
+#      the shipped pin, so Invoke-AvmTerraformCheckPolicy resolves both
 #      bundles without ever calling Invoke-AvmHttp.
 
 BeforeAll {
@@ -56,50 +56,34 @@ BeforeAll {
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
     $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests') -Force
 
-    # Pre-stage pinned-asset cache so Invoke-AvmTerraformCheckPolicy's
-    # Resolve-AvmPinnedAsset short-circuits via the cache-hit fast-path
-    # without ever calling Invoke-AvmHttp. Deterministic fake SHA256s
-    # are fine because Resolve-AvmPinnedAsset only re-verifies on
-    # download, not on cache hit; both the schema validator and the
-    # resolver accept any `^[0-9a-f]{64}$` string.
-    # Resolve-AvmPinnedAsset content-addresses the cache by a 12-hex prefix
-    # of the SHA256 (spec §6 line 220), not the full 64-char hash, so the
-    # pre-staged .verified marker must live under that same prefixed segment
-    # for the cache-hit fast-path to short-circuit the Invoke-AvmHttp download.
-    $script:aprlSha = 'a' * 64
-    $script:avmsecSha = 'b' * 64
-    $cacheRoot = Join-Path $env:AVM_HOME 'cache'
-    $aprlVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-aprl') $script:aprlSha.Substring(0, 12)
-    $avmsecVersionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') 'avm-policy-avmsec') $script:avmsecSha.Substring(0, 12)
-    $null = New-Item -ItemType Directory -Path $aprlVersionDir -Force
-    $null = New-Item -ItemType Directory -Path $avmsecVersionDir -Force
-    Set-Content -LiteralPath (Join-Path $aprlVersionDir '.verified') -Value '' -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $avmsecVersionDir '.verified') -Value '' -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $aprlVersionDir 'aprl-fixture.rego') -Value "package aprl`n" -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $avmsecVersionDir 'avmsec-fixture.rego') -Value "package avmsec`n" -Encoding utf8NoBOM
+    # Pre-stage the pinned policy-library cache so
+    # Invoke-AvmTerraformCheckPolicy's Resolve-AvmPinnedAsset short-circuits
+    # via the cache-hit fast-path without ever calling Invoke-AvmHttp.
+    # AVM_POLICY_LIBRARY_REF/_SHA256 override the shipped pin so the fixture
+    # controls both the archive-root name and the content-addressed cache
+    # segment. Resolve-AvmPinnedAsset content-addresses by a 12-hex prefix of
+    # the SHA256 (spec section 6 line 220), not the full 64-char hash, so the
+    # .verified marker must live under that same prefixed segment. Both
+    # bundles come from one archive, hence one SHA but two asset names.
+    $script:originalPolicyRef = $env:AVM_POLICY_LIBRARY_REF
+    $script:originalPolicySha = $env:AVM_POLICY_LIBRARY_SHA256
+    $script:policySha = 'a' * 64
+    $env:AVM_POLICY_LIBRARY_REF = 'v0.0.0-fixture'
+    $env:AVM_POLICY_LIBRARY_SHA256 = $script:policySha
 
-    # Repo-scoped pinned-asset config declaring both policy bundles. The
-    # source URLs end in .zip to satisfy the archive-kind dispatch that
-    # runs BEFORE the cache-hit short-circuit; they are never actually
-    # fetched because the cache marker above already exists.
-    $avmDir = Join-Path $script:fixtureRoot '.avm'
-    $null = New-Item -ItemType Directory -Path $avmDir -Force
-    $configJson = @"
-{
-  "schemaVersion": 1,
-  "assets": {
-    "avm-policy-aprl": {
-      "source": "https://example.invalid/avm-policy-aprl.zip",
-      "sha256": "$($script:aprlSha)"
-    },
-    "avm-policy-avmsec": {
-      "source": "https://example.invalid/avm-policy-avmsec.zip",
-      "sha256": "$($script:avmsecSha)"
+    $archiveRoot = 'policy-library-avm-0.0.0-fixture'
+    $cacheRoot = Join-Path $env:AVM_HOME 'cache'
+    $bundles = @(
+        @{ Name = 'avm-policy-aprl'; Sub = "$archiveRoot/policy/Azure-Proactive-Resiliency-Library-v2"; File = 'aprl-fixture.rego'; Package = 'aprl' }
+        @{ Name = 'avm-policy-avmsec'; Sub = "$archiveRoot/policy/avmsec"; File = 'avmsec-fixture.rego'; Package = 'avmsec' }
+    )
+    foreach ($bundle in $bundles) {
+        $versionDir = Join-Path (Join-Path (Join-Path $cacheRoot 'assets') $bundle.Name) $script:policySha.Substring(0, 12)
+        $bundleDir = Join-Path $versionDir ($bundle.Sub -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $null = New-Item -ItemType Directory -Path $bundleDir -Force
+        Set-Content -LiteralPath (Join-Path $versionDir '.verified') -Value '' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bundleDir $bundle.File) -Value "package $($bundle.Package)`n" -Encoding utf8NoBOM
     }
-  }
-}
-"@
-    Set-Content -LiteralPath (Join-Path $avmDir 'config.json') -Value $configJson -Encoding utf8NoBOM
 
     $mainTf = @(
         '# AVM integration fixture module',
@@ -171,8 +155,7 @@ BeforeAll {
         'crash.log',
         'examples/*/policy',
         'README-generated.md',
-        'terraform.rc',
-        '.avm'
+        'terraform.rc'
     )
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot '.gitignore') -Value (($gitignoreGlobs -join "`n") + "`n") -Encoding utf8NoBOM
 }
@@ -190,6 +173,18 @@ AfterAll {
     }
     else {
         $env:AVM_MANAGED_FILES_LOCAL_PATH = $script:originalManagedFilesLocalPath
+    }
+    if ($null -eq $script:originalPolicyRef) {
+        Remove-Item Env:\AVM_POLICY_LIBRARY_REF -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:AVM_POLICY_LIBRARY_REF = $script:originalPolicyRef
+    }
+    if ($null -eq $script:originalPolicySha) {
+        Remove-Item Env:\AVM_POLICY_LIBRARY_SHA256 -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:AVM_POLICY_LIBRARY_SHA256 = $script:originalPolicySha
     }
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
@@ -294,9 +289,9 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
 
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
-        # rather than 'path'. The fixture writes .avm/config.json plus all the
-        # files required by the seven Slice D rules in BeforeAll, so every
-        # built-in rule passes with zero issues end-to-end.
+        # rather than 'path'. The fixture writes all the files required by the
+        # built-in rules in BeforeAll, so every rule passes with zero issues
+        # end-to-end.
         $byName['check convention'].PSObject.Properties['Status'].Value | Should -Be 'pass'
         $ccResult = $byName['check convention'].PSObject.Properties['Result'].Value
         $ccResult.PSObject.Properties['Engine'].Value     | Should -Be 'terraform'

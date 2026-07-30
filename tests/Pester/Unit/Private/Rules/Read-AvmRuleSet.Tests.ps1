@@ -19,11 +19,11 @@ BeforeAll {
 }
 
 Describe 'Read-AvmRuleSet loader' {
-    It 'returns the built-in smoke rule when there is no per-repo override' {
+    It 'returns the built-in rules when there is no per-repo override' {
         $root = script:NewRoot
         $rules = InModuleScope 'Avm.Authoring' -Parameters @{ P = $root } { param($P) Read-AvmRuleSet -Path $P }
         @($rules).Count | Should -BeGreaterOrEqual 1
-        ($rules | Where-Object Id -eq 'avm.smoke.avm-config-exists') | Should -Not -BeNullOrEmpty
+        ($rules | Where-Object Id -eq 'avm.tf.header-md-must-exist') | Should -Not -BeNullOrEmpty
         $rules[0].Source | Should -Match 'Resources[\\/]Rules[\\/]'
     }
 
@@ -32,23 +32,23 @@ Describe 'Read-AvmRuleSet loader' {
         $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
         New-Item -ItemType Directory -Path $repoDir | Out-Null
 
-        # Override the smoke rule with an upgraded Severity.
+        # Override a shipped built-in with a changed Severity + Description.
         script:WriteRuleFile (Join-Path $repoDir 'override.psd1') @'
 @{
-    Id          = 'avm.smoke.avm-config-exists'
+    Id          = 'avm.tf.header-md-must-exist'
     Kind        = 'FileMustExist'
-    Description = 'OVERRIDDEN: harder line on config'
-    Severity    = 'error'
-    AppliesTo   = 'root'
-    Parameters  = @{ Path = '.avm/config.json' }
+    Description = 'OVERRIDDEN: softer line on the header'
+    Severity    = 'warning'
+    AppliesTo   = 'all'
+    Parameters  = @{ Path = '_header.md' }
 }
 '@
 
         $rules = InModuleScope 'Avm.Authoring' -Parameters @{ P = $root } { param($P) Read-AvmRuleSet -Path $P }
-        $smoke = $rules | Where-Object Id -eq 'avm.smoke.avm-config-exists'
-        $smoke.Severity | Should -Be 'error'
-        $smoke.Description | Should -Match 'OVERRIDDEN'
-        $smoke.Source | Should -Be (Join-Path $repoDir 'override.psd1')
+        $overridden = $rules | Where-Object Id -eq 'avm.tf.header-md-must-exist'
+        $overridden.Severity | Should -Be 'warning'
+        $overridden.Description | Should -Match 'OVERRIDDEN'
+        $overridden.Source | Should -Be (Join-Path $repoDir 'override.psd1')
     }
 
     It 'appends a per-repo rule whose Id does not collide with a built-in' {
@@ -67,7 +67,7 @@ Describe 'Read-AvmRuleSet loader' {
 
         $rules = InModuleScope 'Avm.Authoring' -Parameters @{ P = $root } { param($P) Read-AvmRuleSet -Path $P }
         ($rules | Where-Object Id -eq 'avm.repo.custom-no-foo') | Should -Not -BeNullOrEmpty
-        ($rules | Where-Object Id -eq 'avm.smoke.avm-config-exists') | Should -Not -BeNullOrEmpty
+        ($rules | Where-Object Id -eq 'avm.tf.header-md-must-exist') | Should -Not -BeNullOrEmpty
     }
 
     It 'returns rules sorted by Id (ordinal)' {
@@ -85,9 +85,9 @@ Describe 'Read-AvmRuleSet loader' {
         $rules = InModuleScope 'Avm.Authoring' -Parameters @{ P = $root } { param($P) Read-AvmRuleSet -Path $P }
         $ids = @($rules.Id)
         $sorted = $ids | Sort-Object {$_}
-        # Confirm the loader sorts (ordinal) — alpha comes before smoke comes before zeta.
-        ($ids.IndexOf('avm.alpha'))                    | Should -BeLessThan ($ids.IndexOf('avm.smoke.avm-config-exists'))
-        ($ids.IndexOf('avm.smoke.avm-config-exists'))  | Should -BeLessThan ($ids.IndexOf('avm.zeta'))
+        # Confirm the loader sorts (ordinal): alpha sorts before the built-ins, which sort before zeta.
+        ($ids.IndexOf('avm.alpha'))                    | Should -BeLessThan ($ids.IndexOf('avm.tf.header-md-must-exist'))
+        ($ids.IndexOf('avm.tf.header-md-must-exist'))  | Should -BeLessThan ($ids.IndexOf('avm.zeta'))
     }
 
     It 'throws AvmConfigurationException with the file path when a .psd1 is malformed' {

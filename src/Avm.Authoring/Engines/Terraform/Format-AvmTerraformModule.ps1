@@ -12,7 +12,7 @@ function Format-AvmTerraformModule {
         names of changed files on stdout, which is parsed into Changed.
 
         The terraform binary is resolved via Resolve-AvmTool against the
-        bundled tools.lock. -AllowPathFallback is passed through so callers
+        bundled avm.pins. -AllowPathFallback is passed through so callers
         can opt in to the host PATH when the managed cache is empty.
 
     .PARAMETER Context

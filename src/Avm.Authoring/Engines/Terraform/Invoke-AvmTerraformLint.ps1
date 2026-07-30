@@ -246,13 +246,15 @@ function Invoke-AvmTerraformLint {
                 ("tflint --init for scope '{0}' exited with code {1}{2}" -f $scope.Label, $init.ExitCode, $tail))
         }
 
+        $lintArgs = @(
+            ('--config={0}' -f $scope.Config),
+            '--format=json',
+            ('--minimum-failure-severity={0}' -f $MinimumFailureSeverity)
+        )
+
         $run = Invoke-AvmProcess `
             -FilePath $tool.Path `
-            -ArgumentList @(
-                ('--config={0}' -f $scope.Config),
-                '--format=json',
-                ('--minimum-failure-severity={0}' -f $MinimumFailureSeverity)
-            ) `
+            -ArgumentList $lintArgs `
             -WorkingDirectory $scope.Dir `
             -IgnoreExitCode
 

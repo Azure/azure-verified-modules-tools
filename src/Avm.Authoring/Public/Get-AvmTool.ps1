@@ -1,7 +1,7 @@
 function Get-AvmTool {
     <#
     .SYNOPSIS
-        List or query managed tools from the tools.lock manifest.
+        List or query managed tools from the avm.pins manifest.
 
     .DESCRIPTION
         With no -Name, returns one pscustomobject per tool in the lock. With
@@ -33,8 +33,8 @@ function Get-AvmTool {
     .PARAMETER Name
         One or more tool names (lowercase). Case-sensitive against the lock.
 
-    .PARAMETER LockPath
-        Override the bundled Resources/tools.lock.psd1. Intended for tests.
+    .PARAMETER PinsPath
+        Override the bundled Resources/avm.pins.jsonc. Intended for tests.
 
     .PARAMETER AllowPathFallback
         Also probe PATH, mirroring the engines' -AllowPathFallback opt-in. Off
@@ -47,11 +47,11 @@ function Get-AvmTool {
         [Parameter(Position = 0)]
         [string[]] $Name,
 
-        [string] $LockPath,
+        [string] $PinsPath,
 
         [switch] $AllowPathFallback,
 
-        # Test-only escape hatch (see Test-AvmToolsLock). Hidden from help
+        # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
         [switch] $AllowFileUrls
@@ -60,11 +60,11 @@ function Get-AvmTool {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $lock = if ($LockPath) {
-        Read-AvmToolsLock -Path $LockPath -AllowFileUrls:$AllowFileUrls
+    $lock = if ($PinsPath) {
+        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmToolsLock
+        Read-AvmPins
     }
     $tools = @($lock.tools)
     $platform = Get-AvmToolPlatform

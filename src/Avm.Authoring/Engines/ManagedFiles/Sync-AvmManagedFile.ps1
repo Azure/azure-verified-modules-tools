@@ -494,8 +494,9 @@ function Get-AvmManagedFilesKnownRepoId {
         [object] $RepositoryConfig
     )
 
-    if (-not $RepositoryConfig) { return @() }
-    if (-not ($RepositoryConfig.PSObject.Properties.Name -contains 'repositoryGroups')) { return @() }
+    [string[]] $none = @()
+    if (-not $RepositoryConfig) { return $none }
+    if (-not ($RepositoryConfig.PSObject.Properties.Name -contains 'repositoryGroups')) { return $none }
 
     $ids = New-Object System.Collections.Generic.List[string]
     foreach ($group in @($RepositoryConfig.repositoryGroups)) {
@@ -506,7 +507,8 @@ function Get-AvmManagedFilesKnownRepoId {
         }
     }
 
-    return @($ids | Select-Object -Unique)
+    [string[]] $unique = @($ids | Select-Object -Unique)
+    return $unique
 }
 
 function Test-AvmManagedFilesInteractive {

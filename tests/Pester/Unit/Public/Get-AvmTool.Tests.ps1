@@ -17,9 +17,25 @@ BeforeAll {
     if ($urlPath -notmatch '^/') { $urlPath = '/' + $urlPath }
     $script:fileUrl = "file://$urlPath"
 
-    $script:lockPath = Join-Path $script:fixtureDir 'tools.lock.psd1'
-    $lockText = "@{`n    schemaVersion = 1`n    tools = @(`n        @{`n            name = 'fake-tool'`n            version = '1.0.0'`n            urlTemplate = '$script:fileUrl'`n            archive = 'raw'`n            entrypoint = 'fake-tool'`n            sha256 = @{`n                'windows-amd64' = '$script:sha'`n                'windows-arm64' = '$script:sha'`n                'linux-amd64' = '$script:sha'`n                'linux-arm64' = '$script:sha'`n                'darwin-amd64' = '$script:sha'`n                'darwin-arm64' = '$script:sha'`n            }`n        }`n    )`n}`n"
-    Set-Content -LiteralPath $script:lockPath -Value $lockText -Encoding utf8
+    $script:pinsPath = Join-Path $script:fixtureDir 'avm.pins.jsonc'
+    $shaMap = [ordered]@{}
+    foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+        $shaMap[$p] = $script:sha
+    }
+    $pins = [ordered]@{
+        schemaVersion = 1
+        tools         = @(
+            [ordered]@{
+                name        = 'fake-tool'
+                version     = '1.0.0'
+                urlTemplate = $script:fileUrl
+                archive     = 'raw'
+                entrypoint  = 'fake-tool'
+                sha256      = $shaMap
+            }
+        )
+    }
+    Set-Content -LiteralPath $script:pinsPath -Value ($pins | ConvertTo-Json -Depth 8) -Encoding utf8
 
     # Sandbox AVM_HOME so tool installs land under $TestDrive, not the real
     # %LOCALAPPDATA% / XDG / ~/Library tree.
@@ -45,7 +61,7 @@ AfterAll {
 Describe 'Get-AvmTool' {
     Context 'list mode (no -Name)' {
         It 'returns one pscustomobject per tool in the lock' {
-            $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+            $rows = @(Get-AvmTool -PinsPath $script:pinsPath -AllowFileUrls)
             $rows.Count | Should -Be 1
             $rows[0].Name | Should -Be 'fake-tool'
             $rows[0].Version | Should -Be '1.0.0'
@@ -58,7 +74,7 @@ Describe 'Get-AvmTool' {
             $prev = $env:AVM_HOME
             $env:AVM_HOME = $miniSandbox
             try {
-                $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+                $rows = @(Get-AvmTool -PinsPath $script:pinsPath -AllowFileUrls)
                 $rows[0].Status | Should -Be 'not-installed'
                 $rows[0].Path | Should -BeNullOrEmpty
                 $rows[0].Source | Should -BeNullOrEmpty
@@ -75,7 +91,7 @@ Describe 'Get-AvmTool' {
             $env:AVM_HOME = $miniSandbox
             $env:AVM_NO_AUTO_INSTALL = '1'
             try {
-                $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+                $rows = @(Get-AvmTool -PinsPath $script:pinsPath -AllowFileUrls)
                 $rows[0].Status | Should -Be 'auto-install-disabled'
                 $rows[0].Path | Should -BeNullOrEmpty
                 $rows[0].Source | Should -BeNullOrEmpty
@@ -87,8 +103,8 @@ Describe 'Get-AvmTool' {
         }
 
         It 'reports Status=installed and a real Path after install' {
-            Install-AvmTool -LockPath $script:lockPath -AllowFileUrls | Out-Null
-            $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+            Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls | Out-Null
+            $rows = @(Get-AvmTool -PinsPath $script:pinsPath -AllowFileUrls)
             $rows[0].Status | Should -Be 'installed'
             $rows[0].Source | Should -Be 'cache'
             $rows[0].Path | Should -Not -BeNullOrEmpty
@@ -98,12 +114,12 @@ Describe 'Get-AvmTool' {
 
     Context 'which mode (-Name)' {
         It 'returns only the requested tool' {
-            $row = Get-AvmTool -Name 'fake-tool' -LockPath $script:lockPath -AllowFileUrls
+            $row = Get-AvmTool -Name 'fake-tool' -PinsPath $script:pinsPath -AllowFileUrls
             $row.Name | Should -Be 'fake-tool'
         }
 
         It 'throws ArgumentException for an unknown tool name' {
-            { Get-AvmTool -Name 'no-such-tool' -LockPath $script:lockPath -AllowFileUrls } |
+            { Get-AvmTool -Name 'no-such-tool' -PinsPath $script:pinsPath -AllowFileUrls } |
                 Should -Throw -ExceptionType ([System.ArgumentException])
         }
     }
@@ -111,18 +127,18 @@ Describe 'Get-AvmTool' {
 
 Describe 'avm tool dispatcher routes' {
     It 'routes "avm tool list" to Get-AvmTool' {
-        $rows = @(avm tool list --LockPath $script:lockPath --AllowFileUrls)
+        $rows = @(avm tool list --PinsPath $script:pinsPath --AllowFileUrls)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }
 
     It 'routes "avm tool which NAME" to Get-AvmTool -Name' {
-        $row = avm tool which fake-tool --LockPath $script:lockPath --AllowFileUrls
+        $row = avm tool which fake-tool --PinsPath $script:pinsPath --AllowFileUrls
         $row.Name | Should -Be 'fake-tool'
     }
 
     It 'accepts kebab-case flags ("--allow-path-fallback" -> "AllowPathFallback")' {
-        $rows = @(avm tool list --lock-path $script:lockPath --allow-file-urls --allow-path-fallback)
+        $rows = @(avm tool list --pins-path $script:pinsPath --allow-file-urls --allow-path-fallback)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }

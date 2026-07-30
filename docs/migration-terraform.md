@@ -45,7 +45,7 @@ in sync, and a custom CA story for corporate networks.
 - **Same upstream binaries**: every engine shells out to the canonical
   tool (`terraform`, `tflint`, `terraform-docs`, `conftest`) — no
   alternate implementation, no re-implementation drift. The module
-  pins each tool's version in `Resources/tools.lock.psd1` and downloads
+  pins each tool's version in `Resources/avm.pins.jsonc` and downloads
   the official archive on first use into a per-user cache.
 - **Same upstream policies**: APRL and AVMSEC are referenced exactly as
   they are upstream; the module fetches the bundles at the version the
@@ -181,20 +181,21 @@ asset-consuming engine that's wired) is:
   "schemaVersion": 1,
   "assets": {
     "avm-policy-aprl": {
-      "type": "archive",
-      "url": "https://github.com/Azure/policy-library-avm/archive/refs/tags/<ref>.tar.gz",
+      "source": "https://github.com/Azure/policy-library-avm/archive/refs/tags/<ref>.tar.gz",
       "sha256": "<64-hex>",
-      "subdirectory": "policy-library-avm-<ref>/policy/Azure-Proactive-Resiliency-Library-v2"
+      "path": "policy-library-avm-<ref>/policy/Azure-Proactive-Resiliency-Library-v2"
     },
     "avm-policy-avmsec": {
-      "type": "archive",
-      "url": "https://github.com/Azure/policy-library-avm/archive/refs/tags/<ref>.tar.gz",
+      "source": "https://github.com/Azure/policy-library-avm/archive/refs/tags/<ref>.tar.gz",
       "sha256": "<64-hex>",
-      "subdirectory": "policy-library-avm-<ref>/policy/avmsec"
+      "path": "policy-library-avm-<ref>/policy/avmsec"
     }
   }
 }
 ```
+
+The archive format is inferred from the `source` extension (`.tar.gz`/`.tgz`
+or `.zip`); `path` names the sub-directory inside the extracted archive.
 
 The downloader (`Resolve-AvmPinnedAsset`) verifies the SHA256, caches
 the extracted directory under
@@ -230,7 +231,7 @@ exactly this status today.
 | `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
 The pinned tool versions live in
-`src/Avm.Authoring/Resources/tools.lock.psd1`. Today: `terraform`,
+`src/Avm.Authoring/Resources/avm.pins.jsonc`. Today: `terraform`,
 `tflint`, `terraform-docs`, `conftest` (and `bicep` for the unrelated
 Bicep engine).
 
@@ -241,7 +242,7 @@ Bicep engine).
 These items are tracked in [`docs/progress.md`](progress.md) and the
 status here will lag the canonical checklist by at most one slice.
 
-- **`avm transform`** — needs `mapotf` in `tools.lock.psd1` plus a
+- **`avm transform`** — needs `mapotf` in `avm.pins.jsonc` plus a
   pinned `mapotf-configs` asset. The upstream `Azure/mapotf` repo has
   no GitHub Releases; only `go install` is supported. Blocked on the
   architectural decision in `progress.md` § *Phase 2 §2 supply-chain

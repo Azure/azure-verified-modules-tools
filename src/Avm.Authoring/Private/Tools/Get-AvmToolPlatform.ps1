@@ -4,7 +4,7 @@ function Get-AvmToolPlatform {
         Return the current OS/arch as a 'windows-amd64' style platform tag.
 
     .DESCRIPTION
-        This is the canonical platform key used in tools.lock.psd1. The OS
+        This is the canonical platform key used in avm.pins.jsonc. The OS
         component is one of windows|linux|darwin and the architecture
         component is one of amd64|arm64. Any other combination throws
         PlatformNotSupportedException.

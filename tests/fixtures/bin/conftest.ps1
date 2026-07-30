@@ -1,4 +1,4 @@
-# AVM test-only stub for `conftest`. Pinned to tools.lock version 0.68.2 so
+# AVM test-only stub for `conftest`. Pinned to avm.pins version 0.68.2 so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
 # Handles only the verbs Invoke-AvmTerraformCheckPolicy actually invokes:

@@ -40,16 +40,16 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Layout/Test-AvmModuleLayout.ps1`         | Module-shape validator used by `./build.ps1 layout` and the publish gate.          |
 | `Private/Process/Invoke-AvmProcess.ps1`           | Subprocess primitive: argv-verbatim, stdout/stderr capture, exit/timeout policy.   |
 | `Private/Tools/Get-AvmToolPlatform.ps1`           | Detect host platform string (e.g. `windows-amd64`) for tool sha256 lookup.         |
-| `Private/Tools/Test-AvmToolsLock.ps1`             | Schema validator for `tools.lock.psd1`. Throws on any violation.                   |
-| `Private/Tools/Read-AvmToolsLock.ps1`             | Load + validate a lock file. Defaults to the bundled `Resources/tools.lock.psd1`.  |
+| `Private/Tools/Test-AvmPins.ps1`             | Schema validator for `avm.pins.jsonc`. Throws on any violation.                   |
+| `Private/Tools/Read-AvmPins.ps1`             | Load + validate a lock file. Defaults to the bundled `Resources/avm.pins.jsonc`.  |
 | `Private/Tools/Invoke-AvmHttp.ps1`                | HTTPS/file download primitive with SHA256 verify, TLS pin, AVM_OFFLINE/MIRROR.     |
 | `Private/Tools/Expand-AvmToolArchive.ps1`         | Extract `zip` / `tar.gz` / `raw` archives into a staging directory.                |
 | `Private/Tools/Lock-AvmToolCache.ps1`             | Cross-process file lock under `<Tools>/<name>/.lock` (retry, timeout).             |
-| `Private/Tools/Install-AvmToolFromLock.ps1`       | One-tool install orchestrator: stage -> verify -> atomic rename -> `.verified`.    |
+| `Private/Tools/Install-AvmToolFromPins.ps1`       | One-tool install orchestrator: stage -> verify -> atomic rename -> `.verified`.    |
 | `Private/Tools/Find-AvmToolOnPath.ps1`            | PATH fallback resolver used by `Get-AvmTool` when no cache hit is present.         |
 | `Private/Tools/Resolve-AvmTool.ps1`               | Cache-first path resolver used by the engines (cache -> optional PATH -> throw).   |
 | `Resources/PSScriptAnalyzerSettings.psd1`         | Lint rules consumed by `./build.ps1 lint`.                                         |
-| `Resources/tools.lock.psd1`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
+| `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
 
 ### Exception taxonomy
 
@@ -114,21 +114,21 @@ avm pre-commit      # Invoke-AvmPreCommit (format -> lint -> test)
 Remove-Module Avm.Authoring
 ```
 
-The bundled `Resources/tools.lock.psd1` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
+The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
 ### Refreshing the tools lock
 
-Maintainers refresh canonical entries with `scripts/Update-AvmToolsLock.ps1`. The script fetches official checksums (terraform, tflint, terraform-docs) or downloads each per-platform binary and computes SHA256 locally (bicep), validates the result through `Test-AvmToolsLock`, then rewrites `Resources/tools.lock.psd1` with deterministic formatting.
+Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The script fetches official checksums (terraform, tflint, terraform-docs) or downloads each per-platform binary and computes SHA256 locally (bicep), validates the result through `Test-AvmPins`, then rewrites `Resources/avm.pins.jsonc` with deterministic formatting.
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmToolsLock.ps1 -Terraform 1.15.3 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.3 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
 
 # Refresh just one
-./scripts/Update-AvmToolsLock.ps1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0
 
 # Preview without writing
-./scripts/Update-AvmToolsLock.ps1 -Terraform 1.15.3 -WhatIf
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.3 -WhatIf
 ```
 
 The lock schema accepts an optional `platformAliases` map for tools whose release assets don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches. Finally, an optional `archives` map allows tools that ship different archive types per OS (terraform-docs, for example, uses `tar.gz` on darwin/linux and `zip` on windows) — when present, every supported platform must be listed and `urlTemplate` may reference the `{ext}` placeholder which expands to `.zip` / `.tar.gz` / `''` per the resolved archive type. don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches.

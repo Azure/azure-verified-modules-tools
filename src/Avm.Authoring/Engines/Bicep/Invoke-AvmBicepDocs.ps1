@@ -24,7 +24,7 @@ function Invoke-AvmBicepDocs {
     .PARAMETER AllowPathFallback
         Reserved for symmetry with the terraform engine; will be passed
         through to Resolve-AvmTool once the new docs CLI is added to
-        tools.lock.psd1.
+        avm.pins.jsonc.
 
     .PARAMETER OutputFile
         README path (relative to module root) to inject into. Reserved

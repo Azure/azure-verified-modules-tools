@@ -24,10 +24,8 @@ BeforeAll {
 
     # Pre-stages the minimum on-disk shape (files + dirs + .gitignore) that
     # satisfies every error-severity built-in rule shipped under
-    # src/Avm.Authoring/Resources/Rules/. After calling this, the only
-    # built-in rule that should still fire is the warning-severity smoke
-    # rule (avm.smoke.avm-config-exists), because no .avm/config.json is
-    # written. Tests can then layer their own per-repo rules on top.
+    # src/Avm.Authoring/Resources/Rules/. After calling this, no built-in
+    # rule should fire. Tests can then layer their own per-repo rules on top.
     function script:NewBaselineRoot {
         $root = script:NewRoot
         $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -67,21 +65,32 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $result.ToolSource | Should -Be 'builtin'
     }
 
-    It 'returns status=pass when every error-severity built-in rule is satisfied (only the smoke warning fires)' {
-        # Baseline root pre-stages files for the Slice D error rules
-        # (terraform.tf, _header.md, examples/, tests/, .gitignore) so the
-        # only built-in rule that still fires is the smoke rule. No
-        # .avm/config.json is written, so the smoke rule emits a warning,
-        # which must not flip Status to fail.
+    It 'returns status=pass when only warning-severity issues fire' {
+        # Baseline root satisfies every error-severity built-in rule
+        # (terraform.tf, _header.md, examples/, tests/, .gitignore), so no
+        # built-in rule fires. A per-repo warning-severity rule for a missing
+        # file is layered on to prove a firing warning does not flip Status.
         $root = script:NewBaselineRoot
+        $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
+        New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+        script:WriteRuleFile (Join-Path $repoDir 'warn.psd1') @'
+@{
+    Id          = 'avm.warn.optional-file'
+    Kind        = 'FileMustExist'
+    Description = 'optional file is recommended'
+    Severity    = 'warning'
+    AppliesTo   = 'root'
+    Parameters  = @{ Path = 'OPTIONAL.md' }
+}
+'@
         $ctx = script:NewTerraformContext $root
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C) Invoke-AvmTerraformCheckConvention -Context $C
         }
         $result.Status | Should -Be 'pass'
-        $smokeIssues = @($result.Issues | Where-Object Code -eq 'avm.smoke.avm-config-exists')
-        $smokeIssues.Count | Should -BeGreaterOrEqual 1
-        $smokeIssues[0].Severity | Should -Be 'warning'
+        $warnIssues = @($result.Issues | Where-Object Code -eq 'avm.warn.optional-file')
+        $warnIssues.Count | Should -BeGreaterOrEqual 1
+        $warnIssues[0].Severity | Should -Be 'warning'
     }
 
     It 'returns status=fail when at least one issue is severity=error' {

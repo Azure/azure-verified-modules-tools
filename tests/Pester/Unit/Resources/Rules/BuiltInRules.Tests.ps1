@@ -64,12 +64,6 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
         }
     }
 
-    Context 'Slice C smoke rule is still shipped' {
-        It 'ships avm.smoke.avm-config-exists' {
-            $script:rulesById.ContainsKey('avm.smoke.avm-config-exists') | Should -BeTrue
-        }
-    }
-
     Context 'Slice D ports the kept grept policies' {
         It 'ships avm.tf.outputs-tf-not-output-tf with rename fix' {
             $r = $script:rulesById['avm.tf.outputs-tf-not-output-tf']

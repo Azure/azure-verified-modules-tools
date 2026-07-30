@@ -1,7 +1,7 @@
-function Install-AvmToolFromLock {
+function Install-AvmToolFromPins {
     <#
     .SYNOPSIS
-        Install a single tool entry from a parsed tools.lock into the cache.
+        Install a single tool entry from a parsed avm.pins into the cache.
 
     .DESCRIPTION
         Internal worker invoked by the public Install-AvmTool. Performs the
@@ -21,6 +21,8 @@ function Install-AvmToolFromLock {
            10. Release lock; return final path.
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = 'Noun mirrors the avm.pins.jsonc manifest, which holds many pins.')]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [hashtable] $Tool,

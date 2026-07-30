@@ -22,24 +22,6 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Ecosystem = 'terraform'
             Source    = 'path-heuristic'
         }
-
-        $script:bothAssets = [pscustomobject]@{
-            Assets  = [ordered]@{
-                'avm-policy-aprl'   = [pscustomobject]@{
-                    Source = 'https://example.test/aprl.tar.gz'
-                    Ref    = 'v1.0.0'
-                    Sha256 = ('a' * 64)
-                    Type   = 'archive'
-                }
-                'avm-policy-avmsec' = [pscustomobject]@{
-                    Source = 'https://example.test/avmsec.tar.gz'
-                    Ref    = 'v2.0.0'
-                    Sha256 = ('b' * 64)
-                    Type   = 'archive'
-                }
-            }
-            Sources = [ordered]@{}
-        }
     }
 
     It 'rejects a non-terraform context' {
@@ -57,71 +39,39 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'throws AvmConfigurationException when avm-policy-aprl is missing' {
+    It 'resolves both bundles from the shipped pin manifest with no repository config' {
         $ctx = $script:context
-        $assets = [pscustomobject]@{
-            Assets  = [ordered]@{
-                'avm-policy-avmsec' = [pscustomobject]@{
-                    Source = 'https://example.test/avmsec.tar.gz'; Ref = 'v1.0.0'; Sha256 = ('b' * 64); Type = 'archive'
-                }
+        $captured = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $seen = [ordered]@{}
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+            Mock Resolve-AvmPinnedAsset {
+                param($Name, $Asset)
+                $seen[$Name] = $Asset
+                [pscustomobject]@{ Name = $Name; Sha256 = $Asset.Sha256; Ref = $Asset.Ref; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
             }
-            Sources = [ordered]@{}
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            $null = Invoke-AvmTerraformCheckPolicy -Context $C
+            $seen
         }
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
-                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
-                Mock Resolve-AvmPinnedAsset { throw 'should not be called' }
-                Mock Invoke-AvmProcess { throw 'should not be called' }
-                Invoke-AvmTerraformCheckPolicy -Context $C
-            }
-        }
-        catch {
-            $err = $_.Exception
-        }
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmConfigurationException'
-        $err.Message        | Should -Match 'avm-policy-aprl'
-    }
 
-    It 'throws AvmConfigurationException when avm-policy-avmsec is missing' {
-        $ctx = $script:context
-        $assets = [pscustomobject]@{
-            Assets  = [ordered]@{
-                'avm-policy-aprl' = [pscustomobject]@{
-                    Source = 'https://example.test/aprl.tar.gz'; Ref = 'v1.0.0'; Sha256 = ('a' * 64); Type = 'archive'
-                }
-            }
-            Sources = [ordered]@{}
+        $captured.Keys | Should -Contain 'avm-policy-aprl'
+        $captured.Keys | Should -Contain 'avm-policy-avmsec'
+        foreach ($name in @('avm-policy-aprl', 'avm-policy-avmsec')) {
+            $captured[$name].Source | Should -Match '^https://github\.com/Azure/policy-library-avm/archive/refs/tags/v'
+            $captured[$name].Sha256 | Should -Match '^[0-9a-f]{64}$'
+            $captured[$name].Type   | Should -Be 'archive'
+            $captured[$name].Path   | Should -Match '^policy-library-avm-[0-9][^/]*/policy/'
         }
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
-                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
-                Mock Resolve-AvmPinnedAsset { throw 'should not be called' }
-                Mock Invoke-AvmProcess { throw 'should not be called' }
-                Invoke-AvmTerraformCheckPolicy -Context $C
-            }
-        }
-        catch {
-            $err = $_.Exception
-        }
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmConfigurationException'
-        $err.Message        | Should -Match 'avm-policy-avmsec'
+        $captured['avm-policy-aprl'].Path   | Should -Match '/policy/Azure-Proactive-Resiliency-Library-v2$'
+        $captured['avm-policy-avmsec'].Path | Should -Match '/policy/avmsec$'
     }
 
     It 'invokes conftest with the resolved bundle paths from the module root' {
         $ctx = $script:context
-        $assets = $script:bothAssets
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-            param($C, $A)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
             Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-            Mock Read-AvmAssetConfig { $A }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
                 if ($Name -eq 'avm-policy-aprl') {
@@ -164,7 +114,6 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
     It 'parses failures into Issue records with Severity error' {
         $ctx = $script:context
-        $assets = $script:bothAssets
         $json = @'
 [
   {
@@ -178,10 +127,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
   }
 ]
 '@
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets; J = $json } {
-            param($C, $A, $J)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
             Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-            Mock Read-AvmAssetConfig { $A }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
                 [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -200,7 +148,6 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
     It 'parses warnings as Severity warning without failing' {
         $ctx = $script:context
-        $assets = $script:bothAssets
         $json = @'
 [
   {
@@ -214,10 +161,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
   }
 ]
 '@
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets; J = $json } {
-            param($C, $A, $J)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
             Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-            Mock Read-AvmAssetConfig { $A }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
                 [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -234,7 +180,6 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
     It 'flattens mixed failures and warnings across multiple files' {
         $ctx = $script:context
-        $assets = $script:bothAssets
         $json = @'
 [
   {
@@ -253,10 +198,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
   }
 ]
 '@
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets; J = $json } {
-            param($C, $A, $J)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
             Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-            Mock Read-AvmAssetConfig { $A }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
                 [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -278,13 +222,11 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
     It 'throws AvmProcessException on unexpected conftest exit codes' {
         $ctx = $script:context
-        $assets = $script:bothAssets
         $err = $null
         try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -304,14 +246,12 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
     It 'returns the resolver-provided ToolSource on path fallback' {
         $ctx = $script:context
-        $assets = $script:bothAssets
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-            param($C, $A)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
             Mock Resolve-AvmTool {
                 param($Name, [switch] $AllowPathFallback)
                 [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'path'; Path = '/usr/local/bin/conftest' }
             }
-            Mock Read-AvmAssetConfig { $A }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
                 [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -339,11 +279,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Set-Content -LiteralPath $barFile -Value 'package y' -Encoding utf8
 
             $ctx = $script:context
-            $assets = $script:bothAssets
-            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -378,11 +316,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Set-Content -LiteralPath $lowerFile -Value 'package l' -Encoding utf8
 
             $ctx = $script:context
-            $assets = $script:bothAssets
-            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -402,11 +338,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
         It 'emits no exceptions args when examples directory is absent' {
             $ctx = $script:context
-            $assets = $script:bothAssets
-            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -427,11 +361,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             $null = New-Item -ItemType Directory -Path (Join-Path $script:examplesRoot 'bar') -Force
 
             $ctx = $script:context
-            $assets = $script:bothAssets
-            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }
@@ -456,11 +388,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Set-Content -LiteralPath (Join-Path $exFoo 'data.json') -Value '{}' -Encoding utf8
 
             $ctx = $script:context
-            $assets = $script:bothAssets
-            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $assets } {
-                param($C, $A)
+            $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
                 Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
-                Mock Read-AvmAssetConfig { $A }
                 Mock Resolve-AvmPinnedAsset {
                     param($Name, $Asset)
                     [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' }

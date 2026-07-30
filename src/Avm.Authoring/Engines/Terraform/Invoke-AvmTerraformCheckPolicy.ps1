@@ -12,20 +12,16 @@ function Invoke-AvmTerraformCheckPolicy {
 
           1. Resolve the 'conftest' binary via Resolve-AvmTool (cache
              first; -AllowPathFallback enables PATH fallback when set).
-          2. Load the merged pinned-asset config via Read-AvmAssetConfig
-             from $Context.Root (walks upward for .avm/config.json,
-             falls back to <Config>/avm.config.json for per-user defaults).
-          3. Look up two named asset descriptors by convention:
+          2. Resolve two policy bundles from the pinned policy library in
+             the module's pin manifest (Resources/avm.pins.jsonc):
                 avm-policy-aprl   - the Azure Proactive Resiliency Library bundle
                 avm-policy-avmsec - the AVM Security bundle
-             If either is missing, throw AvmConfigurationException with a
-             "declare these in .avm/config.json" message. The dispatcher
-             (Invoke-AvmCheckPolicy via Invoke-AvmPrCheck) maps that to
-             Status='skipped' so the chain still flows for unconfigured
-             repos.
-          4. Materialise each asset via Resolve-AvmPinnedAsset and capture
-             the on-disk Path.
-          5. Run conftest:
+             These ship with the module, so no repository configuration is
+             required and the verb works on a clean checkout.
+             AVM_POLICY_LIBRARY_REF + AVM_POLICY_LIBRARY_SHA256 override the
+             pinned ref for testing an unreleased policy set; both are
+             required together.
+          3. Run conftest:
                 conftest test --policy <APRL> --policy <AVMSEC>
                               [--policy <example-exception>]...
                               --output json --parser hcl2 .
@@ -33,7 +29,7 @@ function Invoke-AvmTerraformCheckPolicy {
              discovered as <Root>/examples/<name>/exceptions/*.rego (top-
              level glob only) and appended in ordinal-sorted order, so
              argv is stable across operating systems and locale.
-          6. Parse the JSON output: an array of per-file/per-namespace
+          4. Parse the JSON output: an array of per-file/per-namespace
              records each carrying 'failures' (severity=error) and
              'warnings' (severity=warning) lists. Flatten into the shared
              Issue record shape.
@@ -78,21 +74,11 @@ function Invoke-AvmTerraformCheckPolicy {
 
     $tool = Resolve-AvmTool -Name 'conftest' -AllowPathFallback:$AllowPathFallback
 
-    $assetConfig = Read-AvmAssetConfig -Path $Context.Root
-
     $aprlName = 'avm-policy-aprl'
     $avmsecName = 'avm-policy-avmsec'
 
-    $missing = New-Object System.Collections.Generic.List[string]
-    if (-not $assetConfig.Assets.Contains($aprlName)) { $missing.Add($aprlName) }
-    if (-not $assetConfig.Assets.Contains($avmsecName)) { $missing.Add($avmsecName) }
-    if ($missing.Count -gt 0) {
-        throw [AvmConfigurationException]::new(
-            ("avm check policy requires pinned policy bundles '{0}'. Declare them in .avm/config.json (or your per-user <Config>/avm.config.json) with 'source' + 'sha256' for each." -f ($missing -join "', '")))
-    }
-
-    $aprlAsset = Resolve-AvmPinnedAsset -Name $aprlName -Asset $assetConfig.Assets[$aprlName]
-    $avmsecAsset = Resolve-AvmPinnedAsset -Name $avmsecName -Asset $assetConfig.Assets[$avmsecName]
+    $aprlAsset = Resolve-AvmPolicyBundle -Name $aprlName
+    $avmsecAsset = Resolve-AvmPolicyBundle -Name $avmsecName
 
     # Per-example exceptions: examples/<name>/exceptions/*.rego (top-level glob;
     # spec wording is one level deep). Each match is appended as an additional

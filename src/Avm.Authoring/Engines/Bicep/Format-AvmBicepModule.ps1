@@ -12,7 +12,7 @@ function Format-AvmBicepModule {
         actually modified by hashing content before and after.
 
         The bicep binary is resolved via Resolve-AvmTool against the bundled
-        tools.lock. -AllowPathFallback is passed through so callers can opt
+        avm.pins. -AllowPathFallback is passed through so callers can opt
         in to the host PATH when the managed cache is empty.
 
     .PARAMETER Context
