@@ -162,6 +162,53 @@ Placeholder.
         }
     }
 
+    Context '-AllowMissing' {
+
+        It 'returns nothing instead of throwing when the CHANGELOG file is missing' {
+            $missing = Join-Path $TestDrive 'does-not-exist.md'
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $missing -AllowMissing
+            $notes | Should -BeNullOrEmpty
+        }
+
+        It 'returns nothing instead of throwing when the version has no section' {
+            $changelog = New-Changelog @'
+# Changelog
+
+## [0.1.0] - 2026-05-18
+
+Something.
+'@
+            $notes = & $script:ScriptPath -Version '9.9.9' -ChangelogPath $changelog -AllowMissing
+            $notes | Should -BeNullOrEmpty
+        }
+
+        It 'returns nothing instead of throwing when the matched section is empty' {
+            $changelog = New-Changelog @'
+# Changelog
+
+## [0.1.0] - 2026-05-18
+
+## [0.0.1] - 2026-05-12
+
+Placeholder.
+'@
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -AllowMissing
+            $notes | Should -BeNullOrEmpty
+        }
+
+        It 'still returns the section when one exists' {
+            $changelog = New-Changelog @'
+# Changelog
+
+## [0.1.0] - 2026-05-18
+
+Present and correct.
+'@
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -AllowMissing
+            $notes | Should -Be 'Present and correct.'
+        }
+    }
+
     Context 'repository CHANGELOG sanity' {
 
         BeforeAll {

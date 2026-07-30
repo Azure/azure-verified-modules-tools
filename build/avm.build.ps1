@@ -14,6 +14,9 @@
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
       integration - Run Pester tests under tests/Pester/Integration/ (real FS + REAL NETWORK + real binaries). Not part of ci/pre-commit; PR/on-demand only.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
+                    Pass -ReleaseVersion X.Y.Z to stamp that version (and the
+                    matching CHANGELOG section, if any) into the staged
+                    manifest. The in-repo manifest is never modified.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
       ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
@@ -31,7 +34,13 @@
 
 [CmdletBinding()]
 param(
-    [string] $Configuration = 'Debug'
+    [string] $Configuration = 'Debug',
+
+    # Release version for the `build` task. When supplied, the staged manifest
+    # under out/ is stamped with this version so the git tag -- not the in-repo
+    # manifest -- is the single source of truth for what gets published.
+    [ValidatePattern('^$|^\d+\.\d+\.\d+$')]
+    [string] $ReleaseVersion
 )
 
 Set-StrictMode -Version 3.0
@@ -43,6 +52,7 @@ $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
+$script:scriptsRoot  = Join-Path $script:repoRoot 'scripts'
 
 # Single source of truth for the spec section 18 line-coverage floor. The CI
 # job (`ci` task) runs `coverage` and fails below this number. Adjust here
@@ -350,8 +360,27 @@ task build layout, {
     # Copy everything except scratch and test scaffolding into the staged tree.
     Copy-Item -Path (Join-Path $script:moduleRoot '*') -Destination $stage -Recurse -Force
 
-    # Verify the staged manifest still loads cleanly.
     $stagedManifest = Join-Path $stage 'Avm.Authoring.psd1'
+
+    # Stamp the release version into the staged copy only. The git tag is the
+    # source of truth at release time, so nobody has to remember to bump the
+    # in-repo manifest before tagging.
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+        $notes = & (Join-Path $script:scriptsRoot 'Get-AvmReleaseNotes.ps1') `
+            -Version $ReleaseVersion `
+            -ChangelogPath (Join-Path $script:repoRoot 'CHANGELOG.md') `
+            -AllowMissing
+        $notesText = ($notes | Out-String).Trim()
+
+        $stampArgs = @{ ManifestPath = $stagedManifest; Version = $ReleaseVersion }
+        if ($notesText) { $stampArgs['ReleaseNotes'] = $notesText }
+        & (Join-Path $script:scriptsRoot 'Set-AvmModuleVersion.ps1') @stampArgs -Confirm:$false
+
+        $notesState = if ($notesText) { 'CHANGELOG notes applied' } else { 'no CHANGELOG section (notes left as-is)' }
+        Write-Build Green "  stamped staged manifest: $ReleaseVersion ($notesState)"
+    }
+
+    # Verify the staged manifest still loads cleanly.
     $null = Test-ModuleManifest -Path $stagedManifest
 
     # Verify exports beyond the manifest's structural validity: every name in

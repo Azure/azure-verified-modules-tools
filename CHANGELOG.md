@@ -5,14 +5,17 @@ All notable changes to `Avm.Authoring` will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-The release workflow (`.github/workflows/release.yml`) extracts the section
-matching the git tag (e.g. tag `v0.1.0` → section `## [0.1.0]`) and publishes
-it as the GitHub Release body. Tagged releases without a matching section
-fail the workflow before any PSGallery publish runs.
+The release workflow (`.github/workflows/release.yml`) takes the git tag as the
+single source of truth for the version: it stamps the tag version into the
+staged manifest at build time, so `ModuleVersion` in the repo never has to be
+bumped before tagging. If a section matching the tag exists (e.g. tag `v0.1.0`
+→ section `## [0.1.0]`) it seeds the GitHub Release body and the gallery
+release notes; otherwise the release falls back to GitHub's auto-generated
+notes. A missing section no longer fails the release.
 
 ## [Unreleased]
 
-Tracking work after `0.1.0`. Move bullets into a dated version section when
+Tracking work after `0.1.2`. Move bullets into a dated version section when
 cutting a release.
 
 ### Added
@@ -36,6 +39,11 @@ cutting a release.
 
 ### Changed
 
+- The release workflow no longer requires `ModuleVersion` in the repo manifest
+  to match the tag being released, and no longer fails when the tag has no
+  CHANGELOG section. `./build.ps1 build -ReleaseVersion X.Y.Z` stamps the
+  version (and the matching CHANGELOG section, when present) into the staged
+  manifest under `out/`; the in-repo manifest is never rewritten.
 - `Invoke-AvmBicepDocs` reverted to a clean `AvmConfigurationException` stub
   on 2026-05-26 in a deliberate pivot to prioritise Terraform-first delivery.
   The intervening ARM-JSON walker spike (slices 4a–4f: outputs, resource-types,
@@ -75,6 +83,46 @@ cutting a release.
 - Confirmed the spec §19 pre-commit Pester suite is ghost-complete (no
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
+
+## [0.1.2] - 2026-07-30
+
+Terraform test tiers and managed-file synchronisation.
+
+### Added
+
+- Tiered Terraform testing: `avm test-unit` (`Invoke-AvmTestUnit`),
+  `avm test-integration` (`Invoke-AvmTestIntegration`) and `avm test-e2e`
+  (`Invoke-AvmTestE2e`), backed by `Invoke-AvmTerraformTestSuite` and
+  `Invoke-AvmTerraformTestE2e`.
+- `avm sync` (`Invoke-AvmSync`) with the `Sync-AvmManagedFile` engine, to pull
+  AVM-managed files into a module repository.
+- `ConvertFrom-AvmDotEnv` for reading `.env` files used by the e2e tier.
+- `.github/workflows/terraform-module.yml`: a reusable workflow that AVM
+  Terraform module repositories can call for the full check + test chain.
+
+### Changed
+
+- `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck` updated to compose the new
+  test tiers.
+
+## [0.1.1] - 2026-06-23
+
+Release-pipeline and packaging fixes.
+
+### Changed
+
+- Release workflow made idempotent and re-runnable: it now creates the GitHub
+  Release only when the tag has none, and otherwise re-uploads artefacts with
+  `--clobber` instead of failing with "a release with the same tag name
+  already exists".
+- PowerShell Gallery description rewritten to describe the shipped Terraform
+  chain and the managed-tool resolver rather than the Phase 0 roadmap.
+- Workflow, job and step display names polished for readability.
+
+### Added
+
+- `-SkipIfAlreadyPublished` handling in `scripts/Publish-AvmAuthoring.ps1` so a
+  re-run against an already-published version is a no-op rather than an error.
 
 ## [0.1.0] - 2026-05-18
 
@@ -117,6 +165,8 @@ Initial placeholder release to reserve the `Avm.Authoring` package name on
 PowerShell Gallery. Exposed only the `Get-AvmAuthoringPlaceholder` cmdlet
 so callers could verify the module loads end-to-end.
 
-[Unreleased]: https://github.com/Azure/azure-verified-modules-tools/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Azure/azure-verified-modules-tools/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Azure/azure-verified-modules-tools/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/Azure/azure-verified-modules-tools/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Azure/azure-verified-modules-tools/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/Azure/azure-verified-modules-tools/releases/tag/v0.0.1

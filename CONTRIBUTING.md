@@ -154,6 +154,7 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
+./build.ps1 build -ReleaseVersion 0.2.0   # same, but stamp 0.2.0 into the staged manifest
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
 ```
@@ -162,6 +163,7 @@ Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
 - `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- `-ReleaseVersion` only affects the staged copy under `./out`. The in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
 ---
@@ -188,13 +190,33 @@ Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 
 ---
 
-## 8. Publish to PSGallery (maintainers only)
+## 8. Cut a release (maintainers only)
 
-Don't run this unless you're a PSGallery owner of the `Avm.Authoring` package and you intend to ship.
+Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: `.github/workflows/release.yml` stamps the tag version into the staged manifest under `out/` at build time.
+
+1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes both the GitHub Release body and the PSGallery release notes. When absent the release falls back to GitHub's auto-generated notes.
+2. Publish a GitHub Release from the UI with a new tag `vX.Y.Z` (stable semver only — the workflow rejects prerelease tags such as `v0.1.0-preview.1`). Creating the release creates the tag, which triggers the workflow.
+3. Approve the `psgallery` environment when prompted. The workflow then runs the `ci` gate, builds and stamps the staged module, publishes to PSGallery, and attaches `Avm.Authoring-X.Y.Z.zip` plus `SHA256SUMS` to the release.
+
+The workflow is idempotent, so re-running it against an existing tag re-uploads the artefacts (with `--clobber`) and leaves the release body alone. To release a tag that already exists, run the workflow manually from the **Actions** tab and pass the tag as the `tag` input.
+
+To preview locally what the pipeline will publish:
 
 ```pwsh
+./build.ps1 build -ReleaseVersion 0.2.0
+Test-ModuleManifest ./out/Avm.Authoring/Avm.Authoring.psd1
+```
+
+---
+
+## 9. Publish to PSGallery by hand (break-glass only)
+
+Don't run this unless the release workflow is broken, you're a PSGallery owner of the `Avm.Authoring` package, and you intend to ship.
+
+```pwsh
+./build.ps1 build -ReleaseVersion 0.2.0
 $key = Read-Host -AsSecureString -Prompt 'Paste your PSGallery API key (input is hidden)'
-./scripts/Publish-AvmAuthoring.ps1 -ApiKey $key
+./scripts/Publish-AvmAuthoring.ps1 -ApiKey $key -ModulePath ./out/Avm.Authoring
 Remove-Variable key
 Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
 ```
@@ -203,7 +225,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 
 ---
 
-## 9. OS-specific notes
+## 10. OS-specific notes
 
 ### Windows
 
@@ -231,7 +253,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 
 ---
 
-## 10. Branch and PR workflow
+## 11. Branch and PR workflow
 
 1. Fork the repo and create a feature branch off `main`:
 
@@ -247,7 +269,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 
 ---
 
-## 11. What to read before changing anything
+## 12. What to read before changing anything
 
 | Topic                                            | File                                                                 |
 | ------------------------------------------------ | -------------------------------------------------------------------- |

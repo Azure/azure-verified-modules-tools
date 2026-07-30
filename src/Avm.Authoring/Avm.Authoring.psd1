@@ -1,6 +1,6 @@
 @{
     RootModule           = 'Avm.Authoring.psm1'
-    ModuleVersion        = '0.1.0'
+    ModuleVersion        = '0.1.2'
     GUID                 = '356c238f-88dd-48bf-ad0a-b7de6a5bb877'
     Author               = 'Azure Verified Modules'
     CompanyName          = 'Microsoft'
@@ -38,7 +38,7 @@
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')
             LicenseUri   = 'https://github.com/Azure/azure-verified-modules-tools/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Azure/azure-verified-modules-tools'
-            ReleaseNotes = '0.1.0 - Phase 0 skeleton. Adds the avm dispatcher (alias: avm), Get-AvmVersion / avm version, Invoke-AvmDoctor / avm doctor, and the managed-tool resolver (Get-AvmTool, Install-AvmTool, avm tool list|which|install). The bundled tools.lock.psd1 is an empty schema stub awaiting bicep and terraform entries. Backward compatibility shim Get-AvmAuthoringPlaceholder is retained from 0.0.1.'
+            ReleaseNotes = 'See https://github.com/Azure/azure-verified-modules-tools/blob/main/CHANGELOG.md. The release workflow replaces this value with the CHANGELOG section for the tag being published, when one exists.'
         }
     }
 }
