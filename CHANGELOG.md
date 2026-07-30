@@ -15,8 +15,9 @@ notes. A missing section no longer fails the release.
 
 ## [Unreleased]
 
-Tracking work after `0.1.2`. Move bullets into a dated version section when
-cutting a release.
+Bullets below describe work that shipped untagged in `0.1.3` and `0.1.4`, which
+were both cut without CHANGELOG sections. Move new bullets into a dated version
+section when cutting a release.
 
 ### Added
 
@@ -84,7 +85,118 @@ cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.1.5] - 2026-08-06
+
+Remediation of the 18 defects (F01–F18) found while end-to-end testing `0.1.4`
+against the canary repo `Azure/terraform-azurerm-avm-ptn-example-repo`.
+
+### Added
+
+- Pinned tools now **install themselves on demand**. Any gauntlet verb that
+  needs `terraform`, `tflint`, `terraform-docs`, `conftest` or `mapotf` acquires
+  it transparently through the existing pin manifest, SHA-verified cache and
+  cross-process lock, so a clean machine or CI runner needs no `avm tool
+  install` step. Set `AVM_NO_AUTO_INSTALL=1` to restore the previous hard
+  failure in locked-down or air-gapped environments. (F06)
+- Managed files can now **merge line sets into an existing file** instead of
+  replacing it, so a consumer's own `.gitignore` additions survive a sync. A
+  `.avm-managed-lines.json` in each managed-file group folder maps a
+  forward-slash relative path to `{ required: [...], removed: [...] }` — lines to
+  ensure present and lines to retire. Specs stack across overlays in the same
+  root-then-ascending order as managed files themselves, with last-writer-wins
+  per line, so canary and other groups can layer their own. A missing target
+  file is created like any other managed file.
+- `Resources/tflint/` ships the three governance TFLint rulesets
+  (`avm.tflint.hcl`, `avm.tflint_module.hcl`, `avm.tflint_example.hcl`), and
+  `Resources/mapotf/pre-commit/` ships the nine mapotf transform configs, so
+  neither is resolved from outside the installed module. (F16, F03)
+- `Resources/avm.pins.jsonc` is a single commented manifest holding **every**
+  version pin — managed tools, the `Azure/policy-library-avm` bundle and the
+  TFLint plugins — replacing the scattered `tools.lock.psd1` /
+  `pinned-assets.psd1` pair. `scripts/Update-AvmPins.ps1` refreshes it in place
+  while preserving comments.
+- Release runs now verify the published version is actually resolvable via
+  `Find-PSResource` and emit a warning annotation if gallery indexing has not
+  caught up, instead of leaving consumers with a bare 404. (F14)
+
+### Fixed
+
+- **Repository identity is resolved from the git origin**, not the directory
+  leaf name. Resolution order is explicit `-RepoId`, then
+  `AVM_MANAGED_FILES_REPO_ID`, then the origin remote (HTTPS or SCP-style SSH,
+  with or without `.git`, `terraform-azurerm-` / `terraform-azapi-` prefix
+  stripped), then the folder leaf, then an interactive prompt, then a hard
+  failure. A candidate is only accepted when it matches a governance
+  `repositoryGroups` entry, and zero matching overlays is now an error rather
+  than a silently successful root-only sync. This stops a worktree, fork or
+  renamed clone from reverting a repo to the legacy container/make toolchain.
+  (F11, F01)
+- `avm` **exits non-zero** when a verb reports `Status='fail'` or
+  `Status='error'`, so git hooks and CI steps can no longer pass silently. The
+  reusable workflow's hand-rolled `$result.Status` wrappers have been removed
+  accordingly. (F02, F18)
+- `avm lint` applies the AVM TFLint rulesets. The single `--recursive`
+  default-config invocation is replaced by deterministic per-scope runs — repo
+  root, each `modules/*` and each `examples/*` — each initialised and linted
+  with its matching config via an absolute `--config` path. (F16)
+- Lint **fails on warnings** by default, which is the severity most built-in
+  TFLint rules emit. Override with
+  `-MinimumFailureSeverity error|warning|notice`. (F17)
+- `avm transform` resolves its mapotf configs from `AVM_MPTF_CONFIG_DIR`, then
+  the consumer repo's `config/mapotf/pre-commit`, then the packaged bundle. The
+  previous lookup walked two levels above the installed module root and landed
+  inside `PSModulePath`. (F04, F03)
+- `avm check policy` works on a clean checkout. `.avm/config.json` is gone
+  entirely — the module now carries immutable APRL/AVMSEC descriptors in the pin
+  manifest — so the repo no longer has to satisfy a rule requiring a file that
+  was simultaneously gitignored and never generated. (F07)
+- `terraform.tf` is required at the Terraform repository root and in nested
+  `modules/*`, but **not** under `examples/*`, so a clean canonical example repo
+  passes `avm check convention`. Rule `AppliesTo` is now a normalised scope
+  array rather than a single string, because the old model could not express
+  this. (F08)
+- Sync **never touches the git index**. Executable-mode repair mutates the
+  working tree only, so a subsequent `git commit` cannot silently pick up
+  unrelated staged changes. (F13)
+- `avm tool list` and the engines agree on what is resolvable; PATH fallback is
+  only reported where it is actually accepted. (F05)
+- Engine results share a common contract — `Status`, `FilesProcessed`,
+  `Changed`, `Issues` — so callers can uniformly test `$result.Status`.
+  `avm format` reports a real `Status` and a real file count instead of the
+  `-1` sentinel. (F15)
+- `avm --help` and `avm -h` print the same help as a bare `avm`, and the
+  `pre-commit` summary describes the steps it actually runs. (F09)
+
+### Changed
+
+- **Breaking**: the canonical rule object's `AppliesTo` is now `[string[]]`.
+  `'all'` remains valid authored shorthand but is expanded at construction time;
+  combining `'all'` with another scope is rejected as ambiguous.
+- **Breaking**: `tools.lock.psd1` and `pinned-assets.psd1` are replaced by
+  `Resources/avm.pins.jsonc`; the `*ToolsLock*` function family is replaced by
+  `Read-AvmPins` / `Test-AvmPins` / `Install-AvmToolFromPins`.
+- **Breaking**: `.avm/config.json` and the `avm.smoke.avm-config-exists` rule
+  are removed. `.avm/` is never created by any verb and is no longer required in
+  a consumer `.gitignore`; all persistent state lives under `AVM_HOME`.
+- The `psgallery` release environment is documented as deliberately gate-free.
+  A required reviewer there parks the run in `status=waiting` while the GitHub
+  Release already looks published and the gallery 404s — the exact failure v0.1.4
+  hit for ~53 minutes. (F14)
+
+### Tests
+
+- Regression coverage for repo-id resolution (HTTPS, HTTPS with `.git`, SSH,
+  no origin, renamed worktree, folder fallback, non-interactive hard failure),
+  multi-overlay stacking by ascending `managedFilesOrder` (F12), git-index
+  preservation across a sync (F13), tool auto-install (cold, warm, opt-out,
+  installer failure) and per-scope TFLint invocation.
+- A shell-out test that invokes a failing verb through `pwsh -File` and
+  `pwsh -Command` and asserts a non-zero **process** exit code, mirroring a
+  `run:` step with `shell: pwsh`. (F02)
+
 ## [0.1.2] - 2026-07-30
+
+
 
 Terraform test tiers and managed-file synchronisation.
 
