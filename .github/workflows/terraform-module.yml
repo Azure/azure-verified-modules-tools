@@ -203,6 +203,19 @@ jobs:
           Import-Module Avm.Authoring
           avm version
 
+      - name: Install AVM managed tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          # No -Name filter: installs every tool pinned in tools.lock.psd1
+          # (terraform, terraform-docs, tflint, conftest, mapotf, bicep, ...)
+          # into the fresh AVM_HOME set up above. Avm.Authoring's presence
+          # only satisfies the CLI itself; the pr-check/test verbs shell out
+          # to these managed binaries and fail with "Tool '<name>' is not
+          # installed" if this step is skipped.
+          avm tool install
+
       - name: Run unit tests
         shell: pwsh
         run: |
@@ -328,6 +341,19 @@ jobs:
 
           Import-Module Avm.Authoring
           avm version
+
+      - name: Install AVM managed tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          # No -Name filter: installs every tool pinned in tools.lock.psd1
+          # (terraform, terraform-docs, tflint, conftest, mapotf, bicep, ...)
+          # into the fresh AVM_HOME set up above. Avm.Authoring's presence
+          # only satisfies the CLI itself; the pr-check/test verbs shell out
+          # to these managed binaries and fail with "Tool '<name>' is not
+          # installed" if this step is skipped.
+          avm tool install
 
       - name: Run pr-check
         shell: pwsh
@@ -457,6 +483,19 @@ jobs:
           Import-Module Avm.Authoring
           avm version
 
+      - name: Install AVM managed tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          # No -Name filter: installs every tool pinned in tools.lock.psd1
+          # (terraform, terraform-docs, tflint, conftest, mapotf, bicep, ...)
+          # into the fresh AVM_HOME set up above. Avm.Authoring's presence
+          # only satisfies the CLI itself; the pr-check/test verbs shell out
+          # to these managed binaries and fail with "Tool '<name>' is not
+          # installed" if this step is skipped.
+          avm tool install
+
       - name: Run integration tests
         shell: pwsh
         run: |
@@ -579,6 +618,19 @@ jobs:
 
           Import-Module Avm.Authoring
           avm version
+
+      - name: Install AVM managed tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          # No -Name filter: installs every tool pinned in tools.lock.psd1
+          # (terraform, terraform-docs, tflint, conftest, mapotf, bicep, ...)
+          # into the fresh AVM_HOME set up above. Avm.Authoring's presence
+          # only satisfies the CLI itself; the pr-check/test verbs shell out
+          # to these managed binaries and fail with "Tool '<name>' is not
+          # installed" if this step is skipped.
+          avm tool install
 
       - name: Run end-to-end tests
         shell: pwsh
