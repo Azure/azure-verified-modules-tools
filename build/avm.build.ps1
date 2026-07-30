@@ -92,7 +92,7 @@ function script:Invoke-ScriptAnalyzerWithRetry {
         [Parameter(Mandatory)] [hashtable] $Params
     )
 
-    $max = if ($env:AVM_LINT_MAX_ATTEMPTS) { [int]$env:AVM_LINT_MAX_ATTEMPTS } else { 3 }
+    $max = if ($env:AVM_LINT_MAX_ATTEMPTS) { [int]$env:AVM_LINT_MAX_ATTEMPTS } else { 8 }
     if ($max -lt 1) { $max = 1 }
 
     for ($attempt = 1; $attempt -le $max; $attempt++) {
@@ -112,7 +112,7 @@ function script:Invoke-ScriptAnalyzerWithRetry {
             }
             if (-not $isNre -or $attempt -eq $max) { throw }
             Write-Warning ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max)
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds (500 * $attempt)
         }
     }
 }

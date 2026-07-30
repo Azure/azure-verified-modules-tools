@@ -170,6 +170,50 @@ Describe 'Sync-AvmManagedFile' {
         Test-Path (Join-Path $script:moduleDir 'common.tf') | Should -BeTrue
     }
 
+    It 'stacks multiple overlays in declaration order, last one winning' {
+        $canary = Join-Path $script:base 'canary'
+        $tooling = Join-Path $script:base 'canary-tooling'
+        New-Item -ItemType Directory -Path $canary -Force | Out-Null
+        New-Item -ItemType Directory -Path $tooling -Force | Out-Null
+
+        Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "root-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'pr-check.yml') -Value "root-check`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'common.tf') -Value "# common`n" -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $canary '.gitignore') -Value "canary-version`n" -NoNewline
+        # Placeholder that keeps an otherwise-empty overlay tracked in git.
+        Set-Content -LiteralPath (Join-Path $canary '.gitkeep') -Value '' -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $tooling '.gitignore') -Value "tooling-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $tooling 'pr-check.yml') -Value "tooling-check`n" -NoNewline
+
+        $cfg = Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $cfg -Force | Out-Null
+        $config = @{ repositoryGroups = @(
+                @{ name = 'canary'; managedFilesAdditional = 'canary'; repositories = @('avm-res-foo') }
+                @{ name = 'canary-tooling'; managedFilesAdditional = 'canary-tooling'; repositories = @('avm-res-foo') }
+            ) } | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath (Join-Path $cfg 'config.json') -Value $config -NoNewline
+        Set-Content -LiteralPath (Join-Path $cfg 'deprecated-files.json') -Value '[]' -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -HaveCount 3
+
+        # Last overlay wins over both the earlier overlay and root.
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')).Trim() | Should -Be 'tooling-version'
+        # An overlay-only override of a root file wins.
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'pr-check.yml')).Trim() | Should -Be 'tooling-check'
+        # Root-only file still lands.
+        Test-Path (Join-Path $script:moduleDir 'common.tf') | Should -BeTrue
+        # '.gitkeep' placeholders are never synced into the target repo.
+        Test-Path (Join-Path $script:moduleDir '.gitkeep') | Should -BeFalse
+    }
+
     It 'removes deprecated files listed in deprecated-files.json' {
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "*.tfstate`n" -NoNewline
 
@@ -202,5 +246,99 @@ Describe 'Sync-AvmManagedFile' {
         $result.FilesProcessed | Should -Be 0
         $result.Added          | Should -BeNullOrEmpty
         $result.Issues         | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
+    BeforeAll {
+        # Round-trip through JSON so the shape matches production exactly: the
+        # function inspects PSObject.Properties, which behaves differently on a
+        # raw hashtable than on the PSCustomObject ConvertFrom-Json produces.
+        function script:New-TestConfig {
+            param([object[]] $Groups)
+            return (@{ repositoryGroups = $Groups } | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+        }
+
+        function script:Resolve-Overlays {
+            param([object] $Config, [string] $RepoId)
+            $settings = InModuleScope 'Avm.Authoring' -Parameters @{ C = $Config; R = $RepoId } {
+                param($C, $R)
+                Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $C -RepoId $R
+            }
+            return @($settings.ManagedFilesAdditional)
+        }
+    }
+
+    It 'falls back to declaration order when no managedFilesOrder is set' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'lets an explicit managedFilesOrder override declaration order' {
+        # 'alpha' is declared FIRST but carries a higher order, so it must sort
+        # last and therefore win. This is the whole point of the field.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; managedFilesOrder = 99; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; managedFilesOrder = 1; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta', 'alpha')
+    }
+
+    It 'treats a missing managedFilesOrder as 0' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'ordered'; managedFilesAdditional = 'alpha'; managedFilesOrder = 5; repositories = @('repo-x') }
+            @{ name = 'unordered'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta', 'alpha')
+    }
+
+    It 'breaks ties on declaration order' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; managedFilesOrder = 10; repositories = @('repo-x') }
+            @{ name = 'second'; managedFilesAdditional = 'beta'; managedFilesOrder = 10; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'ignores groups the repository does not belong to' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'other'; managedFilesAdditional = 'alpha'; managedFilesOrder = 1; repositories = @('repo-y') }
+            @{ name = 'mine'; managedFilesAdditional = 'beta'; managedFilesOrder = 2; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta')
+    }
+
+    It 'counts declaration index across groups that declare no overlay' {
+        # The middle group contributes no overlay but must still advance the
+        # tie-break index, so 'alpha' and 'beta' stay in declaration order.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'first'; managedFilesAdditional = 'alpha'; repositories = @('repo-x') }
+            @{ name = 'tier'; repositories = @('repo-x') }
+            @{ name = 'third'; managedFilesAdditional = 'beta'; repositories = @('repo-x') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('alpha', 'beta')
+    }
+
+    It 'pins the canary cohort to canary then canary-tooling regardless of declaration order' {
+        # Mirrors the real config.json, but with the groups declared in the
+        # WRONG order on purpose. managedFilesOrder must still put
+        # 'canary-tooling' last so its pr-check.yml / avm shims win.
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'canary-tooling'; managedFilesAdditional = 'canary-tooling'; managedFilesOrder = 20; repositories = @('avm-ptn-example-repo') }
+            @{ name = 'canary'; managedFilesAdditional = 'canary'; managedFilesOrder = 10; repositories = @('avm-ptn-example-repo') }
+            @{ name = 'azure-verified-modules-tier-1'; repositories = @('avm-ptn-example-repo') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'avm-ptn-example-repo' |
+            Should -Be @('canary', 'canary-tooling')
     }
 }
