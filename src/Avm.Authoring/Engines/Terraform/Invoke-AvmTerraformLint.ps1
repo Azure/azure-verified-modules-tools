@@ -147,8 +147,8 @@ function Invoke-AvmTerraformLint {
         scope produced by Get-AvmTflintScope (repository root, each modules/*,
         each examples/*):
 
-            tflint --init   --config=<absolute ruleset>          (install plugins)
-            tflint --config=<absolute ruleset> --format=json \
+            tflint --init   --config <absolute ruleset>          (install plugins)
+            tflint --config <absolute ruleset> --format=json \
                    --minimum-failure-severity=<threshold>        (lint)
 
         This mirrors the upstream avm-terraform-governance pre-check flow, which
@@ -236,7 +236,7 @@ function Invoke-AvmTerraformLint {
         # cheap. A non-zero exit here means plugin acquisition failed outright.
         $init = Invoke-AvmProcess `
             -FilePath $tool.Path `
-            -ArgumentList @('--init', ('--config={0}' -f $scope.Config)) `
+            -ArgumentList @('--init', '--config', $scope.Config) `
             -WorkingDirectory $scope.Dir `
             -IgnoreExitCode
         if ($init.ExitCode -ne 0) {
@@ -247,7 +247,7 @@ function Invoke-AvmTerraformLint {
         }
 
         $lintArgs = @(
-            ('--config={0}' -f $scope.Config),
+            '--config', $scope.Config,
             '--format=json',
             ('--minimum-failure-severity={0}' -f $MinimumFailureSeverity)
         )

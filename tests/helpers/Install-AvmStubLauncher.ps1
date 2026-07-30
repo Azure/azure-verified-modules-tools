@@ -14,6 +14,13 @@ function Install-AvmStubLauncher {
         AvmTool PATH-fallback path resolves the stubs as if they were the real
         binaries (terraform, tflint, terraform-docs, etc.).
 
+        Known limitation: 'pwsh -File' splits any '-flag=value' argument at the
+        first '=' or ':', so a stub receives '--config=C:\x' as two arguments
+        ('--config=C' and '\x'). Quoting does not prevent this. Stubs must match
+        on flag names only, and engines should prefer '--flag <value>' when the
+        value is a path. Production code is unaffected - Invoke-AvmProcess uses
+        ProcessStartInfo.ArgumentList and never routes through pwsh -File.
+
     .PARAMETER StubDir
         Directory containing one or more '<tool>.ps1' stub files.
 
