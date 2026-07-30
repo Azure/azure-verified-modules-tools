@@ -3,7 +3,7 @@
     Kind        = 'FileMustExist'
     Description = 'AVM requires terraform.tf as the canonical home of the terraform { required_version + required_providers } block.'
     Severity    = 'error'
-    AppliesTo   = 'all'
+    AppliesTo   = @('root', 'modules')
     Parameters  = @{
         Path = 'terraform.tf'
     }

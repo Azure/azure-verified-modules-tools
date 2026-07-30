@@ -52,6 +52,58 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 $rule.AppliesTo | Should -Be 'examples'
             }
         }
+
+        It 'normalises AppliesTo to a string array in canonical scope order' {
+            InModuleScope 'Avm.Authoring' {
+                $rule = New-AvmRule -Definition @{
+                    Id          = 'avm.test.scoped'
+                    Kind        = 'FileMustExist'
+                    Description = 'array scope'
+                    AppliesTo   = @('modules', 'root')
+                    Parameters  = @{ Path = 'terraform.tf' }
+                }
+                $rule.AppliesTo | Should -BeOfType ([string])
+                @($rule.AppliesTo) | Should -Be @('root', 'modules')
+            }
+        }
+
+        It 'de-duplicates repeated scopes' {
+            InModuleScope 'Avm.Authoring' {
+                $rule = New-AvmRule -Definition @{
+                    Id          = 'avm.test.dupes'
+                    Kind        = 'FileMustExist'
+                    Description = 'duplicate scope'
+                    AppliesTo   = @('root', 'root', 'modules')
+                    Parameters  = @{ Path = 'terraform.tf' }
+                }
+                @($rule.AppliesTo) | Should -Be @('root', 'modules')
+            }
+        }
+
+        It "expands 'all' into every concrete scope" {
+            InModuleScope 'Avm.Authoring' {
+                $rule = New-AvmRule -Definition @{
+                    Id          = 'avm.test.all'
+                    Kind        = 'FileMustExist'
+                    Description = 'all scopes'
+                    AppliesTo   = 'all'
+                    Parameters  = @{ Path = 'terraform.tf' }
+                }
+                @($rule.AppliesTo) | Should -Be @('root', 'examples', 'modules')
+            }
+        }
+
+        It 'defaults AppliesTo to a single-element root array' {
+            InModuleScope 'Avm.Authoring' {
+                $rule = New-AvmRule -Definition @{
+                    Id          = 'avm.test.default-scope'
+                    Kind        = 'FileMustExist'
+                    Description = 'no scope authored'
+                    Parameters  = @{ Path = 'terraform.tf' }
+                }
+                @($rule.AppliesTo) | Should -Be @('root')
+            }
+        }
     }
 
     Context 'schema violations' {
@@ -134,6 +186,54 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match "AppliesTo 'galaxy'"
+            }
+        }
+
+        It 'rejects an unsupported scope inside an AppliesTo array' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.badarray'
+                    Kind        = 'FileMustExist'
+                    Description = 'd'
+                    AppliesTo   = @('root', 'galaxy')
+                    Parameters  = @{ Path = 'x' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err | Should -BeOfType ([System.Data.DataException])
+                $err.Message | Should -Match "AppliesTo 'galaxy'"
+            }
+        }
+
+        It "rejects 'all' combined with another scope" {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.allplus'
+                    Kind        = 'FileMustExist'
+                    Description = 'd'
+                    AppliesTo   = @('all', 'modules')
+                    Parameters  = @{ Path = 'x' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err | Should -BeOfType ([System.Data.DataException])
+                $err.Message | Should -Match "cannot be combined"
+            }
+        }
+
+        It 'rejects an empty AppliesTo array' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.emptyscope'
+                    Kind        = 'FileMustExist'
+                    Description = 'd'
+                    AppliesTo   = @()
+                    Parameters  = @{ Path = 'x' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err | Should -BeOfType ([System.Data.DataException])
+                $err.Message | Should -Match 'at least one'
             }
         }
 

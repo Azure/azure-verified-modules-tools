@@ -1,7 +1,7 @@
 @{
     Id          = 'avm.tf.gitignore-essentials'
     Kind        = 'GitignoreMustContain'
-    Description = 'AVM .gitignore must list the 24 canonical globs (state, plans, lockfiles, .terraform/, tfvars, .DS_Store, crash.log, .avm, ...) so common heavy or sensitive files are never accidentally committed.'
+    Description = 'AVM .gitignore must list the 23 canonical globs (state, plans, lockfiles, .terraform/, tfvars, .DS_Store, crash.log, ...) so common heavy or sensitive files are never accidentally committed.'
     Severity    = 'error'
     AppliesTo   = 'root'
     Parameters  = @{
@@ -28,8 +28,7 @@
             'crash.log',
             'examples/*/policy',
             'README-generated.md',
-            'terraform.rc',
-            '.avm'
+            'terraform.rc'
         )
     }
 }

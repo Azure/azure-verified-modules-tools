@@ -19,7 +19,8 @@ function New-AvmRule {
                 Description = 'output.tf should be renamed to outputs.tf'
                 Severity    = 'error' | 'warning'           # optional, default 'error'
                 Parameters  = @{ Path = 'output.tf'; ... }  # kind-specific
-                AppliesTo   = 'root' | 'examples' | 'modules' | 'all'  # optional, default 'root'
+                AppliesTo   = 'root' | 'examples' | 'modules' | 'all'   # optional, default 'root'
+                                                                        # or an array, e.g. @('root','modules')
             }
 
         Returned canonical shape (PascalCase, all fields populated):
@@ -30,7 +31,7 @@ function New-AvmRule {
                 Description = '<authored>'
                 Severity    = 'error' | 'warning'
                 Parameters  = @{ <kind-specific> }
-                AppliesTo   = 'root' | 'examples' | 'modules' | 'all'
+                AppliesTo   = [string[]] subset of 'root','examples','modules'
                 Source      = '<full path to .psd1>' | $null
             }
 
@@ -63,7 +64,12 @@ function New-AvmRule {
     Test-AvmRule -Definition $Definition | Out-Null
 
     $severity = if ($Definition.ContainsKey('Severity')) { [string]$Definition.Severity } else { 'error' }
-    $appliesTo = if ($Definition.ContainsKey('AppliesTo')) { [string]$Definition.AppliesTo } else { 'root' }
+    $appliesTo = if ($Definition.ContainsKey('AppliesTo')) {
+        Expand-AvmRuleScope -AppliesTo $Definition.AppliesTo
+    }
+    else {
+        [string[]]@('root')
+    }
     $parameters = if ($Definition.ContainsKey('Parameters')) { $Definition.Parameters } else { @{} }
 
     return [pscustomobject][ordered]@{
@@ -75,6 +81,41 @@ function New-AvmRule {
         AppliesTo   = $appliesTo
         Source      = if ($Source) { [string]$Source } else { $null }
     }
+}
+
+function Expand-AvmRuleScope {
+    <#
+    .SYNOPSIS
+        Normalise an authored AppliesTo value into a canonical scope array.
+
+    .DESCRIPTION
+        Accepts a single scope string or an array of scope strings. 'all' is
+        shorthand for every concrete scope. The result is de-duplicated and
+        returned in the fixed order root, examples, modules so downstream
+        target expansion is deterministic.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        $AppliesTo
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $requested = @($AppliesTo | ForEach-Object { [string]$_ })
+    if ($requested -ccontains 'all') {
+        return [string[]]@('root', 'examples', 'modules')
+    }
+
+    $ordered = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($scope in @('root', 'examples', 'modules')) {
+        if ($requested -ccontains $scope) { $ordered.Add($scope) }
+    }
+
+    return [string[]]$ordered.ToArray()
 }
 
 function Test-AvmRule {
@@ -95,8 +136,9 @@ function Test-AvmRule {
                           GitignoreMustContain.
           - Description : required, non-empty string.
           - Severity    : optional, 'error' | 'warning' (default 'error').
-          - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all'
-                          (default 'root').
+          - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all',
+                          or an array of those (default 'root'). 'all' cannot
+                          be combined with other scopes.
           - Parameters  : required hashtable; per-kind required keys:
               FileMustNotExist     : Path (string). Optional: FixRenameTo (string).
               FileMustExist        : Path (string).
@@ -160,10 +202,21 @@ function Test-AvmRule {
         }
 
         if ($Definition.ContainsKey('AppliesTo')) {
-            $at = [string]$Definition.AppliesTo
-            if ($validAppliesTo -cnotcontains $at) {
+            $scopes = @($Definition.AppliesTo)
+            if ($scopes.Count -eq 0) {
                 throw [System.Data.DataException]::new(
-                    "avm-rule '$id': AppliesTo '$at' is not one of: $($validAppliesTo -join ', ').")
+                    "avm-rule '$id': AppliesTo must name at least one of: $($validAppliesTo -join ', ').")
+            }
+            foreach ($scope in $scopes) {
+                $at = [string]$scope
+                if ($validAppliesTo -cnotcontains $at) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': AppliesTo '$at' is not one of: $($validAppliesTo -join ', ').")
+                }
+            }
+            if ($scopes.Count -gt 1 -and (@($scopes | ForEach-Object { [string]$_ }) -ccontains 'all')) {
+                throw [System.Data.DataException]::new(
+                    "avm-rule '$id': AppliesTo 'all' cannot be combined with other scopes.")
             }
         }
 

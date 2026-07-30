@@ -70,7 +70,7 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'FileMustNotExist'
             $r.Severity | Should -Be 'error'
-            $r.AppliesTo | Should -Be 'all'
+            @($r.AppliesTo) | Should -Be @('root', 'examples', 'modules')
             [string]$r.Parameters.Path | Should -Be 'output.tf'
             [string]$r.Parameters.FixRenameTo | Should -Be 'outputs.tf'
         }
@@ -80,17 +80,18 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'FileMustNotExist'
             $r.Severity | Should -Be 'error'
-            $r.AppliesTo | Should -Be 'all'
+            @($r.AppliesTo) | Should -Be @('root', 'examples', 'modules')
             [string]$r.Parameters.Path | Should -Be 'variable.tf'
             [string]$r.Parameters.FixRenameTo | Should -Be 'variables.tf'
         }
 
-        It 'ships avm.tf.terraform-tf-must-exist (root + examples + modules)' {
+        It 'ships avm.tf.terraform-tf-must-exist scoped to root + modules only' {
             $r = $script:rulesById['avm.tf.terraform-tf-must-exist']
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'FileMustExist'
             $r.Severity | Should -Be 'error'
-            $r.AppliesTo | Should -Be 'all'
+            @($r.AppliesTo) | Should -Be @('root', 'modules')
+            @($r.AppliesTo) | Should -Not -Contain 'examples'
             [string]$r.Parameters.Path | Should -Be 'terraform.tf'
             $r.Parameters.ContainsKey('FixRenameTo') | Should -BeFalse
         }
@@ -100,7 +101,7 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'FileMustExist'
             $r.Severity | Should -Be 'error'
-            $r.AppliesTo | Should -Be 'all'
+            @($r.AppliesTo) | Should -Be @('root', 'examples', 'modules')
             [string]$r.Parameters.Path | Should -Be '_header.md'
         }
 
@@ -122,7 +123,7 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             [string]$r.Parameters.Path | Should -Be 'tests'
         }
 
-        It 'ships avm.tf.gitignore-essentials with the upstream 24-glob set' {
+        It 'ships avm.tf.gitignore-essentials with the upstream glob set, minus .avm' {
             $r = $script:rulesById['avm.tf.gitignore-essentials']
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'GitignoreMustContain'
@@ -130,7 +131,7 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $r.AppliesTo | Should -Be 'root'
 
             $globs = @($r.Parameters.RequiredGlobs)
-            $globs.Count | Should -Be 24
+            $globs.Count | Should -Be 23
 
             # Canonical entries from upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
             $expected = @(
@@ -156,10 +157,10 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
                 'crash.log',
                 'examples/*/policy',
                 'README-generated.md',
-                'terraform.rc',
-                '.avm'
+                'terraform.rc'
             )
             $globs | Should -Be $expected
+            $globs | Should -Not -Contain '.avm'
         }
     }
 
