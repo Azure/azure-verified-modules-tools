@@ -32,8 +32,8 @@ function Invoke-AvmFormat {
         want only the managed cache.
 
     .OUTPUTS
-        pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        FilesProcessed, Changed.
+        pscustomobject from the engine: Status, Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed.
 
     .EXAMPLE
         avm format

@@ -24,8 +24,8 @@ function Format-AvmBicepModule {
         lock-pinned version matches.
 
     .OUTPUTS
-        pscustomobject with Engine, Tool, ToolPath, ToolSource,
-        FilesProcessed, Changed (string[]).
+        pscustomobject with Status ('pass'), Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed (string[]).
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -60,6 +60,7 @@ function Format-AvmBicepModule {
     }
 
     return [pscustomobject][ordered]@{
+        Status         = 'pass'
         Engine         = 'bicep'
         Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
         ToolPath       = $tool.Path

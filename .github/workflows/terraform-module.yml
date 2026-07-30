@@ -208,13 +208,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          $result = avm test unit
-          $result | Format-List | Out-String | Write-Host
-          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
-          if (-not $result -or $result.Status -ne 'pass') {
-              $status = if ($result) { $result.Status } else { '<none>' }
-              throw "avm test unit failed (status: $status)."
-          }
+          avm test unit
 
   pr-check:
     name: PR check
@@ -334,18 +328,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          $result = avm pr-check
-          $result | Format-List | Out-String | Write-Host
-          if ($result.Steps) {
-              $result.Steps | Format-Table -AutoSize | Out-String | Write-Host
-              foreach ($step in $result.Steps | Where-Object { $_.Status -notin 'pass', 'skipped' }) {
-                  Write-Host "::error::pr-check step failed -> $($step | ConvertTo-Json -Compress)"
-              }
-          }
-          if (-not $result -or $result.Status -ne 'pass') {
-              $status = if ($result) { $result.Status } else { '<none>' }
-              throw "avm pr-check failed (status: $status)."
-          }
+          avm pr-check
 
   integration-test:
     name: Integration tests
@@ -462,13 +445,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          $result = avm test integration
-          $result | Format-List | Out-String | Write-Host
-          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
-          if (-not $result -or $result.Status -ne 'pass') {
-              $status = if ($result) { $result.Status } else { '<none>' }
-              throw "avm test integration failed (status: $status)."
-          }
+          avm test integration
 
   e2e-test:
     name: End-to-end tests
@@ -585,10 +562,4 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          $result = avm test e2e
-          $result | Format-List | Out-String | Write-Host
-          if ($result.Issues) { $result.Issues | Format-List | Out-String | Write-Host }
-          if (-not $result -or $result.Status -ne 'pass') {
-              $status = if ($result) { $result.Status } else { '<none>' }
-              throw "avm test e2e failed (status: $status)."
-          }
+          avm test e2e

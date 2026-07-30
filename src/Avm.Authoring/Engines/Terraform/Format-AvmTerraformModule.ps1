@@ -23,8 +23,8 @@ function Format-AvmTerraformModule {
         Pass through to Resolve-AvmTool.
 
     .OUTPUTS
-        pscustomobject with Engine, Tool, ToolPath, ToolSource,
-        FilesProcessed (-1 when terraform doesn't report it), Changed.
+        pscustomobject with Status ('pass'), Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -52,12 +52,21 @@ function Format-AvmTerraformModule {
     # terraform fmt -list emits one filename per line for changed files.
     $changed = @($result.StdOut -split "`r?`n" | Where-Object { $_ -and $_.Trim() })
 
+    # terraform fmt reports only the files it rewrote, not the total it
+    # inspected. Count the .tf / .tfvars sources it would have visited so the
+    # result contract carries a real FilesProcessed instead of a -1 sentinel.
+    $processed = @(
+        Get-ChildItem -Path $Context.Root -Recurse -File -Include '*.tf', '*.tfvars' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]\.[^\\/]+[\\/]' }
+    )
+
     return [pscustomobject][ordered]@{
+        Status         = 'pass'
         Engine         = 'terraform'
         Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
         ToolPath       = $tool.Path
         ToolSource     = $tool.Source
-        FilesProcessed = -1
+        FilesProcessed = $processed.Count
         Changed        = $changed
     }
 }

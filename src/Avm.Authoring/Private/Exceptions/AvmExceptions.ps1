@@ -75,3 +75,20 @@ class AvmContextException : AvmException {
     AvmContextException([string] $message) : base($message, 'AVM1030') {}
     AvmContextException([string] $message, [Exception] $innerException) : base($message, 'AVM1030', $innerException) {}
 }
+
+# A dispatched avm command completed with Status 'fail' or 'error'. Thrown at
+# the public dispatch boundary (Invoke-Avm) so the hosting process exits
+# non-zero and wrapping git hooks / CI steps cannot pass silently. Carries the
+# structured engine result so callers that catch it keep full diagnostics.
+class AvmCommandException : AvmException {
+    [string] $Verb
+    [string] $CommandStatus
+    [object] $Result
+
+    AvmCommandException([string] $verb, [string] $commandStatus, [object] $result) : base(
+        "avm $verb reported Status '$commandStatus'.", 'AVM1040') {
+        $this.Verb = $verb
+        $this.CommandStatus = $commandStatus
+        $this.Result = $result
+    }
+}

@@ -42,7 +42,16 @@ function Invoke-Avm {
     $arguments = @($args)
     $registry = @(Get-AvmVerbRegistry)
 
-    if ($arguments.Count -eq 0) {
+    # F09: bare 'avm', 'avm --help', 'avm -h' and 'avm help' all print the same
+    # verb listing. A help token is only honoured when it is the sole argument
+    # so it can never shadow a real verb path such as 'avm tool install'.
+    $helpRequested = $arguments.Count -eq 0
+    if (-not $helpRequested -and $arguments.Count -eq 1) {
+        $first = [string]$arguments[0]
+        if ($first -in @('--help', '-h', 'help')) { $helpRequested = $true }
+    }
+
+    if ($helpRequested) {
         Write-Information 'Avm.Authoring CLI' -InformationAction Continue
         Write-Information '' -InformationAction Continue
         Write-Information 'Usage: avm <verb> [<args>]' -InformationAction Continue
@@ -167,5 +176,21 @@ function Invoke-Avm {
         }
     }
 
-    & $cmd @bound @positional
+    $result = & $cmd @bound @positional
+
+    # F02: a gauntlet verb that reports Status 'fail' or 'error' must make the
+    # hosting process exit non-zero, so wrapping git hooks and CI steps cannot
+    # pass silently. Read-only verbs (e.g. 'version') emit no 'Status' property
+    # and stream straight through untouched.
+    foreach ($item in @($result)) {
+        if ($null -eq $item) { continue }
+        $statusProp = $item.PSObject.Properties['Status']
+        if ($null -eq $statusProp) { continue }
+        $status = ([string]$statusProp.Value).Trim()
+        if ($status.ToLowerInvariant() -in @('fail', 'error')) {
+            throw [AvmCommandException]::new(($match.Path -join ' '), $status, $item)
+        }
+    }
+
+    return $result
 }
