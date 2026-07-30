@@ -1071,13 +1071,13 @@ This Appendix is correct as long as the assumptions below hold. If any one start
 2. **User-reported false-positive accept.** Shim claims correct version but binary is materially different (e.g. mise resolves to a patched fork at the same semver). Mitigation: extend the lock with an optional `sha256OnPath` field; verify the binary against it when PATH-resolving.
 3. **`tenv` or `mise` adopts a non-semver version scheme.** e.g. nightly builds like `1.10.0-nightly-20260601`. The current regex matches the `1.10.0` prefix, which is the spec'd `[\-+]` suffix handling — should still work, but worth re-confirming if either tool changes its banner shape.
 4. **New managed tool whose `--version` output doesn't match the regex.** The lock schema would need a per-tool `versionMatcher` extension, plus the resolver would have to dispatch on it. Same shape as `unsupportedPlatforms`.
-5. **The auto-install policy spec deviation gets revisited.** The resolver throws on cache+PATH miss today, but spec §10 line 392 implies "fall through to install." If the verb dispatcher gains an `--auto-install` flag, the resolver may need a sibling `Resolve-AvmTool -AutoInstall` shape — handled then, not now.
+5. **The auto-install policy spec deviation gets revisited.** *(Resolved in 0.1.5 — F06.)* The resolver now auto-installs the locked version on a cache miss by default (`Resolve-AvmTool` → `Install-AvmToolFromLock`), gated only by `AVM_NO_AUTO_INSTALL=1` / `-NoAutoInstall`. PATH fallback is opt-in via `-AllowPathFallback`. See spec §10 "Lookup order".
 
 ### Deliberately deferred
 
 - **`-PreferShim` flag** — speculative; no concrete user request. Would invert precedence and complicate the audit table.
 - **Shim-brand allow-list** — overengineering for zero benefit. We measure the binary's reported version, not the shim's identity.
-- **Auto-install when shim missing** — separate policy decision owned by the dispatcher, per spec §10 line 393's `AVM_AUTO_INSTALL=1` heuristic.
+- **Auto-install when shim missing** — *(Implemented in 0.1.5 — F06.)* Owned by `Resolve-AvmTool`: a cache miss transparently installs the locked version by default; `AVM_NO_AUTO_INSTALL=1` restores the hard failure. See spec §10 "Lookup order".
 - **Shim chatter suppression (`MISE_QUIET=1` etc.)** — preemptive hardening for a trigger that hasn't fired. Re-evaluate when trigger (1) fires.
 - **Per-call resolution cache** — `Find-AvmToolOnPath` runs `--version` afresh on every call. Cold mise shim startup is ~200ms; a chain that resolves 5 tools pays ~1s of latency at the boundary. Annoying but not wrong; optimise when a user reports it.
 

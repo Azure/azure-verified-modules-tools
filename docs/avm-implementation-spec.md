@@ -389,8 +389,10 @@ Schema enforced by `Test-AvmToolsLock`:
 ### Lookup order on every invocation
 
 1. **Cache** — `<Data>/tools/<tool>/<version>/<entrypoint>[.exe]` exists and `.verified` marker present → use it.
-2. **PATH** — `Get-Command <entrypoint> -ErrorAction SilentlyContinue` → if found and reports the locked version, use it. If found but wrong version, warn once and fall through to install.
-3. **Install** — silent under `AVM_AUTO_INSTALL=1` or when `$env:CI` / `$env:GITHUB_ACTIONS` is set; prompts otherwise.
+2. **PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
+3. **Auto-install (default)** — a cache miss transparently installs the locked version from the lock file, into the cache, verifying its SHA-256 (same atomic, locked, `.verified`-marked path as `avm tool install`). A concise progress message is emitted the first time so a first run is not a mysterious pause. This is on by default both locally and in CI — the consumer never needs to run a separate install step. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable it for locked-down / air-gapped environments; a cache miss then fails fast with an actionable `avm tool install <tool>` message instead of downloading. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply to the download (see below).
+
+`avm tool list` mirrors this exact order: it reports `installed` for a cache hit, `not-installed` when a cache miss would auto-install, `auto-install-disabled` when a cache miss would hard-fail under `AVM_NO_AUTO_INSTALL`, and `installed-on-path` / `outdated-on-path` only when invoked with `-AllowPathFallback`. It never claims a tool is usable via PATH that the engines would actually ignore.
 
 ### Offline mode
 

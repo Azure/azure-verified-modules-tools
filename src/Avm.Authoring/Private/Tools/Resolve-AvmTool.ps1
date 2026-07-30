@@ -11,12 +11,16 @@ function Resolve-AvmTool {
           1. Cached + verified under <Tools>/<name>/<version>/<entry>[.exe].
           2. On PATH and reporting the lock-pinned version (-AllowPathFallback).
 
-        On miss, throws AvmToolException with a remediation hint pointing
-        the caller at `avm tool install <name>` (or `Install-AvmTool`).
+        On a cache miss the helper installs the pinned tool on demand
+        through the verified Install-AvmToolFromLock pipeline (SHA256 +
+        atomic rename + cross-process lock, honouring AVM_HOME), then
+        re-resolves. This keeps `avm` self-sufficient: consumers never
+        have to run `avm tool install` first, locally or in CI.
 
-        This helper deliberately does not auto-install. Auto-install is
-        a separate, opt-in policy decision (--auto-install / CI heuristic
-        per the consolidation plan), to be wired by the verb dispatcher.
+        Set AVM_NO_AUTO_INSTALL=1 (or pass -NoAutoInstall) to disable
+        implicit installation for locked-down or air-gapped environments;
+        resolution then hard-fails with a remediation hint pointing at
+        `avm tool install <name>`.
 
     .PARAMETER Name
         The tool name as it appears in tools.lock.psd1 (lowercase).
@@ -28,6 +32,11 @@ function Resolve-AvmTool {
         When set, accept a PATH-resolved binary that self-reports the
         lock-pinned version. Defaults to off (engines should prefer the
         managed cache for reproducibility).
+
+    .PARAMETER NoAutoInstall
+        Disable on-demand installation of a missing pinned tool. Equivalent
+        to AVM_NO_AUTO_INSTALL=1. Resolution then hard-fails instead of
+        installing. For locked-down environments and tests.
 
     .PARAMETER AllowFileUrls
         Test-only escape hatch passed through to Read-AvmToolsLock.
@@ -44,6 +53,8 @@ function Resolve-AvmTool {
         [string] $LockPath,
 
         [switch] $AllowPathFallback,
+
+        [switch] $NoAutoInstall,
 
         [Parameter(DontShow)]
         [switch] $AllowFileUrls
@@ -102,7 +113,27 @@ function Resolve-AvmTool {
         }
     }
 
-    throw [AvmToolException]::new(
-        ("Tool '{0}' (version {1}) is not installed. Run: avm tool install {0}" -f $tool.name, $tool.version),
-        'AVM1014')
+    if (Test-AvmAutoInstallDisabled -Explicit:$NoAutoInstall) {
+        throw [AvmToolException]::new(
+            ("Tool '{0}' (version {1}) is not installed and automatic installation is disabled (AVM_NO_AUTO_INSTALL). Run: avm tool install {0}" -f $tool.name, $tool.version),
+            'AVM1014')
+    }
+
+    Write-Information ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -InformationAction Continue
+    $installed = Install-AvmToolFromLock -Tool $tool -Platform $platform
+
+    if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {
+        throw [AvmToolException]::new(
+            ("Tool '{0}' (version {1}) could not be installed automatically. Run: avm tool install {0}" -f $tool.name, $tool.version),
+            'AVM1014')
+    }
+
+    $source = if ($installed -and $installed.Action -eq 'installed') { 'installed' } else { 'cache' }
+    return [pscustomobject][ordered]@{
+        Name     = $tool.name
+        Version  = $tool.version
+        Platform = $platform
+        Source   = $source
+        Path     = $entrypoint
+    }
 }

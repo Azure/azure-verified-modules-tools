@@ -27,11 +27,18 @@ BeforeAll {
     $script:sandbox = Join-Path $TestDrive 'avmhome'
     New-Item -ItemType Directory -Path $script:sandbox | Out-Null
     $env:AVM_HOME = $script:sandbox
+
+    # Auto-install is on by default; make sure a stray environment setting
+    # cannot flip these tests into the disabled path.
+    $script:savedNoAutoInstall = if (Test-Path Env:\AVM_NO_AUTO_INSTALL) { $env:AVM_NO_AUTO_INSTALL } else { $null }
+    Remove-Item Env:\AVM_NO_AUTO_INSTALL -ErrorAction SilentlyContinue
 }
 
 AfterAll {
     if ($null -eq $script:savedAvmHome) { Remove-Item Env:\AVM_HOME -ErrorAction SilentlyContinue }
     else { $env:AVM_HOME = $script:savedAvmHome }
+    if ($null -eq $script:savedNoAutoInstall) { Remove-Item Env:\AVM_NO_AUTO_INSTALL -ErrorAction SilentlyContinue }
+    else { $env:AVM_NO_AUTO_INSTALL = $script:savedNoAutoInstall }
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
@@ -44,20 +51,38 @@ Describe 'Get-AvmTool' {
             $rows[0].Version | Should -Be '1.0.0'
         }
 
-        It 'reports Status=missing before install (no PATH fallback)' {
+        It 'reports Status=not-installed before install (auto-install pending, no PATH probe)' {
             # Use a sandbox specific to this test so other tests cannot affect us.
             $miniSandbox = Join-Path $TestDrive 'mini'
             New-Item -ItemType Directory -Path $miniSandbox -Force | Out-Null
             $prev = $env:AVM_HOME
             $env:AVM_HOME = $miniSandbox
             try {
-                $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls -NoPathFallback)
-                $rows[0].Status | Should -Be 'missing'
+                $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+                $rows[0].Status | Should -Be 'not-installed'
                 $rows[0].Path | Should -BeNullOrEmpty
                 $rows[0].Source | Should -BeNullOrEmpty
             }
             finally {
                 $env:AVM_HOME = $prev
+            }
+        }
+
+        It 'reports Status=auto-install-disabled when AVM_NO_AUTO_INSTALL is set' {
+            $miniSandbox = Join-Path $TestDrive 'mini-disabled'
+            New-Item -ItemType Directory -Path $miniSandbox -Force | Out-Null
+            $prevHome = $env:AVM_HOME
+            $env:AVM_HOME = $miniSandbox
+            $env:AVM_NO_AUTO_INSTALL = '1'
+            try {
+                $rows = @(Get-AvmTool -LockPath $script:lockPath -AllowFileUrls)
+                $rows[0].Status | Should -Be 'auto-install-disabled'
+                $rows[0].Path | Should -BeNullOrEmpty
+                $rows[0].Source | Should -BeNullOrEmpty
+            }
+            finally {
+                $env:AVM_HOME = $prevHome
+                Remove-Item Env:\AVM_NO_AUTO_INSTALL -ErrorAction SilentlyContinue
             }
         }
 
@@ -86,18 +111,18 @@ Describe 'Get-AvmTool' {
 
 Describe 'avm tool dispatcher routes' {
     It 'routes "avm tool list" to Get-AvmTool' {
-        $rows = @(avm tool list --LockPath $script:lockPath --AllowFileUrls --NoPathFallback)
+        $rows = @(avm tool list --LockPath $script:lockPath --AllowFileUrls)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }
 
     It 'routes "avm tool which NAME" to Get-AvmTool -Name' {
-        $row = avm tool which fake-tool --LockPath $script:lockPath --AllowFileUrls --NoPathFallback
+        $row = avm tool which fake-tool --LockPath $script:lockPath --AllowFileUrls
         $row.Name | Should -Be 'fake-tool'
     }
 
-    It 'accepts kebab-case flags ("--no-path-fallback" -> "NoPathFallback")' {
-        $rows = @(avm tool list --lock-path $script:lockPath --allow-file-urls --no-path-fallback)
+    It 'accepts kebab-case flags ("--allow-path-fallback" -> "AllowPathFallback")' {
+        $rows = @(avm tool list --lock-path $script:lockPath --allow-file-urls --allow-path-fallback)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }
