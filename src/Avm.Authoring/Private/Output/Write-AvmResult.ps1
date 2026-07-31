@@ -2,7 +2,8 @@ function Write-AvmResult {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [object] $Result,
+        [AllowEmptyCollection()]
+        [object[]] $Result,
 
         [Parameter(Mandatory)]
         [string] $Verb
@@ -13,14 +14,14 @@ function Write-AvmResult {
 
     $lines = @(ConvertTo-AvmResultLine -Result $Result -Verb $Verb)
     foreach ($line in $lines) {
-        Write-Information $line -InformationAction Continue
+        Write-AvmLog $line -Level Info
     }
 
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {
         return
     }
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
-        Write-Warning 'GITHUB_ACTIONS is set but GITHUB_STEP_SUMMARY is unavailable.'
+        Write-AvmLog 'GITHUB_ACTIONS is set but GITHUB_STEP_SUMMARY is unavailable.' -Level Warning
         return
     }
 

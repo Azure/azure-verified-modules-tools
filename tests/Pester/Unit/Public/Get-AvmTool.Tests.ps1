@@ -127,18 +127,18 @@ Describe 'Get-AvmTool' {
 
 Describe 'avm tool dispatcher routes' {
     It 'routes "avm tool list" to Get-AvmTool' {
-        $rows = @(avm tool list --PinsPath $script:pinsPath --AllowFileUrls)
+        $rows = @(avm tool list --PinsPath $script:pinsPath --AllowFileUrls --passthru)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }
 
     It 'routes "avm tool which NAME" to Get-AvmTool -Name' {
-        $row = avm tool which fake-tool --PinsPath $script:pinsPath --AllowFileUrls
+        $row = avm tool which fake-tool --PinsPath $script:pinsPath --AllowFileUrls --passthru
         $row.Name | Should -Be 'fake-tool'
     }
 
     It 'accepts kebab-case flags ("--allow-path-fallback" -> "AllowPathFallback")' {
-        $rows = @(avm tool list --pins-path $script:pinsPath --allow-file-urls --allow-path-fallback)
+        $rows = @(avm tool list --pins-path $script:pinsPath --allow-file-urls --allow-path-fallback --passthru)
         $rows.Count | Should -Be 1
         $rows[0].Name | Should -Be 'fake-tool'
     }
