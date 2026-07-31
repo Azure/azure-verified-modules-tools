@@ -24,9 +24,6 @@
 # escape hatch redundant, so it is intentionally dropped here.
 #
 # Divergences from the governance template (tracked as follow-ups):
-#   * e2e runs as a single job; the engine loops every runnable example
-#     internally and has no per-example targeting, so the governance per-example
-#     matrix + round-robin subscription fan-out is not reproduced.
 #   * There is no global setup/teardown stage; the module implements per-example
 #     pre.ps1 / post.ps1 hooks only.
 #   * The tiers emit structured envelopes to the log rather than JUnit XML, so
@@ -71,6 +68,7 @@ jobs:
     outputs:
       subscriptionId: ${{ steps.pick.outputs.subscriptionId }}
       subscriptionName: ${{ steps.pick.outputs.subscriptionName }}
+      subscriptionIds: ${{ steps.pick.outputs.subscriptionIds }}
     steps:
       - name: Shuffle and select a test subscription
         id: pick
@@ -107,9 +105,17 @@ jobs:
               throw "Selected subscription entry has no 'id' property."
           }
 
+          # The shuffled list feeds the e2e per-example matrix, which picks
+          # subs[job-index % subs.Count] so parallel legs do not all deploy into
+          # the same subscription and collide on quota.
+          $ordered = '[{0}]' -f (($subs | ForEach-Object {
+                  ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ id = [string]$_.id; name = [string]$_.name })
+              }) -join ',')
+
           "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "subscriptionName=$($chosen.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Selected test subscription '$($chosen.name)'."
+          "subscriptionIds=$ordered" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Selected test subscription '$($chosen.name)' ($($subs.Count) available)."
 
   unit-test:
     name: Unit tests
@@ -443,15 +449,75 @@ jobs:
           Import-Module Avm.Authoring
           avm test integration
 
-  e2e-test:
-    name: End-to-end tests
+  discover-examples:
+    name: Discover e2e examples
     if: github.event.repository.name != 'terraform-azurerm-avm-template' && github.event.pull_request.head.repo.fork == false
-    needs: subscriptions
+    runs-on: ubuntu-latest
+    environment: no-approval
+    outputs:
+      examples: ${{ steps.list.outputs.examples }}
+      hasExamples: ${{ steps.list.outputs.hasExamples }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+      - name: List runnable examples
+        id: list
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          $examples = (avm test e2e --list | Out-String).Trim()
+          if ([string]::IsNullOrWhiteSpace($examples)) { $examples = '[]' }
+
+          $parsed = @($examples | ConvertFrom-Json)
+          $hasExamples = if ($parsed.Count -gt 0) { 'true' } else { 'false' }
+
+          "examples=$examples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "hasExamples=$hasExamples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Discovered $($parsed.Count) runnable example(s): $examples"
+
+  e2e-test:
+    name: End-to-end tests (${{ matrix.example }})
+    if: >-
+      github.event.repository.name != 'terraform-azurerm-avm-template' &&
+      github.event.pull_request.head.repo.fork == false &&
+      needs.discover-examples.outputs.hasExamples == 'true'
+    needs: [subscriptions, discover-examples]
     runs-on: ubuntu-latest
     environment: examples-test
     permissions:
       id-token: write
       contents: read
+    strategy:
+      # Every failing example must be reported, and every deployed example must
+      # be destroyed - not just the first one to fail.
+      fail-fast: false
+      matrix:
+        example: ${{ fromJson(needs.discover-examples.outputs.examples) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -468,10 +534,44 @@ jobs:
           "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Select subscription for this example
+        id: leg
+        shell: pwsh
+        env:
+          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
+          FALLBACK_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          JOB_INDEX: ${{ strategy.job-index }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # GitHub expressions have no modulo operator, so the round-robin is
+          # computed here from strategy.job-index.
+          $subs = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:SUBSCRIPTION_IDS)) {
+              $subs = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
+          }
+
+          if ($subs.Count -eq 0) {
+              if ([string]::IsNullOrWhiteSpace($env:FALLBACK_SUBSCRIPTION_ID)) {
+                  throw 'No test subscriptions were published by the subscriptions job.'
+              }
+              $chosen = [pscustomobject]@{ id = $env:FALLBACK_SUBSCRIPTION_ID; name = $env:FALLBACK_SUBSCRIPTION_ID }
+          }
+          else {
+              $index = 0
+              if (-not [string]::IsNullOrWhiteSpace($env:JOB_INDEX)) {
+                  $index = [int] $env:JOB_INDEX
+              }
+              $chosen = $subs[$index % $subs.Count]
+          }
+
+          "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Example '${{ matrix.example }}' uses subscription '$($chosen.name)'."
+
       - name: Prepare test environment
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -558,4 +658,4 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          avm test e2e
+          avm test e2e --example '${{ matrix.example }}'
