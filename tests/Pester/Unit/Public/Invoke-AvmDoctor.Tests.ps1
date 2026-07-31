@@ -182,19 +182,23 @@ Describe 'avm doctor (dispatcher routes)' {
 
     It 'routes "avm doctor" to Invoke-AvmDoctor' {
         $direct = Invoke-AvmDoctor
-        $via = avm doctor
+        $via = avm doctor --passthru
         $via.Status | Should -Be $direct.Status
     }
 
     It 'routes "avm doctor --json" to Invoke-AvmDoctor -Json' {
         $json = avm doctor --json
+        # F47: `'' | ConvertFrom-Json` does not throw, so -Not -Throw alone passes on
+        # empty output - the exact regression a routing test exists to catch.
+        $json | Should -Not -BeNullOrEmpty
         { $json | ConvertFrom-Json } | Should -Not -Throw
+        ($json | ConvertFrom-Json).Status | Should -BeIn @('OK', 'Fail')
     }
 
     It 'routes "avm doctor --install" with all install flags through the dispatcher' {
         $fixtureRoot = Join-Path $TestDrive ("fx-disp-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         $pinsPath = New-DoctorFixture -Root $fixtureRoot
-        $result = avm doctor --install --PinsPath $pinsPath --AllowFileUrls
+        $result = avm doctor --install --PinsPath $pinsPath --AllowFileUrls --passthru
         $result.Status | Should -Be 'OK'
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool (fake-tool*' })[0]
         $installCheck.Status | Should -Be 'OK'

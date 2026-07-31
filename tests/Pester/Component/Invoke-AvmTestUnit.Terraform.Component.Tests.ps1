@@ -81,7 +81,7 @@ Describe 'Component: Invoke-AvmTestUnit (terraform unit tier end-to-end)' -Tag '
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 
-    It 'reports a clean pass with FilesProcessed=0 when the module ships no tests/unit tier' {
+    It 'F40: reports skipped with zero runs when the module ships no tests/unit tier' {
         $emptyModule = Join-Path $TestDrive 'empty-module'
         $null = New-Item -ItemType Directory -Path $emptyModule -Force
         $mainTf = @(
@@ -98,8 +98,9 @@ Describe 'Component: Invoke-AvmTestUnit (terraform unit tier end-to-end)' -Tag '
 
         $result = Invoke-AvmTestUnit -Path $emptyModule -Ecosystem terraform -AllowPathFallback
 
-        $result.PSObject.Properties['Status'].Value          | Should -Be 'pass'
+        $result.PSObject.Properties['Status'].Value          | Should -Be 'skipped'
         $result.PSObject.Properties['FilesProcessed'].Value  | Should -Be 0
+        $result.PSObject.Properties['RunsTotal'].Value       | Should -Be 0
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 }

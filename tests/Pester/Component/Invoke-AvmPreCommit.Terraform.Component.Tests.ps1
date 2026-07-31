@@ -248,7 +248,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes nine steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -256,8 +256,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 8
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'test', 'docs')
+        $steps.Count | Should -Be 9
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'unit test', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -281,12 +281,21 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         # transform runs under -CheckDrift in pr-check; the no-op mapotf stub
         # leaves the tree untouched so the drift-check finds nothing and passes.
         # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'test', 'docs')) {
+        foreach ($passing in @('format', 'transform', 'lint', 'validate', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
+
+        # F40: the fixture ships no tests/unit tier, so the step reports 'skipped'
+        # with zero runs rather than a pass. A pass here is indistinguishable from
+        # a real one, which is how a module with no tests stays green forever.
+        # 'skipped' does not flip the overall status, so the gauntlet still passes.
+        $byName['unit test'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        $unitResult = $byName['unit test'].PSObject.Properties['Result'].Value
+        $unitResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
+        $unitResult.PSObject.Properties['RunsTotal'].Value | Should -Be 0
 
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
         # rather than 'path'. The fixture writes all the files required by the
@@ -299,22 +308,67 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
         @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
 
-        # Tool-prefix assertions catch future engine-envelope regressions on
-        # the just-wired check-policy engine, which the existing format/lint/
-        # test/docs steps already pin for their respective tools.
-        $byName['check policy'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
+        # F46: conftest evaluates zero policies under --parser hcl2 because the
+        # pinned APRL + AVMSEC bundles declare no rules in the default 'main'
+        # namespace. The step reports 'skipped' with a diagnostic rather than a
+        # pass it cannot justify. 'skipped' does not flip the overall status.
+        $byName['check policy'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        $policyResult = $byName['check policy'].PSObject.Properties['Result'].Value
+        $policyResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
+        $policyResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
+        $policyResult.PSObject.Properties['Evaluated'].Value | Should -Be 0
+        # Tool-prefix assertion catches future engine-envelope regressions on
+        # the check-policy engine, as format/lint/test/docs do for their tools.
+        $policyResult.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
+        $policyDiagnostics = @($policyResult.PSObject.Properties['Issues'].Value |
+                Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
+        $policyDiagnostics.Count | Should -Be 1
+        # F48: Evaluated=0 has two causes - this vacuity, and conftest aborting
+        # before it loads a policy. Pin the cause, not the value they share.
+        $policyDiagnostics[0].Message | Should -Match 'namespaces seen: main'
     }
 
-    It 'Invoke-AvmCheckPolicy resolves the conftest launcher, the pinned APRL and AVMSEC bundles, and reports pass with zero issues' {
+    It 'F46: Invoke-AvmCheckPolicy reports skipped, not pass, when conftest evaluates nothing' {
         $result = Invoke-AvmCheckPolicy -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
         $result.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
-        $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $result.PSObject.Properties['Status'].Value | Should -Be 'skipped'
         $result.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
         $result.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
         $result.PSObject.Properties['ToolPath'].Value | Should -Not -BeNullOrEmpty
-        $issues = $result.PSObject.Properties['Issues'].Value
-        @($issues).Count | Should -Be 0
+        $result.PSObject.Properties['Evaluated'].Value | Should -Be 0
+
+        $issues = @($result.PSObject.Properties['Issues'].Value)
+        $issues.Count | Should -Be 1
+        $issues[0].Code     | Should -Be 'avm.tf.policy-not-evaluated'
+        $issues[0].Severity | Should -Be 'warning'
+        $issues[0].Message  | Should -Match 'namespaces seen: main'
+    }
+
+    It 'F46: Invoke-AvmCheckPolicy fails and surfaces the rule when conftest reports a real violation' {
+        # Proves the gate can go red end-to-end. Without this the suite only
+        # ever proves it does nothing quietly.
+        $env:AVM_STUB_CONFTEST_OUTPUT = @'
+[{"filename":"main.tf","namespace":"avmsec","successes":259,"failures":[{"msg":"AVM_SEC_1: storage account must disable public network access"}]}]
+'@
+        try {
+            $result = Invoke-AvmCheckPolicy -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+        }
+        finally {
+            Remove-Item Env:\AVM_STUB_CONFTEST_OUTPUT -ErrorAction SilentlyContinue
+        }
+
+        $result.PSObject.Properties['Status'].Value    | Should -Be 'fail'
+        $result.PSObject.Properties['Evaluated'].Value | Should -Be 260
+
+        $issues = @($result.PSObject.Properties['Issues'].Value)
+        $issues.Count | Should -Be 1
+        $issues[0].Severity | Should -Be 'error'
+        $issues[0].Code     | Should -Be 'avmsec'
+        $issues[0].File     | Should -Be 'main.tf'
+        $issues[0].Message  | Should -Match 'public network access'
+        # The vacuity diagnostic must not fire once a rule has genuinely matched.
+        @($issues | Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 0
     }
 }

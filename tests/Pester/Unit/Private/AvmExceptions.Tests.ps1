@@ -35,6 +35,15 @@ Describe 'AvmExceptions' {
         $thrown.Code | Should -Be 'AVM1001'
     }
 
+    It 'AvmNotSupportedException derives from AvmConfigurationException and keeps code AVM1001' {
+        $thrown = InModuleScope 'Avm.Authoring' {
+            try { throw [AvmNotSupportedException]::new('not for this ecosystem') } catch { return $_.Exception }
+        }
+        $thrown.GetType().Name          | Should -Be 'AvmNotSupportedException'
+        $thrown.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
+        $thrown.Code                    | Should -Be 'AVM1001'
+    }
+
     It 'AvmToolException carries default code AVM1010' {
         $thrown = InModuleScope 'Avm.Authoring' {
             try { throw [AvmToolException]::new('tool') } catch { return $_.Exception }

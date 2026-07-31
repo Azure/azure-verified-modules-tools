@@ -44,7 +44,7 @@ Describe 'Invoke-AvmTest' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmBicepTest -Exactly 1
-            Should -Invoke Invoke-AvmTerraformTest -Times 0
+            Should -Invoke Invoke-AvmTerraformTest -Times 0 -Exactly
         }
     }
 

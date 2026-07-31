@@ -36,6 +36,15 @@ class AvmConfigurationException : AvmException {
     AvmConfigurationException([string] $message, [Exception] $innerException) : base($message, 'AVM1001', $innerException) {}
 }
 
+# A verb that does not apply to the resolved ecosystem, or is not implemented
+# for it yet. Distinct from AvmConfigurationException - which means the repo is
+# misconfigured and someone must fix it - so the gauntlets can skip the former
+# and fail the latter. Derives from AvmConfigurationException so existing
+# catches and the CLI's exit-code handling keep working unchanged.
+class AvmNotSupportedException : AvmConfigurationException {
+    AvmNotSupportedException([string] $message) : base($message) {}
+}
+
 # Tool resolver / install / SHA256 mismatch / archive issues.
 class AvmToolException : AvmException {
     AvmToolException([string] $message) : base($message, 'AVM1010') {}

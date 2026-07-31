@@ -7,6 +7,17 @@ variables {
   location                 = "eastus"
 }
 
+run "setup" {
+  module {
+    source = "./tests/unit/setup"
+  }
+
+  assert {
+    condition     = output.name_prefix == "avmtest-unit"
+    error_message = "The helper module referenced by this run block should be installed by terraform init."
+  }
+}
+
 run "apply" {
   command = apply
 

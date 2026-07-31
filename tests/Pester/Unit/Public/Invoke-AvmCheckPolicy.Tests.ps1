@@ -43,7 +43,7 @@ Describe 'Invoke-AvmCheckPolicy' {
             $result = Invoke-AvmCheckPolicy -Path $D
             $result.Engine | Should -Be 'bicep'
             Should -Invoke Invoke-AvmBicepCheckPolicy -Exactly 1
-            Should -Invoke Invoke-AvmTerraformCheckPolicy -Times 0
+            Should -Invoke Invoke-AvmTerraformCheckPolicy -Times 0 -Exactly
         }
     }
 
@@ -65,11 +65,11 @@ Describe 'Invoke-AvmCheckPolicy' {
             $result = Invoke-AvmCheckPolicy -Path $D
             $result.Engine | Should -Be 'terraform'
             Should -Invoke Invoke-AvmTerraformCheckPolicy -Exactly 1
-            Should -Invoke Invoke-AvmBicepCheckPolicy -Times 0
+            Should -Invoke Invoke-AvmBicepCheckPolicy -Times 0 -Exactly
         }
     }
 
-    It 'the bicep engine stub still throws AvmConfigurationException' {
+    It 'the bicep engine stub still throws AvmNotSupportedException' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepCheckPolicy -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -77,7 +77,8 @@ Describe 'Invoke-AvmCheckPolicy' {
             }
             catch { $_.Exception }
         }
-        $err.GetType().Name        | Should -Be 'AvmConfigurationException'
+        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
+        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
         $err.Message               | Should -Match 'Bicep policy check is not yet wired'
     }
 }

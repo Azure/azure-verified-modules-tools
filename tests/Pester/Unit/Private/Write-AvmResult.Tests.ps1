@@ -40,3 +40,40 @@ Describe 'Write-AvmResult GitHub summary' {
         }
     }
 }
+
+Describe 'ConvertTo-AvmRunSummaryLine' {
+    It 'F33: renders the run tally when the result carries run counts' {
+        InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'pass'; FilesProcessed = 4
+                RunsTotal = 14; RunsPassed = 14; RunsFailed = 0
+            }
+            $lines = @(ConvertTo-AvmResultDetailLine -Result $result)
+            $lines | Should -Contain '  14 runs, 14 passed, 0 failed'
+        }
+    }
+
+    It 'F33: emits nothing for results without run counts' {
+        InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{ Status = 'pass'; FilesProcessed = 4 }
+            @(ConvertTo-AvmRunSummaryLine -Result $result) | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'F33: renders the tally for a gauntlet step result' {
+        InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'pass'
+                Steps  = @([pscustomobject]@{
+                        Step   = 'unit'
+                        Status = 'pass'
+                        Result = [pscustomobject]@{
+                            RunsTotal = 3; RunsPassed = 2; RunsFailed = 1
+                        }
+                    })
+            }
+            $lines = @(ConvertTo-AvmResultDetailLine -Result $result)
+            ($lines -join "`n") | Should -Match '3 runs, 2 passed, 1 failed'
+        }
+    }
+}

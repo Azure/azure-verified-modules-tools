@@ -31,14 +31,25 @@ function Invoke-AvmFormat {
         lock-pinned version. Off by default; production callers usually
         want only the managed cache.
 
+    .PARAMETER CheckDrift
+        Report-only mode used by pr-check. Any file that is not already
+        formatted makes the result Status 'fail' and is emitted as an
+        Issue, instead of being silently rewritten. Without it a CI run
+        fixes formatting in the throwaway working copy and reports a pass,
+        so badly formatted sources merge unnoticed.
+
     .OUTPUTS
         pscustomobject from the engine: Status, Engine, Tool, ToolPath,
-        ToolSource, FilesProcessed, Changed.
+        ToolSource, FilesProcessed, Changed, Issues.
 
     .EXAMPLE
         avm format
         # Detect ecosystem from the current directory and format every
         # source file under the module root.
+
+    .EXAMPLE
+        avm format --check-drift
+        # Fail instead of rewriting: what pr-check runs.
 
     .EXAMPLE
         Invoke-AvmFormat -Path C:\repos\my-module -Ecosystem bicep
@@ -57,7 +68,9 @@ function Invoke-AvmFormat {
         [ValidateSet('auto', 'bicep', 'terraform')]
         [string] $Ecosystem = 'auto',
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [switch] $CheckDrift
     )
 
     Set-StrictMode -Version 3.0
@@ -65,16 +78,23 @@ function Invoke-AvmFormat {
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 
-    if (-not $PSCmdlet.ShouldProcess($context.Root, "Format $($context.Ecosystem) module sources")) {
+    $action = if ($CheckDrift) {
+        "Check $($context.Ecosystem) module source formatting"
+    }
+    else {
+        "Format $($context.Ecosystem) module sources"
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($context.Root, $action)) {
         return
     }
 
     switch ($context.Ecosystem) {
         'bicep' {
-            Format-AvmBicepModule -Context $context -AllowPathFallback:$AllowPathFallback
+            Format-AvmBicepModule -Context $context -AllowPathFallback:$AllowPathFallback -CheckDrift:$CheckDrift
         }
         'terraform' {
-            Format-AvmTerraformModule -Context $context -AllowPathFallback:$AllowPathFallback
+            Format-AvmTerraformModule -Context $context -AllowPathFallback:$AllowPathFallback -CheckDrift:$CheckDrift
         }
         default {
             throw [AvmContextException]::new(

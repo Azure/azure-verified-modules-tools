@@ -119,7 +119,7 @@ function Resolve-AvmTool {
             'AVM1014')
     }
 
-    Write-Information ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -InformationAction Continue
+    Write-AvmLog ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -Level Info
     $installed = Install-AvmToolFromPins -Tool $tool -Platform $platform
 
     if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {

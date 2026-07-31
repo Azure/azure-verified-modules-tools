@@ -132,8 +132,12 @@ Describe 'Set-AvmModuleVersion' {
             & $script:ScriptPath -ManifestPath $path -Version '1.2.3' -Confirm:$false
 
             $bytes = [System.IO.File]::ReadAllBytes($path)
+            $text = [System.IO.File]::ReadAllText($path)
+            # F47: a zero-byte manifest has no BOM and no CR, so both negatives
+            # below pass on one. Pin the content first.
+            $text | Should -Match "ModuleVersion += +'1\.2\.3'"
             $bytes[0..2] -join ',' | Should -Not -Be '239,187,191'
-            [System.IO.File]::ReadAllText($path) | Should -Not -Match "`r"
+            $text | Should -Not -Match "`r"
         }
     }
 

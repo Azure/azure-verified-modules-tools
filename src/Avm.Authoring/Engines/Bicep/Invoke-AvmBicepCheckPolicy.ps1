@@ -45,6 +45,6 @@ function Invoke-AvmBicepCheckPolicy {
 
     $null = $AllowPathFallback
 
-    throw [AvmConfigurationException]::new(
+    throw [AvmNotSupportedException]::new(
         "Bicep policy check is not yet wired: the in-process PSRule.Rules.Azure invocation is the next bicep-check-policy slice. Track it in docs/avm-consolidation-plan.md.")
 }

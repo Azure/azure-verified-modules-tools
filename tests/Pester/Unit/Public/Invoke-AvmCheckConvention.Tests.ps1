@@ -43,7 +43,7 @@ Describe 'Invoke-AvmCheckConvention' {
             $result = Invoke-AvmCheckConvention -Path $D
             $result.Engine | Should -Be 'bicep'
             Should -Invoke Invoke-AvmBicepCheckConvention -Exactly 1
-            Should -Invoke Invoke-AvmTerraformCheckConvention -Times 0
+            Should -Invoke Invoke-AvmTerraformCheckConvention -Times 0 -Exactly
         }
     }
 
@@ -65,11 +65,11 @@ Describe 'Invoke-AvmCheckConvention' {
             $result = Invoke-AvmCheckConvention -Path $D
             $result.Engine | Should -Be 'terraform'
             Should -Invoke Invoke-AvmTerraformCheckConvention -Exactly 1
-            Should -Invoke Invoke-AvmBicepCheckConvention -Times 0
+            Should -Invoke Invoke-AvmBicepCheckConvention -Times 0 -Exactly
         }
     }
 
-    It 'the bicep engine still throws AvmConfigurationException for its stub' {
+    It 'the bicep engine still throws AvmNotSupportedException for its stub' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -77,11 +77,12 @@ Describe 'Invoke-AvmCheckConvention' {
             }
             catch { $_.Exception }
         }
-        $err.GetType().Name        | Should -Be 'AvmConfigurationException'
+        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
+        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
         $err.Message               | Should -Match 'Bicep convention check is not yet wired'
     }
 
-    It 'the terraform engine returns a real envelope and no longer throws AvmConfigurationException' {
+    It 'the terraform engine returns a real envelope and no longer throws AvmNotSupportedException' {
         $result = InModuleScope 'Avm.Authoring' {
             Invoke-AvmTerraformCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'terraform'; Root = $TestDrive })
         }

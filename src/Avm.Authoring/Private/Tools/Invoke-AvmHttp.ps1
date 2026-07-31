@@ -49,7 +49,7 @@ function Invoke-AvmHttp {
     $mirror = if (Test-Path Env:\AVM_MIRROR) { $env:AVM_MIRROR } else { $null }
     $effectiveUrl = Resolve-AvmMirrorUrl -Source $Url -Mirror $mirror
     if ($effectiveUrl -cne $Url) {
-        Write-Verbose "AVM_MIRROR rewrite: $Url -> $effectiveUrl"
+        Write-AvmLog "AVM_MIRROR rewrite: $Url -> $effectiveUrl" -Level Verbose
     }
 
     $offline = if (Test-Path Env:\AVM_OFFLINE) { $env:AVM_OFFLINE -eq '1' } else { $false }

@@ -2,7 +2,7 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     format -> lint -> test -> docs.
+        bicep:     format -> lint -> validate -> docs.
         terraform: sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
@@ -23,7 +23,7 @@ function Invoke-AvmPreCommit {
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
         The two checks that require an
-        initialised working directory - lint (tflint) and test
+        initialised working directory - lint (tflint) and validate
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
         upstream porch, which runs tflint and the policy/plan checks in
         pr-check rather than pre-commit.
@@ -95,6 +95,7 @@ function Invoke-AvmPreCommit {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
@@ -112,19 +113,24 @@ function Invoke-AvmPreCommit {
         @(
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
             [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-            [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
+            [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )
     }
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
+    $stepIndex = 0
 
     foreach ($def in $stepDefs) {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $stepIndex++
+        $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info
 
         try {
             $stepResult = & $def.Cmdlet `
@@ -138,10 +144,17 @@ function Invoke-AvmPreCommit {
                 $stepStatus = $stepResult.Status
             }
         }
-        catch [AvmConfigurationException] {
-            # Deliberate placeholder engine (e.g. bicep-docs). Continue the
-            # chain; do not flip overall status.
+        catch [AvmNotSupportedException] {
+            # Verb genuinely does not apply to this ecosystem (e.g. bicep-docs).
+            # Continue the chain; do not flip overall status.
             $stepStatus = 'skipped'
+            $stepError = $_.Exception.Message
+        }
+        catch [AvmConfigurationException] {
+            # The repo is misconfigured, not unsupported. This must fail rather
+            # than skip: a skip renders as a benign gauntlet pass, which is how
+            # a step that never actually ran gets to look green.
+            $stepStatus = 'fail'
             $stepError = $_.Exception.Message
         }
         catch {
@@ -149,12 +162,23 @@ function Invoke-AvmPreCommit {
             $stepError = $_.Exception.Message
         }
         $stepSw.Stop()
+        $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
+
+        Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
+
+        if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
+            # F41: narration only. Assert-AvmCommandSuccess promotes the same
+            # text to the single GitHub Actions annotation for the run.
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info
+        }
 
         $steps.Add([pscustomobject][ordered]@{
                 Step       = $def.Name
                 Status     = $stepStatus
                 Error      = $stepError
                 Result     = $stepResult
+                StartTime  = $stepStart
+                EndTime    = $stepEnd
                 DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
             })
 
@@ -170,6 +194,8 @@ function Invoke-AvmPreCommit {
         Ecosystem  = $context.Ecosystem
         Status     = $overall
         Steps      = $steps.ToArray()
+        StartTime  = $startTime
+        EndTime    = $startTime.AddMilliseconds($sw.Elapsed.TotalMilliseconds)
         DurationMs = [int]$sw.Elapsed.TotalMilliseconds
     }
 }

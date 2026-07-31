@@ -21,12 +21,29 @@ function Invoke-Avm {
 
     .EXAMPLE
         PS> avm doctor --json
+
+    .EXAMPLE
+        PS> avm pre-commit --passthru
     #>
     [Alias('avm')]
     param()
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
+    # logging. Turn verbose on and cascade it to every nested cmdlet through a
+    # cloned default-parameter table so the inherited/global one is untouched.
+    if (Test-AvmDebugMode) {
+        $VerbosePreference = 'Continue'
+        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+            $PSDefaultParameterValues.Clone()
+        }
+        else {
+            @{}
+        }
+        $PSDefaultParameterValues['*:Verbose'] = $true
+    }
 
     # Honour .avm/.disable sentinel anywhere up the path: spec section 8.
     # The opt-out lets a repo turn the dispatcher off without uninstalling
@@ -39,7 +56,18 @@ function Invoke-Avm {
             "avm is disabled in this repository (remove $sentinel to re-enable).")
     }
 
-    $arguments = @($args)
+    $rawArguments = @($args)
+    $passThru = $false
+    $arguments = @(
+        foreach ($arg in $rawArguments) {
+            $token = [string]$arg
+            if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
+                $passThru = $true
+                continue
+            }
+            $arg
+        }
+    )
     $registry = @(Get-AvmVerbRegistry)
 
     # F09: bare 'avm', 'avm --help', 'avm -h' and 'avm help' all print the same
@@ -52,14 +80,14 @@ function Invoke-Avm {
     }
 
     if ($helpRequested) {
-        Write-Information 'Avm.Authoring CLI' -InformationAction Continue
-        Write-Information '' -InformationAction Continue
-        Write-Information 'Usage: avm <verb> [<args>]' -InformationAction Continue
-        Write-Information '' -InformationAction Continue
-        Write-Information 'Available verbs:' -InformationAction Continue
+        Write-AvmLog 'Avm.Authoring CLI' -Level Info
+        Write-AvmLog '' -Level Info
+        Write-AvmLog 'Usage: avm <verb> [<args>]' -Level Info
+        Write-AvmLog '' -Level Info
+        Write-AvmLog 'Available verbs:' -Level Info
         foreach ($entry in $registry) {
             $verb = ($entry.Path -join ' ').PadRight(20)
-            Write-Information ('  {0}  {1}' -f $verb, $entry.Summary) -InformationAction Continue
+            Write-AvmLog ('  {0}  {1}' -f $verb, $entry.Summary) -Level Info
         }
         return
     }
@@ -176,29 +204,41 @@ function Invoke-Avm {
         }
     }
 
-    $result = & $cmd @bound @positional
+    $verbPath = ($match.Path -join ' ')
 
-    foreach ($item in @($result)) {
-        if ($null -eq $item) { continue }
-        $statusProp = $item.PSObject.Properties['Status']
-        if ($null -eq $statusProp) { continue }
-        Write-AvmResult -Result $item -Verb ($match.Path -join ' ')
+    try {
+        $result = & $cmd @bound @positional
+    }
+    catch [AvmException] {
+        Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
+    }
+
+    $items = @($result | Where-Object { $null -ne $_ })
+    $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
+    $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })
+
+    # F25: render once per invocation, not once per emitted object.
+    if ($rendered.Count -gt 0) {
+        Write-AvmResult -Result $rendered -Verb $verbPath
     }
 
     # F02: a gauntlet verb that reports Status 'fail' or 'error' must make the
     # hosting process exit non-zero, so wrapping git hooks and CI steps cannot
     # pass silently. Read-only verbs (e.g. 'version') emit no 'Status' property
     # and stream straight through untouched.
-    foreach ($item in @($result)) {
-        if ($null -eq $item) { continue }
-        $statusProp = $item.PSObject.Properties['Status']
-        if ($null -eq $statusProp) { continue }
-        $status = ([string]$statusProp.Value).Trim()
+    foreach ($item in $rendered) {
+        $status = ([string]$item.PSObject.Properties['Status'].Value).Trim()
         if ($status.ToLowerInvariant() -in @('fail', 'error')) {
-            $detail = Get-AvmFailureDetail -Result $item
-            throw [AvmCommandException]::new(($match.Path -join ' '), $status, $item, $detail)
+            Assert-AvmCommandSuccess -Verb $verbPath -Status $status -Result $item
         }
     }
 
-    return $result
+    # F23: the rendered summary is the interactive contract. Only hand the raw
+    # result objects back when the caller asks for them; objects the renderer
+    # did not consume (e.g. 'avm version') always stream through.
+    if ($passThru) {
+        return $result
+    }
+
+    return $passThrough
 }

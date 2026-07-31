@@ -24,7 +24,7 @@ Describe 'Invoke-AvmBicepDocs (stub — walker reverted pending new CLI design)'
         $err.Message        | Should -Match "Ecosystem='terraform'"
     }
 
-    It 'throws AvmConfigurationException for a bicep context (engine deferred to new CLI command)' {
+    It 'throws AvmNotSupportedException for a bicep context (engine deferred to new CLI command)' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepDocs -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -32,7 +32,8 @@ Describe 'Invoke-AvmBicepDocs (stub — walker reverted pending new CLI design)'
             }
             catch { $_.Exception }
         }
-        $err.GetType().Name | Should -Be 'AvmConfigurationException'
+        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
+        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
         $err.Message        | Should -Match 'redesigned as a separate CLI command'
         $err.Message        | Should -Match 'docs/avm-consolidation-plan\.md'
     }

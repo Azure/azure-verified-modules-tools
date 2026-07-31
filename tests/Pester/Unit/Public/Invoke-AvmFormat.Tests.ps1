@@ -37,7 +37,7 @@ Describe 'Invoke-AvmFormat' {
             Mock Get-AvmModuleContext { $ctx } -ParameterFilter { $true }
             Mock Format-AvmBicepModule { 'should-not-run' }
             $script:result = Invoke-AvmFormat -Path $D -WhatIf
-            Should -Invoke Format-AvmBicepModule -Times 0
+            Should -Invoke Format-AvmBicepModule -Times 0 -Exactly
         }
     }
 
@@ -62,7 +62,7 @@ Describe 'Invoke-AvmFormat' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Format-AvmBicepModule -Exactly 1
-            Should -Invoke Format-AvmTerraformModule -Times 0
+            Should -Invoke Format-AvmTerraformModule -Times 0 -Exactly
         }
     }
 
@@ -108,6 +108,59 @@ Describe 'Invoke-AvmFormat' {
             }
             Invoke-AvmFormat -Path $D -Ecosystem 'bicep' | Out-Null
             $script:eco | Should -Be 'bicep'
+        }
+    }
+    It 'threads -CheckDrift to the terraform engine' {
+        $dir = Join-Path $TestDrive ("fmt-drift-tf-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Format-AvmTerraformModule {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'fail'; FilesProcessed = 1; Changed = @('main.tf'); Issues = @() }
+            }
+            Invoke-AvmFormat -Path $D -CheckDrift | Out-Null
+            Should -Invoke Format-AvmTerraformModule -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+        }
+    }
+
+    It 'threads -CheckDrift to the bicep engine' {
+        $dir = Join-Path $TestDrive ("fmt-drift-bicep-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                }
+            }
+            Mock Format-AvmBicepModule {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 0; Changed = @(); Issues = @() }
+            }
+            Invoke-AvmFormat -Path $D -CheckDrift | Out-Null
+            Should -Invoke Format-AvmBicepModule -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+        }
+    }
+
+    It 'does not request drift mode by default' {
+        $dir = Join-Path $TestDrive ("fmt-nodrift-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Format-AvmTerraformModule {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Changed = @(); Issues = @() }
+            }
+            Invoke-AvmFormat -Path $D | Out-Null
+            Should -Invoke Format-AvmTerraformModule -Exactly 0 -ParameterFilter { $CheckDrift -eq $true }
         }
     }
 }

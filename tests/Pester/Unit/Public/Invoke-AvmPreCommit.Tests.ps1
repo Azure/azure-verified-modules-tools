@@ -46,9 +46,40 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps.Count               | Should -Be 4
         $result.Steps[0].Step             | Should -Be 'format'
         $result.Steps[1].Step             | Should -Be 'lint'
-        $result.Steps[2].Step             | Should -Be 'test'
+        $result.Steps[2].Step             | Should -Be 'validate'
         $result.Steps[3].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+    }
+
+    It 'stamps StartTime, EndTime and DurationMs on the envelope and every step' {
+        $dir = Join-Path $TestDrive ("precommit-timing-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmLint   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmTest   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Invoke-AvmPreCommit -Path $D
+        }
+
+        $result.StartTime  | Should -BeOfType ([datetime])
+        $result.EndTime    | Should -BeOfType ([datetime])
+        $result.EndTime    | Should -BeGreaterOrEqual $result.StartTime
+        $result.DurationMs | Should -BeGreaterOrEqual 0
+
+        foreach ($step in $result.Steps) {
+            $step.StartTime  | Should -BeOfType ([datetime])
+            $step.EndTime    | Should -BeOfType ([datetime])
+            $step.EndTime    | Should -BeGreaterOrEqual $step.StartTime
+            $step.DurationMs | Should -BeGreaterOrEqual 0
+        }
     }
 
     It 'composes all five steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
@@ -73,15 +104,20 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPreCommit -Path $D
 
-            Should -Invoke Invoke-AvmSync            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckConvention -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+
+            # pre-commit is the auto-fix surface: format and docs must rewrite
+            # the working tree, never gate on drift the way pr-check does.
+            Should -Invoke Invoke-AvmFormat -Times 0 -Exactly -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmDocs   -Times 0 -Exactly -ParameterFilter { $CheckDrift -eq $true }
 
             # lint + test are pr-check-only on the terraform chain; pre-commit must not call them.
-            Should -Invoke Invoke-AvmLint -Times 0
-            Should -Invoke Invoke-AvmTest -Times 0
+            Should -Invoke Invoke-AvmLint -Times 0 -Exactly
+            Should -Invoke Invoke-AvmTest -Times 0 -Exactly
 
             $r
         }
@@ -97,7 +133,7 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
-    It 'reports a stubbed engine (AvmConfigurationException) as skipped and continues the chain (terraform)' {
+    It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
         $dir = Join-Path $TestDrive ("precommit-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -110,7 +146,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTransform       { throw [AvmConfigurationException]::new('transform engine not wired yet') }
+            Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
@@ -121,6 +157,37 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | Where-Object Status -eq 'skipped').Count      | Should -Be 1
         ($result.Steps | Where-Object Step -eq 'transform').Status     | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Error      | Should -Match 'not wired'
+    }
+
+    # F39b: a plain AvmConfigurationException means the repo is misconfigured, not
+    # that the verb is unsupported. Skipping it renders as a benign gauntlet pass -
+    # exactly how a step that never actually ran gets to look green.
+    It 'F39: fails the gauntlet on a configuration error but skips an unsupported verb' {
+        $dir = Join-Path $TestDrive ("precommit-f39-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync            { throw [AvmConfigurationException]::new('managed-files repo id could not be resolved') }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPreCommit -Path $D
+        }
+
+        ($result.Steps | Where-Object Step -eq 'sync').Status      | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'transform').Status | Should -Be 'skipped'
+        $result.Status                                            | Should -Be 'fail'
+
+        # 'fail' must not abort the chain the way 'error' does - the remaining
+        # steps still run so one bad config does not mask the next.
+        $result.Steps.Step | Should -Contain 'docs'
     }
 
     It 'flips overall to fail when any step returns Status=fail but continues by default' {
@@ -173,11 +240,11 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[-1].Status             | Should -Be 'fail'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 
-    It 'aborts the chain and flips overall to error on a thrown non-AvmConfigurationException' {
+    It 'aborts the chain and flips overall to error on a thrown non-Avm exception' {
         $dir = Join-Path $TestDrive ("precommit-err-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -203,7 +270,7 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 }

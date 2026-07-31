@@ -1298,3 +1298,446 @@ Steps:
 - **(B) fix-in-pre-commit + drift-check-in-pr-check semantics (J.3) — RESOLVED = follow upstream.** The user confirmed (2026-06-19, *"yes proceed"*) the upstream-canonical model: `pre-commit` **fixes** via `mapotf transform`, `pr-check` **flags drift** via re-transform + `git status --porcelain`. This consciously reverses the 2026-06-03 flag-only preference.
 
 With (A) and (B) resolved, the only remaining Slice G work was the **engine**. **DONE 2026-06-19** (`slice-g-transform`, commit `c3dd21a`): `mapotf` v0.1.4 pinned, `Invoke-AvmTerraformTransform` implemented against `config/mapotf/pre-commit/` (transform → clean-backup, `-CheckDrift` drift gate for pr-check), `tests/fixtures/bin/mapotf.ps1` stub + 12 unit + 3 integration tests, wired into both the pre-commit and pr-check Terraform chains. The config-supply half (`slice-g1-vendor-configs`, commit `37fb848`) was already done. **Terraform pre-commit parity is achieved.**
+
+## Appendix K. Terraform test-fixture traps
+
+Collected while building the `run { module { … } }` regression fixture for F34.
+Both traps share a signature that makes them expensive to diagnose: terraform
+reports the error against the **test file**, not against the helper module or
+the provider block that actually caused it.
+
+### K.1 A helper module must repeat the root's `required_providers` sources
+
+A module pulled in from a `run` block inside a file that uses `mock_provider`
+must declare the *same provider sources* as the root module:
+
+```hcl
+terraform {
+  required_providers {
+    azapi = {
+      source = "Azure/azapi"
+    }
+  }
+}
+```
+
+Terraform unifies provider **names** across the whole test run. Omit the entry
+and the helper's bare `azapi` silently defaults to `hashicorp/azapi`, which then
+collides with the root's real `Azure/azapi`. The diagnostic points at the test
+file and describes a provider-type conflict, so the natural reading is that the
+`mock_provider` block is wrong — it is not.
+
+### K.2 `mock_provider` generates IDs that real providers reject
+
+`mock_provider "azapi" {}` synthesises short opaque IDs (`1knj3pev`). `azapi`
+validates `parent_id` as a genuine ARM resource ID, so anything consuming a
+mocked ID fails validation. Pin a realistic shape:
+
+```hcl
+mock_provider "azapi" {
+  mock_resource "azapi_resource" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg"
+    }
+  }
+}
+```
+
+### K.3 Block syntax must be multi-line
+
+`terraform { required_providers { random = { source = "hashicorp/random" } } }`
+on one line is a parse error, not a style preference. Write the blocks out.
+
+### K.4 Prefer a local helper over a registry one
+
+The F34 fixture sources its helper from a sibling directory rather than the
+registry. A registry source makes the test suite dependent on network reach and
+on the GitHub API rate limit — the same budget that produced the intermittent
+`tflint --init` failure documented in the 0.1.7 upgrade notes. A local helper
+exercises the identical code path in `terraform init` while staying hermetic.
+## Appendix L. `AvmNotSupportedException` vs `AvmConfigurationException`
+
+The two gauntlets (`Invoke-AvmPrCheck`, `Invoke-AvmPreCommit`) run a chain of
+verbs across both ecosystems, so they need a way to tell "this verb does not
+apply here" apart from "this repo is broken". Before F39 they could not: both
+arrived as `AvmConfigurationException`, both were caught, and both rendered as
+`skipped` — a status that deliberately does not flip the overall result. A repo
+with an unresolvable tflint config bundle, an invalid `.avm` context override or
+`AVM_OFFLINE=1` set by accident therefore produced an all-green gauntlet.
+
+The rule:
+
+- **`AvmNotSupportedException`** — the verb does not apply to the resolved
+  ecosystem, or is not implemented for it yet. Throw this from an ecosystem gate
+  or an engine stub. The gauntlets skip it; overall status is unaffected.
+- **`AvmConfigurationException`** — the repo or the environment is misconfigured
+  and a human must fix it. The gauntlets **fail** the step. They do not *error*
+  it, so the chain runs to completion and reports every problem rather than
+  stopping at the first.
+
+`AvmNotSupportedException` derives from `AvmConfigurationException` on purpose,
+so every existing `catch [AvmConfigurationException]`, the CLI's exit-code
+handling and any `-ExceptionType` assertion keep working unchanged. That also
+means a `catch` ladder must list the derived type **first** — the CLR matches
+the first assignable clause, so putting the base type first swallows both.
+
+The two exception classes are module-private, so a Pester test outside
+`InModuleScope` cannot resolve `[AvmNotSupportedException]` as a type literal.
+Assert on names instead:
+
+```powershell
+$err.GetType().Name          | Should -Be 'AvmNotSupportedException'
+$err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
+```
+
+### L.1 A shell hook is only wrong when it is alone
+
+Related, and found in the same change. The test engines rejected the presence of
+`setup.sh` / `teardown.sh` / `pre.sh` / `post.sh` outright. Upstream AVM
+governance ships a `.ps1` and a `.sh` **side by side** — the `.ps1` is what this
+module runs — so that guard made `avm test unit` throw on every
+governance-compliant module. A shell hook only matters when it has no `.ps1`
+counterpart, because only then does the hook silently never run. Guard on the
+absence of the counterpart, not on the presence of the `.sh`.
+### L.2 A step that did nothing is `skipped`, never `pass`
+
+The same shape as L, one level down. A test tier with no test files, or an e2e
+run with no runnable examples, used to return `Status = 'pass'`. That is
+indistinguishable from a real pass on the console, so a module that ships no
+tests stays green forever — the C01 failure mode. Report `skipped`.
+
+Three constraints make this safe rather than breaking:
+
+- `skipped` does not flip a gauntlet's overall status (`Invoke-AvmPrCheck` and
+  `Invoke-AvmPreCommit` react only to `fail`/`error`), and `Invoke-Avm` exits
+  non-zero only on those two. A module with no tier is reported, not broken.
+- Fix it in the **engine**, not the gauntlet. The gauntlets copy the engine
+  status verbatim, so one change makes both the standalone verb and every chain
+  that calls it honest. Fixing the gauntlet leaves the standalone verb lying.
+- Scope it to *nothing to run*, not *nothing happened*. A tier whose files exist
+  but execute no `run` blocks still reports `pass`; `RunsTotal = 0` is the signal
+  there, and conflating the two loses the distinction between "no tests written"
+  and "tests present but vacuous".
+
+The regression test that matters is the real-binary component tier on a fixture
+with no `tests/<tier>/`. A unit test asserting the returned status is easy to
+write against a mock and equally easy to write against the wrong constant; the
+component tier fails for real if the engine reverts.
+
+### L.3 Narration is not an annotation
+
+Every `::error::` line becomes a workflow annotation at the top of a GitHub
+Actions run summary — the surface most reviewers read and, for many, the only
+one. Annotations are capped at **10 per step and 50 per run**, and they are
+displayed in emission order, so anything you narrate at `Error` competes for the
+slot the actual diagnosis needs. A single failing terraform test used to emit
+three: the progress line, the summary, and the positioned diagnostic last.
+
+Two rules follow.
+
+- **Narrate at `Info`.** Progress lines, `FAILED:` / `TIMEOUT:` markers and
+  gauntlet step-error lines are context, not findings. Outside Actions this
+  costs nothing — `Write-AvmLog -Level Error` and `-Level Info` both write to
+  the information stream, so the level only ever changes CI behaviour.
+- **Emit exactly one annotation per failed command**, at the boundary that
+  already owns the failure (`Assert-AvmCommandSuccess`). Anchor it when a
+  position exists; fall back to unanchored when it does not, so a failure is
+  never silent.
+
+Anchoring is the payoff, and it has three constraints that are easy to miss:
+
+- Properties go **before** the separator: `::error file=a.tf,line=1,col=2::text`.
+- The path must be **repo-relative with forward slashes**, or GitHub cannot
+  match it to the diff and the annotation will not render inline on the failing
+  line. Normalise separators and strip a `GITHUB_WORKSPACE` prefix; do not use
+  `Resolve-Path`, which behaves differently on the Linux runner.
+- `col` without `line` is meaningless — suppress it.
+
+Finally, strip leading whitespace from annotation payloads at the writer, not at
+each call site. Console indentation is load-bearing locally and pure noise in an
+annotation.
+### L.4 Check mode must not write
+
+A `-CheckDrift` / check-only switch has one contract: report, do not mutate. It
+is easy to honour when the underlying tool has a dry-run (`terraform fmt
+-write=false`) and easy to quietly break when it does not. Neither
+`terraform-docs` in inject mode nor `mapotf` offers one, so the obvious
+implementation — write, hash, compare, report — produces a correct status and a
+rewritten working copy.
+
+That is invisible in CI, where the checkout is thrown away, which is exactly why
+it survives. It bites the developer who runs the gate locally before pushing.
+
+Prefer **snapshot and restore over a tool-native check flag**:
+
+- The tool still runs unmodified, so drift detection stays byte-for-byte the
+  behaviour you already tested. The diff is purely additive.
+- A tool-native check flag usually collapses "drift found" and "tool failed"
+  into one exit code, which is a worse diagnostic than the one you have.
+- Restore from a `finally`, not after the loop: a tool that throws part-way
+  through must not leave the tree dirty. Pin that with a test.
+- Skip the write when the bytes already match, so files the tool did not touch
+  keep their timestamps.
+- If the tool can create or delete files, re-enumerate afterwards and reconcile
+  against the snapshot — restoring only the files you knew about up front will
+  leave new ones behind.
+
+The inverse matters just as much: the auto-fixing chain (`pre-commit`) must
+*not* inherit the switch. Gating a developer's commit hook on drift it is meant
+to remove breaks the loop that makes the hook worth having. Pin that inverse
+with its own test.
+### L.5 `Should -Invoke`: the loose form is the positive, not the zero
+
+Pester 5 special-cases zero. Measured on 5.5.0 (the pinned floor) and 5.7.1:
+
+| assertion | mock invoked | result |
+| --- | --- | --- |
+| `-Times 0` *without* `-Exactly` | once | **fails** |
+| `-Times 1` *without* `-Exactly` | twice | **passes** |
+| `-Times 1` *with* `-Exactly` | twice | fails |
+
+So a negative guard is already exact, and the assertion that silently tolerates
+extra calls is the ordinary positive one. `-Times N` means "at least N" for
+every N except zero.
+
+The belief that `-Times 0` is vacuous is not folklore — it is true on Pester 4.
+The repo pins `[5.5.0,)` in `ci.yml`, `release.yml`, `build/avm.build.ps1` and
+every `#Requires`, so Pester 4 cannot run here. **Write `-Exactly N`
+everywhere** and the distinction stops mattering.
+
+Why it matters for the gauntlet suites specifically: `Invoke-AvmPrCheck` and
+`Invoke-AvmPreCommit` are tested almost entirely through mock-invocation
+assertions, because the steps themselves are mocked. Those assertions *are* the
+test. A double-invoke injected into the step loop — with the extra result
+discarded, so `Steps.Count` is unchanged — left the pr-check suite at 13/14,
+and the single failure was the one assertion that already used `-Exactly`. The
+eight-assertion compose test passed with every step called twice.
+
+Two habits follow:
+
+- Mutate the **product**, not the test, and mutate it in a way the *other*
+  assertions cannot catch. Breaking `Steps.Count` proves nothing about the
+  invocation assertions; adding a discarded extra call isolates them.
+- Run the negative control: revert the assertions and confirm the same mutation
+  goes green. Without it you have shown the test fails, not that the change is
+  what makes it fail.
+
+### L.6 Before believing a test failure, run an untouched control test
+
+A whole-suite failure is far more likely to be the apparatus than the code, and
+a corrupt test runner is indistinguishable from a product regression by
+inspection alone.
+
+Signature of a corrupt Pester install, seen on 5.7.1 in this repo:
+
+- A standalone `(1+1) | Should -Be 2` fails.
+- `-Output Detailed` prints the summary but **no per-test lines**.
+- `$result.Failed[0].ErrorRecord` has `.Count -eq 1` but `[0]` is `$null`.
+- Containers report `Result: NotRun`, `ShouldRun: False`, `Executed: False`
+  while still counting as failed.
+
+Diagnostic ladder, cheapest first: parse-check the file, stash your edits and
+re-run the original, run an **untouched** test file, run a trivial standalone
+test, then compare versions:
+
+```powershell
+foreach ($v in '5.5.0','5.7.1') {
+    pwsh -NoProfile -Command "Import-Module Pester -RequiredVersion $v -Force; ..."
+}
+```
+
+Fix: `Install-Module Pester -RequiredVersion <v> -Force -Scope CurrentUser -SkipPublisherCheck`.
+
+### L.7 Mutation tests must restore from a hash-verified copy
+
+Mutation testing has found more real defects here than any other technique, so
+it gets used often. Its failure mode is uniquely bad: it injects a defect into
+shipped source while reporting success.
+
+An in-place regex mutation restored by string comparison silently failed in this
+repo, the verification reported success anyway, and `# MUTATED` shipped in a
+commit. It was caught a run later — only because the tests it had disabled went
+red.
+
+Back up with a file copy and prove the restore by hash:
+
+```powershell
+Copy-Item $src $bak -Force
+$h0 = (Get-FileHash $src).Hash
+# ... mutate, run tests ...
+Copy-Item $bak $src -Force
+"restored byte-identical: $((Get-FileHash $src).Hash -eq $h0)"
+```
+
+Then `git status --porcelain` before you commit anything.
+
+### L.8 A gate that *cannot* fail must not report `pass`
+
+L.2 says a step that did nothing is `skipped`. This is the harder case: a step
+that did *something* — resolved its tool, shelled out, parsed real output,
+returned in a plausible amount of time — while being structurally incapable of
+ever reporting a problem.
+
+`avm check policy` ran `conftest test --policy <APRL> --policy <AVMSEC> --parser
+hcl2 .` with no namespace selector. conftest defaults to its `main` namespace;
+not one of the 266 bundled `.rego` files declares `package main`. Zero policies
+were evaluated, exit was 0, and the step reported `pass` in ~320ms — which is
+about what doing nothing costs. One of nine `pr-check` gates had never been able
+to fail on any module.
+
+Three things generalise:
+
+- **Count what was evaluated, not what was reported.** Zero findings is the same
+  observation for "checked, all clean" and "checked nothing". Only a count of
+  work actually done separates them, so surface it (`Evaluated`) and branch on
+  it. This is L.2's third constraint sharpened: *nothing happened* is a legitimate
+  `pass` only when something downstream makes the vacuity visible.
+- **Half a fix is worse than none.** Adding `--all-namespaces` here would have
+  moved the step from 0 evaluated to 260 evaluated and 0 matched, because every
+  accessor in the bundles destructures `terraform show -json` shapes and none
+  reads HCL. Longer runtime, more convincing JSON, still no gate. Guard the
+  intermediate state explicitly rather than in a comment — the second skip
+  reason fires precisely on "evaluated many, matched none, wrong input shape".
+- **Tie the guard to the real invocation.** The skip reason keys off the
+  `$parserMode` variable used to build the argv, not a literal, so it retires
+  itself the moment the plan-JSON path lands. A guard you must remember to
+  remove is a guard that outlives its premise.
+
+Gate the skip on *no findings at all*: a rule that fired proves the input shape
+matched, so the vacuity premise no longer holds and normal status applies.
+
+The test that matters is the component tier proving the gate can go **red**. A
+stub that only ever emits `[]` proves the engine stays quiet, which was the
+original defect one tier down — the fixture asserted `pass` on the vacuous case
+and so encoded the bug as the expectation.
+### L.9 A negative matcher passes vacuously on an empty subject
+
+`Should -Not -Match`, `-Not -Contain` and `-Not -Be` all pass when the subject is
+empty or `$null`. So does `Should -Not -Throw` when the operation was never
+reached. That makes a negative-only `It` a test that cannot distinguish "the bad
+thing did not happen" from "nothing happened at all" — and "nothing happened at
+all" is usually the more serious regression.
+
+Measured on Pester 5.5.0 and in plain PowerShell 7.4:
+
+| Expression | Result |
+| --- | --- |
+| `'' \| Should -Match 'x'` | **fails** |
+| `'' \| Should -Not -Match 'x'` | **passes** — vacuous |
+| `[version]$null` | **does not throw** |
+| `'' \| ConvertFrom-Json` | **does not throw** |
+| `$null \| ConvertFrom-Json` | **does not throw** (non-terminating) |
+
+The last three matter because `{ ... } | Should -Not -Throw` looks like a strong
+assertion and is frequently the *only* assertion in its `It`. `avm doctor --json`
+emitting nothing at all satisfied `{ $json | ConvertFrom-Json } | Should -Not -Throw`;
+so did a `Get-AvmVersion` result with no `PSVersion` property satisfy
+`{ [version](Get-AvmVersion).PSVersion } | Should -Not -Throw`.
+
+**Pair every negative with a positive anchor on the same value.** Assert what the
+value *is* before asserting what it is not:
+
+```powershell
+$json | Should -Not -BeNullOrEmpty                      # existence
+($json | ConvertFrom-Json).Status | Should -BeIn @(...) # content
+{ $json | ConvertFrom-Json } | Should -Not -Throw       # then the negative
+```
+
+`Should -Not -BeNullOrEmpty` is an **existence** assertion, not a negative — it is
+the strongest single guard against this class and reads like the opposite of one.
+Do not count it when auditing for negative-only tests.
+
+**Triage by mutation, not by reading.** The question "is this assertion
+load-bearing?" is answered by forcing the captured value to empty and seeing
+which tests still pass. Auditing this repo that way separated six genuine holes
+from a much larger set of candidates that were correctly scoped: assertions that
+compare against bytes captured earlier in the same `It` cannot pass vacuously,
+because the read throws when the file is missing, and exit-code-only tests do not
+assert on output by design.
+
+The worst instance found was worse than negative-only — it read the wrong stream.
+`Write-AvmLog -Level Verbose` routes to stream 4, but the test captured
+`-InformationVariable`, so the collection was empty under every input and the
+assertion could never fail in either direction. A negative matcher on a channel
+that never carries the value is indistinguishable from a passing test.
+
+### L.10 Capturing output: the discard trap, and how to sweep for it
+
+`... | Out-String` builds its result from a completed pipeline. If a terminating
+error fires part-way through, the pipeline unwinds and the capture is empty — the
+output you wanted is gone, and any negative matcher on it now passes vacuously
+(L.9). Redirect to a file instead, then read it back:
+
+```powershell
+$log = Join-Path ([IO.Path]::GetTempPath()) 'run.txt'
+./build.ps1 pre-commit *> $log          # survives a terminating error
+Select-String -Path $log -Pattern '...'
+```
+
+**When sweeping for this, match every stream merge, not the ones you remember.**
+An audit that grepped `*>&1` and `6>&1` missed two live `2>&1` sites. The pattern
+to use is `\d?\*?>&1`, which catches `2>&1`, `4>&1`, `6>&1` and `*>&1` alike.
+
+A capture site being safe is not the same as being safe *for the reason you
+assumed*, and the distinction matters because it decides what a future edit may
+break. The four sites in this repo are each safe differently:
+
+| Site | Why it is safe | What would break it |
+|---|---|---|
+| `Get-AvmVersion.Tests.ps1` | positive matcher — an empty capture fails | switching to a negative matcher |
+| `Invoke-Avm.Tests.ps1` (×2) | external process; a failing child `pwsh` raises no terminating error in the parent | moving the call in-process |
+| `Write-AvmLog.Tests.ps1` | negative, but paired with a positive control `It` on the same mechanism | deleting the control as redundant |
+
+Record which reason applies. "It passes" is not a finding; "it cannot pass while
+broken, because X" is.
+
+### L.11 Never pin an assertion to a value two different causes produce
+
+`Evaluated -eq 0` looks like a strong assertion. It is not, if two unrelated
+things both produce it.
+
+`avm check policy` had exactly that. The engine could report zero evaluated
+policies for either of:
+
+1. conftest ran to completion and no bundled rule declares `package main`
+   (the F46 vacuity — expected, benign, a `skipped`); or
+2. conftest **crashed in `parse configurations` before loading any policy**, and
+   exited 1 with no output (F48 — a real defect on every AVM repository).
+
+Three tiers asserted `Evaluated -eq 0` and `Status -eq 'skipped'`. All three
+passed. All three were, for the whole life of the defect, certifying cause 2
+while their comments described cause 1 — including the real-binary integration
+tier, whose entire purpose is to catch this.
+
+The fix is to assert on something only one cause can produce. Here the engine
+already computed it: the namespaces conftest reported. A completed run yields
+`main`; a crash yields `(none)`, because there are no records to read a namespace
+from. So:
+
+```powershell
+# ratifies either cause
+$policyStep.Result.Evaluated | Should -Be 0
+
+# pins the one you mean
+$diagnostics[0].Message | Should -Match 'namespaces seen: main'
+```
+
+The test to apply to your own assertion: **can I name a second way this value
+arises?** If you can, the assertion does not distinguish them, and the one you
+did not think of is the one that will ship. This is L.8 one layer down — there
+the gate could not fail, here the assertion could not tell two answers apart.
+
+The same question applies to fixtures. This stub carried a comment asserting a
+fact about reality:
+
+```powershell
+# Default `test` output is an empty JSON array, which is what real conftest
+# emits today for the pinned bundles under --parser hcl2
+Write-Output '[]'
+```
+
+That claim was false, and unverified. Real conftest emits one record per input
+file in the `main` namespace; `[]` is what you see when it *crashes*. The stub
+was modelling the bug, so the component tier could not have caught it. Measure
+what the real tool emits before encoding it in a stub, and if a fixture comment
+states a fact about the real world, it needs the same evidence as a finding.

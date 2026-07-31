@@ -3,7 +3,7 @@ function Invoke-AvmPrCheck {
     .SYNOPSIS
         Run the full pull-request gauntlet against the resolved module:
         sync -> format -> transform -> lint -> check policy ->
-        check convention -> test -> docs.
+        check convention -> validate -> unit test -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -15,9 +15,20 @@ function Invoke-AvmPrCheck {
 
         This is the broader sibling of Invoke-AvmPreCommit: where
         pre-commit runs the fast, locally meaningful checks (format,
-        lint, test, docs), pr-check runs **every check that runs in
+        lint, validate, docs), pr-check runs **every check that runs in
         CI** (per plan section 4), including the convention-policy
         steps that compare the module against the AVM specs.
+
+        The 'validate' step is a build-validation pass ('terraform
+        validate' / 'bicep build'), NOT a test run - it is named for
+        what it does. The 'unit test' step that follows is the real
+        thing: it runs the tests/unit tier and reports run counts, so a
+        module with no tests cannot read as a green gauntlet. It is
+        included because the unit tier is credential-free and therefore
+        the only tier that can honestly run anywhere; the integration
+        and e2e tiers need a live subscription and stay out. For bicep
+        the unit-test step throws AvmConfigurationException and is
+        skipped.
 
         The chain opens with the managed-files sync step (terraform
         only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
@@ -95,29 +106,36 @@ function Invoke-AvmPrCheck {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 
     $stepDefs = @(
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
-        [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
+        [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
         [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
-        [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
-        [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
+        [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
+        [pscustomobject]@{ Name = 'unit test'; Cmdlet = 'Invoke-AvmTestUnit' }
+        [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
     )
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
+    $stepIndex = 0
 
     foreach ($def in $stepDefs) {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $stepIndex++
+        $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info
 
         try {
             $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
@@ -131,8 +149,17 @@ function Invoke-AvmPrCheck {
                 $stepStatus = $stepResult.Status
             }
         }
-        catch [AvmConfigurationException] {
+        catch [AvmNotSupportedException] {
+            # Verb genuinely does not apply to this ecosystem. Continue the
+            # chain; do not flip overall status.
             $stepStatus = 'skipped'
+            $stepError = $_.Exception.Message
+        }
+        catch [AvmConfigurationException] {
+            # The repo is misconfigured, not unsupported. This must fail rather
+            # than skip: a skip renders as a benign gauntlet pass, which is how
+            # a step that never actually ran gets to look green.
+            $stepStatus = 'fail'
             $stepError = $_.Exception.Message
         }
         catch {
@@ -140,12 +167,23 @@ function Invoke-AvmPrCheck {
             $stepError = $_.Exception.Message
         }
         $stepSw.Stop()
+        $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
+
+        Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
+
+        if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
+            # F41: narration only. Assert-AvmCommandSuccess promotes the same
+            # text to the single GitHub Actions annotation for the run.
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info
+        }
 
         $steps.Add([pscustomobject][ordered]@{
                 Step       = $def.Name
                 Status     = $stepStatus
                 Error      = $stepError
                 Result     = $stepResult
+                StartTime  = $stepStart
+                EndTime    = $stepEnd
                 DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
             })
 
@@ -161,6 +199,8 @@ function Invoke-AvmPrCheck {
         Ecosystem  = $context.Ecosystem
         Status     = $overall
         Steps      = $steps.ToArray()
+        StartTime  = $startTime
+        EndTime    = $startTime.AddMilliseconds($sw.Elapsed.TotalMilliseconds)
         DurationMs = [int]$sw.Elapsed.TotalMilliseconds
     }
 }

@@ -229,10 +229,10 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $result = Invoke-AvmPreCommit -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs'
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
             }
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs'
             $result.Status | Should -Be 'pass'
 
             # Fail the build if pre-commit changed anything: a canonical module
@@ -242,19 +242,46 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
-        It 'pr-check passes every step, including check policy on a repo with no .avm/config.json, and resolves tools from the AVM cache' {
+        It 'pr-check runs every step on a repo with no .avm/config.json, reports check policy as skipped, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
-
             # F07: check policy used to skip here because the fixture declared no
             # APRL/AVMSEC bundles. The module now ships immutable descriptors in
-            # Resources/avm.pins.jsonc, so it must run and pass on a clean repo.
-            foreach ($step in $result.Steps) {
+            # Resources/avm.pins.jsonc, so it must run on a clean repo.
+            #
+            # F46: it runs, but it cannot yet *check* anything. conftest is driven
+            # with --parser hcl2 and the pinned APRL/AVMSEC bundles declare no
+            # rules in conftest's default 'main' namespace, so zero policies are
+            # evaluated. This tier is the real-binary one, so it is the assertion
+            # that proves that against genuine conftest and genuine bundles --
+            # and it previously asserted 'pass', which is exactly how the defect
+            # survived a green suite. It must report 'skipped' until the
+            # plan-JSON input path lands, at which point this flips back to pass
+            # and the diagnostic below disappears.
+            $policyStep = $result.Steps | Where-Object { $_.Step -eq 'check policy' }
+            $policyStep | Should -Not -BeNullOrEmpty
+            $policyStep.Status | Should -Be 'skipped'
+            $policyStep.Result.Evaluated | Should -Be 0
+            $diagnostics = @($policyStep.Result.Issues |
+                    Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
+            $diagnostics.Count | Should -Be 1
+            # F48: Evaluated=0 is produced by two different causes - the namespace
+            # vacuity below, and conftest aborting in 'parse configurations' before
+            # loading a policy. Pinning the shared value ratified the crash for as
+            # long as it existed, so pin the cause: 'main' can only be reported by
+            # a run that completed.
+            $diagnostics[0].Message | Should -Match 'namespaces seen: main'
+            @($policyStep.Result.Issues |
+                    Where-Object { $_.Code -eq 'avm.tf.policy-run-failed' }).Count |
+                Should -Be 0
+
+            foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,validate,unit test,docs'
+            # 'skipped' must not flip the gauntlet: a module is reported, not broken.
             $result.Status | Should -Be 'pass'
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state
@@ -265,13 +292,43 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             # Every managed-tool step must resolve its binary from the AVM
             # cache we just populated (not a stray PATH binary).
             $toolSteps = $result.Steps | Where-Object {
-                ($_.Step -in @('format', 'transform', 'lint', 'test', 'docs')) -and
+                ($_.Step -in @('format', 'transform', 'lint', 'validate', 'unit test', 'docs')) -and
                 $_.Result -and ($_.Result.PSObject.Properties.Name -contains 'ToolSource')
             }
             $toolSteps.Count | Should -BeGreaterThan 0
             foreach ($step in $toolSteps) {
                 $step.Result.ToolSource | Should -Be 'cache' -Because "pr-check step '$($step.Step)' should use the managed cache"
             }
+        }
+
+        # F34: terraform init only scans the *default* test directory when
+        # resolving modules declared inside .tftest.hcl run blocks. AVM tiers
+        # live in tests/<tier>/, so without '-test-directory' on init the
+        # helper module is never installed and terraform test dies with
+        # 'Module not installed'. Runs from a cold copy (no .terraform/) so it
+        # is a genuine guard rather than a beneficiary of an earlier init.
+        It 'unit tier installs modules referenced by run blocks from a cold working directory' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azurerm-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the azurerm fixture carries a run-block helper module'
+                return
+            }
+
+            $cold = Join-Path $script:WorkRoot "$name-f34"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $cold -Recurse -Force
+            (Test-Path -LiteralPath (Join-Path $cold '.terraform')) |
+                Should -BeFalse -Because 'the guard is only meaningful from a cold working directory'
+
+            $result = Invoke-AvmTestUnit -Path $cold -Ecosystem terraform
+
+            $result.Status | Should -Be 'pass' -Because "issues: $($result.Issues | ConvertTo-Json -Depth 4 -Compress)"
+            $result.RunsTotal | Should -BeGreaterOrEqual 2
+            $result.RunsFailed | Should -Be 0
+
+            $modules = Join-Path $cold '.terraform' 'modules' 'modules.json'
+            (Test-Path -LiteralPath $modules) | Should -BeTrue
+            (Get-Content -LiteralPath $modules -Raw) |
+                Should -Match 'tests/unit/setup' -Because 'init must record the run-block helper module'
         }
     }
 }

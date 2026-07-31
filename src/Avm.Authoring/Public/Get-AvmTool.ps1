@@ -113,8 +113,8 @@ function Get-AvmTool {
                 }
                 else {
                     $status = 'outdated-on-path'
-                    Write-Warning ("PATH '$($t.entrypoint)' reports '{0}' but lock pins '{1}'." -f
-                        ($detectedVersion ?? '<unknown>'), $t.version)
+                    Write-AvmLog ("PATH '$($t.entrypoint)' reports '{0}' but lock pins '{1}'." -f
+                        ($detectedVersion ?? '<unknown>'), $t.version) -Level Warning
                 }
             }
         }

@@ -39,12 +39,31 @@ function Invoke-AvmProcess {
         code is still returned on the result object.
 
     .PARAMETER StreamOutput
-        Emit child stdout and stderr lines to the Information stream while
-        retaining both captured values on the result object.
+        Narrate the invocation. Child output is always captured; it is emitted
+        live only when verbose/debug logging is on or when running under GitHub
+        Actions (where it is wrapped in a collapsed group). Otherwise the run is
+        quiet with a periodic heartbeat, and the full captured output is
+        replayed if the process fails.
+
+    .PARAMETER Label
+        Friendly name for the invocation used in narration. Defaults to the
+        executable leaf plus its arguments.
+
+    .PARAMETER OnStdOutLine
+        Scriptblock invoked with each stdout line as it arrives. When supplied
+        the caller owns stdout rendering, so raw stdout lines are not echoed
+        even when live streaming is on, and the invocation is not wrapped in a
+        collapsed GitHub Actions group: the caller's lines are already the
+        curated progress view and must stay visible. Requires -StreamOutput.
+
+    .PARAMETER SuccessExitCode
+        Exit codes treated as success for narration and failure replay. Does
+        not affect the AvmProcessException throw, which is governed by
+        -IgnoreExitCode.
 
     .OUTPUTS
         pscustomobject with FileName, ArgumentList, ExitCode, StdOut, StdErr,
-        Duration, TimedOut.
+        Duration, DurationMs, StartTime, EndTime, TimedOut.
 
     .EXAMPLE
         PS> Invoke-AvmProcess -FilePath 'terraform' -ArgumentList @('version')
@@ -58,7 +77,10 @@ function Invoke-AvmProcess {
         [hashtable] $EnvVars,
         [int] $TimeoutSec = 0,
         [switch] $IgnoreExitCode,
-        [switch] $StreamOutput
+        [switch] $StreamOutput,
+        [string] $Label,
+        [scriptblock] $OnStdOutLine,
+        [int[]] $SuccessExitCode = @(0)
     )
 
     Set-StrictMode -Version 3.0
@@ -67,6 +89,23 @@ function Invoke-AvmProcess {
     if (-not $WorkingDirectory) {
         $WorkingDirectory = (Get-Location).ProviderPath
     }
+
+    $displayLabel = if (-not [string]::IsNullOrWhiteSpace($Label)) {
+        $Label
+    }
+    else {
+        $leaf = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
+        $joined = if ($ArgumentList.Count -gt 0) { '{0} {1}' -f $leaf, ($ArgumentList -join ' ') } else { $leaf }
+        if ($joined.Length -gt 140) { $joined.Substring(0, 137) + '...' } else { $joined }
+    }
+
+    $inActions = Test-AvmGitHubActionsContext
+    $narrate = [bool]$StreamOutput
+    $hasLineHook = $null -ne $OnStdOutLine
+    $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
+    $grouped = $narrate -and $inActions -and -not $hasLineHook
+    $heartbeatSeconds = 30
+    $nextHeartbeat = $heartbeatSeconds
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $FilePath
@@ -110,7 +149,16 @@ function Invoke-AvmProcess {
     $stderrTask = $null
     $stdoutBuilder = [System.Text.StringBuilder]::new()
     $stderrBuilder = [System.Text.StringBuilder]::new()
+    $startTime = [datetime]::UtcNow
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    if ($grouped) {
+        Enter-AvmLogGroup -Name $displayLabel
+    }
+    elseif ($narrate) {
+        Write-AvmLog ('  run: {0}' -f $displayLabel) -Level Info
+    }
+
     try {
         try {
             $null = $process.Start()
@@ -141,7 +189,10 @@ function Invoke-AvmProcess {
                     }
                     else {
                         $null = $stdoutBuilder.AppendLine($line)
-                        Write-Information $line -InformationAction Continue
+                        if ($hasLineHook) {
+                            & $OnStdOutLine $line
+                        }
+                        elseif ($live) { Write-AvmLog $line -Level Info }
                         $stdoutTask = $process.StandardOutput.ReadLineAsync()
                     }
                 }
@@ -153,9 +204,14 @@ function Invoke-AvmProcess {
                     }
                     else {
                         $null = $stderrBuilder.AppendLine($line)
-                        Write-Information $line -InformationAction Continue
+                        if ($live) { Write-AvmLog $line -Level Info }
                         $stderrTask = $process.StandardError.ReadLineAsync()
                     }
+                }
+
+                if (-not $live -and $stopwatch.Elapsed.TotalSeconds -ge $nextHeartbeat) {
+                    Write-AvmLog ('  ... still running: {0} ({1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Info
+                    $nextHeartbeat += $heartbeatSeconds
                 }
 
                 if (
@@ -166,7 +222,7 @@ function Invoke-AvmProcess {
                 ) {
                     $timedOut = $true
                     try { $process.Kill($true) }
-                    catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
+                    catch { Write-AvmLog "Failed to kill timed-out process: $($_.Exception.Message)" -Level Verbose }
                 }
             }
         }
@@ -179,7 +235,7 @@ function Invoke-AvmProcess {
                 if (-not $exited) {
                     $timedOut = $true
                     try { $process.Kill($true) }
-                    catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
+                    catch { Write-AvmLog "Failed to kill timed-out process: $($_.Exception.Message)" -Level Verbose }
                 }
             }
         }
@@ -187,7 +243,11 @@ function Invoke-AvmProcess {
     }
     finally {
         $stopwatch.Stop()
+        if ($grouped) {
+            Exit-AvmLogGroup
+        }
     }
+    $endTime = $startTime.AddMilliseconds($stopwatch.Elapsed.TotalMilliseconds)
 
     # Drain the async readers. After the process has exited (or been killed) the
     # child's pipe ends are closed, so these tasks complete with whatever was
@@ -210,8 +270,33 @@ function Invoke-AvmProcess {
     $process.Dispose()
 
     if ($timedOut) {
+        if ($narrate) {
+            Write-AvmLog ('  TIMEOUT: {0} (after {1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Info
+        }
         throw [System.TimeoutException]::new(
             "Process '$FilePath' did not exit within $TimeoutSec seconds; killed.")
+    }
+
+    $succeeded = $SuccessExitCode -contains $exitCode
+
+    if ($narrate) {
+        $suffix = '(exit {0}, {1})' -f $exitCode, (Format-AvmDuration -Duration $stopwatch.Elapsed)
+        if ($succeeded) {
+            Write-AvmLog ('  done: {0} {1}' -f $displayLabel, $suffix) -Level Info
+        }
+        else {
+            Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Info
+            if ($hasLineHook) {
+                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
+                    Write-AvmLog $replayLine -Level Info
+                }
+            }
+            elseif (-not $live) {
+                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $stdErr)) {
+                    Write-AvmLog $replayLine -Level Info
+                }
+            }
+        }
     }
 
     $result = [pscustomobject][ordered]@{
@@ -221,6 +306,9 @@ function Invoke-AvmProcess {
         StdOut       = $stdOut
         StdErr       = $stdErr
         Duration     = $stopwatch.Elapsed
+        DurationMs   = [int]$stopwatch.Elapsed.TotalMilliseconds
+        StartTime    = $startTime
+        EndTime      = $endTime
         TimedOut     = $timedOut
     }
 
@@ -231,4 +319,38 @@ function Invoke-AvmProcess {
     }
 
     return $result
+}
+
+function Get-AvmProcessReplayLine {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Label,
+
+        [AllowEmptyString()]
+        [string] $StdOut = '',
+
+        [AllowEmptyString()]
+        [string] $StdErr = ''
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $body = [System.Collections.Generic.List[string]]::new()
+    foreach ($chunk in @($StdOut, $StdErr)) {
+        if ([string]::IsNullOrWhiteSpace($chunk)) { continue }
+        foreach ($line in $chunk -split "`r?`n") {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $body.Add('    ' + $line)
+        }
+    }
+
+    if ($body.Count -eq 0) {
+        return @()
+    }
+
+    $lines.Add(('  ---- captured output: {0} ----' -f $Label))
+    $lines.AddRange($body)
+    $lines.Add('  ---- end captured output ----')
+    return $lines.ToArray()
 }

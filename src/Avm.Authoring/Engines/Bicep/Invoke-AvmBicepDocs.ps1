@@ -59,6 +59,6 @@ function Invoke-AvmBicepDocs {
     $null = $AllowPathFallback
     $null = $OutputFile
 
-    throw [AvmConfigurationException]::new(
+    throw [AvmNotSupportedException]::new(
         "Bicep docs generation is being redesigned as a separate CLI command. The previous ARM-JSON walker (commit 17f63cf) has been removed pending the new design. Track the new docs slice in docs/avm-consolidation-plan.md.")
 }

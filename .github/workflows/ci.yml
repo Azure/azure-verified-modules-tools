@@ -115,6 +115,12 @@ jobs:
       # Context for only the named module, so each matrix leg exercises exactly
       # one test module.
       AVM_INTEGRATION_FIXTURE: ${{ matrix.fixture }}
+      # `tflint --init` downloads its ruleset plugins from the GitHub releases
+      # API. Unauthenticated it gets 60 requests/hour per source IP, and the
+      # hosted macOS runners share an egress IP, so the integration legs
+      # intermittently failed with `403 API rate limit exceeded`. tflint reads
+      # GITHUB_TOKEN for authenticated downloads (5000/hour).
+      GITHUB_TOKEN: ${{ github.token }}
       # OIDC plumbing for `azure/login`. The `test` step today is validate-only
       # (`terraform init -backend=false` + `terraform validate -json`) so it does
       # not actually need Azure auth, but we wire login per the same pattern as

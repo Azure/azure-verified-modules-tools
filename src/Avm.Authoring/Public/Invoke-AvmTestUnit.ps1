@@ -10,12 +10,14 @@ function Invoke-AvmTestUnit {
         Invoke-AvmTerraformTestSuite -Tier unit.
 
         Unlike the bare 'avm test' verb (which is the cheap, offline
-        'terraform validate' build pass wired into pre-commit), this tier
-        executes real 'terraform test' HCL run blocks. Modules that ship no
-        tests/unit/*.tftest.hcl report a clean pass with FilesProcessed = 0.
+        'terraform validate' build pass), this tier executes real
+        'terraform test' HCL run blocks. Modules that ship no
+        tests/unit/*.tftest.hcl report Status 'skipped' with RunsTotal = 0
+        rather than a pass, so an absent tier can never look like a green one.
 
-        This verb is a standalone command; it is NOT part of the offline
-        pre-commit / pr-check chains, which keep the validate-only 'test'.
+        This tier is credential-free by design, so it runs as part of the
+        'avm pr-check' gauntlet. It is deliberately NOT part of 'avm
+        pre-commit', which stays fast enough for a commit hook.
 
         Routed by the dispatcher: 'avm test unit'.
 
@@ -32,12 +34,12 @@ function Invoke-AvmTestUnit {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Skip the auto 'terraform init -backend=false' step even when
-        '.terraform/' is missing.
+        Skip the auto 'terraform init -backend=false -test-directory=tests/unit'
+        step, which otherwise always runs.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Issues.
+        Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
 
     .EXAMPLE
         avm test unit
@@ -69,7 +71,7 @@ function Invoke-AvmTestUnit {
             Invoke-AvmTerraformTestSuite -Context $context -Tier 'unit' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
         }
         default {
-            throw [AvmConfigurationException]::new(
+            throw [AvmNotSupportedException]::new(
                 "avm test unit is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep unit-test tiers are not implemented.")
         }
     }

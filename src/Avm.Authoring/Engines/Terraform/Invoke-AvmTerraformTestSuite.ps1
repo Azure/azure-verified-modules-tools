@@ -19,15 +19,20 @@ function Invoke-AvmTerraformTestSuite {
              (this engine is PowerShell-only).
           3. Per runnable target (cwd = target root): runs an optional
              tests/<tier>/setup.ps1 hook in an isolated pwsh subprocess; a
-             failing hook records an issue and skips that target. Then, if the
-             target has no '.terraform/' and -NoInit was not passed, runs
+             failing hook records an issue and skips that target. Then, unless
+             -NoInit was passed, runs
                  terraform init -backend=false -upgrade=false -input=false
+                                -test-directory=tests/<tier>
              followed by
                  terraform test -test-directory=tests/<tier> -no-color -json
+             Both calls carry -test-directory: init only scans the *default*
+             test directory when resolving modules declared in a run block, so
+             without it a 'run { module { source = ... } }' helper is never
+             installed and terraform test dies with 'Module not installed'.
           4. Parses each target's newline-delimited JSON stream into the shared
              Issue shape (failing 'test_run' entries and error-level
              'diagnostic' entries), prefixing submodule paths with
-             'modules/<name>/'.
+             'modules/<name>/', and renders a live progress line per test run.
 
         Status is 'fail' when any target reports a failing/errored run or a
         setup.ps1 hook fails; otherwise 'pass'. A terraform init failure or an
@@ -45,13 +50,16 @@ function Invoke-AvmTerraformTestSuite {
         Pass through to Resolve-AvmTool.
 
     .PARAMETER NoInit
-        Skip the implicit 'terraform init' even when '.terraform/' is
-        missing. Use when init is genuinely impossible (offline + no cached
-        providers) or when the caller has already run it.
+        Skip the implicit 'terraform init'. Use when init is genuinely
+        impossible (offline + no cached providers) or when the caller has
+        already run it. Init is otherwise always run: the presence of
+        '.terraform/' only proves init ran at some point, not that it ran
+        against the module sources and providers the current configuration
+        (including its .tftest.hcl files) requires.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
-        FilesProcessed, Issues.
+        FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -81,30 +89,43 @@ function Invoke-AvmTerraformTestSuite {
     $targets = @(Get-AvmTerraformTestTarget -Root $Context.Root -Tier $Tier)
 
     if ($targets.Count -eq 0) {
+        Write-AvmLog ('no {0} tests found under tests/{0}' -f $Tier) -Level Warning
+        # A tier that ran nothing is 'skipped', never 'pass': inside a gauntlet a
+        # pass is indistinguishable from a real one, which is how a module with no
+        # tests stays green forever. 'skipped' does not flip the overall status, so
+        # this reports the gap without breaking modules that ship no tier.
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
             ToolPath       = $tool.Path
             ToolSource     = $tool.Source
-            Status         = 'pass'
+            Status         = 'skipped'
             FilesProcessed = 0
+            RunsTotal      = 0
+            RunsPassed     = 0
+            RunsFailed     = 0
             Issues         = @()
         }
     }
 
+    # Governance ships setup.sh and setup.ps1 side by side, so a .sh is only a
+    # misconfiguration when it has no .ps1 counterpart - that is the case where
+    # the hook would silently never run.
     $shHooks = New-Object System.Collections.Generic.List[string]
     foreach ($target in $targets) {
         $relPrefix = if ($target.Rel) { $target.Rel + '/' } else { '' }
-        foreach ($shName in @('setup.sh', 'teardown.sh')) {
-            $shPath = Join-Path $target.Path (Join-Path 'tests' (Join-Path $Tier $shName))
-            if (Test-Path -LiteralPath $shPath -PathType Leaf) {
-                $shHooks.Add(('{0}tests/{1}/{2}' -f $relPrefix, $Tier, $shName))
+        foreach ($hookName in @('setup', 'teardown')) {
+            $hookDir = Join-Path $target.Path (Join-Path 'tests' $Tier)
+            $shPath = Join-Path $hookDir ('{0}.sh' -f $hookName)
+            $ps1Path = Join-Path $hookDir ('{0}.ps1' -f $hookName)
+            if ((Test-Path -LiteralPath $shPath -PathType Leaf) -and -not (Test-Path -LiteralPath $ps1Path -PathType Leaf)) {
+                $shHooks.Add(('{0}tests/{1}/{2}.sh' -f $relPrefix, $Tier, $hookName))
             }
         }
     }
     if ($shHooks.Count -gt 0) {
         throw [AvmConfigurationException]::new(
-            ("The terraform {0} test engine runs PowerShell setup hooks only; convert these shell hooks to '.ps1': {1}" -f $Tier, ($shHooks -join ', ')))
+            ("The terraform {0} test engine runs PowerShell setup hooks only; add a '.ps1' counterpart for these shell hooks: {1}" -f $Tier, ($shHooks -join ', ')))
     }
 
     $pwshPath = [Environment]::ProcessPath
@@ -117,6 +138,9 @@ function Invoke-AvmTerraformTestSuite {
     $testDir = ('tests/{0}' -f $Tier)
     $issues = New-Object System.Collections.Generic.List[object]
     $filesProcessed = 0
+    $runsTotal = 0
+    $runsPassed = 0
+    $runsFailed = 0
     $anyFail = $false
 
     foreach ($target in $targets) {
@@ -128,7 +152,7 @@ function Invoke-AvmTerraformTestSuite {
             -PwshPath $pwshPath `
             -HookPath (Join-Path $targetDir (Join-Path 'tests' (Join-Path $Tier 'setup.ps1'))) `
             -WorkingDirectory $targetDir `
-            -StreamOutput:($Tier -eq 'integration')
+            -StreamOutput
         if ($null -ne $setup -and $setup.ExitCode -ne 0) {
             $detail = if ($setup.StdErr) { $setup.StdErr.Trim() } elseif ($setup.StdOut) { $setup.StdOut.Trim() } else { '' }
             $issues.Add([pscustomobject][ordered]@{
@@ -145,14 +169,14 @@ function Invoke-AvmTerraformTestSuite {
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $targetDir '.env')
 
-        $terraformDir = Join-Path $targetDir '.terraform'
-        if (-not $NoInit -and -not (Test-Path -LiteralPath $terraformDir)) {
+        if (-not $NoInit) {
             $initResult = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
+                -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color', ('-test-directory={0}' -f $testDir)) `
                 -WorkingDirectory $targetDir `
                 -EnvVars $envVars `
                 -StreamOutput `
+                -Label ('terraform init {0}' -f $targetDir) `
                 -IgnoreExitCode
 
             if ($initResult.ExitCode -ne 0) {
@@ -162,13 +186,44 @@ function Invoke-AvmTerraformTestSuite {
             }
         }
 
+        $runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        # Must stay a plain scriptblock: .GetNewClosure() rebinds it to a fresh
+        # dynamic module, so module-private helpers like Read-AvmTerraformTestRunEvent
+        # stop resolving. Unit tests mock Invoke-AvmProcess and never invoke this
+        # callback, so only the component tier catches a regression here.
+        $progress = {
+            param($line)
+            $runEvent = Read-AvmTerraformTestRunEvent -Line $line
+            if ($null -eq $runEvent) { return }
+            $elapsed = $runStopwatch.Elapsed
+            $runStopwatch.Restart()
+            $name = if ($runEvent.Name) { $runEvent.Name } else { '(unnamed)' }
+            $where = if ($runEvent.Path) { '{0} ' -f $runEvent.Path } else { '' }
+            # F41: a failing run is narration, not a diagnostic. Writing it at
+            # Error level turned every failing run into a GitHub Actions
+            # annotation, so the positionless progress line was shown first and
+            # the anchored diagnostic last, behind the 10-per-step cap.
+            Write-AvmLog ('    run {0}"{1}" -> {2} ({3})' -f $where, $name, $runEvent.Status, (Format-AvmDuration -Duration $elapsed))
+        }
+
         $result = Invoke-AvmProcess `
             -FilePath $tool.Path `
             -ArgumentList @('test', ('-test-directory={0}' -f $testDir), '-no-color', '-json') `
             -WorkingDirectory $targetDir `
             -EnvVars $envVars `
-            -StreamOutput:($Tier -eq 'integration') `
+            -StreamOutput `
+            -OnStdOutLine $progress `
+            -Label ('terraform test {0}{1}' -f $relPrefix, $testDir) `
+            -SuccessExitCode @(0, 1) `
             -IgnoreExitCode
+
+        foreach ($rawLine in ([string]$result.StdOut -split "`r?`n")) {
+            $runEvent = Read-AvmTerraformTestRunEvent -Line $rawLine
+            if ($null -eq $runEvent) { continue }
+            $runsTotal++
+            if ($runEvent.Status -in @('fail', 'error')) { $runsFailed++ }
+            elseif ($runEvent.Status -eq 'pass') { $runsPassed++ }
+        }
 
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
         # or errored runs. Anything else is a terraform-internal failure -> rethrow.
@@ -194,6 +249,9 @@ function Invoke-AvmTerraformTestSuite {
         ToolSource     = $tool.Source
         Status         = $status
         FilesProcessed = $filesProcessed
+        RunsTotal      = $runsTotal
+        RunsPassed     = $runsPassed
+        RunsFailed     = $runsFailed
         Issues         = $issues.ToArray()
     }
 }
@@ -282,6 +340,45 @@ function Invoke-AvmTerraformSetupHook {
         -WorkingDirectory $WorkingDirectory `
         -StreamOutput:$StreamOutput `
         -IgnoreExitCode
+}
+
+function Read-AvmTerraformTestRunEvent {
+    <#
+        .SYNOPSIS
+            Extracts the terminal 'test_run' event from a single line of the
+            'terraform test -json' stream, or $null when the line is not one.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Line
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $trimmed = $Line.Trim()
+    if (-not $trimmed) { return $null }
+    if (-not $trimmed.StartsWith('{')) { return $null }
+
+    try { $obj = $trimmed | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $null }
+
+    $type = if ($obj.PSObject.Properties.Name -contains 'type') { [string]$obj.type } else { '' }
+    if ($type -ne 'test_run') { return $null }
+    if (-not ($obj.PSObject.Properties.Name -contains 'test_run') -or -not $obj.test_run) { return $null }
+
+    $run = $obj.test_run
+    $status = if (($run.PSObject.Properties.Name -contains 'status') -and $run.status) { ([string]$run.status).ToLowerInvariant() } else { '' }
+    if ($status -notin @('pass', 'fail', 'error', 'skip')) { return $null }
+
+    return [pscustomobject]@{
+        Name   = if (($run.PSObject.Properties.Name -contains 'run') -and $run.run) { [string]$run.run } else { '' }
+        Path   = if (($run.PSObject.Properties.Name -contains 'path') -and $run.path) { [string]$run.path } else { '' }
+        Status = $status
+    }
 }
 
 function ConvertFrom-AvmTerraformTestJson {

@@ -633,7 +633,7 @@ function Set-AvmManagedFileExecutableBit {
         $item.UnixFileMode = $item.UnixFileMode -bor $execute
     }
     catch {
-        Write-Verbose "Failed to set executable bit on '$Path': $($_.Exception.Message)"
+        Write-AvmLog "Failed to set executable bit on '$Path': $($_.Exception.Message)" -Level Verbose
     }
 }
 
@@ -658,7 +658,7 @@ function Get-AvmManagedFilesFileConfig {
         $json = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     }
     catch {
-        Write-Warning "Failed to parse '$configPath': $($_.Exception.Message)"
+        Write-AvmLog "Failed to parse '$configPath': $($_.Exception.Message)" -Level Warning
         return $result
     }
 
@@ -839,7 +839,7 @@ function Add-AvmManagedFilesFromDir {
 
     if ([string]::IsNullOrEmpty($BaseDir)) { return }
     if (-not (Test-Path -LiteralPath $BaseDir -PathType Container)) {
-        Write-Warning "Managed files directory does not exist: $BaseDir"
+        Write-AvmLog "Managed files directory does not exist: $BaseDir" -Level Warning
         return
     }
 
@@ -914,11 +914,11 @@ function Build-AvmManagedFilesMap {
     foreach ($excludedPath in $Excluded) {
         if ($map.ContainsKey($excludedPath)) {
             $map.Remove($excludedPath) | Out-Null
-            Write-Verbose "Excluded managed file from sync: $excludedPath"
+            Write-AvmLog "Excluded managed file from sync: $excludedPath" -Level Verbose
         }
     }
 
-    Write-Verbose "Resolved $($map.Count) managed file(s) for repository '$RepoId' (overlays='$($Overlays -join ', ')', exclusions=$($Excluded.Count))."
+    Write-AvmLog "Resolved $($map.Count) managed file(s) for repository '$RepoId' (overlays='$($Overlays -join ', ')', exclusions=$($Excluded.Count))." -Level Verbose
     return $map
 }
 
@@ -1083,7 +1083,7 @@ function Get-AvmDesiredManagedFile {
         $mode = $entry.Mode
         if (-not $mode) { $mode = '100644' }
         if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-            Write-Warning "Managed file source missing on disk: $sourcePath (target=$targetPath)"
+            Write-AvmLog "Managed file source missing on disk: $sourcePath (target=$targetPath)" -Level Warning
             continue
         }
         $bytes = [System.IO.File]::ReadAllBytes($sourcePath)

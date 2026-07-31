@@ -43,7 +43,12 @@ Describe 'Get-AvmVersion' {
     }
 
     It 'PSVersion parses as a System.Version' {
-        { [version](Get-AvmVersion).PSVersion } | Should -Not -Throw
+        # F47: `[version]$null` does not throw, so -Not -Throw alone passes when
+        # PSVersion is missing entirely. Pin the value before casting it.
+        $psVersion = (Get-AvmVersion).PSVersion
+        $psVersion | Should -Not -BeNullOrEmpty
+        { [version]$psVersion } | Should -Not -Throw
+        ([version]$psVersion).Major | Should -BeGreaterOrEqual 7
     }
 }
 

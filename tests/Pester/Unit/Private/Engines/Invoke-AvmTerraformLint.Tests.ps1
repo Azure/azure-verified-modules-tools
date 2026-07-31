@@ -291,7 +291,7 @@ Describe 'Invoke-AvmTerraformLint' {
             }
             $r = Invoke-AvmTerraformLint -Context $C -MinimumFailureSeverity notice
 
-            Should -Invoke Invoke-AvmProcess -ParameterFilter {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList -contains '--minimum-failure-severity=notice'
             }
             $r

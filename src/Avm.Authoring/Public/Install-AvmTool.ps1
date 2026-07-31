@@ -69,13 +69,13 @@ function Install-AvmTool {
     }
 
     if ($tools.Count -eq 0) {
-        Write-Information 'No tools to install.' -InformationAction Continue
+        Write-AvmLog 'No tools to install.' -Level Info
         return
     }
 
     $platform = Get-AvmToolPlatform
     foreach ($t in $tools) {
-        Write-Information ("Installing {0} {1} ({2})..." -f $t.name, $t.version, $platform) -InformationAction Continue
+        Write-AvmLog ("Installing {0} {1} ({2})..." -f $t.name, $t.version, $platform) -Level Info
         Install-AvmToolFromPins -Tool $t -Platform $platform -Force:$Force
     }
 }

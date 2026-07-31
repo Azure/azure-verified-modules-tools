@@ -209,6 +209,121 @@ Describe 'Invoke-AvmTerraformTransform' {
         @($result.Issues).Count | Should -Be 0
     }
 
+    It 'leaves modified .tf files byte-identical after a drift-mode run' {
+        $ctx = $script:context
+        $variables = Join-Path $script:moduleDir 'variables.tf'
+        $originalBytes = [System.IO.File]::ReadAllBytes($variables)
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/mapotf'
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList -contains 'transform') {
+                    $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                    $tfDir = $ArgumentList[$i + 1]
+                    Add-Content -LiteralPath (Join-Path $tfDir 'variables.tf') -Value 'variable "z" {}'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTransform -Context $C -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        [System.IO.File]::ReadAllBytes($variables) | Should -Be $originalBytes
+    }
+
+    It 'removes a .tf file that mapotf created during a drift-mode run' {
+        $ctx = $script:context
+        $created = Join-Path $script:moduleDir 'generated.tf'
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/mapotf'
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList -contains 'transform') {
+                    $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                    $tfDir = $ArgumentList[$i + 1]
+                    Set-Content -LiteralPath (Join-Path $tfDir 'generated.tf') -Value 'output "g" {}' -Encoding utf8
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTransform -Context $C -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        Test-Path -LiteralPath $created | Should -BeFalse
+    }
+
+    It 'recreates a .tf file that mapotf deleted during a drift-mode run' {
+        $ctx = $script:context
+        $variables = Join-Path $script:moduleDir 'variables.tf'
+        $originalBytes = [System.IO.File]::ReadAllBytes($variables)
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/mapotf'
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList -contains 'transform') {
+                    $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                    $tfDir = $ArgumentList[$i + 1]
+                    Remove-Item -LiteralPath (Join-Path $tfDir 'variables.tf') -Force
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTransform -Context $C -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        Test-Path -LiteralPath $variables | Should -BeTrue
+        [System.IO.File]::ReadAllBytes($variables) | Should -Be $originalBytes
+    }
+
+    It 'still rewrites .tf files when drift mode is off' {
+        $ctx = $script:context
+        $variables = Join-Path $script:moduleDir 'variables.tf'
+        $originalBytes = [System.IO.File]::ReadAllBytes($variables)
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/mapotf'
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList -contains 'transform') {
+                    $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                    $tfDir = $ArgumentList[$i + 1]
+                    Add-Content -LiteralPath (Join-Path $tfDir 'variables.tf') -Value 'variable "z" {}'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTransform -Context $C
+        }
+
+        [System.IO.File]::ReadAllBytes($variables) | Should -Not -Be $originalBytes
+    }
+
     It 'throws AvmProcessException when mapotf transform exits non-zero' {
         $ctx = $script:context
         $err = $null

@@ -139,4 +139,73 @@ Describe 'Format-AvmBicepModule' {
         }
         $count | Should -Be 3
     }
+    It 'fails with a relative, forward-slashed Issue per rewritten file in drift mode' {
+        $ctx = $script:context
+        $a = $script:fileA
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $a } {
+            param($C, $A)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/bicep'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[1] -eq $A) {
+                    Set-Content -LiteralPath $A -Value 'param x string = ''rewritten''' -Encoding utf8
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Format-AvmBicepModule -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Count | Should -Be 1
+        $result.Issues[0].File | Should -Be 'main.bicep'
+        $result.Issues[0].Code | Should -Be 'avm.bicep.fmt-drift'
+        $result.Issues[0].Severity | Should -Be 'error'
+        $result.Issues[0].Message | Should -Match 'avm format'
+    }
+
+    It 'passes with no Issues in drift mode when every file is already formatted' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/bicep'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Format-AvmBicepModule -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues.Count | Should -Be 0
+    }
+
+    It 'reports pass without Issues when files are rewritten outside drift mode' {
+        $ctx = $script:context
+        $a = $script:fileA
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; A = $a } {
+            param($C, $A)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/bicep'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[1] -eq $A) {
+                    Set-Content -LiteralPath $A -Value 'param x string = ''rewritten''' -Encoding utf8
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Format-AvmBicepModule -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues.Count | Should -Be 0
+        $result.Changed.Count | Should -Be 1
+    }
 }
