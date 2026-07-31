@@ -781,6 +781,11 @@ Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
             param($C)
             Invoke-AvmTerraformTestE2e -Context $C -List
         }
+        # F47: the positive assertions are load-bearing. -List returning nothing
+        # would satisfy the omission check on its own, and an empty discovery
+        # surface silently collapses the CI matrix to zero e2e legs.
+        $json | Should -Match 'example-a'
+        (ConvertFrom-Json $json).Count | Should -BeGreaterThan 0
         $json | Should -Not -Match 'skipped'
     }
 }

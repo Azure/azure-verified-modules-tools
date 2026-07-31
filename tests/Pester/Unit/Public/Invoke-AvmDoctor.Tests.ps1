@@ -188,7 +188,11 @@ Describe 'avm doctor (dispatcher routes)' {
 
     It 'routes "avm doctor --json" to Invoke-AvmDoctor -Json' {
         $json = avm doctor --json
+        # F47: `'' | ConvertFrom-Json` does not throw, so -Not -Throw alone passes on
+        # empty output - the exact regression a routing test exists to catch.
+        $json | Should -Not -BeNullOrEmpty
         { $json | ConvertFrom-Json } | Should -Not -Throw
+        ($json | ConvertFrom-Json).Status | Should -BeIn @('OK', 'Fail')
     }
 
     It 'routes "avm doctor --install" with all install flags through the dispatcher' {

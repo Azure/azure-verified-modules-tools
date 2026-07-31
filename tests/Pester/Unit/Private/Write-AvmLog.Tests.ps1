@@ -58,12 +58,23 @@ Describe 'Write-AvmLog' {
         }
 
         It 'suppresses Verbose when verbose is not enabled' {
+            # F47: this must read the verbose stream. Verbose output never reaches
+            # -InformationVariable, so capturing that stream made the assertion
+            # unfailable regardless of what Write-AvmLog did.
             $messages = InModuleScope 'Avm.Authoring' {
-                $captured = @()
-                Write-AvmLog 'chatty' -Level Verbose -InformationVariable captured
-                @($captured | ForEach-Object { [string]$_.MessageData })
+                @(Write-AvmLog 'chatty' -Level Verbose 4>&1 | ForEach-Object { [string]$_ })
             }
             @($messages) | Should -Not -Contain 'chatty'
+        }
+
+        It 'emits Verbose to the verbose stream when verbose is enabled' {
+            # The positive control for the test above: without it, a Write-AvmLog
+            # that dropped every Verbose message unconditionally would still pass.
+            $env:AVM_VERBOSE = '1'
+            $messages = InModuleScope 'Avm.Authoring' {
+                @(Write-AvmLog 'chatty' -Level Verbose 4>&1 | ForEach-Object { [string]$_ })
+            }
+            @($messages) | Should -Contain 'chatty'
         }
     }
 

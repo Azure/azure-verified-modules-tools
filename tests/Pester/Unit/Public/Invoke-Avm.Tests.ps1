@@ -231,6 +231,10 @@ Describe 'Invoke-Avm clean failure reporting (F24)' {
     It 'keeps the non-zero process exit under pwsh -Command' {
         $result = Invoke-AvmChildVerb -Mode Command -Body "[pscustomobject]@{ Status = 'error' }"
         $result.ExitCode | Should -Not -Be 0
+        # F47: the positive anchor is load-bearing. Without it the negative below
+        # passes on an empty capture, so a tool that failed while printing nothing
+        # would satisfy the only assertion guarding the failure summary.
+        $result.Output | Should -Match "reported Status 'error'"
         $result.Output | Should -Not -Match 'Invoke-Avm\.ps1:\d+'
     }
 }
