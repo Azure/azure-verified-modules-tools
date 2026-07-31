@@ -364,7 +364,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues[0].Message | Should -Match 'post\.ps1 hook failed'
     }
 
-    It 'throws a configuration error when a shell hook is present' {
+    It 'throws a configuration error when a shell hook has no PowerShell counterpart' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.sh') -Value 'echo hi' -Encoding utf8
@@ -379,9 +379,31 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             }
             Mock Invoke-AvmProcess { throw 'should not shell out when a .sh hook is rejected' }
             { Invoke-AvmTerraformTestE2e -Context $C } |
-                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*convert these shell hooks*'
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage "*add a '.ps1' counterpart*"
             Should -Invoke Invoke-AvmProcess -Times 0
         }
+    }
+
+    # Governance ships pre.sh and pre.ps1 together, so rejecting the mere
+    # presence of a .sh made the e2e tier unusable on every compliant module.
+    It 'accepts a shell hook that has a PowerShell counterpart' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.sh') -Value 'echo hi' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'pre.ps1') -Value 'exit 0' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
     }
 
     It 'parses a .env file and passes its values to every terraform step via -EnvVars' {

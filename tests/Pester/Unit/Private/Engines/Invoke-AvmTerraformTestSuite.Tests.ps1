@@ -396,7 +396,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $result.Issues[0].Message | Should -Match 'setup boom'
     }
 
-    It 'throws AvmConfigurationException when a shell setup/teardown hook is present' {
+    It 'throws AvmConfigurationException when a shell hook has no PowerShell counterpart' {
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.sh') -Value 'echo hi' -Encoding utf8
         $ctx = $script:context
         $err = $null
@@ -420,6 +420,28 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $err.GetType().Name | Should -Be 'AvmConfigurationException'
         $err.Message        | Should -Match 'setup.sh'
         $err.Message        | Should -Match '\.ps1'
+    }
+
+    # F39: upstream AVM governance ships setup.sh and setup.ps1 side by side, so
+    # rejecting the mere presence of a .sh made `avm test unit` throw on every
+    # governance-compliant module. Only a .sh with no .ps1 counterpart is a
+    # misconfiguration, because only then does the hook silently never run.
+    It 'F39: accepts a shell hook that has a PowerShell counterpart' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.sh') -Value 'echo hi' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.ps1') -Value 'exit 0' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+        $result.Status | Should -Be 'pass'
     }
 
     It 'skips a modules/* subdirectory that ships no tests for the tier' {
