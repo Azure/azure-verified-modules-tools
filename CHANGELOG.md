@@ -359,6 +359,22 @@ shell-hook guard and the empty-tier status respectively.
   evaluated count doubles as a canary: if a future bundle re-packages into
   conftest's default namespace, that assertion fails loudly rather than the gate
   silently going quiet again. (F46)
+- Anchored every negative-only assertion with a positive control. A negative
+  matcher (`Should -Not -Match`, `-Not -Contain`, `-Not -Be`) passes on an empty
+  or `$null` subject, and `Should -Not -Throw` passes when the operation was
+  never reached — so an `It` whose only assertion is negative cannot distinguish
+  "the bad thing did not happen" from "nothing happened at all". Six genuine
+  holes were found by forcing each captured value to empty and seeing which
+  tests still passed: the `avm doctor --json` routing test (`'' |
+  ConvertFrom-Json` does not throw), the `Get-AvmVersion` PSVersion cast
+  (`[version]$null` does not throw), the `avm test e2e -List` discovery surface
+  (an empty array would collapse the CI matrix to zero legs), the module-version
+  encoding test (a zero-byte manifest satisfied both BOM and CRLF negatives), the
+  dispatcher's non-zero-exit test, and a `Write-AvmLog` verbose test that was
+  worse than vacuous — it captured `-InformationVariable` for output that only
+  ever reaches stream 4, so it could never fail in either direction. Each fix is
+  proven load-bearing by mutating the source and confirming the new anchor
+  catches. (F47)
 
 ## [0.1.6] - 2026-07-31
 

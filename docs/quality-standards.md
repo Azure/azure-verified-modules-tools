@@ -1610,3 +1610,53 @@ The test that matters is the component tier proving the gate can go **red**. A
 stub that only ever emits `[]` proves the engine stays quiet, which was the
 original defect one tier down — the fixture asserted `pass` on the vacuous case
 and so encoded the bug as the expectation.
+### L.9 A negative matcher passes vacuously on an empty subject
+
+`Should -Not -Match`, `-Not -Contain` and `-Not -Be` all pass when the subject is
+empty or `$null`. So does `Should -Not -Throw` when the operation was never
+reached. That makes a negative-only `It` a test that cannot distinguish "the bad
+thing did not happen" from "nothing happened at all" — and "nothing happened at
+all" is usually the more serious regression.
+
+Measured on Pester 5.5.0 and in plain PowerShell 7.4:
+
+| Expression | Result |
+| --- | --- |
+| `'' \| Should -Match 'x'` | **fails** |
+| `'' \| Should -Not -Match 'x'` | **passes** — vacuous |
+| `[version]$null` | **does not throw** |
+| `'' \| ConvertFrom-Json` | **does not throw** |
+| `$null \| ConvertFrom-Json` | **does not throw** (non-terminating) |
+
+The last three matter because `{ ... } | Should -Not -Throw` looks like a strong
+assertion and is frequently the *only* assertion in its `It`. `avm doctor --json`
+emitting nothing at all satisfied `{ $json | ConvertFrom-Json } | Should -Not -Throw`;
+so did a `Get-AvmVersion` result with no `PSVersion` property satisfy
+`{ [version](Get-AvmVersion).PSVersion } | Should -Not -Throw`.
+
+**Pair every negative with a positive anchor on the same value.** Assert what the
+value *is* before asserting what it is not:
+
+```powershell
+$json | Should -Not -BeNullOrEmpty                      # existence
+($json | ConvertFrom-Json).Status | Should -BeIn @(...) # content
+{ $json | ConvertFrom-Json } | Should -Not -Throw       # then the negative
+```
+
+`Should -Not -BeNullOrEmpty` is an **existence** assertion, not a negative — it is
+the strongest single guard against this class and reads like the opposite of one.
+Do not count it when auditing for negative-only tests.
+
+**Triage by mutation, not by reading.** The question "is this assertion
+load-bearing?" is answered by forcing the captured value to empty and seeing
+which tests still pass. Auditing this repo that way separated six genuine holes
+from a much larger set of candidates that were correctly scoped: assertions that
+compare against bytes captured earlier in the same `It` cannot pass vacuously,
+because the read throws when the file is missing, and exit-code-only tests do not
+assert on output by design.
+
+The worst instance found was worse than negative-only — it read the wrong stream.
+`Write-AvmLog -Level Verbose` routes to stream 4, but the test captured
+`-InformationVariable`, so the collection was empty under every input and the
+assertion could never fail in either direction. A negative matcher on a channel
+that never carries the value is indistinguishable from a passing test.
