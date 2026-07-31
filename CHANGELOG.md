@@ -88,7 +88,7 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F44).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F46).
 
 Two numbering sequences collided during review, so the `F` tags below are
 branch-local. Where a reviewer used the same number for a different defect, the
@@ -316,6 +316,25 @@ shell-hook guard and the empty-tier status respectively.
   dependency was not picked up on a warm working directory. CI never saw this
   (every job is a fresh checkout); it only bit locally. `-backend=false` keeps
   the warm path cheap. (F32)
+- **`avm check policy` reported `pass` without evaluating a single policy, and
+  now reports `skipped`.** conftest was invoked with no namespace selector, so
+  it evaluated only its default `main` namespace — and none of the 266 bundled
+  APRL/AVMSEC `.rego` files declares `package main`. Zero policies ran, exit was
+  0, and the step passed in ~320ms, which is about what doing nothing costs. One
+  of nine `pr-check` gates had never been able to fail on any AVM module. The
+  engine now counts what conftest actually evaluated, exposes it as `Evaluated`,
+  and reports `skipped` with an `avm.tf.policy-not-evaluated` diagnostic when
+  nothing could have been checked. `skipped` does not flip a gauntlet's overall
+  status, so no module breaks; under GitHub Actions it surfaces as a single
+  `::warning::`, which makes the gap visible in every run instead of invisible.
+  Deliberately *not* fixed by adding `--all-namespaces`: every input accessor in
+  the bundles destructures `terraform show -json` shapes, so that flag alone
+  would evaluate all 260 rules against an input none of them can read and count
+  every one as a success — slower, more convincing, still no gate. The second
+  skip reason exists precisely to catch that state, and both reasons key off the
+  parser mode used to build the argv, so they retire themselves when the
+  plan-JSON input path lands. Policy enforcement is therefore still a follow-up
+  slice — this release stops it claiming otherwise. (F46)
 
 ### Tests
 
@@ -329,6 +348,11 @@ shell-hook guard and the empty-tier status respectively.
   only one already using `-Exactly`; the eight-assertion compose test passed
   with every step invoked twice. All 15 are now `-Exactly`, and
   `Invoke-AvmTestUnit` gained the compose assertion it never had. (F43, F45)
+- The `conftest` component-tier stub gained an `AVM_STUB_CONFTEST_OUTPUT` hatch,
+  so the component tier proves `check policy` can go **red** end-to-end rather
+  than only proving it stays quiet. The previous stub emitted `[]` and the
+  fixture asserted `pass` on it — the vacuous case encoded as the expectation,
+  which is how F46 survived a green suite. (F46)
 
 ## [0.1.6] - 2026-07-31
 

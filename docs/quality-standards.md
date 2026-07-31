@@ -1570,3 +1570,43 @@ Copy-Item $bak $src -Force
 ```
 
 Then `git status --porcelain` before you commit anything.
+
+### L.8 A gate that *cannot* fail must not report `pass`
+
+L.2 says a step that did nothing is `skipped`. This is the harder case: a step
+that did *something* — resolved its tool, shelled out, parsed real output,
+returned in a plausible amount of time — while being structurally incapable of
+ever reporting a problem.
+
+`avm check policy` ran `conftest test --policy <APRL> --policy <AVMSEC> --parser
+hcl2 .` with no namespace selector. conftest defaults to its `main` namespace;
+not one of the 266 bundled `.rego` files declares `package main`. Zero policies
+were evaluated, exit was 0, and the step reported `pass` in ~320ms — which is
+about what doing nothing costs. One of nine `pr-check` gates had never been able
+to fail on any module.
+
+Three things generalise:
+
+- **Count what was evaluated, not what was reported.** Zero findings is the same
+  observation for "checked, all clean" and "checked nothing". Only a count of
+  work actually done separates them, so surface it (`Evaluated`) and branch on
+  it. This is L.2's third constraint sharpened: *nothing happened* is a legitimate
+  `pass` only when something downstream makes the vacuity visible.
+- **Half a fix is worse than none.** Adding `--all-namespaces` here would have
+  moved the step from 0 evaluated to 260 evaluated and 0 matched, because every
+  accessor in the bundles destructures `terraform show -json` shapes and none
+  reads HCL. Longer runtime, more convincing JSON, still no gate. Guard the
+  intermediate state explicitly rather than in a comment — the second skip
+  reason fires precisely on "evaluated many, matched none, wrong input shape".
+- **Tie the guard to the real invocation.** The skip reason keys off the
+  `$parserMode` variable used to build the argv, not a literal, so it retires
+  itself the moment the plan-JSON path lands. A guard you must remember to
+  remove is a guard that outlives its premise.
+
+Gate the skip on *no findings at all*: a rule that fired proves the input shape
+matched, so the vacuity premise no longer holds and normal status applies.
+
+The test that matters is the component tier proving the gate can go **red**. A
+stub that only ever emits `[]` proves the engine stays quiet, which was the
+original defect one tier down — the fixture asserted `pass` on the vacuous case
+and so encoded the bug as the expectation.
