@@ -59,6 +59,13 @@ $script:scriptsRoot  = Join-Path $script:repoRoot 'scripts'
 # when the per-file ratchet lands; the spec lets us start at 70 and tighten.
 $script:coverageFloor = 70
 
+# The PowerShell Gallery rejects a package whose manifest ReleaseNotes exceeds
+# this many characters. It enforces it at publish time -- after the tag and the
+# GitHub Release exist -- so the `build` task caps the notes and then verifies
+# the stamped value rather than discovering the limit mid-release. v0.1.7 was
+# rejected here at 23987 characters.
+$script:galleryNotesLimit = 10600
+
 # --- helpers ----------------------------------------------------------------
 
 function script:Assert-Module {
@@ -369,6 +376,7 @@ task build layout, {
         $notes = & (Join-Path $script:scriptsRoot 'Get-AvmReleaseNotes.ps1') `
             -Version $ReleaseVersion `
             -ChangelogPath (Join-Path $script:repoRoot 'CHANGELOG.md') `
+            -MaxLength $script:galleryNotesLimit `
             -AllowMissing
         $notesText = ($notes | Out-String).Trim()
 
@@ -376,7 +384,20 @@ task build layout, {
         if ($notesText) { $stampArgs['ReleaseNotes'] = $notesText }
         & (Join-Path $script:scriptsRoot 'Set-AvmModuleVersion.ps1') @stampArgs -Confirm:$false
 
-        $notesState = if ($notesText) { 'CHANGELOG notes applied' } else { 'no CHANGELOG section (notes left as-is)' }
+        # Measure what actually landed in the manifest, not what we asked for.
+        # The gallery enforces this at publish time, after the tag and the
+        # GitHub Release exist, so a rejection there costs a whole release.
+        $stamped = (Import-PowerShellDataFile -LiteralPath $stagedManifest).PrivateData.PSData.ReleaseNotes
+        $stampedLength = $stamped.Length + ([regex]::Matches($stamped, "`n")).Count
+        if ($stampedLength -gt $script:galleryNotesLimit) {
+            throw ("Staged manifest ReleaseNotes is $stampedLength characters, over the PowerShell Gallery " +
+                   "limit of $($script:galleryNotesLimit). Get-AvmReleaseNotes.ps1 -MaxLength did not take effect.")
+        }
+
+        $notesState = if ($notesText) {
+            "CHANGELOG notes applied, $stampedLength/$($script:galleryNotesLimit) chars"
+        }
+        else { 'no CHANGELOG section (notes left as-is)' }
         Write-Build Green "  stamped staged manifest: $ReleaseVersion ($notesState)"
     }
 
