@@ -21,18 +21,32 @@ function Invoke-AvmTerraformCheckPolicy {
              AVM_POLICY_LIBRARY_REF + AVM_POLICY_LIBRARY_SHA256 override the
              pinned ref for testing an unreleased policy set; both are
              required together.
-          3. Stage the module's '*.tf' / '*.tfvars' into a temporary
-             directory, mirroring their paths relative to $Context.Root.
-             '--parser hcl2 .' walks every file under CWD, so pointing it
-             at a real repository feeds '.gitignore', '.editorconfig',
-             '.github/**/*.yml', 'Makefile' and friends to an HCL parser.
-             conftest aborts in 'parse configurations' on the first one -
-             before any policy is loaded - so on a real module it never
-             evaluated a rule. Staging is used rather than naming the files
-             as arguments because conftest 0.68.2 on Windows resolves
-             --policy paths relative to a named input file and loses the
-             drive letter; '.' is the only input form that keeps absolute
-             bundle paths loadable.
+          3. Stage the module's '*.tf' / '*.tfvars' into a scratch directory
+             under the AVM cache, mirroring their paths relative to
+             $Context.Root. '--parser hcl2 .' walks every file under CWD, so
+             pointing it at a real repository feeds '.gitignore',
+             '.editorconfig', '.github/**/*.yml', 'Makefile' and friends to an
+             HCL parser. conftest aborts in 'parse configurations' on the
+             first one - before any policy is loaded - so on a real module it
+             never evaluated a rule.
+
+             Two details of this are load-bearing on Windows, both measured on
+             conftest 0.68.2:
+
+               * Staging, rather than naming the files as arguments. Given a
+                 file positional, conftest resolves --policy relative to it
+                 and loses the drive letter. '.' is the only input form that
+                 keeps absolute bundle paths loadable.
+               * The scratch directory lives under the cache, not the system
+                 temp dir. conftest strips the drive letter from --policy
+                 regardless, so an absolute bundle path only resolves when CWD
+                 is on the same volume: with the bundles on C:, staging on C:
+                 exits 0 and staging on Q: exits 1 with 'GetFileAttributesEx
+                 \Users\...\avm-policy-aprl\...: The system cannot find the
+                 path specified.' The bundles live under the cache root, so
+                 staging there shares a volume by construction. This was
+                 latent until parsing started succeeding - the parse abort
+                 above happens first and masked it.
           4. Run conftest from the staging directory:
                 conftest test --policy <APRL> --policy <AVMSEC>
                               [--policy <example-exception>]...
@@ -178,7 +192,17 @@ function Invoke-AvmTerraformCheckPolicy {
     # .gitignore/.editorconfig/*.yml abort it in 'parse configurations' before a
     # single policy loads. Stage the Terraform sources alone, mirroring their
     # relative paths so reported filenames stay meaningful.
-    $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-policy-' + [guid]::NewGuid().ToString('N'))
+    #
+    # The staging directory goes under the AVM cache, not the system temp dir,
+    # and that is load-bearing on Windows: conftest resolves --policy with the
+    # drive letter stripped, so an absolute bundle path only resolves when the
+    # working directory is on the same volume. Measured on conftest 0.68.2 with
+    # the bundles on C: -- staging on C: exits 0, staging on Q: exits 1 with
+    # 'GetFileAttributesEx \Users\...\avm-policy-aprl\...: The system cannot
+    # find the path specified.' The bundles live under the cache root, so
+    # staging there makes the two share a volume by construction on every OS.
+    $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'policy-stage'
+    $stageRoot = Join-Path $stageParent ('avm-policy-' + [guid]::NewGuid().ToString('N'))
     try {
         $null = New-Item -ItemType Directory -Path $stageRoot -Force -ErrorAction Stop
         $staged = 0

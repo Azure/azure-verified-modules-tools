@@ -98,6 +98,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 Result = $result
                 Staged = $script:stagedFiles
                 Stage  = $script:stageRootSeen
+                Cache  = (Get-AvmFolder -Kind Cache)
             }
         }
 
@@ -114,6 +115,15 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
         $probe.Stage | Should -Not -Be $ctx.Root
         Test-Path -LiteralPath $probe.Stage | Should -BeFalse
+
+        # Staging under the cache, not the system temp dir, is load-bearing:
+        # conftest strips the drive letter from --policy, so an absolute bundle
+        # path only resolves when CWD shares its volume. The bundles live under
+        # the cache, so this containment is what guarantees that. Windows CI
+        # (repo + AVM_HOME on D:, temp on C:) failed on exactly this.
+        $probe.Stage | Should -BeLike ((Join-Path $probe.Cache 'policy-stage') + '*')
+        [System.IO.Path]::GetPathRoot($probe.Stage) |
+            Should -Be ([System.IO.Path]::GetPathRoot($probe.Cache))
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {

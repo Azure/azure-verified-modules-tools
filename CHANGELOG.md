@@ -402,7 +402,21 @@ shell-hook guard and the empty-tier status respectively.
   After the fix the same fixture runs to completion and reports
   `namespaces seen: main`. Naming the Terraform files as arguments — the obvious
   alternative — does not work: conftest 0.68.2 on Windows then resolves `--policy`
-  paths relative to the named input and loses the drive letter. (F48)
+  paths relative to the named input and loses the drive letter.
+
+  The staging directory lives under the AVM cache rather than the system temp
+  directory, and that is load-bearing for the same reason. conftest strips the
+  drive letter from `--policy` regardless of the input form, so an absolute bundle
+  path only resolves when the working directory is on the **same volume**. With
+  the bundles on `C:`, staging on `C:` exits 0 and staging on `Q:` exits 1 with
+  `GetFileAttributesEx \Users\…\avm-policy-aprl\…: The system cannot find the path
+  specified.` The bundles live under the cache root, so staging there shares a
+  volume by construction on every OS. This was latent until the parse abort above
+  was fixed — that crash happens first and masked it — and it surfaced on Windows
+  CI, where the checkout and `AVM_HOME` are on `D:` while the temp directory is on
+  `C:`. Reproduced locally by pointing `AVM_HOME` at a second volume: the released
+  arrangement reports `error` / `avm.tf.policy-run-failed` / `loading policies`,
+  and the fixed one reports `namespaces seen: main`. (F48)
 - `avm check policy` no longer reports a conftest crash as the F46 vacuity skip.
   conftest reuses exit 1 for *"a policy failed"* and *"I aborted before evaluating
   anything"*, and the engine only treated codes other than 0 and 1 as a
