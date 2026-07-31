@@ -51,6 +51,37 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
+    It 'stamps StartTime, EndTime and DurationMs on the envelope and every step' {
+        $dir = Join-Path $TestDrive ("precommit-timing-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmLint   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmTest   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Invoke-AvmPreCommit -Path $D
+        }
+
+        $result.StartTime  | Should -BeOfType ([datetime])
+        $result.EndTime    | Should -BeOfType ([datetime])
+        $result.EndTime    | Should -BeGreaterOrEqual $result.StartTime
+        $result.DurationMs | Should -BeGreaterOrEqual 0
+
+        foreach ($step in $result.Steps) {
+            $step.StartTime  | Should -BeOfType ([datetime])
+            $step.EndTime    | Should -BeOfType ([datetime])
+            $step.EndTime    | Should -BeGreaterOrEqual $step.StartTime
+            $step.DurationMs | Should -BeGreaterOrEqual 0
+        }
+    }
+
     It 'composes all five steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("precommit-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

@@ -95,6 +95,7 @@ function Invoke-AvmPrCheck {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
@@ -112,12 +113,17 @@ function Invoke-AvmPrCheck {
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
+    $stepIndex = 0
 
     foreach ($def in $stepDefs) {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $stepIndex++
+        $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info
 
         try {
             $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
@@ -140,12 +146,17 @@ function Invoke-AvmPrCheck {
             $stepError = $_.Exception.Message
         }
         $stepSw.Stop()
+        $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
+
+        Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
 
         $steps.Add([pscustomobject][ordered]@{
                 Step       = $def.Name
                 Status     = $stepStatus
                 Error      = $stepError
                 Result     = $stepResult
+                StartTime  = $stepStart
+                EndTime    = $stepEnd
                 DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
             })
 
@@ -161,6 +172,8 @@ function Invoke-AvmPrCheck {
         Ecosystem  = $context.Ecosystem
         Status     = $overall
         Steps      = $steps.ToArray()
+        StartTime  = $startTime
+        EndTime    = $startTime.AddMilliseconds($sw.Elapsed.TotalMilliseconds)
         DurationMs = [int]$sw.Elapsed.TotalMilliseconds
     }
 }
