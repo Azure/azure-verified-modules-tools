@@ -112,6 +112,19 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   fallback path, but every parallel matrix leg then deploys into the same
   subscription and may hit quota where a sequential run did not.
 
+### Upgrade notes
+
+- **`tflint --init` needs an authenticated token outside the reusable workflow.**
+  TFLint resolves its ruleset plugins through the GitHub releases API, which
+  allows 60 unauthenticated requests per hour *per source IP*. Hosted runners
+  share an egress IP, so a busy period surfaces as an intermittent, platform-
+  correlated lint failure that looks like a flake rather than a rate limit.
+  `.github/workflows/terraform-module.yml` and this repo's own CI now both set
+  `GITHUB_TOKEN` for the 5,000/hour authenticated budget, and a workflow-contract
+  test keeps the two from drifting apart again. If you self-host runners, or call
+  `tflint` outside the reusable workflow, set `GITHUB_TOKEN` in that environment
+  too.
+
 ### Added
 
 - `avm test e2e --example <name>` targets a single example. It accepts either

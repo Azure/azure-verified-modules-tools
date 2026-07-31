@@ -174,6 +174,10 @@ function Invoke-AvmTerraformTestSuite {
         }
 
         $runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        # Must stay a plain scriptblock: .GetNewClosure() rebinds it to a fresh
+        # dynamic module, so module-private helpers like Read-AvmTerraformTestRunEvent
+        # stop resolving. Unit tests mock Invoke-AvmProcess and never invoke this
+        # callback, so only the component tier catches a regression here.
         $progress = {
             param($line)
             $runEvent = Read-AvmTerraformTestRunEvent -Line $line
