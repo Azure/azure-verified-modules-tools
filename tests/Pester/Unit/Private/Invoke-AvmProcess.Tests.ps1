@@ -138,6 +138,36 @@ Describe 'Invoke-AvmProcess' {
         @($messages) | Should -Contain 'grouped-out'
     }
 
+    It 'leaves caller-rendered progress ungrouped under GitHub Actions' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('raw-noise')"
+        $messages = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $saved = @{ Actions = $env:GITHUB_ACTIONS; Verbose = $env:AVM_VERBOSE }
+            $env:GITHUB_ACTIONS = 'true'
+            $env:AVM_VERBOSE = ''
+            try {
+                $captured = @()
+                Invoke-AvmProcess `
+                    -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -Label 'hooked fixture' `
+                    -StreamOutput `
+                    -OnStdOutLine { param($line) Write-AvmLog -Message "rendered:$line" -Level Info } `
+                    -InformationVariable captured | Out-Null
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+        @($messages) | Should -Not -Contain '::group::hooked fixture'
+        @($messages) | Should -Not -Contain '::endgroup::'
+        @($messages) | Should -Contain 'rendered:raw-noise'
+        @($messages) | Should -Not -Contain 'raw-noise'
+    }
+
     It 'replays the captured output when a quiet run fails' {
         $exe = $script:pwsh
         $script = "[Console]::Out.WriteLine('failing-detail'); exit 9"

@@ -34,6 +34,11 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match "needs\.discover-examples\.outputs\.hasExamples == 'true'"
     }
 
+    It 'keeps the e2e environment static so one approval releases every matrix leg' {
+        $script:workflow | Should -Match 'environment:\s*examples-test'
+        $script:workflow | Should -Not -Match 'environment:\s*.*\$\{\{\s*matrix\.'
+    }
+
     It 'round-robins the subscription across matrix legs using strategy.job-index' {
         $script:workflow | Should -Match 'JOB_INDEX:\s*\$\{\{ strategy\.job-index \}\}'
         $script:workflow | Should -Match '\$subs\[\$index % \$subs\.Count\]'

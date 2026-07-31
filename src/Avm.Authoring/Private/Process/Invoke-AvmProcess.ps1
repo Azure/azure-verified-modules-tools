@@ -52,7 +52,9 @@ function Invoke-AvmProcess {
     .PARAMETER OnStdOutLine
         Scriptblock invoked with each stdout line as it arrives. When supplied
         the caller owns stdout rendering, so raw stdout lines are not echoed
-        even when live streaming is on. Requires -StreamOutput.
+        even when live streaming is on, and the invocation is not wrapped in a
+        collapsed GitHub Actions group: the caller's lines are already the
+        curated progress view and must stay visible. Requires -StreamOutput.
 
     .PARAMETER SuccessExitCode
         Exit codes treated as success for narration and failure replay. Does
@@ -101,7 +103,7 @@ function Invoke-AvmProcess {
     $narrate = [bool]$StreamOutput
     $hasLineHook = $null -ne $OnStdOutLine
     $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
-    $grouped = $narrate -and $inActions
+    $grouped = $narrate -and $inActions -and -not $hasLineHook
     $heartbeatSeconds = 30
     $nextHeartbeat = $heartbeatSeconds
 
