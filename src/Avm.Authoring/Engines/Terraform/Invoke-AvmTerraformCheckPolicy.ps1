@@ -21,25 +21,46 @@ function Invoke-AvmTerraformCheckPolicy {
              AVM_POLICY_LIBRARY_REF + AVM_POLICY_LIBRARY_SHA256 override the
              pinned ref for testing an unreleased policy set; both are
              required together.
-          3. Run conftest:
+          3. Stage the module's '*.tf' / '*.tfvars' into a temporary
+             directory, mirroring their paths relative to $Context.Root.
+             '--parser hcl2 .' walks every file under CWD, so pointing it
+             at a real repository feeds '.gitignore', '.editorconfig',
+             '.github/**/*.yml', 'Makefile' and friends to an HCL parser.
+             conftest aborts in 'parse configurations' on the first one -
+             before any policy is loaded - so on a real module it never
+             evaluated a rule. Staging is used rather than naming the files
+             as arguments because conftest 0.68.2 on Windows resolves
+             --policy paths relative to a named input file and loses the
+             drive letter; '.' is the only input form that keeps absolute
+             bundle paths loadable.
+          4. Run conftest from the staging directory:
                 conftest test --policy <APRL> --policy <AVMSEC>
                               [--policy <example-exception>]...
                               --output json --parser hcl2 .
-             from CWD=$Context.Root. Per-example exception bundles are
-             discovered as <Root>/examples/<name>/exceptions/*.rego (top-
-             level glob only) and appended in ordinal-sorted order, so
-             argv is stable across operating systems and locale.
-          4. Parse the JSON output: an array of per-file/per-namespace
+             Per-example exception bundles are discovered as
+             <Root>/examples/<name>/exceptions/*.rego (top-level glob only)
+             and appended in ordinal-sorted order, so argv is stable across
+             operating systems and locale. Reported filenames are relative
+             to the staging root, which mirrors $Context.Root, so they need
+             no translation.
+          5. Parse the JSON output: an array of per-file/per-namespace
              records each carrying 'failures' (severity=error) and
              'warnings' (severity=warning) lists. Flatten into the shared
              Issue record shape.
-          5. Decide the status. 'pass' is only reachable when policies were
+          6. Decide the status. 'pass' is only reachable when policies were
              actually evaluated against the module - see below.
 
         conftest exit codes:
           0 - no failures (warnings allowed)
           1 - at least one failure (parse and report; Status='fail')
           others - conftest itself misbehaved (throw AvmProcessException)
+
+        Exit 1 is ambiguous: conftest also uses it when it aborts before
+        evaluating anything (a parse error, an unreadable bundle). Those
+        runs emit no JSON, so a non-zero exit with no parseable stdout is
+        reported as Status='error' carrying conftest's stderr, rather than
+        falling through to the vacuity skips below - a crash and 'no rule
+        applies' are different answers and must not share a diagnostic.
 
         This slice uses the HCL2 parser so the engine can be exercised
         without first running 'terraform plan' against a configured Azure
@@ -153,11 +174,63 @@ function Invoke-AvmTerraformCheckPolicy {
     $argList.Add('--parser'); $argList.Add($parserMode)
     $argList.Add('.')
 
-    $result = Invoke-AvmProcess `
-        -FilePath $tool.Path `
-        -ArgumentList $argList.ToArray() `
-        -WorkingDirectory $Context.Root `
-        -IgnoreExitCode
+    # '--parser hcl2 .' feeds conftest every file under CWD, so a real module's
+    # .gitignore/.editorconfig/*.yml abort it in 'parse configurations' before a
+    # single policy loads. Stage the Terraform sources alone, mirroring their
+    # relative paths so reported filenames stay meaningful.
+    $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-policy-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $null = New-Item -ItemType Directory -Path $stageRoot -Force -ErrorAction Stop
+        $staged = 0
+        $sources = @(Get-ChildItem -LiteralPath $Context.Root -Recurse -File -Include '*.tf', '*.tfvars' -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '[\\/]\.(terraform|git)[\\/]' })
+        foreach ($source in $sources) {
+            $relative = [System.IO.Path]::GetRelativePath($Context.Root, $source.FullName)
+            $destination = Join-Path $stageRoot $relative
+            $parent = Split-Path -Path $destination -Parent
+            if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+                $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop
+            }
+            Copy-Item -LiteralPath $source.FullName -Destination $destination -Force -ErrorAction Stop
+            $staged++
+        }
+        Write-AvmLog ('Staged {0} Terraform file(s) for policy evaluation.' -f $staged) -Level Debug
+
+        if ($staged -eq 0) {
+            # conftest exits 1 with 'no files found' on an empty tree, which the
+            # crash guard below would report as a failure. Nothing to check is a
+            # skip, not an error, and it is knowable without launching conftest.
+            $emptyReason = 'the module contains no .tf or .tfvars files, so there was nothing for conftest to evaluate.'
+            Write-AvmLog $emptyReason -Level Warning
+            return [pscustomobject][ordered]@{
+                Engine     = 'terraform'
+                Tool       = ('{0}/{1}' -f $tool.Name, $tool.Version)
+                ToolPath   = $tool.Path
+                ToolSource = $tool.Source
+                Status     = 'skipped'
+                Evaluated  = 0
+                Issues     = @([pscustomobject][ordered]@{
+                        File     = ''
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'warning'
+                        Code     = 'avm.tf.policy-not-evaluated'
+                        Message  = ('conftest was not run: {0}' -f $emptyReason)
+                    })
+            }
+        }
+
+        $result = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList $argList.ToArray() `
+            -WorkingDirectory $stageRoot `
+            -IgnoreExitCode
+    }
+    finally {
+        if (Test-Path -LiteralPath $stageRoot) {
+            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     # exit 0 = no failures; 1 = at least one failure; anything else = conftest itself misbehaved.
     if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 1) {
@@ -165,6 +238,31 @@ function Invoke-AvmTerraformCheckPolicy {
         $tail = if ($stderr) { ": $stderr" } else { '.' }
         throw [AvmProcessException]::new(
             ('conftest exited with code {0}{1}' -f $result.ExitCode, $tail))
+    }
+
+    # conftest also exits 1 when it aborts before evaluating anything, and those
+    # runs emit no JSON. Without this, a crash is indistinguishable from a clean
+    # run that matched no rule, and gets reported with the vacuity diagnostic.
+    if ($result.ExitCode -ne 0 -and -not ($result.StdOut -and $result.StdOut.Trim())) {
+        $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
+        $detail = if ($stderr) { $stderr } else { 'conftest produced no output.' }
+        Write-AvmLog ('conftest failed before evaluating any policy: {0}' -f $detail) -Level Warning
+        return [pscustomobject][ordered]@{
+            Engine     = 'terraform'
+            Tool       = ('{0}/{1}' -f $tool.Name, $tool.Version)
+            ToolPath   = $tool.Path
+            ToolSource = $tool.Source
+            Status     = 'error'
+            Evaluated  = 0
+            Issues     = @([pscustomobject][ordered]@{
+                    File     = ''
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = 'avm.tf.policy-run-failed'
+                    Message  = ('conftest exited with code {0} without producing any result: {1}' -f $result.ExitCode, $detail)
+                })
+        }
     }
 
     $issues = New-Object System.Collections.Generic.List[object]
