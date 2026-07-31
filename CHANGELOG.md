@@ -88,7 +88,7 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F33).
 
 ### Added
 
@@ -111,6 +111,9 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
   verbose on, and verbose now cascades from the entry point to engines,
   sub-cmdlets and `Invoke-AvmProcess`. `AVM_VERBOSE=1` does the same outside
   GitHub Actions. (F30)
+- `avm test unit` and `avm test integration` report `RunsTotal`, `RunsPassed` and
+  `RunsFailed` alongside `FilesProcessed`, and render the tally. A file count is a
+  poor coverage signal; a run count exposes an empty suite immediately. (F33)
 
 ### Changed
 
@@ -128,6 +131,11 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
   (F25)
 - `avm` no longer writes result objects to the success stream by default; pass
   `--passthru` to get them back for scripting. (F23)
+- Both test tiers now invoke `terraform test` identically and render a progress
+  line per test run with its duration, instead of the unit tier running silently
+  and the integration tier dumping raw `-json` NDJSON on the human channel. The
+  `terraform init` sub-step follows the same quiet-by-default rule as everything
+  else. (F33)
 
 ### Fixed
 
@@ -139,6 +147,13 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
   point of failure, so callers that invoke `Invoke-AvmPrCheck` or
   `Invoke-AvmPreCommit` directly (bypassing the dispatcher's renderer) get a
   diagnosis instead of a bare status.
+- `terraform init` now always runs before `terraform validate` and
+  `terraform test` unless `-NoInit` was passed. The previous gate on the
+  existence of `.terraform/` only proved init had run at some point, against a
+  possibly different set of requirements, so adding a `.tftest.hcl` that sources
+  a helper module failed with `Module not installed`. CI never saw this (every
+  job is a fresh checkout); it only bit locally. `-backend=false` keeps the warm
+  path cheap. (F32)
 
 ## [0.1.6] - 2026-07-31
 
