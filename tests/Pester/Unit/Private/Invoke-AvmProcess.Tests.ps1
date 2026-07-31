@@ -40,26 +40,142 @@ Describe 'Invoke-AvmProcess' {
         $result.StdErr.TrimEnd() | Should -Be 'to-stderr'
     }
 
-    It 'streams stdout and stderr while retaining both captured values' {
+    It 'stays quiet by default while retaining both captured values' {
         $exe = $script:pwsh
         $script = "[Console]::Out.WriteLine('live-out'); [Console]::Error.WriteLine('live-error')"
         $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
             param($E, $S)
-            $messages = @()
-            $result = Invoke-AvmProcess `
-                -FilePath $E `
-                -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
-                -StreamOutput `
-                -InformationVariable messages
-            [pscustomobject]@{
-                Result   = $result
-                Messages = @($messages | ForEach-Object { [string]$_.MessageData })
+            $saved = @{
+                Actions = $env:GITHUB_ACTIONS
+                Runner  = $env:RUNNER_DEBUG
+                Verbose = $env:AVM_VERBOSE
+            }
+            $env:GITHUB_ACTIONS = ''
+            $env:RUNNER_DEBUG = ''
+            $env:AVM_VERBOSE = ''
+            try {
+                $messages = @()
+                $result = Invoke-AvmProcess `
+                    -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -Label 'quiet fixture' `
+                    -StreamOutput `
+                    -InformationVariable messages
+                [pscustomobject]@{
+                    Result   = $result
+                    Messages = @($messages | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:RUNNER_DEBUG = $saved.Runner
+                $env:AVM_VERBOSE = $saved.Verbose
             }
         }
         $observed.Result.StdOut.TrimEnd() | Should -Be 'live-out'
         $observed.Result.StdErr.TrimEnd() | Should -Be 'live-error'
+        $observed.Messages | Should -Not -Contain 'live-out'
+        $observed.Messages | Should -Not -Contain 'live-error'
+        ($observed.Messages -join "`n") | Should -Match 'quiet fixture'
+    }
+
+    It 'streams child output live when verbose is enabled' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('live-out'); [Console]::Error.WriteLine('live-error')"
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $saved = @{ Actions = $env:GITHUB_ACTIONS; Verbose = $env:AVM_VERBOSE }
+            $env:GITHUB_ACTIONS = ''
+            $env:AVM_VERBOSE = '1'
+            try {
+                $messages = @()
+                $result = Invoke-AvmProcess `
+                    -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -Label 'verbose fixture' `
+                    -StreamOutput `
+                    -InformationVariable messages
+                [pscustomobject]@{
+                    Result   = $result
+                    Messages = @($messages | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+        $observed.Result.StdOut.TrimEnd() | Should -Be 'live-out'
         $observed.Messages | Should -Contain 'live-out'
         $observed.Messages | Should -Contain 'live-error'
+    }
+
+    It 'wraps output in a collapsible group under GitHub Actions' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('grouped-out')"
+        $messages = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $saved = @{ Actions = $env:GITHUB_ACTIONS; Verbose = $env:AVM_VERBOSE }
+            $env:GITHUB_ACTIONS = 'true'
+            $env:AVM_VERBOSE = ''
+            try {
+                $captured = @()
+                Invoke-AvmProcess `
+                    -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -Label 'grouped fixture' `
+                    -StreamOutput `
+                    -InformationVariable captured | Out-Null
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+        @($messages) | Should -Contain '::group::grouped fixture'
+        @($messages) | Should -Contain '::endgroup::'
+        @($messages) | Should -Contain 'grouped-out'
+    }
+
+    It 'replays the captured output when a quiet run fails' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('failing-detail'); exit 9"
+        $messages = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $saved = @{ Actions = $env:GITHUB_ACTIONS; Verbose = $env:AVM_VERBOSE }
+            $env:GITHUB_ACTIONS = ''
+            $env:AVM_VERBOSE = ''
+            try {
+                $captured = @()
+                Invoke-AvmProcess `
+                    -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -Label 'failing fixture' `
+                    -StreamOutput `
+                    -IgnoreExitCode `
+                    -InformationVariable captured | Out-Null
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+        ($messages -join "`n") | Should -Match 'FAILED: failing fixture'
+        ($messages -join "`n") | Should -Match 'failing-detail'
+    }
+
+    It 'reports StartTime, EndTime and DurationMs on the result' {
+        $exe = $script:pwsh
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe } {
+            param($E)
+            Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', "Write-Output 'timed'")
+        }
+        $result.StartTime | Should -BeOfType ([datetime])
+        $result.EndTime | Should -BeOfType ([datetime])
+        $result.EndTime | Should -BeGreaterOrEqual $result.StartTime
+        $result.DurationMs | Should -BeGreaterOrEqual 0
     }
 
     It 'throws AvmProcessException on a non-zero exit' {

@@ -153,6 +153,7 @@ function Invoke-AvmTerraformTestSuite {
                 -WorkingDirectory $targetDir `
                 -EnvVars $envVars `
                 -StreamOutput `
+                -Label ('terraform init {0}' -f $targetDir) `
                 -IgnoreExitCode
 
             if ($initResult.ExitCode -ne 0) {
@@ -168,6 +169,8 @@ function Invoke-AvmTerraformTestSuite {
             -WorkingDirectory $targetDir `
             -EnvVars $envVars `
             -StreamOutput:($Tier -eq 'integration') `
+            -Label ('terraform test {0}{1}' -f $relPrefix, $testDir) `
+            -SuccessExitCode @(0, 1) `
             -IgnoreExitCode
 
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
