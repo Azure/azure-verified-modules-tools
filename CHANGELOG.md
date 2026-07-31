@@ -88,7 +88,19 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F43).
+
+Two numbering sequences collided during review, so the `F` tags below are
+branch-local. Where a reviewer used the same number for a different defect, the
+mapping is:
+
+| Reviewer ID | Tag used here | Defect |
+| --- | --- | --- |
+| F39 | F41 | Three unanchored `::error::` annotations per failure, worst-first |
+| F40 | F42 | `format` and `docs` auto-fix the CI working copy and report `pass` |
+
+Both are fixed in this release. The F39 and F40 tags below refer to the
+shell-hook guard and the empty-tier status respectively.
 
 ### Breaking
 
