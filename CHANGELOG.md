@@ -111,6 +111,21 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   configured with only `ARM_SUBSCRIPTION_ID` still work through the preserved
   fallback path, but every parallel matrix leg then deploys into the same
   subscription and may hit quota where a sequential run did not.
+- **`avm pr-check` now runs the unit test tier, and its `test` step is renamed
+  to `validate`.** The step called `test` never ran a test: it routes to
+  `terraform validate` / `bicep build`, reports `FilesProcessed` and carries no
+  run counts, so a module whose tests were broken — or entirely absent — still
+  produced an all-green gauntlet in a few seconds. The step is now named for
+  what it does, and a real `unit test` step runs after it.
+
+  Two consequences. `pr-check` gets slower by the cost of your unit tier
+  (~20s on a typical module). And it can newly fail: if your unit tests were
+  never actually running locally, this is the run that tells you. Both are the
+  point — `pr-check` documents itself as running *every check that runs in CI*,
+  and that claim was not true while the unit tier was absent. Only the unit
+  tier is included, because it is the one tier that is credential-free by
+  design; `integration` and `e2e` need a live subscription and stay out.
+  `avm pre-commit` is unchanged and still offline. (F38)
 
 ### Upgrade notes
 
@@ -178,6 +193,12 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
 
 ### Fixed
 
+- The test suite result object now carries `RunsTotal` / `RunsPassed` /
+  `RunsFailed` even when a tier ships no `.tftest.hcl` files at all. That case
+  previously returned `Status='pass'` with `FilesProcessed=0` and no run-count
+  members, so the one shape that most needs to be conspicuous — a module with no
+  tests — was the one shape indistinguishable from a real result. The tier also
+  now says so on the console. (F38)
 - A failing `avm` command reports a clean one-line failure summary and exits
   non-zero instead of surfacing a raw `OperationStopped` stack trace pointing at
   module source. The remainder of a calling script no longer stops running, so

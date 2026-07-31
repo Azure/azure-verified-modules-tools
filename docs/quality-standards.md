@@ -1298,3 +1298,60 @@ Steps:
 - **(B) fix-in-pre-commit + drift-check-in-pr-check semantics (J.3) — RESOLVED = follow upstream.** The user confirmed (2026-06-19, *"yes proceed"*) the upstream-canonical model: `pre-commit` **fixes** via `mapotf transform`, `pr-check` **flags drift** via re-transform + `git status --porcelain`. This consciously reverses the 2026-06-03 flag-only preference.
 
 With (A) and (B) resolved, the only remaining Slice G work was the **engine**. **DONE 2026-06-19** (`slice-g-transform`, commit `c3dd21a`): `mapotf` v0.1.4 pinned, `Invoke-AvmTerraformTransform` implemented against `config/mapotf/pre-commit/` (transform → clean-backup, `-CheckDrift` drift gate for pr-check), `tests/fixtures/bin/mapotf.ps1` stub + 12 unit + 3 integration tests, wired into both the pre-commit and pr-check Terraform chains. The config-supply half (`slice-g1-vendor-configs`, commit `37fb848`) was already done. **Terraform pre-commit parity is achieved.**
+
+## Appendix K. Terraform test-fixture traps
+
+Collected while building the `run { module { … } }` regression fixture for F34.
+Both traps share a signature that makes them expensive to diagnose: terraform
+reports the error against the **test file**, not against the helper module or
+the provider block that actually caused it.
+
+### K.1 A helper module must repeat the root's `required_providers` sources
+
+A module pulled in from a `run` block inside a file that uses `mock_provider`
+must declare the *same provider sources* as the root module:
+
+```hcl
+terraform {
+  required_providers {
+    azapi = {
+      source = "Azure/azapi"
+    }
+  }
+}
+```
+
+Terraform unifies provider **names** across the whole test run. Omit the entry
+and the helper's bare `azapi` silently defaults to `hashicorp/azapi`, which then
+collides with the root's real `Azure/azapi`. The diagnostic points at the test
+file and describes a provider-type conflict, so the natural reading is that the
+`mock_provider` block is wrong — it is not.
+
+### K.2 `mock_provider` generates IDs that real providers reject
+
+`mock_provider "azapi" {}` synthesises short opaque IDs (`1knj3pev`). `azapi`
+validates `parent_id` as a genuine ARM resource ID, so anything consuming a
+mocked ID fails validation. Pin a realistic shape:
+
+```hcl
+mock_provider "azapi" {
+  mock_resource "azapi_resource" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg"
+    }
+  }
+}
+```
+
+### K.3 Block syntax must be multi-line
+
+`terraform { required_providers { random = { source = "hashicorp/random" } } }`
+on one line is a parse error, not a style preference. Write the blocks out.
+
+### K.4 Prefer a local helper over a registry one
+
+The F34 fixture sources its helper from a sibling directory rather than the
+registry. A registry source makes the test suite dependent on network reach and
+on the GitHub API rate limit — the same budget that produced the intermittent
+`tflint --init` failure documented in the 0.1.7 upgrade notes. A local helper
+exercises the identical code path in `terraform init` while staying hermetic.

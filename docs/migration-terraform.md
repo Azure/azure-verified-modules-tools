@@ -151,9 +151,9 @@ through the host's own TLS trust store.
 The composition cmdlets and the exact order of engines they call:
 
 - **`avm pre-commit`** →
-  - **Terraform**: `check convention` → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which runs only transform + docs in pre-commit and keeps `tflint`/validate in pr-check; `lint`+`test` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
+  - **Terraform**: `check convention` → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which runs only transform + docs in pre-commit and keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch. `avm pr-check` additionally runs the credential-free `unit test` tier)
   - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
-- **`avm pr-check`** → `format` → `transform` → `lint` → `check policy` → `check convention` → `test` → `docs`
+- **`avm pr-check`** → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `unit test` → `docs`
 
 A step that raises `AvmConfigurationException` (e.g. an engine that's
 still a stub because the required tool isn't packaged yet, or a policy
