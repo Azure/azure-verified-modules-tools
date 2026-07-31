@@ -1564,12 +1564,27 @@ Back up with a file copy and prove the restore by hash:
 ```powershell
 Copy-Item $src $bak -Force
 $h0 = (Get-FileHash $src).Hash
-# ... mutate, run tests ...
-Copy-Item $bak $src -Force
-"restored byte-identical: $((Get-FileHash $src).Hash -eq $h0)"
+try {
+    # ... mutate, run tests ...
+}
+finally {
+    Copy-Item $bak $src -Force
+    "restored byte-identical: $((Get-FileHash $src).Hash -eq $h0)"
+}
 ```
 
-Then `git status --porcelain` before you commit anything.
+**The `finally` is load-bearing, not decoration.** A mutation whose whole purpose
+is to make something fail will often make it fail *terminally* — this happened
+while proving the `build` task's gallery-notes guard: the mutated build threw, the
+error propagated out of the harness, and every line after it, restore included,
+never ran. The mutation was still live in the working tree afterwards. Without a
+`finally` the restore is skipped in exactly the case the mutation was designed to
+produce, which is the one case you are guaranteed to hit.
+
+Then `git status --porcelain` before you commit anything, and grep the tree for
+your mutation marker. Match the *mutated* text, not a loose pattern: a scan for
+`-lt 0) {` reported two hits in a file whose only mutation had already been
+restored, both of them pre-existing code.
 
 ### L.8 A gate that *cannot* fail must not report `pass`
 
