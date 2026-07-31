@@ -88,7 +88,7 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F46).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F48).
 
 Two numbering sequences collided during review, so the `F` tags below are
 branch-local. Where a reviewer used the same number for a different defect, the
@@ -391,6 +391,38 @@ shell-hook guard and the empty-tier status respectively.
   audit that grepped only `*>&1` and `6>&1` missed two live `2>&1` sites. Each of
   the four capture sites in the suite is safe for a *different* reason, so the
   reason is now recorded alongside what would break it. (F47)
+- `avm check policy` now stages the module's `*.tf` / `*.tfvars` into a temporary
+  directory and runs conftest there, instead of pointing `--parser hcl2 .` at the
+  repository root. conftest walks every file under its working directory, so on a
+  real module it hit `.gitignore` (or `.editorconfig`, or `.github/**/*.yml`),
+  died in `parse configurations` **before loading a single policy**, and exited 1
+  with no output. That is on every AVM repository in existence: measured on the
+  integration fixture, conftest reported
+  `parse config: [:1,1-2: Argument or block definition required], path: .gitignore`.
+  After the fix the same fixture runs to completion and reports
+  `namespaces seen: main`. Naming the Terraform files as arguments — the obvious
+  alternative — does not work: conftest 0.68.2 on Windows then resolves `--policy`
+  paths relative to the named input and loses the drive letter. (F48)
+- `avm check policy` no longer reports a conftest crash as the F46 vacuity skip.
+  conftest reuses exit 1 for *"a policy failed"* and *"I aborted before evaluating
+  anything"*, and the engine only treated codes other than 0 and 1 as a
+  malfunction — so a crash fell through to the normal path, produced zero records,
+  and was reported with the diagnostic *"the bundles declare no rules in the
+  default 'main' namespace"*. True about the bundles, false as the reason. A
+  non-zero exit with no parseable output is now `Status='error'` carrying
+  conftest's stderr under `avm.tf.policy-run-failed`. This outlives F46: that
+  guard self-cancels once the plan-JSON slice lands, this one does not. A module
+  holding no Terraform sources at all is detected before conftest is launched and
+  stays a skip, because *nothing to check* is not a failure. (F48)
+- Stopped the test suite ratifying the crash above. The integration and component
+  tiers both asserted `Evaluated -eq 0` — a value **both** causes produce, so the
+  assertions passed for the crash for as long as it existed. They now pin the
+  cause (`namespaces seen: main`), which only a completed run can report. The
+  component stub's default output was `[]` with a comment claiming that was what
+  real conftest emits; it is not — that is the *crash* shape. The stub now
+  enumerates its working directory, emits one `main`-namespace record per input,
+  and reproduces the parse abort if a non-Terraform file reaches it, so the
+  component tier witnesses the staging too. (F48)
 
 ## [0.1.6] - 2026-07-31
 

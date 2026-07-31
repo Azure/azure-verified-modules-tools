@@ -1690,3 +1690,54 @@ break. The four sites in this repo are each safe differently:
 
 Record which reason applies. "It passes" is not a finding; "it cannot pass while
 broken, because X" is.
+
+### L.11 Never pin an assertion to a value two different causes produce
+
+`Evaluated -eq 0` looks like a strong assertion. It is not, if two unrelated
+things both produce it.
+
+`avm check policy` had exactly that. The engine could report zero evaluated
+policies for either of:
+
+1. conftest ran to completion and no bundled rule declares `package main`
+   (the F46 vacuity — expected, benign, a `skipped`); or
+2. conftest **crashed in `parse configurations` before loading any policy**, and
+   exited 1 with no output (F48 — a real defect on every AVM repository).
+
+Three tiers asserted `Evaluated -eq 0` and `Status -eq 'skipped'`. All three
+passed. All three were, for the whole life of the defect, certifying cause 2
+while their comments described cause 1 — including the real-binary integration
+tier, whose entire purpose is to catch this.
+
+The fix is to assert on something only one cause can produce. Here the engine
+already computed it: the namespaces conftest reported. A completed run yields
+`main`; a crash yields `(none)`, because there are no records to read a namespace
+from. So:
+
+```powershell
+# ratifies either cause
+$policyStep.Result.Evaluated | Should -Be 0
+
+# pins the one you mean
+$diagnostics[0].Message | Should -Match 'namespaces seen: main'
+```
+
+The test to apply to your own assertion: **can I name a second way this value
+arises?** If you can, the assertion does not distinguish them, and the one you
+did not think of is the one that will ship. This is L.8 one layer down — there
+the gate could not fail, here the assertion could not tell two answers apart.
+
+The same question applies to fixtures. This stub carried a comment asserting a
+fact about reality:
+
+```powershell
+# Default `test` output is an empty JSON array, which is what real conftest
+# emits today for the pinned bundles under --parser hcl2
+Write-Output '[]'
+```
+
+That claim was false, and unverified. Real conftest emits one record per input
+file in the `main` namespace; `[]` is what you see when it *crashes*. The stub
+was modelling the bug, so the component tier could not have caught it. Measure
+what the real tool emits before encoding it in a stub, and if a fixture comment
+states a fact about the real world, it needs the same evidence as a finding.
