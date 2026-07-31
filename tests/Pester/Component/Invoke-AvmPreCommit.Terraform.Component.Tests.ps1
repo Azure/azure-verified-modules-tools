@@ -320,8 +320,12 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         # Tool-prefix assertion catches future engine-envelope regressions on
         # the check-policy engine, as format/lint/test/docs do for their tools.
         $policyResult.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
-        @($policyResult.PSObject.Properties['Issues'].Value |
-                Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 1
+        $policyDiagnostics = @($policyResult.PSObject.Properties['Issues'].Value |
+                Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
+        $policyDiagnostics.Count | Should -Be 1
+        # F48: Evaluated=0 has two causes - this vacuity, and conftest aborting
+        # before it loads a policy. Pin the cause, not the value they share.
+        $policyDiagnostics[0].Message | Should -Match 'namespaces seen: main'
     }
 
     It 'F46: Invoke-AvmCheckPolicy reports skipped, not pass, when conftest evaluates nothing' {
@@ -339,6 +343,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $issues.Count | Should -Be 1
         $issues[0].Code     | Should -Be 'avm.tf.policy-not-evaluated'
         $issues[0].Severity | Should -Be 'warning'
+        $issues[0].Message  | Should -Match 'namespaces seen: main'
     }
 
     It 'F46: Invoke-AvmCheckPolicy fails and surfaces the rule when conftest reports a real violation' {

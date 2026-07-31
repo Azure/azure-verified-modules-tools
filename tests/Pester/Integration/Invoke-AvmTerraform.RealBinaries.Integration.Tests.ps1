@@ -264,9 +264,18 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $policyStep | Should -Not -BeNullOrEmpty
             $policyStep.Status | Should -Be 'skipped'
             $policyStep.Result.Evaluated | Should -Be 0
+            $diagnostics = @($policyStep.Result.Issues |
+                    Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
+            $diagnostics.Count | Should -Be 1
+            # F48: Evaluated=0 is produced by two different causes - the namespace
+            # vacuity below, and conftest aborting in 'parse configurations' before
+            # loading a policy. Pinning the shared value ratified the crash for as
+            # long as it existed, so pin the cause: 'main' can only be reported by
+            # a run that completed.
+            $diagnostics[0].Message | Should -Match 'namespaces seen: main'
             @($policyStep.Result.Issues |
-                    Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count |
-                Should -Be 1
+                    Where-Object { $_.Code -eq 'avm.tf.policy-run-failed' }).Count |
+                Should -Be 0
 
             foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"

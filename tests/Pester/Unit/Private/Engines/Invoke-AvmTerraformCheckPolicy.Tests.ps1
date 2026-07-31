@@ -67,10 +67,16 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $captured['avm-policy-avmsec'].Path | Should -Match '/policy/avmsec$'
     }
 
-    It 'invokes conftest with the resolved bundle paths from the module root' {
+    It 'invokes conftest against a staging directory holding only the Terraform sources' {
         $ctx = $script:context
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value '*.tfstate' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'README.md') -Value '# mock' -Encoding utf8
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value 'variable "y" {}' -Encoding utf8
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
+            $seen = $null
             Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
             Mock Resolve-AvmPinnedAsset {
                 param($Name, $Asset)
@@ -81,22 +87,37 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                     [pscustomobject]@{ Name = $Name; Sha256 = $Asset.Sha256; Ref = $Asset.Ref; Path = '/fake/cache/avmsec'; Action = 'cache-hit' }
                 }
             }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-            Invoke-AvmTerraformCheckPolicy -Context $C
+            Mock Invoke-AvmProcess {
+                $script:stagedFiles = @(Get-ChildItem -LiteralPath $WorkingDirectory -Recurse -File |
+                        ForEach-Object { [System.IO.Path]::GetRelativePath($WorkingDirectory, $_.FullName).Replace('\', '/') })
+                $script:stageRootSeen = $WorkingDirectory
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformCheckPolicy -Context $C
+            [pscustomobject]@{
+                Result = $result
+                Staged = $script:stagedFiles
+                Stage  = $script:stageRootSeen
+            }
         }
-        $result.Engine     | Should -Be 'terraform'
-        $result.Tool       | Should -Be 'conftest/0.68.2'
-        $result.ToolPath   | Should -Be '/fake/conftest'
-        $result.ToolSource | Should -Be 'cache'
-        $result.Status     | Should -Be 'skipped'
-        $result.Issues.Count | Should -Be 1
 
-        $expectedRoot = $ctx.Root
-        InModuleScope 'Avm.Authoring' -Parameters @{ R = $expectedRoot } {
-            param($R)
+        $probe.Result.Status | Should -Be 'skipped'
+
+        # The F48 defect: conftest walks every file under CWD, so a real module's
+        # .gitignore aborted it in 'parse configurations' before a policy loaded.
+        $probe.Staged | Should -Not -BeNullOrEmpty
+        $probe.Staged | Should -Contain 'main.tf'
+        $probe.Staged | Should -Contain 'examples/default/main.tf'
+        $probe.Staged | Should -Not -Contain '.gitignore'
+        $probe.Staged | Should -Not -Contain 'README.md'
+        @($probe.Staged).Count | Should -Be 2
+
+        $probe.Stage | Should -Not -Be $ctx.Root
+        Test-Path -LiteralPath $probe.Stage | Should -BeFalse
+
+        InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/conftest' -and
-                $WorkingDirectory -eq $R -and
                 $ArgumentList.Count -eq 10 -and
                 $ArgumentList[0] -eq 'test' -and
                 $ArgumentList[1] -eq '--policy' -and
@@ -477,6 +498,99 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
 
             $result.Status | Should -Be 'pass'
             @($result.Issues | Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 0
+        }
+    }
+
+    Context 'run-failure detection (F48)' {
+        It 'reports error, not skipped, when conftest exits non-zero without producing results' {
+            # conftest reuses exit 1 for 'a policy failed' and 'I aborted before
+            # evaluating anything'. Reported as the vacuity skip, a crash was
+            # indistinguishable from a clean run that matched no rule.
+            $stderr = 'Error: running test: parse configurations: parser unmarshal: convert to bytes: parse config: [:1,1-2: Argument or block definition required], path: .gitignore'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; E = $stderr } {
+                param($C, $E)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = $E } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status    | Should -Be 'error'
+            $result.Evaluated | Should -Be 0
+            $result.Issues.Count | Should -Be 1
+            $result.Issues[0].Code     | Should -Be 'avm.tf.policy-run-failed'
+            $result.Issues[0].Severity | Should -Be 'error'
+            $result.Issues[0].Message  | Should -Match 'parse configurations'
+            # Pin the cause, not the shared value: both this and the namespace
+            # skip yield Evaluated=0, so only the diagnostic separates them.
+            $result.Issues[0].Message  | Should -Not -Match 'default .main. namespace'
+        }
+
+        It 'keeps reporting fail when conftest exits non-zero with real findings' {
+            # Negative control for the guard above: exit 1 plus output is a
+            # genuine policy failure and must not be re-labelled a crash.
+            $json = '[{"filename":"main.tf","namespace":"avmsec","successes":259,"failures":[{"msg":"AVM_SEC_2_1: CMK required"}]}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = $J; StdErr = 'noise on stderr' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status | Should -Be 'fail'
+            @($result.Issues | Where-Object { $_.Code -eq 'avm.tf.policy-run-failed' }).Count | Should -Be 0
+            @($result.Issues | Where-Object { $_.Severity -eq 'error' }).Count | Should -Be 1
+        }
+
+        It 'keeps the namespace skip when conftest succeeds having evaluated nothing' {
+            # Second negative control: exit 0 with output is the honest vacuity
+            # case and must keep its own diagnostic, not become an error.
+            $json = '[{"filename":"main.tf","namespace":"main","successes":0}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status | Should -Be 'skipped'
+            $result.Issues[0].Code    | Should -Be 'avm.tf.policy-not-evaluated'
+            $result.Issues[0].Message | Should -Match 'namespaces seen: main'
+        }
+
+        It 'surfaces a bare non-zero exit with no stderr as an error rather than a silent skip' {
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+                param($C)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status | Should -Be 'error'
+            $result.Issues[0].Code    | Should -Be 'avm.tf.policy-run-failed'
+            $result.Issues[0].Message | Should -Match 'exited with code 1'
+        }
+        It 'skips without launching conftest when the module holds no Terraform sources' {
+            # conftest exits 1 with 'no files found' on an empty tree. Routed
+            # through the crash guard that would read as a run failure; nothing
+            # to check is a skip, and it is knowable before launching anything.
+            Remove-Item -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Force
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+                param($C)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Error: running test: parse files: no files found' } }
+                $r = Invoke-AvmTerraformCheckPolicy -Context $C
+                Should -Invoke Invoke-AvmProcess -Exactly 0
+                $r
+            }
+
+            $result.Status | Should -Be 'skipped'
+            $result.Issues[0].Code    | Should -Be 'avm.tf.policy-not-evaluated'
+            $result.Issues[0].Message | Should -Match 'no \.tf or \.tfvars files'
         }
     }
 }
