@@ -24,10 +24,8 @@ BeforeAll {
 
     # Pre-stages the minimum on-disk shape (files + dirs + .gitignore) that
     # satisfies every error-severity built-in rule shipped under
-    # src/Avm.Authoring/Resources/Rules/. After calling this, the only
-    # built-in rule that should still fire is the warning-severity smoke
-    # rule (avm.smoke.avm-config-exists), because no .avm/config.json is
-    # written. Tests can then layer their own per-repo rules on top.
+    # src/Avm.Authoring/Resources/Rules/. After calling this, no built-in
+    # rule should fire. Tests can then layer their own per-repo rules on top.
     function script:NewBaselineRoot {
         $root = script:NewRoot
         $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -67,21 +65,32 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $result.ToolSource | Should -Be 'builtin'
     }
 
-    It 'returns status=pass when every error-severity built-in rule is satisfied (only the smoke warning fires)' {
-        # Baseline root pre-stages files for the Slice D error rules
-        # (terraform.tf, _header.md, examples/, tests/, .gitignore) so the
-        # only built-in rule that still fires is the smoke rule. No
-        # .avm/config.json is written, so the smoke rule emits a warning,
-        # which must not flip Status to fail.
+    It 'returns status=pass when only warning-severity issues fire' {
+        # Baseline root satisfies every error-severity built-in rule
+        # (terraform.tf, _header.md, examples/, tests/, .gitignore), so no
+        # built-in rule fires. A per-repo warning-severity rule for a missing
+        # file is layered on to prove a firing warning does not flip Status.
         $root = script:NewBaselineRoot
+        $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
+        New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+        script:WriteRuleFile (Join-Path $repoDir 'warn.psd1') @'
+@{
+    Id          = 'avm.warn.optional-file'
+    Kind        = 'FileMustExist'
+    Description = 'optional file is recommended'
+    Severity    = 'warning'
+    AppliesTo   = 'root'
+    Parameters  = @{ Path = 'OPTIONAL.md' }
+}
+'@
         $ctx = script:NewTerraformContext $root
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C) Invoke-AvmTerraformCheckConvention -Context $C
         }
         $result.Status | Should -Be 'pass'
-        $smokeIssues = @($result.Issues | Where-Object Code -eq 'avm.smoke.avm-config-exists')
-        $smokeIssues.Count | Should -BeGreaterOrEqual 1
-        $smokeIssues[0].Severity | Should -Be 'warning'
+        $warnIssues = @($result.Issues | Where-Object Code -eq 'avm.warn.optional-file')
+        $warnIssues.Count | Should -BeGreaterOrEqual 1
+        $warnIssues[0].Severity | Should -Be 'warning'
     }
 
     It 'returns status=fail when at least one issue is severity=error' {
@@ -180,6 +189,117 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $files | Should -Contain 'examples/default/terraform.tf'
         $files | Should -Contain 'modules/sub/terraform.tf'
         $issuesForRule.Count | Should -Be 3
+    }
+
+    It 'expands an AppliesTo array into exactly the named scopes' {
+        $root = script:NewRoot
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'modules/sub')      -Force | Out-Null
+
+        $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
+        New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+        script:WriteRuleFile (Join-Path $repoDir 'root-and-modules.psd1') @'
+@{
+    Id          = 'avm.scoped.terraform-tf'
+    Kind        = 'FileMustExist'
+    Description = 'terraform.tf at root and in nested modules'
+    AppliesTo   = @('root', 'modules')
+    Parameters  = @{ Path = 'terraform.tf' }
+}
+'@
+        $ctx = script:NewTerraformContext $root
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C) Invoke-AvmTerraformCheckConvention -Context $C
+        }
+        $files = @($result.Issues | Where-Object Code -eq 'avm.scoped.terraform-tf').File | Sort-Object
+        $files | Should -Be @('modules/sub/terraform.tf', 'terraform.tf')
+        $files | Should -Not -Contain 'examples/default/terraform.tf'
+    }
+
+    It 'evaluates an AppliesTo array in canonical root/examples/modules order' {
+        $root = script:NewRoot
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'modules/sub')      -Force | Out-Null
+
+        $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
+        New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+        # Authored out of order and with a duplicate; expansion must normalise.
+        script:WriteRuleFile (Join-Path $repoDir 'unordered.psd1') @'
+@{
+    Id          = 'avm.scoped.ordered'
+    Kind        = 'FileMustExist'
+    Description = 'scopes are normalised regardless of authored order'
+    AppliesTo   = @('modules', 'root', 'modules')
+    Parameters  = @{ Path = 'terraform.tf' }
+}
+'@
+        $ctx = script:NewTerraformContext $root
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C) Invoke-AvmTerraformCheckConvention -Context $C
+        }
+        $files = @(@($result.Issues | Where-Object Code -eq 'avm.scoped.ordered').File)
+        $files | Should -Be @('terraform.tf', 'modules/sub/terraform.tf')
+    }
+
+    Context 'F08 - the built-in terraform.tf rule ignores examples' {
+        It 'does not fire for examples that have no terraform.tf' {
+            $root = script:NewBaselineRoot
+            New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null
+            New-Item -ItemType Directory -Path (Join-Path $root 'examples/second')  -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root 'examples/default/_header.md'), '# h', [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText((Join-Path $root 'examples/second/_header.md'), '# h', [System.Text.UTF8Encoding]::new($false))
+
+            $ctx = script:NewTerraformContext $root
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-tf-must-exist') | Should -BeNullOrEmpty
+            $result.Status | Should -Be 'pass'
+        }
+
+        It 'still fires for a nested module that has no terraform.tf' {
+            $root = script:NewBaselineRoot
+            New-Item -ItemType Directory -Path (Join-Path $root 'modules/sub') -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root 'modules/sub/_header.md'), '# h', [System.Text.UTF8Encoding]::new($false))
+
+            $ctx = script:NewTerraformContext $root
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            $issues = @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-tf-must-exist')
+            $issues.Count | Should -Be 1
+            $issues[0].File | Should -Be 'modules/sub/terraform.tf'
+            $result.Status | Should -Be 'fail'
+        }
+
+        It 'still fires when the repository root has no terraform.tf' {
+            $root = script:NewBaselineRoot
+            Remove-Item -LiteralPath (Join-Path $root 'terraform.tf') -Force
+
+            $ctx = script:NewTerraformContext $root
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            $issues = @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-tf-must-exist')
+            $issues.Count | Should -Be 1
+            $issues[0].File | Should -Be 'terraform.tf'
+        }
+
+        It 'passes on a mixed repository where only examples lack terraform.tf' {
+            $root = script:NewBaselineRoot
+            foreach ($rel in @('examples/default', 'examples/second', 'modules/sub')) {
+                New-Item -ItemType Directory -Path (Join-Path $root $rel) -Force | Out-Null
+                [System.IO.File]::WriteAllText((Join-Path $root "$rel/_header.md"), '# h', [System.Text.UTF8Encoding]::new($false))
+            }
+            [System.IO.File]::WriteAllText((Join-Path $root 'modules/sub/terraform.tf'), '# stub', [System.Text.UTF8Encoding]::new($false))
+
+            $ctx = script:NewTerraformContext $root
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-tf-must-exist') | Should -BeNullOrEmpty
+            $result.Status | Should -Be 'pass'
+        }
     }
 
     It 'emits no Issues when an AppliesTo=examples rule has no example subdirectories' {

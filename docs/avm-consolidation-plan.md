@@ -34,7 +34,7 @@ A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bi
 | -------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Local-CI parity is non-negotiable      | Every check is an Invoke-Build task; CI calls `./build.ps1 <task>`, contributors call the same.    |
 | Opt-in adoption                        | Existing repos keep working. Adoption is per-repo, per-phase, controlled by a config file.        |
-| Determinism                            | Tool versions pinned by version + SHA256 in a single `tools.lock.psd1` manifest; downloads verified before use; no runtime fetch of `main` branches. |
+| Determinism                            | Tool versions pinned by version + SHA256 in a single `avm.pins.jsonc` manifest; downloads verified before use; no runtime fetch of `main` branches. |
 | Native, install-on-demand dependencies | The CLI never assumes Terraform, TFLint, `avmfix`, `mapotf`, `grept`, Conftest, or `terraform-docs` are pre-installed. It checks `PATH`, falls back to a per-user tool cache, and installs missing/outdated tools from the lock manifest. Works the same locally and in CI; no container needed. |
 | Observability                          | Every task emits structured logs and a machine-readable summary suitable for GitHub annotations.    |
 | Parallel coexistence                   | Existing `./avm`, `./avm.ps1`, `Makefile`, and `utilities/tools/*.ps1` entry points remain untouched in their current repos. Contributors install the new module alongside and test it directly. Phase 6 deletes the old entry points once adoption is broad. No shim layer exists at any point. |
@@ -145,7 +145,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm governance issue sync`   | `Set-AvmGitHubIssueForWorkflow` + owner config                           | Equivalent porting in Phase 5                                              |
 | `avm governance pr label`     | `Set-AvmGitHubPrLabels`                                                  | Equivalent porting in Phase 5                                              |
 | `avm governance workflow toggle` | `Switch-WorkflowState`                                                | Equivalent porting in Phase 5                                              |
-| `avm tool list`               | List every tool in `tools.lock.psd1` with resolved path and version      | Same                                                                       |
+| `avm tool list`               | List every tool in `avm.pins.jsonc` with resolved path and version      | Same                                                                       |
 | `avm tool install [<name>\|--all]` | Bootstrap a missing/outdated tool from the lock manifest into the user cache | Same                                                                |
 | `avm tool which <name>`       | Print the resolved path the CLI would use for the given tool             | Same                                                                       |
 | `avm doctor`                  | Diagnose: PS version, Bicep version, Az modules, OIDC config, tool-cache status | Diagnose: Terraform/TFLint/`terraform-docs`/Conftest/`avmfix`/`mapotf`/`grept` versions vs lock, OIDC; `--install` bootstraps anything missing |
@@ -206,7 +206,7 @@ The resolver returns a `ModuleContext` object (kind, root path, ecosystem, scope
 
 The CLI is responsible for every non-PowerShell binary it needs. It never assumes a containerised environment and never relies on a contributor having already installed Terraform, TFLint, `terraform-docs`, Conftest, `avmfix`, `mapotf`, or `grept`.
 
-### `tools.lock.psd1` manifest
+### `avm.pins.jsonc` manifest
 
 A single manifest in the repo root pins each tool by version and per-OS SHA256:
 
@@ -261,13 +261,13 @@ The cache is per-user, never the repo, so multiple checkouts and CI jobs share t
 
 ### CI integration
 
-The CI workflow runs `avm tool install --all` and caches the tool directory keyed on the SHA of `tools.lock.psd1`:
+The CI workflow runs `avm tool install --all` and caches the tool directory keyed on the SHA of `avm.pins.jsonc`:
 
 ```yaml
 - uses: actions/cache@v4
   with:
     path: ~/.cache/avm/tools
-    key: avm-tools-${{ runner.os }}-${{ hashFiles('tools.lock.psd1') }}
+    key: avm-tools-${{ runner.os }}-${{ hashFiles('avm.pins.jsonc') }}
 - run: ./build.ps1 install-tools
 - run: ./build.ps1 pr-check
 ```
@@ -320,7 +320,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 - `./build.ps1` entry point that forwards to Invoke-Build.
 - CI workflow `.github/workflows/ci.yml` that runs the same tasks on Windows, Linux, and macOS runners.
 - Distribution scaffolding: PSGallery publish job, GitHub Release zip job.
-- Tool bootstrap subsystem (per §6): `tools.lock.psd1` manifest schema, per-user cache resolver, SHA256-verified downloader, and the `avm tool list|install|which` verbs.
+- Tool bootstrap subsystem (per §6): `avm.pins.jsonc` manifest schema, per-user cache resolver, SHA256-verified downloader, and the `avm tool list|install|which` verbs.
 - `avm doctor`, `avm version`, `avm tool *` (the only verbs that work in Phase 0).
 
 **Exit criteria**: `./build.ps1 ci` runs the same tasks locally and in CI on all three OSes, with zero pre-installed tooling beyond PowerShell 7.
@@ -352,7 +352,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `docs` → `terraform-docs`.
   - `test unit` / `test integration` → `terraform test`.
   - `test e2e` → existing per-example apply via porch (delegated, not replaced).
-- All Terraform-side native dependencies (`terraform`, `tflint`, `terraform-docs`, `conftest`, `avmfix`, `mapotf`, `grept`) added to `tools.lock.psd1` with verified SHA256s for Windows / Linux / macOS on amd64 and arm64.
+- All Terraform-side native dependencies (`terraform`, `tflint`, `terraform-docs`, `conftest`, `avmfix`, `mapotf`, `grept`) added to `avm.pins.jsonc` with verified SHA256s for Windows / Linux / macOS on amd64 and arm64.
 - Primary UX is the module's exported `avm` function and approved-verb cmdlets per §4 — a developer runs `Install-Module Avm` once, then `cd` into any module and runs `avm pre-commit`. **No new repo ships a `./avm` file**, and this repo does not produce one. Existing `./avm` Bash and `./avm.ps1` scripts in upstream Terraform module repos are left untouched and keep working exactly as today; contributors trial the module side-by-side and we delete the old scripts in Phase 6.
 - No container is built, pulled, or required. First-time invocations call `avm tool install --all` automatically when `--auto-install` or CI is detected.
 - A pinned-asset feature: the CLI downloads governance assets (`mapotf-configs/`, `grept-policies/`, `tflint-configs/`, Conftest bundles) at a configurable ref (default `main` for backwards compatibility, overridable via `avm.config.json`).
@@ -380,7 +380,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 
 **Deliverables**
 
-- **`grept` is replaced, not ported.** Convention checks become first-party PowerShell rule modules under `src/Avm.Authoring/Engines/Terraform/` plus a rule loader in `Private/Rules/`. Each of the 7 upstream `.grept.hcl` policies (`outputs_tf`, `variables_tf`, `ensure_file_existence`, `ensure_dir_existence`, `git_ignore`, `deprecated_files`, `managed_files`) was audited individually and dispositioned in [`quality-standards.md` § Appendix A](quality-standards.md#appendix-a-decision-grept-policy-disposition). Outcome: 5 policies become PowerShell rules built on 4 primitives (`FileMustNotExist`, `FileMustExist`, `DirectoryMustExist`, `GitignoreMustContain`); 2 policies (`deprecated_files`, `managed_files`) are dropped entirely — see appendix for rationale. No `grept` binary in `tools.lock.psd1`, no `grept-policies` pinned asset.
+- **`grept` is replaced, not ported.** Convention checks become first-party PowerShell rule modules under `src/Avm.Authoring/Engines/Terraform/` plus a rule loader in `Private/Rules/`. Each of the 7 upstream `.grept.hcl` policies (`outputs_tf`, `variables_tf`, `ensure_file_existence`, `ensure_dir_existence`, `git_ignore`, `deprecated_files`, `managed_files`) was audited individually and dispositioned in [`quality-standards.md` § Appendix A](quality-standards.md#appendix-a-decision-grept-policy-disposition). Outcome: 5 policies become PowerShell rules built on 4 primitives (`FileMustNotExist`, `FileMustExist`, `DirectoryMustExist`, `GitignoreMustContain`); 2 policies (`deprecated_files`, `managed_files`) are dropped entirely — see appendix for rationale. No `grept` binary in `avm.pins.jsonc`, no `grept-policies` pinned asset.
 - **`mapotf` was audited before implementation** (done — see [`quality-standards.md` § Appendix B](quality-standards.md#appendix-b-decision-mapotf-replacement-strategy)). All 3 upstream `.mptf.hcl` configs (`avm_headers_for_azapi`, `main_telemetry_tf`, `required_provider_versions`) are important to the AVM telemetry contract. Recommended path is **keep mapotf via build-and-host** — configs ship as a pinned-asset bundle, `Invoke-AvmTerraformTransform` wraps `mapotf transform` + `mapotf clean-backup`. Two follow-ups (mapotf release shipping + hosting strategy) overlap with the still-open A/B/C decision from the 2026-05-27 conftest-lock audit.
 - **`avmfix` was audited before implementation** (done — see [`quality-standards.md` § Appendix C](quality-standards.md#appendix-c-decision-avmfix-replacement-strategy)). avmfix has 10 distinct behaviours split across schema-aware (resource/data/ephemeral block ordering, module block ordering with required-vs-optional vars, `azapi` schema post-processor) and schema-free (variable/output/locals/`moved`/`removed`/`terraform` block ordering, attribute hygiene). `terraform fmt` covers none of them. The schema-aware behaviours depend on real provider plugin schemas downloaded from `registry.opentofu.org` and consumed via gRPC, so no general CLI tool (`hcledit`, `topiary`) can substitute for them. Recommended path is **keep avmfix via build-and-host** — same shape as `mapotf`. The 4 mapotf follow-ups (release shipping + hosting strategy + lock-entry shape + bundling) extend to cover avmfix too; resolving them once unblocks both Slice G and Slice H.
 - A rule registry inside the CLI so authors can drop a `*.avmrule.psd1` into a folder (per-repo `.avm/rules/*.psd1` or a pinned-asset bundle) and have it loaded automatically, with built-in rules shipped in `src/Avm.Authoring/Resources/Rules/`.
@@ -426,7 +426,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 | Concern             | Approach                                                                                                                  |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Single entry point  | Both contributors and CI invoke `./build.ps1 <task>` (or `avm <verb>` after Phase 1).                                     |
-| Identical tool versions | Pinned in `tools.lock.psd1`; the same manifest drives local installs and CI installs (see §6). CI fails if a resolved tool version doesn't match the lock. |
+| Identical tool versions | Pinned in `avm.pins.jsonc`; the same manifest drives local installs and CI installs (see §6). CI fails if a resolved tool version doesn't match the lock. |
 | Identical environment | CLI exposes `avm env --print` to dump every relevant env var; CI uses the same dump.                                    |
 | Idempotency         | Tasks are designed to be safe to re-run; no implicit state between runs.                                                  |
 | Output parity       | Same JSON / annotation output locally and in CI; CI just renders the annotations differently.                              |
@@ -473,7 +473,7 @@ Cross-cutting engineering standards (encoding, cross-OS rules, subprocess invoca
 
 | Risk                                                                   | Likelihood | Impact | Mitigation                                                                                                          |
 | ---------------------------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------- |
-| Supply chain — `avmfix` and `porch` live on personal GitHub accounts   | Medium     | High   | During Phase 2, fork both into `Azure/*`; pin versions by SHA in `tools.lock.psd1`; offer to replace `porch` in Phase 3 |
+| Supply chain — `avmfix` and `porch` live on personal GitHub accounts   | Medium     | High   | During Phase 2, fork both into `Azure/*`; pin versions by SHA in `avm.pins.jsonc`; offer to replace `porch` in Phase 3 |
 | Governance asset drift — module repos pull configs from `main` at runtime | High    | High   | Phase 2 introduces ref-pinning; Phase 6 migrates everyone to the pinned defaults                                    |
 | PSRule rewrites — no first-class .NET SDK                              | Medium     | Medium | Keep PSRule.Rules.Azure in-process via PowerShell SDK in Phase 3+; never rewrite                                    |
 | Two-ecosystem cognitive load                                            | Medium     | Medium | Strict verb model + ecosystem-agnostic context resolver enforce uniform UX                                          |
@@ -483,7 +483,7 @@ Cross-cutting engineering standards (encoding, cross-OS rules, subprocess invoca
 | Adoption stalls (modules opt out)                                      | Medium     | High   | Parallel coexistence keeps every legacy entry point working unchanged until Phase 6, so trying the module is risk-free. Run the module side-by-side with `./avm` in upstream CI during the transition for confidence; only delete the legacy scripts in Phase 6 once a measurable share of modules has moved over. |
 | Rewriting `mapotf` complex rules                                       | Medium     | Medium | Phase 4 audits each `mapotf` config before deciding implementation path (native PS, general CLI like `hcledit`, or kept upstream via build-and-host); complex transforms stay on the Go binary indefinitely if the audit picks that path |
 | Windows / macOS / Linux behaviour drift                                | Low        | Medium | CI matrix from Phase 0 runs every task on all three OSes; same bootstrapped binaries everywhere                     |
-| Loss of the curated `azterraform` image as a known-good environment    | Medium     | Medium | `avm doctor` reproduces the same guarantees by version-checking every managed binary against `tools.lock.psd1`; an opt-in `Dockerfile.dev` is provided as a convenience for users who still want a one-shot environment |
+| Loss of the curated `azterraform` image as a known-good environment    | Medium     | Medium | `avm doctor` reproduces the same guarantees by version-checking every managed binary against `avm.pins.jsonc`; an opt-in `Dockerfile.dev` is provided as a convenience for users who still want a one-shot environment |
 
 ---
 

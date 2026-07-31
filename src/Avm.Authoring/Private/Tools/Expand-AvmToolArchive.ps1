@@ -4,7 +4,7 @@ function Expand-AvmToolArchive {
         Unpack a downloaded tool archive into a target directory.
 
     .DESCRIPTION
-        Handles the three archive kinds supported by tools.lock.psd1:
+        Handles the three archive kinds supported by avm.pins.jsonc:
             - 'zip'     -> Expand-Archive
             - 'tar.gz'  -> tar -xzf (requires GNU/BSD tar on PATH)
             - 'raw'     -> Copy-Item (single-binary archives)

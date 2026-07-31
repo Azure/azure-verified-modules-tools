@@ -12,7 +12,7 @@ function Format-AvmBicepModule {
         actually modified by hashing content before and after.
 
         The bicep binary is resolved via Resolve-AvmTool against the bundled
-        tools.lock. -AllowPathFallback is passed through so callers can opt
+        avm.pins. -AllowPathFallback is passed through so callers can opt
         in to the host PATH when the managed cache is empty.
 
     .PARAMETER Context
@@ -24,8 +24,8 @@ function Format-AvmBicepModule {
         lock-pinned version matches.
 
     .OUTPUTS
-        pscustomobject with Engine, Tool, ToolPath, ToolSource,
-        FilesProcessed, Changed (string[]).
+        pscustomobject with Status ('pass'), Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed (string[]).
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -60,6 +60,7 @@ function Format-AvmBicepModule {
     }
 
     return [pscustomobject][ordered]@{
+        Status         = 'pass'
         Engine         = 'bicep'
         Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
         ToolPath       = $tool.Path

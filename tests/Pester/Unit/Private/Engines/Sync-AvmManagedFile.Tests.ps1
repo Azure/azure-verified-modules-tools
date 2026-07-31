@@ -247,6 +247,107 @@ Describe 'Sync-AvmManagedFile' {
         $result.Added          | Should -BeNullOrEmpty
         $result.Issues         | Should -BeNullOrEmpty
     }
+
+    It 'creates a line-managed file when it is missing and classifies it as Added' {
+        $spec = '{ ".gitignore": { "required": ["*.tfstate", ".terraform/"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match '\*\.tfstate'
+        $onDisk | Should -Match '\.terraform/'
+        # The spec sentinel is tooling metadata and must never be synced.
+        Test-Path (Join-Path $script:moduleDir '.avm-managed-lines.json') | Should -BeFalse
+    }
+
+    It 'merges required lines into an existing file, preserving the user additions' {
+        $spec = '{ ".gitignore": { "required": ["*.tfstate"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        # The consumer already has a hand-authored entry that must survive.
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "my-custom-secret.txt`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status  | Should -Be 'pass'
+        $result.Updated | Should -Contain '.gitignore'
+        $result.Added   | Should -Not -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'my-custom-secret\.txt'
+        $onDisk | Should -Match '\*\.tfstate'
+    }
+
+    It 'removes a deprecated line while preserving the rest' {
+        $spec = '{ ".gitignore": { "required": [], "removed": ["obsolete-entry"] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "keep-me`nobsolete-entry`nkeep-me-too`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status  | Should -Be 'pass'
+        $result.Updated | Should -Contain '.gitignore'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'keep-me'
+        $onDisk | Should -Match 'keep-me-too'
+        $onDisk | Should -Not -Match 'obsolete-entry'
+    }
+
+    It 'reports drift for a line-managed file under -CheckDrift and writes nothing' {
+        $spec = '{ ".gitignore": { "required": [".terraform/"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "existing`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -CheckDrift
+        }
+
+        $result.Status       | Should -Be 'fail'
+        $result.Issues.Count | Should -BeGreaterThan 0
+
+        # Nothing was written: the missing required line is still absent.
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Not -Match '\.terraform/'
+    }
+
+    It 'lets a line spec take over a path that also exists as a whole-file managed file' {
+        # Root ships .gitignore as a whole file, but the line spec claims the same
+        # path: the line merge must win so the consumer keeps its own additions.
+        Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "whole-file-version`n" -NoNewline
+        $spec = '{ ".gitignore": { "required": ["line-managed-entry"], "removed": [] } }'
+        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "user-line`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status | Should -Be 'pass'
+
+        $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
+        $onDisk | Should -Match 'user-line'
+        $onDisk | Should -Match 'line-managed-entry'
+        $onDisk | Should -Not -Match 'whole-file-version'
+    }
 }
 
 Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
@@ -340,5 +441,305 @@ Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
 
         script:Resolve-Overlays -Config $config -RepoId 'avm-ptn-example-repo' |
             Should -Be @('canary', 'canary-tooling')
+    }
+}
+
+Describe 'Managed-file repository id resolution (helpers)' {
+    It 'normalises repository names by stripping the terraform provider prefix (F11)' {
+        InModuleScope 'Avm.Authoring' {
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azurerm-avm-res-foo' | Should -Be 'avm-res-foo'
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azapi-avm-res-bar'   | Should -Be 'avm-res-bar'
+            ConvertTo-AvmManagedFilesRepoId 'avm-ptn-example-repo'          | Should -Be 'avm-ptn-example-repo'
+            ConvertTo-AvmManagedFilesRepoId '  terraform-azurerm-avm-x  '   | Should -Be 'avm-x'
+            ConvertTo-AvmManagedFilesRepoId ''                              | Should -Be ''
+            ConvertTo-AvmManagedFilesRepoId $null                           | Should -Be ''
+        }
+    }
+
+    It 'extracts the repository leaf from every remote URL shape (F11)' {
+        InModuleScope 'Avm.Authoring' {
+            Get-AvmRepoLeafFromUrl 'https://github.com/Azure/terraform-azurerm-avm-res-foo'       | Should -Be 'terraform-azurerm-avm-res-foo'
+            Get-AvmRepoLeafFromUrl 'https://github.com/Azure/terraform-azurerm-avm-res-foo.git'   | Should -Be 'terraform-azurerm-avm-res-foo'
+            Get-AvmRepoLeafFromUrl 'git@github.com:Azure/terraform-azurerm-avm-res-foo.git'       | Should -Be 'terraform-azurerm-avm-res-foo'
+            Get-AvmRepoLeafFromUrl 'ssh://git@github.com/Azure/terraform-azurerm-avm-res-foo.git' | Should -Be 'terraform-azurerm-avm-res-foo'
+            Get-AvmRepoLeafFromUrl 'https://github.com/Azure/terraform-azurerm-avm-res-foo/'      | Should -Be 'terraform-azurerm-avm-res-foo'
+            Get-AvmRepoLeafFromUrl ''                                                             | Should -Be ''
+        }
+    }
+
+    It 'collects and de-duplicates repository ids across governance groups (F11)' {
+        InModuleScope 'Avm.Authoring' {
+            $cfg = '{ "repositoryGroups": [
+                { "name": "a", "repositories": ["repo-x", "repo-y"] },
+                { "name": "b", "repositories": ["repo-y", "repo-z"] },
+                { "name": "c" }
+            ] }' | ConvertFrom-Json
+            $ids = Get-AvmManagedFilesKnownRepoId -RepositoryConfig $cfg
+            $ids | Should -Contain 'repo-x'
+            $ids | Should -Contain 'repo-z'
+            @($ids | Where-Object { $_ -eq 'repo-y' }).Count | Should -Be 1
+        }
+    }
+
+    It 'returns an empty set for a null or group-less config (F11)' {
+        InModuleScope 'Avm.Authoring' {
+            @(Get-AvmManagedFilesKnownRepoId -RepositoryConfig $null).Count | Should -Be 0
+            @(Get-AvmManagedFilesKnownRepoId -RepositoryConfig ([pscustomobject]@{ other = 1 })).Count | Should -Be 0
+        }
+    }
+
+    It 'returns an explicit id verbatim and never inspects the origin (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-bar'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { 'avm-res-should-not-win' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -ExplicitRepoId '  avm-res-foo  ' -KnownRepoIds @('avm-res-other') |
+                Should -Be 'avm-res-foo'
+            Should -Invoke Get-AvmManagedFilesOriginRepoId -Times 0 -Exactly
+        }
+    }
+
+    It 'accepts a validated git-origin candidate over the folder leaf (F11)' {
+        $root = Join-Path $TestDrive 'renamed-worktree'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { 'avm-ptn-example-repo' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') |
+                Should -Be 'avm-ptn-example-repo'
+        }
+    }
+
+    It 'falls back to a validated folder leaf when there is no origin (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-foo'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { '' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-res-foo') |
+                Should -Be 'avm-res-foo'
+        }
+    }
+
+    It 'returns an inferred origin candidate unvalidated when no governance config is supplied (F11)' {
+        $root = Join-Path $TestDrive 'some-worktree'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { 'avm-res-fromorigin' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @() | Should -Be 'avm-res-fromorigin'
+        }
+    }
+
+    It 'returns the folder leaf unvalidated when no governance config and no origin (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-anything'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { '' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @() | Should -Be 'avm-res-anything'
+        }
+    }
+
+    It 'prompts interactively and accepts a valid answer when inference fails (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { '' }
+            Mock Read-Host { 'avm-ptn-example-repo' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true |
+                Should -Be 'avm-ptn-example-repo'
+            Should -Invoke Read-Host -Times 1 -Exactly
+        }
+    }
+
+    It 'normalises an interactive answer before validating it (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Get-AvmManagedFilesOriginRepoId { '' }
+            Mock Read-Host { 'terraform-azurerm-avm-ptn-example-repo' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true |
+                Should -Be 'avm-ptn-example-repo'
+        }
+    }
+
+    It 'throws a configuration error on a non-interactive host when inference fails (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+        $err = {
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+                param($Root)
+                Mock Get-AvmManagedFilesOriginRepoId { '' }
+                Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $false
+            }
+        } | Should -Throw -PassThru
+        $err.Exception.Code | Should -Be 'AVM1001'
+        $err.Exception.Message | Should -Match 'Could not resolve a managed-files repository id'
+    }
+
+    It 'throws when an interactive answer still does not match a known id (F11)' {
+        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+        $err = {
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+                param($Root)
+                Mock Get-AvmManagedFilesOriginRepoId { '' }
+                Mock Read-Host { 'still-wrong' }
+                Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true
+            }
+        } | Should -Throw -PassThru
+        $err.Exception.Code | Should -Be 'AVM1001'
+    }
+}
+
+Describe 'Sync-AvmManagedFile repository identity (git origin)' {
+    BeforeAll {
+        $script:git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+
+        function script:New-AvmTargetRepo {
+            param(
+                [Parameter(Mandatory)][string] $Dir,
+                [string] $OriginUrl
+            )
+            New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+            & $script:git -C $Dir init -q | Out-Null
+            if ($OriginUrl) { & $script:git -C $Dir remote add origin $OriginUrl | Out-Null }
+            return $Dir
+        }
+    }
+
+    BeforeEach {
+        $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)
+
+        # Managed source: root + two stacked overlays (canary order 10, tooling order 20).
+        $script:base = Join-Path $TestDrive ("gov-" + $unique)
+        $script:root = Join-Path $script:base 'root'
+        $canary = Join-Path $script:base 'canary'
+        $tooling = Join-Path $script:base 'canary-tooling'
+        New-Item -ItemType Directory -Path $script:root, $canary, $tooling -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "root-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'common.tf') -Value "# common`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $canary '.gitignore') -Value "canary-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $tooling '.gitignore') -Value "tooling-version`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $tooling 'pr-check.yml') -Value "tooling-check`n" -NoNewline
+
+        # Governance config: avm-ptn-example-repo is in both groups.
+        $script:cfg = Join-Path $TestDrive ("cfg-" + $unique)
+        New-Item -ItemType Directory -Path $script:cfg -Force | Out-Null
+        $config = @{ repositoryGroups = @(
+                @{ name = 'canary'; managedFilesAdditional = 'canary'; managedFilesOrder = 10; repositories = @('avm-ptn-example-repo') }
+                @{ name = 'canary-tooling'; managedFilesAdditional = 'canary-tooling'; managedFilesOrder = 20; repositories = @('avm-ptn-example-repo') }
+            ) } | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath (Join-Path $script:cfg 'config.json') -Value $config -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:cfg 'deprecated-files.json') -Value '[]' -NoNewline
+    }
+
+    It 'infers the repo id from the git origin when the worktree leaf does not match, and stacks overlays (F11/F01/F12)' {
+        $target = script:New-AvmTargetRepo `
+            -Dir (Join-Path $TestDrive ("jaredfholgate-jubilant-potato-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -OriginUrl 'https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo.git'
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        # Origin resolved to avm-ptn-example-repo, so BOTH overlays land (not a root-only revert).
+        (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
+        (Get-Content -Raw -LiteralPath (Join-Path $target 'pr-check.yml')).Trim() | Should -Be 'tooling-check'
+        Test-Path (Join-Path $target 'common.tf') | Should -BeTrue
+    }
+
+    It 'resolves an SCP-style SSH origin (F11)' {
+        $target = script:New-AvmTargetRepo `
+            -Dir (Join-Path $TestDrive ("ssh-clone-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -OriginUrl 'git@github.com:Azure/terraform-azurerm-avm-ptn-example-repo.git'
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
+    }
+
+    It 'lets an explicit -RepoId short-circuit git-origin inference (F11)' {
+        # Origin would normalise to avm-res-bar (absent from config); the explicit id must still win.
+        $target = script:New-AvmTargetRepo `
+            -Dir (Join-Path $TestDrive ("misleading-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -OriginUrl 'https://github.com/Azure/terraform-azurerm-avm-res-bar.git'
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-ptn-example-repo'
+        }
+
+        $result.Status | Should -Be 'pass'
+        (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
+    }
+
+    It 'fails loudly rather than syncing zero overlays when the id cannot be resolved (F11/F01)' {
+        $target = script:New-AvmTargetRepo `
+            -Dir (Join-Path $TestDrive ("orphan-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -OriginUrl ''
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+
+        $err = {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+                param($C, $B, $Cfg)
+                Mock Test-AvmManagedFilesInteractive { $false }
+                Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+            }
+        } | Should -Throw -PassThru
+
+        $err.Exception.Code | Should -Be 'AVM1001'
+        # No silent zero-overlay sync: the root files were never written.
+        Test-Path (Join-Path $target '.gitignore') | Should -BeFalse
+    }
+}
+
+Describe 'Sync-AvmManagedFile git index safety (F13)' {
+    BeforeAll {
+        $script:git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    }
+
+    It 'never stages synced files, including executable-mode ones, and leaves the index untouched (F13)' {
+        $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)
+
+        # Managed source is a git repo whose root/avm is staged with mode 100755.
+        $srcBase = Join-Path $TestDrive ("idx-src-" + $unique)
+        $srcRoot = Join-Path $srcBase 'root'
+        New-Item -ItemType Directory -Path $srcRoot -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $srcRoot 'avm') -Value "#!/usr/bin/env pwsh`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $srcRoot '.gitignore') -Value "*.tfstate`n" -NoNewline
+        & $script:git -C $srcBase init -q | Out-Null
+        & $script:git -C $srcBase add -A | Out-Null
+        & $script:git -C $srcBase update-index --chmod=+x root/avm | Out-Null
+        ((& $script:git -C $srcBase ls-files --stage -- root/avm) -join '') | Should -Match '^100755 '
+
+        # Target working tree is a git repo with a pre-staged UNRELATED file that must stay staged.
+        $target = Join-Path $TestDrive ("idx-tgt-" + $unique)
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        & $script:git -C $target init -q | Out-Null
+        Set-Content -LiteralPath (Join-Path $target 'unrelated.txt') -Value "keep me staged`n" -NoNewline
+        & $script:git -C $target add unrelated.txt | Out-Null
+        $before = (& $script:git -C $target ls-files --stage) -join "`n"
+
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $srcBase } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -RepoId 'avm-res-foo'
+        }
+
+        $result.Status | Should -Be 'pass'
+        # The executable file landed on disk...
+        Test-Path (Join-Path $target 'avm') | Should -BeTrue
+        # ...but the git index is byte-for-byte unchanged: sync never staged anything.
+        $after = (& $script:git -C $target ls-files --stage) -join "`n"
+        $after | Should -Be $before
+        # Synced files are untracked, never staged.
+        $porcelain = @(& $script:git -C $target status --porcelain)
+        @($porcelain | Where-Object { $_ -match '^\?\?\s+avm$' }) | Should -Not -BeNullOrEmpty
+        @($porcelain | Where-Object { $_ -match '^\?\?\s+\.gitignore$' }) | Should -Not -BeNullOrEmpty
     }
 }

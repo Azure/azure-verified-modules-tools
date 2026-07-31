@@ -33,19 +33,19 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Test-AvmToolsLock' {
+Describe 'Test-AvmPins' {
     Context 'valid lock' {
         It 'accepts an empty tools list' {
             InModuleScope 'Avm.Authoring' {
-                Test-AvmToolsLock -Lock @{ schemaVersion = 1; tools = @() } | Should -BeTrue
+                Test-AvmPins -Pins @{ schemaVersion = 1; tools = @() } | Should -BeTrue
             }
         }
 
         It 'accepts a fully populated entry' {
-            $lock = script:NewValidLock
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                Test-AvmToolsLock -Lock $L | Should -BeTrue
+                Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
     }
@@ -53,128 +53,128 @@ Describe 'Test-AvmToolsLock' {
     Context 'schema enforcement' {
         It 'rejects a missing schemaVersion' {
             InModuleScope 'Avm.Authoring' {
-                { Test-AvmToolsLock -Lock @{ tools = @() } } |
+                { Test-AvmPins -Pins @{ tools = @() } } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects schemaVersion != 1' {
             InModuleScope 'Avm.Authoring' {
-                { Test-AvmToolsLock -Lock @{ schemaVersion = 2; tools = @() } } |
+                { Test-AvmPins -Pins @{ schemaVersion = 2; tools = @() } } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a missing tools array' {
             InModuleScope 'Avm.Authoring' {
-                { Test-AvmToolsLock -Lock @{ schemaVersion = 1 } } |
+                { Test-AvmPins -Pins @{ schemaVersion = 1 } } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a non-hashtable tool entry' {
             InModuleScope 'Avm.Authoring' {
-                $lock = @{ schemaVersion = 1; tools = @('not-a-hashtable') }
-                { Test-AvmToolsLock -Lock $lock } |
+                $pins = @{ schemaVersion = 1; tools = @('not-a-hashtable') }
+                { Test-AvmPins -Pins $pins } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a missing required key' {
-            $lock = script:NewValidLock
-            $lock.tools[0].Remove('sha256')
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].Remove('sha256')
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a non-semver version' {
-            $lock = script:NewValidLock
-            $lock.tools[0].version = '1.9'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].version = '1.9'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects an http:// urlTemplate by default' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'http://example.com/{version}'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'http://example.com/{version}'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects file:// urlTemplate by default' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'file:///tmp/payload'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'file:///tmp/payload'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'accepts file:// urlTemplate when -AllowFileUrls is set' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'file:///tmp/payload'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'file:///tmp/payload'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                Test-AvmToolsLock -Lock $L -AllowFileUrls | Should -BeTrue
+                Test-AvmPins -Pins $L -AllowFileUrls | Should -BeTrue
             }
         }
 
         It 'rejects an unknown archive value' {
-            $lock = script:NewValidLock
-            $lock.tools[0].archive = 'rar'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].archive = 'rar'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects an uppercase entrypoint' {
-            $lock = script:NewValidLock
-            $lock.tools[0].entrypoint = 'Terraform'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].entrypoint = 'Terraform'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a missing platform in sha256' {
-            $lock = script:NewValidLock
-            $lock.tools[0].sha256.Remove('darwin-arm64')
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].sha256.Remove('darwin-arm64')
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a non-hex sha256 value' {
-            $lock = script:NewValidLock
-            $lock.tools[0].sha256['linux-amd64'] = 'not-a-hash'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].sha256['linux-amd64'] = 'not-a-hash'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a duplicate tool name' {
-            $lock = script:NewValidLock
-            $lock.tools = @($lock.tools[0], $lock.tools[0])
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools = @($pins.tools[0], $pins.tools[0])
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
@@ -182,9 +182,9 @@ Describe 'Test-AvmToolsLock' {
 
     Context 'platformAliases' {
         It 'accepts a tool with platformAliases and a {platform} urlTemplate' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
-            $lock.tools[0].platformAliases = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
+            $pins.tools[0].platformAliases = @{
                 'windows-amd64' = 'win-x64.exe'
                 'windows-arm64' = 'win-arm64.exe'
                 'linux-amd64'   = 'linux-x64'
@@ -192,26 +192,26 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'osx-x64'
                 'darwin-arm64'  = 'osx-arm64'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                Test-AvmToolsLock -Lock $L | Should -BeTrue
+                Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
 
         It 'rejects {platform} urlTemplate without platformAliases' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects a platformAliases map missing a platform' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
-            $lock.tools[0].platformAliases = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
+            $pins.tools[0].platformAliases = @{
                 'windows-amd64' = 'win-x64.exe'
                 'windows-arm64' = 'win-arm64.exe'
                 'linux-amd64'   = 'linux-x64'
@@ -219,17 +219,17 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'osx-x64'
                 # darwin-arm64 missing
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects an empty platformAliases entry' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
-            $lock.tools[0].platformAliases = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{platform}'
+            $pins.tools[0].platformAliases = @{
                 'windows-amd64' = ''
                 'windows-arm64' = 'win-arm64.exe'
                 'linux-amd64'   = 'linux-x64'
@@ -237,9 +237,9 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'osx-x64'
                 'darwin-arm64'  = 'osx-arm64'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
@@ -247,10 +247,10 @@ Describe 'Test-AvmToolsLock' {
 
     Context 'archives map' {
         It 'accepts a per-platform archives override' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{os}-{arch}{ext}'
-            $lock.tools[0].archive = 'tar.gz'
-            $lock.tools[0].archives = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo-{os}-{arch}{ext}'
+            $pins.tools[0].archive = 'tar.gz'
+            $pins.tools[0].archives = @{
                 'windows-amd64' = 'zip'
                 'windows-arm64' = 'zip'
                 'linux-amd64'   = 'tar.gz'
@@ -258,31 +258,31 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'tar.gz'
                 'darwin-arm64'  = 'tar.gz'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                Test-AvmToolsLock -Lock $L | Should -BeTrue
+                Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
 
         It 'rejects an archives map missing a supported platform' {
-            $lock = script:NewValidLock
-            $lock.tools[0].archives = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].archives = @{
                 'windows-amd64' = 'zip'
                 'linux-amd64'   = 'tar.gz'
                 'linux-arm64'   = 'tar.gz'
                 'darwin-amd64'  = 'tar.gz'
                 'darwin-arm64'  = 'tar.gz'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
 
         It 'rejects an archives value outside the allowed set' {
-            $lock = script:NewValidLock
-            $lock.tools[0].archives = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].archives = @{
                 'windows-amd64' = 'rar'
                 'windows-arm64' = 'zip'
                 'linux-amd64'   = 'tar.gz'
@@ -290,9 +290,9 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'tar.gz'
                 'darwin-arm64'  = 'tar.gz'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                { Test-AvmToolsLock -Lock $L } |
+                { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
@@ -304,10 +304,10 @@ Describe 'Test-AvmToolsLock' {
         # map). The validator handles each map with an independent check;
         # this fixture proves the combination stays valid.
         It 'accepts an entry with both platformAliases and archives maps' {
-            $lock = script:NewValidLock
-            $lock.tools[0].urlTemplate = 'https://example.com/v{version}/foo_{version}_{platform}{ext}'
-            $lock.tools[0].archive = 'tar.gz'
-            $lock.tools[0].platformAliases = @{
+            $pins = script:NewValidLock
+            $pins.tools[0].urlTemplate = 'https://example.com/v{version}/foo_{version}_{platform}{ext}'
+            $pins.tools[0].archive = 'tar.gz'
+            $pins.tools[0].platformAliases = @{
                 'windows-amd64' = 'Windows_x86_64'
                 'windows-arm64' = 'Windows_arm64'
                 'linux-amd64'   = 'Linux_x86_64'
@@ -315,7 +315,7 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'Darwin_x86_64'
                 'darwin-arm64'  = 'Darwin_arm64'
             }
-            $lock.tools[0].archives = @{
+            $pins.tools[0].archives = @{
                 'windows-amd64' = 'zip'
                 'windows-arm64' = 'zip'
                 'linux-amd64'   = 'tar.gz'
@@ -323,20 +323,48 @@ Describe 'Test-AvmToolsLock' {
                 'darwin-amd64'  = 'tar.gz'
                 'darwin-arm64'  = 'tar.gz'
             }
-            InModuleScope 'Avm.Authoring' -Parameters @{ L = $lock } {
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
                 param($L)
-                Test-AvmToolsLock -Lock $L | Should -BeTrue
+                Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
     }
 
-    Context 'bundled production lock' {
+    Context 'bundled production pin manifest' {
         It 'is valid under the strict (https-only) schema' {
-            $lockPath = Resolve-Path (Join-Path $script:moduleRoot 'Resources' 'tools.lock.psd1')
-            InModuleScope 'Avm.Authoring' -Parameters @{ P = $lockPath.Path } {
-                param($P)
-                $lock = Import-PowerShellDataFile -LiteralPath $P
-                Test-AvmToolsLock -Lock $lock | Should -BeTrue
+            InModuleScope 'Avm.Authoring' {
+                $pins = Read-AvmPins
+                Test-AvmPins -Pins $pins | Should -BeTrue
+            }
+        }
+
+        It 'parses despite JSONC comments and declares every pinned component' {
+            $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
+            $pins.schemaVersion | Should -Be 1
+            @($pins.tools).Count | Should -BeGreaterThan 0
+            $pins.ContainsKey('policyLibrary') | Should -BeTrue
+            $pins.ContainsKey('tflintPlugins') | Should -BeTrue
+
+            $pins.policyLibrary.repository | Should -Be 'Azure/policy-library-avm'
+            $pins.policyLibrary.ref        | Should -Match '^v[0-9]'
+            $pins.policyLibrary.sha256     | Should -Match '^[0-9a-f]{64}$'
+            $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-aprl'
+            $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
+        }
+
+        It 'mirrors the tflint plugin versions that the vendored HCL configs pin' {
+            $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
+            $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
+
+            foreach ($config in (Get-ChildItem -LiteralPath $configDir -Filter '*.hcl' -File)) {
+                $text = [System.IO.File]::ReadAllText($config.FullName)
+                foreach ($plugin in $pins.tflintPlugins.Keys) {
+                    $pattern = 'plugin\s+"' + [regex]::Escape($plugin) + '"\s*\{[^}]*?version\s*=\s*"([^"]+)"'
+                    $found = [regex]::Match($text, $pattern, 'Singleline')
+                    if ($found.Success) {
+                        $found.Groups[1].Value | Should -Be $pins.tflintPlugins[$plugin] -Because "$($config.Name) must agree with avm.pins.jsonc for plugin '$plugin'"
+                    }
+                }
             }
         }
     }

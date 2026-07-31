@@ -1,5 +1,5 @@
 # AVM test-only stub for `terraform`. Pinned to the version recorded in
-# src/Avm.Authoring/Resources/tools.lock.psd1 (terraform 1.15.3) so
+# src/Avm.Authoring/Resources/avm.pins.jsonc (terraform 1.15.3) so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
 # This stub handles only the verbs the Terraform engine wrappers invoke.

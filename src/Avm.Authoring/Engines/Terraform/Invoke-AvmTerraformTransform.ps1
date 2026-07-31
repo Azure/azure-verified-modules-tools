@@ -9,23 +9,30 @@ function Resolve-AvmMapotfConfigDir {
 
           1. $env:AVM_MPTF_CONFIG_DIR - explicit override (test injection and
              power users).
-          2. <ModuleRoot>/Resources/mapotf/pre-commit - forward-compatible
-             location for when the configs ship inside the module itself.
-          3. <RepoRoot>/config/mapotf/pre-commit - the configs as currently
-             vendored at the top of this repository (separate from the
-             PowerShell module), per the 2026-06-19 vendoring decision.
+          2. <Root>/config/mapotf/pre-commit - a consumer repository that
+             vendors its own config bundle at the top of the repo overrides
+             the packaged defaults.
+          3. <ModuleRoot>/Resources/mapotf/pre-commit - the bundle shipped
+             inside the published module (the default source).
 
         Each candidate must be a directory containing at least one
         '*.mptf.hcl' file. Throws AvmConfigurationException when none
         resolve, so the transform engine surfaces as 'skipped' (a deliberate
         placeholder) rather than running mapotf against an empty config set.
 
+    .PARAMETER Root
+        The consumer repository root, used to locate an optional
+        'config/mapotf/pre-commit' override. Pass $Context.Root.
+
     .OUTPUTS
         [string] absolute path to the resolved config directory.
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param()
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
@@ -36,11 +43,10 @@ function Resolve-AvmMapotfConfigDir {
         $candidates.Add($env:AVM_MPTF_CONFIG_DIR)
     }
 
+    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' 'pre-commit'))))
+
     $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))))
-
-    $repoRoot = Split-Path -Parent (Split-Path -Parent $moduleRoot)
-    $candidates.Add((Join-Path $repoRoot (Join-Path 'config' (Join-Path 'mapotf' 'pre-commit'))))
 
     foreach ($candidate in $candidates) {
         if (-not $candidate) { continue }
@@ -53,7 +59,8 @@ function Resolve-AvmMapotfConfigDir {
 
     throw [AvmConfigurationException]::new(
         ("Cannot resolve the mapotf pre-commit config bundle (looked in: {0}). " -f ($candidates -join '; ')) +
-        'Set the AVM_MPTF_CONFIG_DIR environment variable or restore config/mapotf/pre-commit/*.mptf.hcl.')
+        'The bundle normally ships inside the module under Resources/mapotf/pre-commit; ' +
+        'set AVM_MPTF_CONFIG_DIR or add config/mapotf/pre-commit/*.mptf.hcl to override it.')
 }
 
 function Get-AvmTerraformFile {
@@ -178,7 +185,7 @@ function Invoke-AvmTerraformTransform {
     }
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
-    $configDir = Resolve-AvmMapotfConfigDir
+    $configDir = Resolve-AvmMapotfConfigDir -Root $Context.Root
 
     $beforeFiles = Get-AvmTerraformFile -Root $Context.Root
 

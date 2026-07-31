@@ -6,7 +6,7 @@ function Resolve-AvmMirrorUrl {
 
     .DESCRIPTION
         Pure helper used by Invoke-AvmHttp. Given a source URL from
-        tools.lock.psd1 and a mirror base, produces the URL the downloader
+        avm.pins.jsonc and a mirror base, produces the URL the downloader
         should actually fetch. The mirror is expected to be a transparent
         HTTPS proxy that mounts upstream binaries under a per-deployment
         prefix (typical Artifactory / Nexus / internal mirror setup).
@@ -35,7 +35,7 @@ function Resolve-AvmMirrorUrl {
             exception is raised with the offending value.
 
     .PARAMETER Source
-        The canonical URL from tools.lock.psd1 (already placeholder-expanded).
+        The canonical URL from avm.pins.jsonc (already placeholder-expanded).
 
     .PARAMETER Mirror
         The raw value of $env:AVM_MIRROR. $null or empty string => no rewrite.

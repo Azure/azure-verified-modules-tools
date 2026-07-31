@@ -4,7 +4,7 @@ function Resolve-AvmPinnedAsset {
         Materialise a single pinned asset descriptor into the per-user cache.
 
     .DESCRIPTION
-        Given an asset descriptor (the shape Read-AvmAssetConfig.Assets[<name>]
+        Given an asset descriptor (the shape Resolve-AvmPolicyBundle projects from the pin manifest
         returns) plus its asset Name, ensures the referenced archive is
         downloaded, SHA-verified, extracted, and available under
 
@@ -15,7 +15,7 @@ function Resolve-AvmPinnedAsset {
         64-char SHA is still pinned by the descriptor, verified by Invoke-AvmHttp,
         and preserved in .meta.json -- only the on-disk directory name is truncated.
 
-        The install pipeline mirrors Install-AvmToolFromLock: cache-hit
+        The install pipeline mirrors Install-AvmToolFromPins: cache-hit
         short-circuit -> cross-process lock -> stage under .staging/<uuid>/
         -> Invoke-AvmHttp (download + SHA verify) -> Expand-AvmToolArchive
         -> optional Path subdir verification -> atomic Move-Item to final
@@ -34,7 +34,7 @@ function Resolve-AvmPinnedAsset {
         The asset name. Used for the cache subdirectory and diagnostics.
 
     .PARAMETER Asset
-        The pscustomobject descriptor returned by Read-AvmAssetConfig.
+        The pscustomobject descriptor built by the caller (see Resolve-AvmPolicyBundle).
         Required properties: Source. Conditionally required: Sha256.
         Optional: Ref, Path, Type.
 
@@ -191,7 +191,7 @@ function Resolve-AvmPinnedAsset {
             if ($AllowFileUrls -and $source.StartsWith('file://')) {
                 # Invoke-AvmHttp accepts file:// natively; no extra flag needed,
                 # but we still gate it via -AllowFileUrls on this function so
-                # callers must opt in explicitly (matches Test-AvmAssetConfig).
+                # callers must opt in explicitly (matches Test-AvmPins).
             }
             elseif ($source.StartsWith('file://') -and -not $AllowFileUrls) {
                 throw [AvmConfigurationException]::new(

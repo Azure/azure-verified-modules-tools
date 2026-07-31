@@ -470,15 +470,15 @@ task integration {
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
-task 'pre-commit' layout, lint, test
+task 'pre-commit' layout, lint, test, component
 
 # CI runs layout + lint + coverage + component. Coverage runs the Unit tier
 # with CodeCoverage enabled (so we get the spec section 18 70% floor) and
 # `component` runs the real-subprocess (stub-binary) tier separately. The real
 # `integration` tier (REAL NETWORK + real binaries) is NOT part of the ci task --
 # it runs as a separate `integration` job in the ci workflow on PR / on-demand.
-# `pre-commit` (the local gate) skips coverage, component, and integration to
-# stay fast.
+# `pre-commit` (the local gate) skips coverage and integration to stay fast, but
+# runs `component` so a green local gate predicts a green CI run.
 task ci layout, lint, coverage, component
 
 task . layout

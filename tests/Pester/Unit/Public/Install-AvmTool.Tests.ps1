@@ -14,9 +14,25 @@ BeforeAll {
     if ($urlPath -notmatch '^/') { $urlPath = '/' + $urlPath }
     $script:fileUrl = "file://$urlPath"
 
-    $script:lockPath = Join-Path $script:fixtureDir 'tools.lock.psd1'
-    $lockText = "@{`n    schemaVersion = 1`n    tools = @(`n        @{`n            name = 'fake-tool'`n            version = '1.0.0'`n            urlTemplate = '$script:fileUrl'`n            archive = 'raw'`n            entrypoint = 'fake-tool'`n            sha256 = @{`n                'windows-amd64' = '$script:sha'`n                'windows-arm64' = '$script:sha'`n                'linux-amd64' = '$script:sha'`n                'linux-arm64' = '$script:sha'`n                'darwin-amd64' = '$script:sha'`n                'darwin-arm64' = '$script:sha'`n            }`n        }`n    )`n}`n"
-    Set-Content -LiteralPath $script:lockPath -Value $lockText -Encoding utf8
+    $script:pinsPath = Join-Path $script:fixtureDir 'avm.pins.jsonc'
+    $shaMap = [ordered]@{}
+    foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+        $shaMap[$p] = $script:sha
+    }
+    $pins = [ordered]@{
+        schemaVersion = 1
+        tools         = @(
+            [ordered]@{
+                name        = 'fake-tool'
+                version     = '1.0.0'
+                urlTemplate = $script:fileUrl
+                archive     = 'raw'
+                entrypoint  = 'fake-tool'
+                sha256      = $shaMap
+            }
+        )
+    }
+    Set-Content -LiteralPath $script:pinsPath -Value ($pins | ConvertTo-Json -Depth 8) -Encoding utf8
 
     $script:savedAvmHome = if (Test-Path Env:\AVM_HOME) { $env:AVM_HOME } else { $null }
 }
@@ -36,7 +52,7 @@ Describe 'Install-AvmTool' {
     }
 
     It 'downloads, verifies, and writes the entrypoint under Tools/name/version/' {
-        $result = Install-AvmTool -LockPath $script:lockPath -AllowFileUrls
+        $result = Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls
         $result.Action | Should -Be 'installed'
         Test-Path -LiteralPath $result.Path | Should -BeTrue
         $expectedName = if ($IsWindows) { 'fake-tool.exe' } else { 'fake-tool' }
@@ -45,7 +61,7 @@ Describe 'Install-AvmTool' {
     }
 
     It 'writes a .verified marker and a .meta.json' {
-        $result = Install-AvmTool -LockPath $script:lockPath -AllowFileUrls
+        $result = Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls
         $versionDir = Split-Path -Parent $result.Path
         Test-Path -LiteralPath (Join-Path $versionDir '.verified') | Should -BeTrue
         $metaPath = Join-Path $versionDir '.meta.json'
@@ -57,30 +73,46 @@ Describe 'Install-AvmTool' {
     }
 
     It 'short-circuits to cache-hit on a second invocation' {
-        Install-AvmTool -LockPath $script:lockPath -AllowFileUrls | Out-Null
-        $second = Install-AvmTool -LockPath $script:lockPath -AllowFileUrls
+        Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls | Out-Null
+        $second = Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls
         $second.Action | Should -Be 'cache-hit'
     }
 
     It 'reinstalls when -Force is set' {
-        $first = Install-AvmTool -LockPath $script:lockPath -AllowFileUrls
+        $first = Install-AvmTool -PinsPath $script:pinsPath -AllowFileUrls
         $first.Action | Should -Be 'installed'
-        $forced = Install-AvmTool -Force -LockPath $script:lockPath -AllowFileUrls
+        $forced = Install-AvmTool -Force -PinsPath $script:pinsPath -AllowFileUrls
         $forced.Action | Should -Be 'installed'
     }
 
     It 'throws ArgumentException for an unknown tool name' {
-        { Install-AvmTool -Name 'no-such-tool' -LockPath $script:lockPath -AllowFileUrls } |
+        { Install-AvmTool -Name 'no-such-tool' -PinsPath $script:pinsPath -AllowFileUrls } |
             Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
     It 'throws AvmToolException when the payload SHA256 has been tampered with' {
-        $badPath = Join-Path $script:fixtureDir 'bad-lock.psd1'
+        $badPath = Join-Path $script:fixtureDir 'bad-pins.jsonc'
         $bogus = ('1' * 64)
-        $badText = "@{`n    schemaVersion = 1`n    tools = @(`n        @{`n            name = 'fake-tool'`n            version = '1.0.0'`n            urlTemplate = '$script:fileUrl'`n            archive = 'raw'`n            entrypoint = 'fake-tool'`n            sha256 = @{`n                'windows-amd64' = '$bogus'`n                'windows-arm64' = '$bogus'`n                'linux-amd64' = '$bogus'`n                'linux-arm64' = '$bogus'`n                'darwin-amd64' = '$bogus'`n                'darwin-arm64' = '$bogus'`n            }`n        }`n    )`n}`n"
-        Set-Content -LiteralPath $badPath -Value $badText -Encoding utf8
+        $badShaMap = [ordered]@{}
+        foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+            $badShaMap[$p] = $bogus
+        }
+        $badPins = [ordered]@{
+            schemaVersion = 1
+            tools         = @(
+                [ordered]@{
+                    name        = 'fake-tool'
+                    version     = '1.0.0'
+                    urlTemplate = $script:fileUrl
+                    archive     = 'raw'
+                    entrypoint  = 'fake-tool'
+                    sha256      = $badShaMap
+                }
+            )
+        }
+        Set-Content -LiteralPath $badPath -Value ($badPins | ConvertTo-Json -Depth 8) -Encoding utf8
         $err = $null
-        try { Install-AvmTool -LockPath $badPath -AllowFileUrls } catch { $err = $_.Exception }
+        try { Install-AvmTool -PinsPath $badPath -AllowFileUrls } catch { $err = $_.Exception }
         $err | Should -Not -BeNullOrEmpty
         $err.GetType().Name | Should -Be 'AvmToolException'
         $err.Code | Should -Be 'AVM1011'
@@ -104,41 +136,29 @@ Describe 'Install-AvmTool' {
         }
         $aliasMap[$platform] = $realName
 
-        $aliasBody = ($aliasMap.GetEnumerator() | Sort-Object Key |
-            ForEach-Object { "                '$($_.Key)' = '$($_.Value)'" }) -join "`n"
-        $shaBody = @(
-            "                'windows-amd64' = '$script:sha'"
-            "                'windows-arm64' = '$script:sha'"
-            "                'linux-amd64' = '$script:sha'"
-            "                'linux-arm64' = '$script:sha'"
-            "                'darwin-amd64' = '$script:sha'"
-            "                'darwin-arm64' = '$script:sha'"
-        ) -join "`n"
-
-        $platformLock = Join-Path $script:fixtureDir 'platform-lock.psd1'
-        $lockText = @"
-@{
-    schemaVersion = 1
-    tools = @(
-        @{
-            name = 'fake-tool'
-            version = '1.0.0'
-            urlTemplate = '$dirUrl/{platform}'
-            archive = 'raw'
-            entrypoint = 'fake-tool'
-            platformAliases = @{
-$aliasBody
-            }
-            sha256 = @{
-$shaBody
-            }
+        $shaMap = [ordered]@{}
+        foreach ($p in 'windows-amd64', 'windows-arm64', 'linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64') {
+            $shaMap[$p] = $script:sha
         }
-    )
-}
-"@
-        Set-Content -LiteralPath $platformLock -Value $lockText -Encoding utf8
 
-        $result = Install-AvmTool -LockPath $platformLock -AllowFileUrls
+        $platformLock = Join-Path $script:fixtureDir 'platform-pins.jsonc'
+        $pins = [ordered]@{
+            schemaVersion = 1
+            tools         = @(
+                [ordered]@{
+                    name            = 'fake-tool'
+                    version         = '1.0.0'
+                    urlTemplate     = "$dirUrl/{platform}"
+                    archive         = 'raw'
+                    entrypoint      = 'fake-tool'
+                    platformAliases = $aliasMap
+                    sha256          = $shaMap
+                }
+            )
+        }
+        Set-Content -LiteralPath $platformLock -Value ($pins | ConvertTo-Json -Depth 8) -Encoding utf8
+
+        $result = Install-AvmTool -PinsPath $platformLock -AllowFileUrls
         $result.Action | Should -Be 'installed'
         $result.Name | Should -Be 'fake-tool'
     }
@@ -152,20 +172,20 @@ Describe 'avm tool install dispatcher route' {
     }
 
     It 'routes "avm tool install" to Install-AvmTool' {
-        $result = avm tool install --LockPath $script:lockPath --AllowFileUrls
+        $result = avm tool install --PinsPath $script:pinsPath --AllowFileUrls
         $result.Action | Should -Be 'installed'
         $result.Name | Should -Be 'fake-tool'
     }
 
     It 'routes "avm tool install NAME" with a positional tool name' {
-        $result = avm tool install fake-tool --LockPath $script:lockPath --AllowFileUrls
+        $result = avm tool install fake-tool --PinsPath $script:pinsPath --AllowFileUrls
         $result.Action | Should -Be 'installed'
         $result.Name | Should -Be 'fake-tool'
     }
 
     It 'routes "avm tool install --force NAME" and re-installs' {
-        avm tool install --LockPath $script:lockPath --AllowFileUrls | Out-Null
-        $result = avm tool install --force fake-tool --LockPath $script:lockPath --AllowFileUrls
+        avm tool install --PinsPath $script:pinsPath --AllowFileUrls | Out-Null
+        $result = avm tool install --force fake-tool --PinsPath $script:pinsPath --AllowFileUrls
         $result.Action | Should -Be 'installed'
     }
 }

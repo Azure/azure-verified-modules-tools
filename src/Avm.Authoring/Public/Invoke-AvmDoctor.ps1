@@ -10,9 +10,9 @@ function Invoke-AvmDoctor {
         and reflected in the overall Status. Use the exit-code via the dispatcher
         when scripting.
 
-        With -Install, additionally walks every entry in tools.lock and installs
+        With -Install, additionally walks every entry in avm.pins and installs
         any missing tool into the per-user cache (atomic stage->verify->rename
-        through Install-AvmToolFromLock). Tools that do not ship a release for
+        through Install-AvmToolFromPins). Tools that do not ship a release for
         the current platform are reported as 'Skip', not 'Fail'.
 
     .PARAMETER Json
@@ -20,7 +20,7 @@ function Invoke-AvmDoctor {
         pscustomobject. Matches the global '--json' contract from the spec.
 
     .PARAMETER Install
-        After running diagnostics, install every tool in tools.lock that is not
+        After running diagnostics, install every tool in avm.pins that is not
         already cache-verified. Cache hits are reported as OK; per-platform
         unsupported tools are reported as Skip; any other install failure
         becomes a Fail without aborting the remaining tools.
@@ -29,8 +29,8 @@ function Invoke-AvmDoctor {
         Combined with -Install, reinstall every tool even if a verified copy is
         already in the cache.
 
-    .PARAMETER LockPath
-        Override the bundled Resources/tools.lock.psd1. Intended for tests.
+    .PARAMETER PinsPath
+        Override the bundled Resources/avm.pins.jsonc. Intended for tests.
 
     .EXAMPLE
         PS> Invoke-AvmDoctor
@@ -50,9 +50,9 @@ function Invoke-AvmDoctor {
 
         [switch] $Force,
 
-        [string] $LockPath,
+        [string] $PinsPath,
 
-        # Test-only escape hatch (see Test-AvmToolsLock). Hidden from help
+        # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
         [switch] $AllowFileUrls
@@ -129,11 +129,11 @@ function Invoke-AvmDoctor {
     }
 
     if ($Install) {
-        $lock = if ($LockPath) {
-            Read-AvmToolsLock -Path $LockPath -AllowFileUrls:$AllowFileUrls
+        $lock = if ($PinsPath) {
+            Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
         }
         else {
-            Read-AvmToolsLock
+            Read-AvmPins
         }
         $platform = Get-AvmToolPlatform
 
@@ -152,7 +152,7 @@ function Invoke-AvmDoctor {
             }
 
             try {
-                $installResult = Install-AvmToolFromLock -Tool $t -Platform $platform -Force:$Force
+                $installResult = Install-AvmToolFromPins -Tool $t -Platform $platform -Force:$Force
                 $checks.Add([pscustomobject][ordered]@{
                         Name     = $checkName
                         Status   = 'OK'

@@ -7,7 +7,7 @@ function Invoke-AvmLint {
         Routes to the engine matching the module's ecosystem:
 
           - bicep      -> Invoke-AvmBicepLint     ('bicep lint <file>' per file)
-          - terraform  -> Invoke-AvmTerraformLint ('tflint' - not yet wired)
+          - terraform  -> Invoke-AvmTerraformLint (AVM tflint rulesets, per scope)
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.

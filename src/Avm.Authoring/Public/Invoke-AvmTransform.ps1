@@ -10,9 +10,12 @@ function Invoke-AvmTransform {
           - terraform  -> Invoke-AvmTerraformTransform  (mapotf transform + clean-backup)
 
         The Terraform engine is wired against the pinned mapotf binary and
-        the vendored config bundle (config/mapotf/pre-commit). The Bicep
-        engine remains intentionally stubbed in this slice and throws
-        AvmConfigurationException with a clear "next slice" message.
+        the mapotf config bundle shipped in the module under
+        Resources/mapotf/pre-commit, which a consumer repository can override
+        with its own config/mapotf/pre-commit or the AVM_MPTF_CONFIG_DIR
+        environment variable. The Bicep engine remains intentionally stubbed in
+        this slice and throws AvmConfigurationException with a clear "next
+        slice" message.
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.

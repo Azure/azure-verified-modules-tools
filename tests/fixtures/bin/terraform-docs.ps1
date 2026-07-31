@@ -1,4 +1,4 @@
-# AVM test-only stub for `terraform-docs`. Pinned to tools.lock 0.20.0.
+# AVM test-only stub for `terraform-docs`. Pinned to avm.pins 0.20.0.
 # Handles only --version and the Invoke-AvmTerraformDocs argv shape
 # (markdown table --output-file README.md --output-mode inject .).
 # The stub does NOT mutate README so the engine reports Changed=@().

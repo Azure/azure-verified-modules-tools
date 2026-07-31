@@ -1,4 +1,4 @@
-# AVM test-only stub for `mapotf`. Pinned to tools.lock version 0.1.4 so
+# AVM test-only stub for `mapotf`. Pinned to avm.pins version 0.1.4 so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
 # Handles only the verbs Invoke-AvmTerraformTransform actually invokes:

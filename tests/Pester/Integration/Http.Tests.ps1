@@ -31,20 +31,20 @@ Describe 'Integration: Invoke-AvmHttp against real upstream releases' -Tag 'Inte
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ Destination = $dest } {
             param($Destination)
 
-            $lockPath = Join-Path $PSScriptRoot 'Resources' 'tools.lock.psd1'
+            $pinsPath = Join-Path $PSScriptRoot 'Resources' 'avm.pins.jsonc'
             # PSScriptRoot inside the module-scope block resolves to the
             # module root because the .psm1 dot-sources the private files
             # from there at import time. Fall back to a discovery walk if
             # someone re-arranges the layout.
-            if (-not (Test-Path -LiteralPath $lockPath)) {
-                $lockPath = (Get-Module Avm.Authoring).ModuleBase |
+            if (-not (Test-Path -LiteralPath $pinsPath)) {
+                $pinsPath = (Get-Module Avm.Authoring).ModuleBase |
                     Join-Path -ChildPath 'Resources' |
-                    Join-Path -ChildPath 'tools.lock.psd1'
+                    Join-Path -ChildPath 'avm.pins.jsonc'
             }
 
-            $lock = Read-AvmToolsLock -Path $lockPath
-            $tool = $lock.tools | Where-Object { $_.name -eq 'terraform-docs' }
-            if (-not $tool) { throw "terraform-docs not present in lock file at $lockPath" }
+            $pins = Read-AvmPins -Path $pinsPath
+            $tool = $pins.tools | Where-Object { $_.name -eq 'terraform-docs' }
+            if (-not $tool) { throw "terraform-docs not present in the pin manifest at $pinsPath" }
 
             $platform = Get-AvmToolPlatform
             if (-not $tool.sha256.ContainsKey($platform)) {

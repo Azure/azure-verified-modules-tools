@@ -25,10 +25,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # Configure a `psgallery` environment in repo Settings → Environments with
-    # required reviewers to gate publishes behind a manual approval. The
-    # POWERSHELL_GALLERY_API_KEY secret may live at repo or environment scope;
-    # the publish step refuses to run if it is not present.
+    # The `psgallery` environment deliberately carries **no** protection rules.
+    # Releases are cut from the GitHub UI, so the GitHub Release (and its tag)
+    # already exists before this workflow starts. Adding a required reviewer
+    # therefore produces a silent, hard-to-diagnose failure mode: the run parks
+    # in `status=waiting`, the Release looks published, and consumers get a bare
+    # 404 from the gallery with nothing anywhere surfacing the pending approval.
+    # v0.1.4 lost ~53 minutes to exactly this. Keep the environment gate-free and
+    # rely on branch/tag protection instead. The POWERSHELL_GALLERY_API_KEY
+    # secret may live at repo or environment scope; the publish step refuses to
+    # run if it is not present.
     environment: psgallery
 
     steps:
@@ -177,6 +183,33 @@ jobs:
               -ModulePath ./out/Avm.Authoring `
               -SkipIfAlreadyPublished `
               -Confirm:$false
+
+      - name: Verify the version is resolvable on the PowerShell Gallery
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
+
+          # Gallery indexing lags the publish API by minutes. Consumers only see
+          # a bare 404 while that lag lasts, so surface it here rather than
+          # letting the GitHub Release imply the package is installable.
+          $deadline = (Get-Date).AddMinutes(10)
+          $found    = $null
+          do {
+              $found = Find-PSResource -Name 'Avm.Authoring' -Version $env:VERSION `
+                  -Repository 'PSGallery' -ErrorAction SilentlyContinue
+              if ($found) { break }
+              Start-Sleep -Seconds 20
+          } while ((Get-Date) -lt $deadline)
+
+          if ($found) {
+              Write-Host "Avm.Authoring $env:VERSION is live on the PowerShell Gallery."
+          }
+          else {
+              Write-Host "::warning title=Gallery indexing lag::Avm.Authoring $env:VERSION was published but is still not resolvable via Find-PSResource after 10 minutes. Install-PSResource will 404 until indexing completes."
+          }
 
       - name: Create or update GitHub Release
         shell: pwsh

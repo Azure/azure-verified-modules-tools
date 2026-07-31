@@ -60,3 +60,51 @@ Describe 'Test-AvmModuleLayout' {
         $err.Message | Should -Match "expected 'Avm.Authoring'"
     }
 }
+
+Describe 'Module Resources packaging' {
+    It 'ships the three vendored AVM tflint rulesets under Resources/tflint' {
+        $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        $tflintDir | Should -Exist
+        foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+            $path = Join-Path $tflintDir $file
+            $path | Should -Exist
+            (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'pins the AVM tflint ruleset plugin in the vendored configs' {
+        $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+            $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
+            $content | Should -Match 'plugin\s+"avm"'
+        }
+    }
+
+    It 'ships the mapotf pre-commit config bundle under Resources/mapotf/pre-commit' {
+        $mapotfDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))
+        $mapotfDir | Should -Exist
+        $expected = @(
+            'avm_headers_for_azapi.mptf.hcl'
+            'main_telemetry_tf.mptf.hcl'
+            'move_misplaced_blocks.mptf.hcl'
+            'order_module_attrs.mptf.hcl'
+            'order_resource_attrs.mptf.hcl'
+            'order_resource_meta.mptf.hcl'
+            'required_provider_versions.mptf.hcl'
+            'sort_outputs.mptf.hcl'
+            'sort_variables.mptf.hcl'
+        )
+        foreach ($file in $expected) {
+            $path = Join-Path $mapotfDir $file
+            $path | Should -Exist
+            (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
+        }
+        @(Get-ChildItem -LiteralPath $mapotfDir -Filter '*.mptf.hcl' -File).Count | Should -Be $expected.Count
+    }
+
+    It 'ships the consolidated pin manifest and no legacy tools lock' {
+        $resources = Join-Path $script:moduleRoot 'Resources'
+        (Join-Path $resources 'avm.pins.jsonc') | Should -Exist
+        (Join-Path $resources 'tools.lock.psd1') | Should -Not -Exist
+    }
+}

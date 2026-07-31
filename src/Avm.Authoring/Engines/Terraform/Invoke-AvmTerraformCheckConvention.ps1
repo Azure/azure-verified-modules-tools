@@ -125,14 +125,14 @@ function Get-AvmRuleTargetRoot {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $applies = [string]$Rule.AppliesTo
+    $applies = @($Rule.AppliesTo | ForEach-Object { [string]$_ })
     $targets = New-Object 'System.Collections.Generic.List[string]'
 
-    if ($applies -eq 'root' -or $applies -eq 'all') {
+    if ($applies -ccontains 'root') {
         $targets.Add($ContextRoot)
     }
 
-    if ($applies -eq 'examples' -or $applies -eq 'all') {
+    if ($applies -ccontains 'examples') {
         $examplesDir = Join-Path $ContextRoot 'examples'
         if (Test-Path -LiteralPath $examplesDir -PathType Container) {
             foreach ($d in Get-ChildItem -LiteralPath $examplesDir -Directory -ErrorAction SilentlyContinue) {
@@ -141,7 +141,7 @@ function Get-AvmRuleTargetRoot {
         }
     }
 
-    if ($applies -eq 'modules' -or $applies -eq 'all') {
+    if ($applies -ccontains 'modules') {
         $modulesDir = Join-Path $ContextRoot 'modules'
         if (Test-Path -LiteralPath $modulesDir -PathType Container) {
             foreach ($d in Get-ChildItem -LiteralPath $modulesDir -Directory -ErrorAction SilentlyContinue) {

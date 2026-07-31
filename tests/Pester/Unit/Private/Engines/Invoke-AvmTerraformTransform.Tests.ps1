@@ -308,6 +308,15 @@ Describe 'Invoke-AvmTerraformTransform' {
 }
 
 Describe 'Resolve-AvmMapotfConfigDir' {
+    BeforeAll {
+        function script:New-AvmCfgBundle {
+            param([string] $Path, [string] $FileName = 'sample.mptf.hcl')
+            New-Item -ItemType Directory -Path $Path -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $Path $FileName) -Value 'transform {}' -Encoding utf8
+            return $Path
+        }
+    }
+
     BeforeEach {
         $script:savedConfigDir = $env:AVM_MPTF_CONFIG_DIR
     }
@@ -321,25 +330,45 @@ Describe 'Resolve-AvmMapotfConfigDir' {
         }
     }
 
-    It 'returns the AVM_MPTF_CONFIG_DIR override when it holds a *.mptf.hcl file' {
-        $override = Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        New-Item -ItemType Directory -Path $override -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $override 'sample.mptf.hcl') -Value 'transform {}' -Encoding utf8
+    It 'prefers the AVM_MPTF_CONFIG_DIR override over the consumer and packaged bundles' {
+        $override = script:New-AvmCfgBundle -Path (Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)))
+        $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl' | Out-Null
         $env:AVM_MPTF_CONFIG_DIR = $override
 
-        $resolved = InModuleScope 'Avm.Authoring' { Resolve-AvmMapotfConfigDir }
-        $expected = (Resolve-Path -LiteralPath $override).ProviderPath
-        $resolved | Should -Be $expected
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved | Should -Be ((Resolve-Path -LiteralPath $override).ProviderPath)
     }
 
-    It 'skips an override directory without *.mptf.hcl and falls back to the vendored bundle' {
+    It 'prefers the consumer config/mapotf/pre-commit bundle over the packaged module bundle' {
+        Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
+        $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl'
+
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
+    }
+
+    It 'skips an empty AVM_MPTF_CONFIG_DIR override and uses the consumer bundle' {
         $emptyOverride = Join-Path $TestDrive ("empty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $emptyOverride -Force | Out-Null
+        $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl'
         $env:AVM_MPTF_CONFIG_DIR = $emptyOverride
 
-        $resolved = InModuleScope 'Avm.Authoring' { Resolve-AvmMapotfConfigDir }
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
+    }
+
+    It 'falls back to the packaged module bundle when no override or consumer bundle exists' {
+        Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
+        $root = Join-Path $TestDrive ("bare-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
         $resolved | Should -Not -BeNullOrEmpty
         (Split-Path -Leaf $resolved) | Should -Be 'pre-commit'
+        $resolved | Should -Match ([regex]::Escape([System.IO.Path]::Combine('Resources', 'mapotf', 'pre-commit')))
         @(Get-ChildItem -LiteralPath $resolved -Filter '*.mptf.hcl' -File).Count | Should -BeGreaterThan 0
     }
 }

@@ -1,7 +1,7 @@
 function Install-AvmTool {
     <#
     .SYNOPSIS
-        Install one, several, or all managed tools from tools.lock.
+        Install one, several, or all managed tools from avm.pins.
 
     .DESCRIPTION
         Routed by the dispatcher:
@@ -11,7 +11,7 @@ function Install-AvmTool {
             avm tool install --force terraform      -> Force-reinstall
 
         Each install goes through the atomic stage->rename pipeline implemented
-        by Install-AvmToolFromLock: SHA256 verified before extraction, version
+        by Install-AvmToolFromPins: SHA256 verified before extraction, version
         directory renamed atomically into place, and a '.verified' marker
         written last so that interrupted installs are re-tried automatically.
 
@@ -23,8 +23,8 @@ function Install-AvmTool {
         Delete and reinstall, even if the cache already has a '.verified'
         entry for the requested version.
 
-    .PARAMETER LockPath
-        Override the bundled Resources/tools.lock.psd1. Intended for tests.
+    .PARAMETER PinsPath
+        Override the bundled Resources/avm.pins.jsonc. Intended for tests.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -34,9 +34,9 @@ function Install-AvmTool {
 
         [switch] $Force,
 
-        [string] $LockPath,
+        [string] $PinsPath,
 
-        # Test-only escape hatch (see Test-AvmToolsLock). Hidden from help
+        # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
         [switch] $AllowFileUrls
@@ -45,11 +45,11 @@ function Install-AvmTool {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $lock = if ($LockPath) {
-        Read-AvmToolsLock -Path $LockPath -AllowFileUrls:$AllowFileUrls
+    $lock = if ($PinsPath) {
+        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmToolsLock
+        Read-AvmPins
     }
     $tools = @($lock.tools)
 
@@ -76,6 +76,6 @@ function Install-AvmTool {
     $platform = Get-AvmToolPlatform
     foreach ($t in $tools) {
         Write-Information ("Installing {0} {1} ({2})..." -f $t.name, $t.version, $platform) -InformationAction Continue
-        Install-AvmToolFromLock -Tool $t -Platform $platform -Force:$Force
+        Install-AvmToolFromPins -Tool $t -Platform $platform -Force:$Force
     }
 }

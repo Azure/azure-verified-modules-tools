@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Refresh src/Avm.Authoring/Resources/tools.lock.psd1 with verified
+    Refresh src/Avm.Authoring/Resources/avm.pins.jsonc with verified
     per-platform SHA256 hashes for canonical AVM CLI dependencies.
 
 .DESCRIPTION
@@ -30,7 +30,7 @@
 
     The script never publishes anything; it only mutates a single .psd1
     file under source control. The resulting lock is then validated via
-    Test-AvmToolsLock by importing the Avm.Authoring module.
+    Test-AvmPins by importing the Avm.Authoring module.
 
 .PARAMETER Terraform
     Terraform version to lock, e.g. '1.9.5'. Skip the terraform tool when
@@ -52,21 +52,31 @@
     conftest version to lock, e.g. '0.68.2' (no leading 'v'). Skip the
     conftest tool when omitted.
 
-.PARAMETER LockPath
-    Override the path to tools.lock.psd1. Defaults to the in-tree copy
+.PARAMETER PolicyLibrary
+    Azure/policy-library-avm tag to pin, e.g. 'v1.0.0' (leading 'v' required).
+    Downloads the source tarball and records its SHA256.
+
+.PARAMETER TflintPlugin
+    Hashtable of TFLint plugin name to version, e.g. @{ avm = '0.17.0' }.
+    Updates the mirrored versions in the manifest only; the authoritative
+    copy in Resources/tflint/*.hcl must be edited by hand to match, and a
+    packaging test asserts the two agree.
+
+.PARAMETER PinsPath
+    Override the path to avm.pins.jsonc. Defaults to the in-tree copy
     under src/Avm.Authoring/Resources/.
 
 .PARAMETER WhatIf
     Show what would change without writing the file.
 
 .EXAMPLE
-    ./scripts/Update-AvmToolsLock.ps1 -Terraform 1.9.5 -Bicep 0.30.3
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.9.5 -Bicep 0.30.3
 
 .EXAMPLE
-    ./scripts/Update-AvmToolsLock.ps1 -Terraform 1.9.8
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.9.8
 
 .EXAMPLE
-    ./scripts/Update-AvmToolsLock.ps1 -Conftest 0.68.2
+    ./scripts/Update-AvmPins.ps1 -Conftest 0.68.2
 
 .NOTES
     Intended for maintainers and CI 'refresh tools' workflows. Not part
@@ -99,18 +109,33 @@ param(
     [string] $Mapotf,
 
     [Parameter()]
-    [string] $LockPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'tools.lock.psd1')
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string] $PolicyLibrary,
+
+    [Parameter()]
+    [hashtable] $TflintPlugin = @{},
+
+    [Parameter()]
+    [string] $PinsPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc')
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-if (-not $Terraform -and -not $Bicep -and -not $Tflint -and -not $TerraformDocs -and -not $Conftest) {
-    throw "Specify at least one of -Terraform <version>, -Bicep <version>, -Tflint <version>, -TerraformDocs <version>, or -Conftest <version>."
+if (-not $Terraform -and -not $Bicep -and -not $Tflint -and -not $TerraformDocs -and
+    -not $Conftest -and -not $Mapotf -and -not $PolicyLibrary -and $TflintPlugin.Count -eq 0) {
+    throw "Specify at least one of -Terraform, -Bicep, -Tflint, -TerraformDocs, -Conftest, -Mapotf, -PolicyLibrary <vX.Y.Z> or -TflintPlugin @{ name = 'version' }."
 }
 
-$LockPath = (Resolve-Path -LiteralPath $LockPath).Path
-Write-Host "Lock file: $LockPath" -ForegroundColor Cyan
+$PinsPath = (Resolve-Path -LiteralPath $PinsPath).Path
+Write-Host "Pin manifest: $PinsPath" -ForegroundColor Cyan
+
+function script:Read-PinsFile {
+    param([Parameter(Mandatory)] [string] $Path)
+    # ConvertFrom-Json natively tolerates JSONC line/block comments and
+    # trailing commas, so no pre-processing is needed.
+    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable)
+}
 
 # ----------------------------------------------------------------------
 # Platform map shared by every tool entry. Keys are the canonical platform
@@ -452,62 +477,74 @@ function script:Get-BicepEntry {
     }
 }
 
-# ----------------------------------------------------------------------
-# Deterministic renderer for tools.lock.psd1. We emit a fixed header
-# (preserved verbatim from the existing file's leading comment block)
-# followed by the @{...} payload in a stable key order.
-# ----------------------------------------------------------------------
-function script:Format-StringValue {
-    param([string] $Value)
-    # Single-quoted with embedded single quotes doubled.
-    return "'" + ($Value -replace "'", "''") + "'"
+function script:Get-PolicyLibraryPin {
+    param(
+        [Parameter(Mandatory)] [string] $Ref,
+        [Parameter(Mandatory)] $Existing
+    )
+    Write-Host "policy-library-avm $Ref" -ForegroundColor Cyan
+    $version = $Ref.TrimStart('v')
+    $url = ([string]$Existing.urlTemplate) `
+        -replace '\{repository\}', ([string]$Existing.repository) `
+        -replace '\{ref\}', $Ref `
+        -replace '\{version\}', $version
+    $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-policy-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.tar.gz')
+    try {
+        Write-Host "  GET $url" -ForegroundColor DarkGray
+        Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing -MaximumRedirection 5
+        $sha = (Get-FileHash -LiteralPath $tempFile -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Host "  sha256 = $sha" -ForegroundColor DarkGray
+        return [ordered]@{ ref = $Ref; sha256 = $sha }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
-function script:Format-PlatformHashBlock {
+# ----------------------------------------------------------------------
+# Deterministic renderer for avm.pins.jsonc. The header comment block and
+# everything from the policyLibrary banner onwards are preserved verbatim
+# so hand-written JSONC documentation survives every refresh; only the
+# schemaVersion + tools[] payload between them is regenerated.
+# ----------------------------------------------------------------------
+function script:Format-JsonString {
+    param([AllowEmptyString()] [string] $Value)
+    return (ConvertTo-Json -InputObject $Value -Compress)
+}
+
+function script:Format-JsonMap {
     param(
         [Parameter(Mandatory)] $Map,
-        [Parameter(Mandatory)] [int] $OuterIndent,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [int] $Indent,
         [string[]] $Keys
     )
-    # Renders:
-    #     @{
-    #         'windows-amd64' = '...'
-    #         ...
-    #     }
-    # where 'OuterIndent' is the column of the opening '@{'. Pads every
-    # key to the longest quoted key width so PSAlignAssignmentStatement
-    # is satisfied. -Keys lets the caller render a subset of platforms
-    # (e.g. for tools that omit windows-arm64).
     if (-not $Keys) { $Keys = $script:platforms }
-    $outer = ' ' * $OuterIndent
-    $inner = ' ' * ($OuterIndent + 4)
-    $quotedKeys = $Keys | ForEach-Object { "'$_'" }
-    $keyWidth = ($quotedKeys | Measure-Object -Property Length -Maximum).Maximum
-    $lines = @('@{')
-    foreach ($p in $Keys) {
-        $quoted = "'$p'"
-        $lines += "$inner" + $quoted.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Map[$p])
+    $pad = ' ' * $Indent
+    $inner = ' ' * ($Indent + 2)
+    $lines = @("$pad$(script:Format-JsonString $Name): {")
+    for ($i = 0; $i -lt $Keys.Count; $i++) {
+        $comma = if ($i -lt $Keys.Count - 1) { ',' } else { '' }
+        $lines += "$inner$(script:Format-JsonString $Keys[$i]): $(script:Format-JsonString $Map[$Keys[$i]])$comma"
     }
-    $lines += "$outer}"
+    $lines += "$pad}"
     return ($lines -join "`n")
 }
 
-function script:Format-PlatformStringArray {
+function script:Format-JsonStringArray {
     param(
         [Parameter(Mandatory)] [string[]] $Items,
-        [Parameter(Mandatory)] [int] $OuterIndent
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [int] $Indent
     )
-    # Renders:
-    #     @(
-    #         'windows-arm64'
-    #     )
-    $outer = ' ' * $OuterIndent
-    $inner = ' ' * ($OuterIndent + 4)
-    $lines = @('@(')
-    foreach ($v in $Items) {
-        $lines += "$inner" + (script:Format-StringValue $v)
+    $pad = ' ' * $Indent
+    $inner = ' ' * ($Indent + 2)
+    $lines = @("$pad$(script:Format-JsonString $Name): [")
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        $comma = if ($i -lt $Items.Count - 1) { ',' } else { '' }
+        $lines += "$inner$(script:Format-JsonString $Items[$i])$comma"
     }
-    $lines += "$outer)"
+    $lines += "$pad]"
     return ($lines -join "`n")
 }
 
@@ -517,14 +554,7 @@ function script:Format-ToolEntry {
         [Parameter(Mandatory)] [int] $Indent
     )
     $pad = ' ' * $Indent
-    $padInner = ' ' * ($Indent + 4)
-    # Compute the alignment column from the longest key actually present.
-    $keys = @('name', 'version', 'urlTemplate', 'archive', 'entrypoint')
-    if ($Tool.Contains('platformAliases')) { $keys += 'platformAliases' }
-    if ($Tool.Contains('unsupportedPlatforms')) { $keys += 'unsupportedPlatforms' }
-    if ($Tool.Contains('archives')) { $keys += 'archives' }
-    $keys += 'sha256'
-    $keyWidth = ($keys | Measure-Object -Property Length -Maximum).Maximum
+    $padInner = ' ' * ($Indent + 2)
 
     $unsupported = @()
     if ($Tool.Contains('unsupportedPlatforms')) {
@@ -532,53 +562,55 @@ function script:Format-ToolEntry {
     }
     $supportedPlatforms = $script:platforms | Where-Object { $unsupported -notcontains $_ }
 
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("$pad@{")
-    $lines.Add("$padInner" + 'name'.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Tool.name))
-    $lines.Add("$padInner" + 'version'.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Tool.version))
-    $lines.Add("$padInner" + 'urlTemplate'.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Tool.urlTemplate))
-    $lines.Add("$padInner" + 'archive'.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Tool.archive))
-    $lines.Add("$padInner" + 'entrypoint'.PadRight($keyWidth) + ' = ' + (script:Format-StringValue $Tool.entrypoint))
+    $blocks = New-Object System.Collections.Generic.List[string]
+    foreach ($scalar in @('name', 'version', 'urlTemplate', 'archive', 'entrypoint')) {
+        $blocks.Add("$padInner$(script:Format-JsonString $scalar): $(script:Format-JsonString ([string]$Tool[$scalar]))")
+    }
     if ($Tool.Contains('platformAliases')) {
-        $aliasBlock = script:Format-PlatformHashBlock -Map $Tool.platformAliases -OuterIndent ($Indent + 4) -Keys $supportedPlatforms
-        $lines.Add("$padInner" + 'platformAliases'.PadRight($keyWidth) + ' = ' + $aliasBlock)
+        $blocks.Add((script:Format-JsonMap -Map $Tool.platformAliases -Name 'platformAliases' -Indent ($Indent + 2) -Keys $supportedPlatforms))
     }
     if ($Tool.Contains('unsupportedPlatforms')) {
-        $unsupportedBlock = script:Format-PlatformStringArray -Items $unsupported -OuterIndent ($Indent + 4)
-        $lines.Add("$padInner" + 'unsupportedPlatforms'.PadRight($keyWidth) + ' = ' + $unsupportedBlock)
+        $blocks.Add((script:Format-JsonStringArray -Items $unsupported -Name 'unsupportedPlatforms' -Indent ($Indent + 2)))
     }
     if ($Tool.Contains('archives')) {
-        $archivesBlock = script:Format-PlatformHashBlock -Map $Tool.archives -OuterIndent ($Indent + 4) -Keys $supportedPlatforms
-        $lines.Add("$padInner" + 'archives'.PadRight($keyWidth) + ' = ' + $archivesBlock)
+        $blocks.Add((script:Format-JsonMap -Map $Tool.archives -Name 'archives' -Indent ($Indent + 2) -Keys $supportedPlatforms))
     }
-    $shaBlock = script:Format-PlatformHashBlock -Map $Tool.sha256 -OuterIndent ($Indent + 4) -Keys $supportedPlatforms
-    $lines.Add("$padInner" + 'sha256'.PadRight($keyWidth) + ' = ' + $shaBlock)
+    $blocks.Add((script:Format-JsonMap -Map $Tool.sha256 -Name 'sha256' -Indent ($Indent + 2) -Keys $supportedPlatforms))
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("$pad{")
+    for ($i = 0; $i -lt $blocks.Count; $i++) {
+        $comma = if ($i -lt $blocks.Count - 1) { ',' } else { '' }
+        $lines.Add($blocks[$i] + $comma)
+    }
     $lines.Add("$pad}")
     return ($lines -join "`n")
 }
 
-function script:Format-Lock {
+function script:Format-Pins {
     param(
         [Parameter(Mandatory)] [string] $Header,
         [Parameter(Mandatory)] [int] $SchemaVersion,
-        [Parameter(Mandatory)] $Tools
+        [Parameter(Mandatory)] $Tools,
+        [Parameter(Mandatory)] [string] $Tail
     )
     $body = New-Object System.Collections.Generic.List[string]
-    $body.Add($Header.TrimEnd())
-    $body.Add('@{')
-    $body.Add('    schemaVersion = ' + $SchemaVersion)
+    $body.Add($Header.TrimEnd("`n"))
+    $body.Add('  "schemaVersion": ' + $SchemaVersion + ',')
+    $body.Add('')
     if ($Tools.Count -eq 0) {
-        $body.Add('    tools         = @()')
+        $body.Add('  "tools": [],')
     }
     else {
-        $body.Add('    tools         = @(')
+        $body.Add('  "tools": [')
         for ($i = 0; $i -lt $Tools.Count; $i++) {
-            $entry = script:Format-ToolEntry -Tool $Tools[$i] -Indent 8
-            $body.Add($entry)
+            $comma = if ($i -lt $Tools.Count - 1) { ',' } else { '' }
+            $body.Add((script:Format-ToolEntry -Tool $Tools[$i] -Indent 4) + $comma)
         }
-        $body.Add('    )')
+        $body.Add('  ],')
     }
-    $body.Add('}')
+    $body.Add('')
+    $body.Add($Tail.TrimEnd("`n"))
     return ($body -join "`n") + "`n"
 }
 
@@ -586,16 +618,28 @@ function script:Format-Lock {
 # Main flow
 # ----------------------------------------------------------------------
 
-# Extract the leading comment block (everything before the first @{ at
-# column 0) so we preserve the schema documentation.
-$existingText = Get-Content -LiteralPath $LockPath -Raw
-$openIdx = $existingText.IndexOf("`n@{")
-if ($openIdx -lt 0) {
-    throw "Could not find '@{' opening brace in $LockPath."
-}
-$header = $existingText.Substring(0, $openIdx)
+# Split the manifest into (header comments + '{'), the regenerated
+# schemaVersion/tools payload, and the preserved policyLibrary/tflintPlugins
+# tail. Both boundaries are anchored on structural markers so every JSONC
+# comment outside the tools array survives a refresh untouched.
+$existingText = ((Get-Content -LiteralPath $PinsPath -Raw) -replace "`r`n", "`n")
+$existingLines = $existingText -split "`n"
 
-$existing = Import-PowerShellDataFile -LiteralPath $LockPath
+$headerEnd = -1
+$tailStart = -1
+$toolsClose = -1
+for ($i = 0; $i -lt $existingLines.Count; $i++) {
+    if ($headerEnd -lt 0 -and $existingLines[$i] -match '^\s*"schemaVersion"\s*:') { $headerEnd = $i }
+    if ($headerEnd -ge 0 -and $toolsClose -lt 0 -and $existingLines[$i] -match '^\s{2}\],\s*$') { $toolsClose = $i }
+    if ($toolsClose -ge 0 -and $tailStart -lt 0 -and $existingLines[$i] -match '^\s*//\s*=+\s*$') { $tailStart = $i }
+}
+if ($headerEnd -lt 0) { throw "Could not find the '`"schemaVersion`"' key in $PinsPath." }
+if ($tailStart -lt 0) { throw "Could not find the trailing section banner after the tools array in $PinsPath." }
+
+$header = ($existingLines[0..($headerEnd - 1)] -join "`n")
+$tail = ($existingLines[$tailStart..($existingLines.Count - 1)] -join "`n")
+
+$existing = script:Read-PinsFile -Path $PinsPath
 $schemaVersion = [int]$existing.schemaVersion
 $toolList = @($existing.tools)
 
@@ -616,7 +660,7 @@ foreach ($t in $toolList) {
         $merged.Add($replacement)
     }
     else {
-        $merged.Add($t)
+        $merged.Add([hashtable]$t)
     }
 }
 foreach ($n in $newEntries) {
@@ -628,33 +672,46 @@ foreach ($n in $newEntries) {
 # Sort tools alphabetically by name so diffs stay stable across refreshes.
 $sorted = @($merged | Sort-Object { [string]$_.name })
 
-$rendered = script:Format-Lock -Header $header -SchemaVersion $schemaVersion -Tools $sorted
+if ($PolicyLibrary) {
+    $policy = script:Get-PolicyLibraryPin -Ref $PolicyLibrary -Existing $existing.policyLibrary
+    $tail = $tail `
+        -replace '(?m)^(\s*"ref"\s*:\s*)"[^"]*"', ('${1}' + (script:Format-JsonString $policy.ref)) `
+        -replace '(?m)^(\s*"sha256"\s*:\s*)"[^"]*"', ('${1}' + (script:Format-JsonString $policy.sha256))
+}
 
-# Validate the new content by routing through the real Test-AvmToolsLock
+foreach ($plugin in $TflintPlugin.Keys) {
+    $version = [string]$TflintPlugin[$plugin]
+    $pattern = '(?ms)("' + [regex]::Escape($plugin) + '"\s*:\s*)"[^"]*"(?=[^{}]*\}\s*\}?\s*$)'
+    $tail = [regex]::Replace($tail, $pattern, { param($m) $m.Groups[1].Value + (script:Format-JsonString $version) })
+}
+
+$rendered = script:Format-Pins -Header $header -SchemaVersion $schemaVersion -Tools $sorted -Tail $tail
+
+# Validate the new content by routing through the real Test-AvmPins
 # in the Avm.Authoring module before touching the file on disk.
-$validateTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-lock-validate-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.psd1')
+$validateTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-pins-validate-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.jsonc')
 # Direct file write so validation runs even under -WhatIf.
-[System.IO.File]::WriteAllText($validateTmp, ($rendered -replace "`r`n", "`n"))
+[System.IO.File]::WriteAllText($validateTmp, $rendered, [System.Text.UTF8Encoding]::new($false))
 try {
     Import-Module (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-    $parsed = Import-PowerShellDataFile -LiteralPath $validateTmp
-    & (Get-Module Avm.Authoring) { param($L) Test-AvmToolsLock -Lock $L | Out-Null } $parsed
-    Write-Host 'Lock validation: OK' -ForegroundColor Green
+    $parsed = script:Read-PinsFile -Path $validateTmp
+    & (Get-Module Avm.Authoring) { param($L) Test-AvmPins -Pins $L | Out-Null } $parsed
+    Write-Host 'Pin manifest validation: OK' -ForegroundColor Green
 }
 finally {
     Remove-Item -LiteralPath $validateTmp -Force -ErrorAction SilentlyContinue
 }
 
-if ($PSCmdlet.ShouldProcess($LockPath, 'Write refreshed tools.lock.psd1')) {
-    # Use LF line endings to match repo convention.
-    [System.IO.File]::WriteAllText($LockPath, ($rendered -replace "`r`n", "`n"))
-    Write-Host "Wrote $LockPath" -ForegroundColor Green
-    Write-Host ("  Tools in lock: {0}" -f $sorted.Count)
+if ($PSCmdlet.ShouldProcess($PinsPath, 'Write refreshed avm.pins.jsonc')) {
+    # Use LF line endings and UTF-8 without a BOM to match repo convention.
+    [System.IO.File]::WriteAllText($PinsPath, $rendered, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Wrote $PinsPath" -ForegroundColor Green
+    Write-Host ("  Tools pinned: {0}" -f $sorted.Count)
     foreach ($t in $sorted) {
         Write-Host ("    - {0} {1}" -f $t.name, $t.version)
     }
 }
 else {
-    Write-Host '(WhatIf) Lock file would be:' -ForegroundColor Yellow
+    Write-Host '(WhatIf) Pin manifest would be:' -ForegroundColor Yellow
     Write-Host $rendered
 }

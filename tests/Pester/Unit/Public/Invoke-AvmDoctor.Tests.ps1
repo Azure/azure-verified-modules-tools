@@ -23,44 +23,32 @@ BeforeAll {
         if ($urlPath -notmatch '^/') { $urlPath = '/' + $urlPath }
         $fileUrl = "file://$urlPath"
 
-        $unsupportedLine = ''
-        if ($UnsupportedPlatforms) {
-            $items = ($UnsupportedPlatforms | ForEach-Object { "'$_'" }) -join ', '
-            $unsupportedLine = "            unsupportedPlatforms = @($items)`n"
-        }
-
         $allPlatforms = @(
             'windows-amd64', 'windows-arm64',
             'linux-amd64', 'linux-arm64',
             'darwin-amd64', 'darwin-arm64'
         )
         $unsupported = if ($UnsupportedPlatforms) { @($UnsupportedPlatforms) } else { @() }
-        $shaLines = foreach ($p in $allPlatforms) {
+        $shaMap = [ordered]@{}
+        foreach ($p in $allPlatforms) {
             if ($unsupported -contains $p) { continue }
-            "                '$p' = '$sha'"
+            $shaMap[$p] = $sha
         }
-        $shaBody = $shaLines -join "`n"
 
-        $lockText = @"
-@{
-    schemaVersion = 1
-    tools = @(
-        @{
-            name = '$ToolName'
-            version = '$ToolVersion'
-            urlTemplate = '$fileUrl'
-            archive = 'raw'
-            entrypoint = '$ToolName'
-$unsupportedLine            sha256 = @{
-$shaBody
-            }
+        $tool = [ordered]@{
+            name        = $ToolName
+            version     = $ToolVersion
+            urlTemplate = $fileUrl
+            archive     = 'raw'
+            entrypoint  = $ToolName
         }
-    )
-}
-"@
-        $lockPath = Join-Path $Root 'tools.lock.psd1'
-        Set-Content -LiteralPath $lockPath -Value $lockText -Encoding utf8
-        return $lockPath
+        if ($UnsupportedPlatforms) { $tool['unsupportedPlatforms'] = @($UnsupportedPlatforms) }
+        $tool['sha256'] = $shaMap
+
+        $pins = [ordered]@{ schemaVersion = 1; tools = @($tool) }
+        $pinsPath = Join-Path $Root 'avm.pins.jsonc'
+        Set-Content -LiteralPath $pinsPath -Value ($pins | ConvertTo-Json -Depth 8) -Encoding utf8
+        return $pinsPath
     }
 
     $script:savedAvmHome = if (Test-Path Env:\AVM_HOME) { $env:AVM_HOME } else { $null }
@@ -124,11 +112,11 @@ Describe 'Invoke-AvmDoctor -Install' {
         $env:AVM_HOME = $script:sandbox
 
         $script:fixtureRoot = Join-Path $TestDrive ("fx-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        $script:lockPath = New-DoctorFixture -Root $script:fixtureRoot
+        $script:pinsPath = New-DoctorFixture -Root $script:fixtureRoot
     }
 
     It 'installs the tool and adds an OK "Install tool" check' {
-        $result = Invoke-AvmDoctor -Install -LockPath $script:lockPath -AllowFileUrls
+        $result = Invoke-AvmDoctor -Install -PinsPath $script:pinsPath -AllowFileUrls
         $result.Status | Should -Be 'OK'
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool (fake-tool*' })
         $installCheck.Count | Should -Be 1
@@ -137,15 +125,15 @@ Describe 'Invoke-AvmDoctor -Install' {
     }
 
     It 'reports cache-hit on the second invocation' {
-        Invoke-AvmDoctor -Install -LockPath $script:lockPath -AllowFileUrls | Out-Null
-        $second = Invoke-AvmDoctor -Install -LockPath $script:lockPath -AllowFileUrls
+        Invoke-AvmDoctor -Install -PinsPath $script:pinsPath -AllowFileUrls | Out-Null
+        $second = Invoke-AvmDoctor -Install -PinsPath $script:pinsPath -AllowFileUrls
         $installCheck = @($second.Checks | Where-Object { $_.Name -like 'Install tool (fake-tool*' })[0]
         $installCheck.Detail | Should -Match '^cache-hit: '
     }
 
     It 'reinstalls when -Force is set' {
-        Invoke-AvmDoctor -Install -LockPath $script:lockPath -AllowFileUrls | Out-Null
-        $forced = Invoke-AvmDoctor -Install -Force -LockPath $script:lockPath -AllowFileUrls
+        Invoke-AvmDoctor -Install -PinsPath $script:pinsPath -AllowFileUrls | Out-Null
+        $forced = Invoke-AvmDoctor -Install -Force -PinsPath $script:pinsPath -AllowFileUrls
         $installCheck = @($forced.Checks | Where-Object { $_.Name -like 'Install tool (fake-tool*' })[0]
         $installCheck.Detail | Should -Match '^installed: '
     }
@@ -154,7 +142,7 @@ Describe 'Invoke-AvmDoctor -Install' {
         $platform = InModuleScope 'Avm.Authoring' { Get-AvmToolPlatform }
         $skipFixture = Join-Path $TestDrive ("fx-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         $skipLock = New-DoctorFixture -Root $skipFixture -UnsupportedPlatforms @($platform)
-        $result = Invoke-AvmDoctor -Install -LockPath $skipLock -AllowFileUrls
+        $result = Invoke-AvmDoctor -Install -PinsPath $skipLock -AllowFileUrls
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool*' })[0]
         $installCheck.Status | Should -Be 'Skip'
         $result.Status | Should -Be 'OK'
@@ -164,7 +152,7 @@ Describe 'Invoke-AvmDoctor -Install' {
     It 'marks the check Fail when the payload SHA256 has been tampered with, but other checks survive' {
         $tamperedFixture = Join-Path $TestDrive ("fx-bad-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         $tamperedLock = New-DoctorFixture -Root $tamperedFixture -TamperedSha ('1' * 64)
-        $result = Invoke-AvmDoctor -Install -LockPath $tamperedLock -AllowFileUrls
+        $result = Invoke-AvmDoctor -Install -PinsPath $tamperedLock -AllowFileUrls
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool*' })[0]
         $installCheck.Status | Should -Be 'Fail'
         $result.Status | Should -Be 'Fail'
@@ -173,7 +161,7 @@ Describe 'Invoke-AvmDoctor -Install' {
     }
 
     It 'supports -WhatIf: emits a Skip check and does not install' {
-        $result = Invoke-AvmDoctor -Install -WhatIf -LockPath $script:lockPath -AllowFileUrls
+        $result = Invoke-AvmDoctor -Install -WhatIf -PinsPath $script:pinsPath -AllowFileUrls
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool*' })[0]
         $installCheck.Status | Should -Be 'Skip'
         $installCheck.Detail | Should -Match 'ShouldProcess'
@@ -205,8 +193,8 @@ Describe 'avm doctor (dispatcher routes)' {
 
     It 'routes "avm doctor --install" with all install flags through the dispatcher' {
         $fixtureRoot = Join-Path $TestDrive ("fx-disp-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        $lockPath = New-DoctorFixture -Root $fixtureRoot
-        $result = avm doctor --install --LockPath $lockPath --AllowFileUrls
+        $pinsPath = New-DoctorFixture -Root $fixtureRoot
+        $result = avm doctor --install --PinsPath $pinsPath --AllowFileUrls
         $result.Status | Should -Be 'OK'
         $installCheck = @($result.Checks | Where-Object { $_.Name -like 'Install tool (fake-tool*' })[0]
         $installCheck.Status | Should -Be 'OK'

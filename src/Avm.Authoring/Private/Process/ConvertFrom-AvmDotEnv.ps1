@@ -75,9 +75,9 @@ function ConvertFrom-AvmDotEnv {
         }
 
         $value = $trimmed.Substring($eq + 1)
-        if ($value.Length -ge 2 -and
-            (($value.StartsWith('"') -and $value.EndsWith('"')) -or
-             ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+        $isDoubleQuoted = $value.StartsWith('"') -and $value.EndsWith('"')
+        $isSingleQuoted = $value.StartsWith("'") -and $value.EndsWith("'")
+        if ($value.Length -ge 2 -and ($isDoubleQuoted -or $isSingleQuoted)) {
             $value = $value.Substring(1, $value.Length - 2)
         }
         else {

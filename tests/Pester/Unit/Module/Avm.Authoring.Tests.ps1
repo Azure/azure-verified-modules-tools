@@ -90,8 +90,8 @@ Describe 'Avm.Authoring module' {
                 Should -BeNullOrEmpty
         }
 
-        It 'does not leak private helpers (Test-AvmToolsLock is module-private)' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Test-AvmToolsLock' -ErrorAction SilentlyContinue |
+        It 'does not leak private helpers (Test-AvmPins is module-private)' {
+            Get-Command -Module 'Avm.Authoring' -Name 'Test-AvmPins' -ErrorAction SilentlyContinue |
                 Should -BeNullOrEmpty
         }
     }

@@ -16,7 +16,7 @@ The stance has three pillars:
 
 - **Secure by design.** Every new public verb, network call, subprocess invocation, file write, and credential touch is threat-modelled at PR time (what data is handled, which identities are touched, which dependencies are added, what the blast radius is on compromise). New code that fails the threat-model pass is rejected — patches do not happen post-merge.
 - **Secure by default.** Defaults never compromise the user. TLS 1.2 minimum (section 16). `GITHUB_TOKEN: contents: read` unless a write scope is justified job-by-job (section 17). No `-SkipCertificateCheck` (section 16). No plain-text secrets in parameter form (section 17). No `Invoke-Expression`, no `cmd /c`, no `bash -c` on user input (section 9). No PATH-resolved tool execution unless the caller explicitly opts in with `-AllowPathFallback` (section 10).
-- **Secure operations.** Every external dependency is pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Tool binaries are pinned by SHA256 in `Resources/tools.lock.psd1` and verified on every download (section 10). PowerShell module dependencies are floor-pinned in the workflow with the release pipeline as the upgrade gate (section 20). Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
+- **Secure operations.** Every external dependency is pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Tool binaries are pinned by SHA256 in `Resources/avm.pins.jsonc` and verified on every download (section 10). PowerShell module dependencies are floor-pinned in the workflow with the release pipeline as the upgrade gate (section 20). Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
 
 A successful supply-chain attack against any of these dependencies must, by construction, require either a SHA collision (impractical) or a deliberate maintainer-side PR that re-publishes a known-good SHA — never a silent tag-repoint or a transparent version drift.
 
@@ -90,7 +90,7 @@ azure-verified-modules-tools/
         Bicep/                    # facade over utilities/tools PS scripts
         Terraform/                # facade over avmfix/mapotf/grept/terraform
       Resources/
-        tools.lock.psd1           # pinned tool versions + SHA256
+        avm.pins.jsonc           # pinned tool versions + SHA256
         PSScriptAnalyzerSettings.psd1
       en-US/                      # Import-LocalizedData strings
       README.md
@@ -285,20 +285,29 @@ This is the integration point for `mise` / `asdf` / `tenv` users who centralise 
 
 ### Per-repo files
 
-When the CLI needs to drop state inside the user's module repo (rare — only when something must travel with the working copy), it goes under `.avm/`:
+The CLI does not require any per-repo state. Persistent state (tool cache,
+resolved governance assets, logs) lives under `$AVM_HOME` / the per-OS
+folders described in §7, never inside the user's module repo.
+
+A repo may *optionally* carry a hand-authored `.avm/` folder to override
+defaults for that working copy. These files are authored by the user and
+committed (or not) at their discretion; the CLI only ever reads them:
 
 ```text
 <repo>/
   .avm/
-    config.json            # per-repo overrides
-    cache/                 # resolved governance assets, pinned to a ref
-    logs/                  # last-run logs for diagnostics
+    config.json            # per-repo pinned-asset / policy overrides
+    managed-files.json     # per-repo managed-files sync-source override
+    context.psd1           # per-repo context override
     .disable               # zero-byte sentinel — CLI refuses to run if present
 ```
 
 Rules:
 
-- The CLI adds `.avm/` to the repo's `.gitignore` on first write (idempotent — checked first).
+- The CLI never creates `.avm/` and never writes into it. If none of these
+  files exist, the CLI runs entirely from packaged defaults and `$AVM_HOME`.
+- The CLI never adds `.avm/` (or anything else) to the repo's `.gitignore`.
+  Whether `.avm/` overrides are tracked in git is the user's choice.
 - The leading dot is a Unix convention. Windows Explorer does not treat dotfiles as hidden, and we **do not** set `FILE_ATTRIBUTE_HIDDEN` via `attrib +h` — too surprising and not worth the friction.
 - The CLI never creates other dotfiles or dot-folders in user repos (no `.avm-cache`, no `.avmrc`, etc.). One folder, one namespace.
 - A `.avm/.disable` sentinel makes the CLI exit `2` with a clear message: `"avm is disabled in this repository (remove .avm/.disable to re-enable)"`. This gives a clean opt-out for repos that don't want the CLI to ever touch them, even by accident.
@@ -341,9 +350,9 @@ Anything that draws progress bars or uses ANSI escapes guards on `-not [Console]
 
 Extends §6 of the consolidation plan with concrete OS-aware paths and file conventions.
 
-### `tools.lock.psd1`
+### `avm.pins.jsonc`
 
-Schema enforced by `Test-AvmToolsLock`:
+Schema enforced by `Test-AvmPins`:
 
 ```powershell
 @{
@@ -389,8 +398,10 @@ Schema enforced by `Test-AvmToolsLock`:
 ### Lookup order on every invocation
 
 1. **Cache** — `<Data>/tools/<tool>/<version>/<entrypoint>[.exe]` exists and `.verified` marker present → use it.
-2. **PATH** — `Get-Command <entrypoint> -ErrorAction SilentlyContinue` → if found and reports the locked version, use it. If found but wrong version, warn once and fall through to install.
-3. **Install** — silent under `AVM_AUTO_INSTALL=1` or when `$env:CI` / `$env:GITHUB_ACTIONS` is set; prompts otherwise.
+2. **PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
+3. **Auto-install (default)** — a cache miss transparently installs the locked version from the lock file, into the cache, verifying its SHA-256 (same atomic, locked, `.verified`-marked path as `avm tool install`). A concise progress message is emitted the first time so a first run is not a mysterious pause. This is on by default both locally and in CI — the consumer never needs to run a separate install step. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable it for locked-down / air-gapped environments; a cache miss then fails fast with an actionable `avm tool install <tool>` message instead of downloading. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply to the download (see below).
+
+`avm tool list` mirrors this exact order: it reports `installed` for a cache hit, `not-installed` when a cache miss would auto-install, `auto-install-disabled` when a cache miss would hard-fail under `AVM_NO_AUTO_INSTALL`, and `installed-on-path` / `outdated-on-path` only when invoked with `-AllowPathFallback`. It never claims a tool is usable via PATH that the engines would actually ignore.
 
 ### Offline mode
 
@@ -562,8 +573,8 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Tool binary supply chain
 
-- Every binary downloaded by `Resolve-AvmTool` is SHA256-verified against `Resources/tools.lock.psd1` (section 10). A mismatch throws `AvmToolException` with both the expected and the actual hash. The lock file is the only sanctioned source of truth.
-- `scripts/Update-AvmToolsLock.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
+- Every binary downloaded by `Resolve-AvmTool` is SHA256-verified against `Resources/avm.pins.jsonc` (section 10). A mismatch throws `AvmToolException` with both the expected and the actual hash. The lock file is the only sanctioned source of truth.
+- `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
 - The repo bundles no precompiled binaries. Everything is fetched at first use and cached under the user's standard cache root (section 7).
 
 ### Module manifest and release pipeline
@@ -679,7 +690,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 ## 24. Glossary
 
 - **AVM** — Azure Verified Modules.
-- **Lock manifest** — `src/Avm.Authoring/Resources/tools.lock.psd1`. Pins every managed tool's version and SHA256.
+- **Lock manifest** — `src/Avm.Authoring/Resources/avm.pins.jsonc`. Pins every managed tool's version and SHA256.
 - **Managed tool** — any binary the CLI installs and resolves itself (Terraform, TFLint, `avmfix`, …).
 - **Module context** — the `pscustomobject` returned by `Get-AvmModuleContext` describing a Bicep or Terraform module's root, ecosystem, scope, and owner.
 - **Public verb** — a verb exposed to end users via the `avm` dispatcher and the approved-verb cmdlets. Every public verb is in §4 of the plan.

@@ -212,7 +212,7 @@ if ($obj.PSObject.Properties['Children']) { $obj.Children }
 
 **`AVM_MIRROR`.** When set, every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. The mirror itself **MUST** be `https://` — an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy can't silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
 
-**Tool binary supply chain.** Pinned in `src/Avm.Authoring/Resources/tools.lock.psd1`. The lock file is the only sanctioned source of truth for SHA256s. `scripts/Update-AvmToolsLock.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation records what was updated and which upstream release notes were reviewed. No precompiled binaries in the repo — everything is fetched at first use and cached under `Get-AvmFolder Tools`.
+**Tool binary supply chain.** Pinned in `src/Avm.Authoring/Resources/avm.pins.jsonc`. The lock file is the only sanctioned source of truth for SHA256s. `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation records what was updated and which upstream release notes were reviewed. No precompiled binaries in the repo — everything is fetched at first use and cached under `Get-AvmFolder Tools`.
 
 > See also: [`avm-implementation-spec.md` §10](avm-implementation-spec.md#10-tool-resolver-and-cache), [`avm-implementation-spec.md` §16](avm-implementation-spec.md#16-networking), [`avm-implementation-spec.md` §17](avm-implementation-spec.md#17-security).
 
@@ -331,7 +331,43 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 > See also: [`AGENTS.md`](../AGENTS.md) § Commit & push protocol.
 
----
+## 12. Packaged governance assets
+
+Some governance-authored assets are **vendored into the module** under `src/Avm.Authoring/Resources/` because the engines need them at runtime and cannot reach the consumer repo's synced copies (they run before or independently of `avm sync`). These are copies, so they can drift from their upstream source in `Azure/avm-terraform-governance`.
+
+Currently vendored:
+
+- `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`, `avm.tflint_example.hcl` — from governance `tflint-configs/`, applied per scope by `Invoke-AvmTerraformLint` (root / `modules/*` / `examples/*`).
+- `Resources/mapotf/pre-commit/*.mptf.hcl` — from governance `mapotf-configs/pre-commit/`, used by `Invoke-AvmTerraformTransform`.
+
+**Update process.**
+
+*TFLint configs* — when governance moves ahead:
+
+1. Compare the vendored files against upstream `main`:
+   ```powershell
+   'avm.tflint.hcl','avm.tflint_module.hcl','avm.tflint_example.hcl' | ForEach-Object {
+     $u = "https://raw.githubusercontent.com/Azure/avm-terraform-governance/main/tflint-configs/$_"
+     $local = Get-Content "src/Avm.Authoring/Resources/tflint/$_" -Raw
+     $remote = (Invoke-WebRequest $u -UseBasicParsing).Content
+     "{0}: {1}" -f $_, ($(if ($local -eq $remote) { 'up-to-date' } else { 'DRIFTED' }))
+   }
+   ```
+2. Re-fetch drifted files with `curl.exe -sSL <url> -o <path>`, normalise CRLF → LF, save UTF-8 no-BOM, keep ASCII-only (the tflint configs are ASCII today; if upstream introduces non-ASCII, mirror it verbatim like the mapotf bundle below).
+3. Run `./build.ps1 pre-commit`; the packaging guard in `Test-AvmModuleLayout.Tests.ps1` asserts both the tflint configs (still pinning the `avm` plugin) and the mapotf bundle exist under `Resources/`.
+4. Note the refresh (and the upstream commit SHA) in the changelog so releases don't silently drift.
+
+*mapotf pre-commit bundle* — the module is the source of truth; upstream governance is expected to drop its `mapotf-configs/pre-commit/` copy once every consumer is on the module. To detect and close drift against the pinned upstream revision:
+
+1. `pwsh scripts/Update-AvmMapotfConfig.ps1 -Check` reports drift against the `$Ref` pin baked into the script; CI runs this as a gate.
+2. `pwsh scripts/Update-AvmMapotfConfig.ps1` (optionally `-Ref <sha>` to move the pin) re-mirrors the bundle into `Resources/mapotf/pre-commit`.
+3. These configs are mirrored **byte-for-byte** and legitimately contain non-ASCII characters (em-dashes, arrows) in comments. Do **not** transcode them to ASCII. They are `.hcl`, so the `src/` encoding guard (BOM/CRLF check on a fixed extension list) and PSScriptAnalyzer do not scan them.
+4. When the pin moves, update the `$Ref` default in the script and record the new SHA in the changelog.
+
+**Deliberate deviations from the governance chain** (documented so a future reader doesn't "fix" them as bugs):
+
+- Lint does **not** run `terraform init` per scope. It relies on `tflint --init` (plugin acquisition) only. If real-world provider-schema-dependent rules start erroring, the follow-up is a per-scope `terraform init`, tracked as a new finding rather than assumed here.
+- No `*.override.hcl` merge and no `AVM_TFLINT_CONFIG_URL`-style remote fetch. The only supported override is `AVM_TFLINT_CONFIG_DIR` pointing at a directory that contains all three configs; otherwise the vendored copies are authoritative.
 
 ## Appendix D. Decision: long-path support on Windows
 
@@ -372,7 +408,7 @@ Tool cache is comfortable. Logs are comfortable. Staging directory is comfortabl
 $versionDir = Join-Path $assetDir $sha   # $sha is 64 hex chars
 ```
 
-This violates spec §6 line 220 ("first 12 hex of SHA256, not full hashes"). For comparison, `src/Avm.Authoring/Private/Tools/Install-AvmToolFromLock.ps1` (line 46) correctly avoids hash segments entirely — it uses `<DataDir>/tools/<tool>/<version>/<binary>` because tool installs are version-addressed, not content-addressed. The staging directory (`Install-AvmToolFromLock.ps1` line 109) already uses a 12-character GUID, so the precedent for short identifiers is already in the codebase.
+This violates spec §6 line 220 ("first 12 hex of SHA256, not full hashes"). For comparison, `src/Avm.Authoring/Private/Tools/Install-AvmToolFromPins.ps1` (line 46) correctly avoids hash segments entirely — it uses `<DataDir>/tools/<tool>/<version>/<binary>` because tool installs are version-addressed, not content-addressed. The staging directory (`Install-AvmToolFromPins.ps1` line 109) already uses a 12-character GUID, so the precedent for short identifiers is already in the codebase.
 
 A short hash buys 52 chars of headroom on every asset path, which is roughly the difference between "uncomfortable" and "comfortable" for the realistic mapotf bundle.
 
@@ -499,7 +535,7 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 ## Appendix B. Decision: mapotf replacement strategy
 
 > **UPDATE 2026-06-19 — supply-chain UNBLOCKED; recommendation flips from build-and-host to wrap-the-shipping-release. See [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh) for the authoritative current state.** Three facts changed since this audit was written:
-> 1. **`Azure/mapotf` now ships goreleaser releases.** Latest `v0.1.4` (published 2026-06-10) ships the canonical 6-platform archive shape (`mapotf_0.1.4_{os}_{arch}.{tar.gz|zip}` + `checksums.txt`) — identical to `conftest` / `terraform-docs`. The open follow-up #1 below ("confirm mapotf release-shipping status — the 2026-05-27 audit said no") is now **resolved: yes**. The build-and-host hosting decision (follow-up #2) is **moot** — no Azure-side workflow PR needed; we pin the upstream `Azure/mapotf` release directly in `tools.lock.psd1`.
+> 1. **`Azure/mapotf` now ships goreleaser releases.** Latest `v0.1.4` (published 2026-06-10) ships the canonical 6-platform archive shape (`mapotf_0.1.4_{os}_{arch}.{tar.gz|zip}` + `checksums.txt`) — identical to `conftest` / `terraform-docs`. The open follow-up #1 below ("confirm mapotf release-shipping status — the 2026-05-27 audit said no") is now **resolved: yes**. The build-and-host hosting decision (follow-up #2) is **moot** — no Azure-side workflow PR needed; we pin the upstream `Azure/mapotf` release directly in `avm.pins.jsonc`.
 > 2. **mapotf gained ordering/sorting transform primitives.** The per-config audit below predates `reorder_attributes`, `sort_blocks_in_file`, `remove_block_element`, and `move_block`. The live governance bundle is now **nine** configs (not three): `avm_headers_for_azapi`, `main_telemetry_tf`, `move_misplaced_blocks`, `order_module_attrs`, `order_resource_attrs`, `order_resource_meta`, `required_provider_versions`, `sort_outputs`, `sort_variables`. Together they realise the **entire** avmfix 10-behaviour catalogue from Appendix C — including the file-partitioning behaviours #5 + #7 that [Appendix I](#appendix-i-decision-hcl2json-adoption-for-narrow-file-layout-enforcement) was going to cover with `hcl2json`.
 > 3. **Recommended option is now: wrap the shipping `Azure/mapotf` release + pin the governance `mapotf-configs/pre-commit` bundle as a pinned-asset.** The "reimplement in PowerShell / `hcledit`" analysis below stands as the reason we don't reimplement — but the build-and-host conclusion is superseded. The Slice G recipe with concrete SHA256s lives in [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh).
 >
@@ -616,7 +652,7 @@ Concrete reasoning:
 
 1. **Confirm `avmfix` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 row in `docs/progress.md`) noted avmfix does not ship releases today. Owner: investigate `lonegunmanb/avmfix` (canonical home; no `Azure/avmfix` fork exists, unlike mapotf). If still absent → resolve next item.
 2. **Pick a hosting strategy for avmfix release artefacts.** Same A/B/C as mapotf: (i) PR a release workflow into upstream `lonegunmanb/avmfix`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — resolve once for both mapotf + avmfix.
-3. **Settle the `tools.lock.psd1` entry shape.** Same shape as `conftest` / `terraform-docs` (binary archive per platform, SHA256-verified). Six platforms: windows/linux/darwin × amd64/arm64. avmfix uses `go-releaser`-style naming if a release workflow is added.
+3. **Settle the `avm.pins.jsonc` entry shape.** Same shape as `conftest` / `terraform-docs` (binary archive per platform, SHA256-verified). Six platforms: windows/linux/darwin × amd64/arm64. avmfix uses `go-releaser`-style naming if a release workflow is added.
 4. **Decide whether to bundle behaviour #2's `terraform-config-inspect` dependency separately.** avmfix vendors it; if we ever rip the schema-free behaviours into PowerShell as an offline fallback, we'd need an equivalent. Defer until follow-up #2 lands.
 
 ### What is deliberately deferred
@@ -1071,13 +1107,13 @@ This Appendix is correct as long as the assumptions below hold. If any one start
 2. **User-reported false-positive accept.** Shim claims correct version but binary is materially different (e.g. mise resolves to a patched fork at the same semver). Mitigation: extend the lock with an optional `sha256OnPath` field; verify the binary against it when PATH-resolving.
 3. **`tenv` or `mise` adopts a non-semver version scheme.** e.g. nightly builds like `1.10.0-nightly-20260601`. The current regex matches the `1.10.0` prefix, which is the spec'd `[\-+]` suffix handling — should still work, but worth re-confirming if either tool changes its banner shape.
 4. **New managed tool whose `--version` output doesn't match the regex.** The lock schema would need a per-tool `versionMatcher` extension, plus the resolver would have to dispatch on it. Same shape as `unsupportedPlatforms`.
-5. **The auto-install policy spec deviation gets revisited.** The resolver throws on cache+PATH miss today, but spec §10 line 392 implies "fall through to install." If the verb dispatcher gains an `--auto-install` flag, the resolver may need a sibling `Resolve-AvmTool -AutoInstall` shape — handled then, not now.
+5. **The auto-install policy spec deviation gets revisited.** *(Resolved in 0.1.5 — F06.)* The resolver now auto-installs the locked version on a cache miss by default (`Resolve-AvmTool` → `Install-AvmToolFromPins`), gated only by `AVM_NO_AUTO_INSTALL=1` / `-NoAutoInstall`. PATH fallback is opt-in via `-AllowPathFallback`. See spec §10 "Lookup order".
 
 ### Deliberately deferred
 
 - **`-PreferShim` flag** — speculative; no concrete user request. Would invert precedence and complicate the audit table.
 - **Shim-brand allow-list** — overengineering for zero benefit. We measure the binary's reported version, not the shim's identity.
-- **Auto-install when shim missing** — separate policy decision owned by the dispatcher, per spec §10 line 393's `AVM_AUTO_INSTALL=1` heuristic.
+- **Auto-install when shim missing** — *(Implemented in 0.1.5 — F06.)* Owned by `Resolve-AvmTool`: a cache miss transparently installs the locked version by default; `AVM_NO_AUTO_INSTALL=1` restores the hard failure. See spec §10 "Lookup order".
 - **Shim chatter suppression (`MISE_QUIET=1` etc.)** — preemptive hardening for a trigger that hasn't fired. Re-evaluate when trigger (1) fires.
 - **Per-call resolution cache** — `Find-AvmToolOnPath` runs `--version` afresh on every call. Cold mise shim startup is ~200ms; a chain that resolves 5 tools pays ~1s of latency at the boundary. Annoying but not wrong; optimise when a user reports it.
 
@@ -1102,7 +1138,7 @@ This Appendix is correct as long as the assumptions below hold. If any one start
 - **Repository.** [`tmccombs/hcl2json`](https://github.com/tmccombs/hcl2json) — single-purpose CLI: parse an HCL file (or stdin), emit the parsed tree as JSON to stdout.
 - **License.** Apache-2.0.
 - **Implementation.** Go binary that wraps `hashicorp/hcl/v2` (currently `v2.24.0` — the same parser Terraform itself uses). Single static binary, no runtime dependencies, `go 1.25` toolchain at build time.
-- **Distribution.** Pre-built GitHub Releases assets across all six platforms we target (`darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`, `windows_amd64.exe`, `windows_arm64.exe`); `.tar.gz` / `.zip` archive variants also published; per-release `hcl2json_<ver>_checksums.txt` provides SHA256 for every asset. Verified against `v0.6.9` published 2026-04-04 (the current latest stable). Also packaged via Homebrew, MacPorts, mise, and Docker, but the GitHub Releases assets are what `tools.lock.psd1` would consume.
+- **Distribution.** Pre-built GitHub Releases assets across all six platforms we target (`darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`, `windows_amd64.exe`, `windows_arm64.exe`); `.tar.gz` / `.zip` archive variants also published; per-release `hcl2json_<ver>_checksums.txt` provides SHA256 for every asset. Verified against `v0.6.9` published 2026-04-04 (the current latest stable). Also packaged via Homebrew, MacPorts, mise, and Docker, but the GitHub Releases assets are what `avm.pins.jsonc` would consume.
 - **Surface area we'd use.** Bare invocation only: `hcl2json <file>` → JSON to stdout. `-simplify` (constant-folds expressions that don't reference unknown variables) and `-pack` (emit `hclpack` JSON instead of decoded JSON) exist but aren't relevant.
 - **Output shape.** Top-level JSON object whose keys are the block types present in the file. For a conforming `variables.tf` the only top-level key is `"variable"`; any other key is a violation. Each key maps to an array of objects keyed by the block labels (e.g. variable name). Labels and bodies are mirrored verbatim from the parsed HCL.
 
@@ -1120,21 +1156,21 @@ This Appendix is correct as long as the assumptions below hold. If any one start
 | **(a) PowerShell HCL parser (state machine)** | Reject | Brittle on heredocs / `${}` interpolation / escaped-quote labels / `//` + `/* */` comments. Write-once never-extend; reinventing a known-hard parser problem for a two-rule scope today. A second HCL-parsing need is foreseeable on the Terraform-side roadmap (variable-description extraction for docs, `validation {}` block detection, resource-label conventions) — going PowerShell-only here would compound the maintenance bill the moment that lands. |
 | **(b) `terraform-config-inspect`** | Defer | HashiCorp Go library that returns a typed module representation (variables, outputs, resources, providers, calls). Strictly more capable than `hcl2json` for module-wide inspection, but it's a library — not a CLI. Adopting it needs the same build-and-host pipeline that [Appendix B](#appendix-b-decision-mapotf-replacement-strategy) parks behind a hosting decision. Overkill for syntactic block-type enumeration. Re-evaluate if a use case emerges that `hcl2json` can't serve. |
 | **(c) `terraform` CLI built-ins** | Reject | No `terraform parse` command. `terraform fmt -check` only verifies whitespace + alignment. `terraform validate` needs `terraform init`. None enumerate top-level block types. |
-| **(d) `hcl2json` + PowerShell rule on top** | **Adopt** | Generic HCL → JSON via the canonical `hashicorp/hcl/v2` parser. Read-only (no `terraform init`, no provider gRPC, no registry HTTPS). Pre-built single binary on all six platforms. Apache-2.0 with active maintenance and SHA256-checksummed releases. Slots into the existing `tools.lock.psd1` shape without disturbance. |
+| **(d) `hcl2json` + PowerShell rule on top** | **Adopt** | Generic HCL → JSON via the canonical `hashicorp/hcl/v2` parser. Read-only (no `terraform init`, no provider gRPC, no registry HTTPS). Pre-built single binary on all six platforms. Apache-2.0 with active maintenance and SHA256-checksummed releases. Slots into the existing `avm.pins.jsonc` shape without disturbance. |
 
-### Recommended option: **(d) adopt `hcl2json` as a pinned `tools.lock.psd1` dependency**
+### Recommended option: **(d) adopt `hcl2json` as a pinned `avm.pins.jsonc` dependency**
 
 Concrete reasoning:
 
 1. **Smaller blast radius than the avmfix-style binaries Appendix C audits.** No `terraform init` requirement. No provider plugin download. No registry HTTPS. No gRPC subprocess management. Pure file → JSON in a single Go process. The whole interaction surface is one CLI flag and one stdout consumer.
 2. **Uses the canonical parser.** Wraps `hashicorp/hcl/v2 v2.24.0` directly — the same parser Terraform itself uses. Edge cases (heredocs, `${}` interpolation, escaped quotes in labels, `#` / `//` / `/* */` comments) are handled identically to Terraform; we get the correct answer for free, not by re-deriving HCL grammar in PowerShell.
 3. **Forward-looking primitive.** Beyond today's two rules, the same JSON output supports future Terraform-side needs already foreshadowed on the roadmap: variable-description extraction for docs generation, `validation {}` block detection per AVM codex, resource-label convention enforcement, `for_each` / `count` presence detection per resource. Each is a one-line walk over the JSON tree, not a new parser.
-4. **Bounded supply-chain cost vs Appendix B/C.** Single tool (vs avmfix's 37+ source files), no orchestration baggage (vs mapotf's cross-config dependency graph), upstream already ships releases (no release-workflow PR needed, no Azure-side build-and-host decision required). Slots into `tools.lock.psd1` with the same six-platform shape we already use for `terraform`, `conftest`, `terraform-docs`.
+4. **Bounded supply-chain cost vs Appendix B/C.** Single tool (vs avmfix's 37+ source files), no orchestration baggage (vs mapotf's cross-config dependency graph), upstream already ships releases (no release-workflow PR needed, no Azure-side build-and-host decision required). Slots into `avm.pins.jsonc` with the same six-platform shape we already use for `terraform`, `conftest`, `terraform-docs`.
 5. **Distinct chain from Slice H.** This is a **check-only** primitive that lives in `Invoke-AvmTerraformCheckConvention` (Slice C's chain), not `Format-AvmTerraformModule` (Slice H's chain). Slice H stays correct as `terraform fmt -recursive` alone — no avmfix-equivalent format step needed. The user's "flag a failure rather than attempting to fix" preference maps directly onto check-only semantics; auto-fix (block relocation) would require an HCL **writer**, which `hcl2json` is not.
 
 ### Slice R implementation outline (if option (d) holds)
 
-1. **Pin `hcl2json` in `tools.lock.psd1`.** Six platforms (`darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`, `windows_amd64`, `windows_arm64`), SHA256-verified against the upstream `hcl2json_<ver>_checksums.txt`. Version pin: latest stable at slice kick-off (currently `v0.6.9`). Extend [scripts/Update-AvmToolsLock.ps1](../scripts/Update-AvmToolsLock.ps1) with a `Get-Hcl2JsonEntry` helper (mirrors `Get-ConftestEntry` / `Get-TerraformDocsEntry`).
+1. **Pin `hcl2json` in `avm.pins.jsonc`.** Six platforms (`darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`, `windows_amd64`, `windows_arm64`), SHA256-verified against the upstream `hcl2json_<ver>_checksums.txt`. Version pin: latest stable at slice kick-off (currently `v0.6.9`). Extend [scripts/Update-AvmPins.ps1](../scripts/Update-AvmPins.ps1) with a `Get-Hcl2JsonEntry` helper (mirrors `Get-ConftestEntry` / `Get-TerraformDocsEntry`).
 2. **Add `Get-AvmHclBlockTypes` private helper** under `src/Avm.Authoring/Private/Hcl/Get-AvmHclBlockTypes.ps1`. Resolves `hcl2json` via `Resolve-AvmTool -Name 'hcl2json' -AllowPathFallback:$AllowPathFallback`, invokes via `Invoke-AvmProcess` with argv `<hcl2json> <file>`, runs the stdout through `ConvertFrom-Json -AsHashtable`, returns the sorted set of top-level keys. Throws `AvmConfigurationException` on missing tool (caller surfaces as `skipped` via the standard chain semantics); throws `AvmProcessException` on parser failure.
 3. **Add `Test-AvmRuleTerraformFileLayout` primitive** under `src/Avm.Authoring/Private/Rules/Primitives/`. `Parameters` shape: `@{ FilePattern = 'variables*.tf'; AllowedBlockType = 'variable' }`. Per matched file (walking the `AppliesTo` slots): run `Get-AvmHclBlockTypes`; pass iff the returned set is a subset of `@($AllowedBlockType)`; emit one `Issue` per offending file listing the unexpected block types and the file path.
 4. **Add two built-in rules** under `src/Avm.Authoring/Resources/Rules/` (slot continues the numbering convention from Slice D's 010–050):
@@ -1153,7 +1189,7 @@ Concrete reasoning:
 ### Open follow-ups before Slice R can land
 
 1. **Re-confirm `hcl2json` latest stable at slice kick-off.** Current as of this audit: `v0.6.9` (published 2026-04-04, per `https://api.github.com/repos/tmccombs/hcl2json/releases/latest`). Confirm + re-fetch `hcl2json_<ver>_checksums.txt` immediately before pinning.
-2. **Decide raw-binary vs archive pin.** Upstream publishes both per-platform raw binaries (simpler — no extract step) and `.tar.gz` / `.zip` archives (matches the shape of existing entries like `terraform-docs`). `tools.lock.psd1` schema accommodates both via the `archives` map. Default proposal: archives, for symmetry with sibling entries.
+2. **Decide raw-binary vs archive pin.** Upstream publishes both per-platform raw binaries (simpler — no extract step) and `.tar.gz` / `.zip` archives (matches the shape of existing entries like `terraform-docs`). `avm.pins.jsonc` schema accommodates both via the `archives` map. Default proposal: archives, for symmetry with sibling entries.
 3. **Settle `.tf.json` handling.** Terraform supports `variables.tf.json` (the JSON-equivalent surface). `hcl2json` does not parse `.tf.json` — it is already JSON. Default proposal for Slice R: skip `.tf.json` files; surface as a per-rule `IncludeJsonVariant` boolean if a user ever cares. Track as a follow-up not blocking Slice R.
 4. **Decide `FilePattern` glob semantics.** Upstream porch uses globbed filenames (`variables*.tf` matches `variables.tf` + `variables_extra.tf`). Default proposal for Slice R: glob — and surface the matched-file list in the `Issues` envelope so any false-positive is debuggable. Lock canonical-only behaviour later if module authors complain.
 5. **Regression-test fixture gap.** Will need committed HCL fixtures under `tests/fixtures/hcl/` covering: canonical `variables.tf` (only `variable` blocks), mixed-file (`variable` + `locals`), heredoc-containing variable (parser stress test), syntax-error file (parser must fail loudly, not silently pass). The integration stub also needs a `Get-Hcl2JsonStubLauncher.ps1` helper alongside `Install-AvmStubLauncher.ps1`.
@@ -1172,7 +1208,7 @@ Concrete reasoning:
 
 This appendix is the **authoritative current state** for the Terraform pre-commit pivot. Appendices B, C, and I above carry dated update banners pointing here; where they disagree with this appendix, **this appendix wins**.
 
-> **STATUS 2026-06-19 — Terraform `pre-commit` is DONE end-to-end.** `slice-g-transform` landed: `mapotf` v0.1.4 pinned in `tools.lock.psd1` (commit `1eb82d7`, six SHA256s from J.4 via `scripts/Update-AvmToolsLock.ps1 -Mapotf`); `Invoke-AvmTerraformTransform` wired against the vendored `config/mapotf/pre-commit/` — `mapotf transform` → `clean-backup`, `-CheckDrift` for pr-check, `tests/fixtures/bin/mapotf.ps1` stub, 12 unit + 3 integration tests — and threaded into the pre-commit/pr-check Terraform chains (commit `c3dd21a`). `g-testmodules` landed: both on-disk mock fixtures (`terraform-azurerm-avm-res-mock` 25 files, `terraform-azure-avm-res-mock` 45 files) refreshed to governance SHA `7f8c4ee` and **verified byte-for-byte against upstream** for the full functional Terraform surface (commit `664da48`). The pre-commit chain `check convention → transform → format → lint → test → docs` now has **zero stub engines**. Gate green at **432/0/7**; 3/3 Terraform integration tests pass.
+> **STATUS 2026-06-19 — Terraform `pre-commit` is DONE end-to-end.** `slice-g-transform` landed: `mapotf` v0.1.4 pinned in `avm.pins.jsonc` (commit `1eb82d7`, six SHA256s from J.4 via `scripts/Update-AvmPins.ps1 -Mapotf`); `Invoke-AvmTerraformTransform` wired against the vendored `config/mapotf/pre-commit/` — `mapotf transform` → `clean-backup`, `-CheckDrift` for pr-check, `tests/fixtures/bin/mapotf.ps1` stub, 12 unit + 3 integration tests — and threaded into the pre-commit/pr-check Terraform chains (commit `c3dd21a`). `g-testmodules` landed: both on-disk mock fixtures (`terraform-azurerm-avm-res-mock` 25 files, `terraform-azure-avm-res-mock` 45 files) refreshed to governance SHA `7f8c4ee` and **verified byte-for-byte against upstream** for the full functional Terraform surface (commit `664da48`). The pre-commit chain `check convention → transform → format → lint → test → docs` now has **zero stub engines**. Gate green at **432/0/7**; 3/3 Terraform integration tests pass.
 
 > **UPDATE 2026-06-19 (later) — `lint`+`test` removed from the Terraform `pre-commit` chain.** The chain in the banner above (`check convention → transform → format → lint → test → docs`) was the six-step Option (b) shape. On re-checking upstream `pre-commit.porch.yaml` at the pinned SHA `7f8c4ee`, upstream pre-commit runs **only** `mapotf transform` → `clean-backup` → `terraform-docs` (no tflint, no `terraform validate`/`test`); both `tflint` and validate live in `pr-check.porch.yaml`. Because `lint` (tflint) and `test` (`terraform validate`) both need `terraform init` — which would force pre-commit online and slow — they were **dropped from the Terraform pre-commit chain**, which is now the four-step `check convention → transform → format → docs`. They remain in `avm pr-check` (the heavyweight gate). The **Bicep** pre-commit chain (`format → lint → test → docs`) and `avm pr-check` are unchanged. Step count unchanged at **432/0/7** (assertions retargeted, no `It` blocks added/removed; the unit-test failing-engine probe moved from `lint` to `format`). Deferred: whether to also strip the non-upstream `test`(validate) step from `pr-check` — left in place this slice.
 
@@ -1217,8 +1253,8 @@ So the AVM-canonical model is **fix-in-pre-commit, flag-drift-in-pr-check**. Our
 ### J.4 `Azure/mapotf` v0.1.4 release — ready-to-pin facts
 
 - Tag `v0.1.4`, published 2026-06-10. 7 assets: `checksums.txt` + 6 platform archives.
-- Asset naming: `mapotf_0.1.4_{os}_{arch}.{ext}`, `ext` = `tar.gz` (darwin/linux), `zip` (windows) — the **mixed-archive** shape `tools.lock.psd1` already supports (same as `terraform-docs`).
-- SHA256 checksums (captured 2026-06-19, ready for `tools.lock.psd1`):
+- Asset naming: `mapotf_0.1.4_{os}_{arch}.{ext}`, `ext` = `tar.gz` (darwin/linux), `zip` (windows) — the **mixed-archive** shape `avm.pins.jsonc` already supports (same as `terraform-docs`).
+- SHA256 checksums (captured 2026-06-19, ready for `avm.pins.jsonc`):
 
   | Platform | Asset | SHA256 |
   | --- | --- | --- |
@@ -1249,7 +1285,7 @@ These use mapotf's newer primitives — `reorder_attributes`, `sort_blocks_in_fi
 
 Steps:
 
-1. **Pin `Azure/mapotf` v0.1.4 in `tools.lock.psd1`** — six platforms, the six SHA256s in J.4, mixed `archives` map (`tar.gz` + `zip`) with `urlTemplate` using `{version}`/`{os}`/`{arch}`/`{ext}` placeholders. Add a `Get-MapotfEntry` helper to `scripts/Update-AvmToolsLock.ps1` mirroring `Get-ConftestEntry`.
+1. **Pin `Azure/mapotf` v0.1.4 in `avm.pins.jsonc`** — six platforms, the six SHA256s in J.4, mixed `archives` map (`tar.gz` + `zip`) with `urlTemplate` using `{version}`/`{os}`/`{arch}`/`{ext}` placeholders. Add a `Get-MapotfEntry` helper to `scripts/Update-AvmPins.ps1` mirroring `Get-ConftestEntry`.
 2. **Supply the configs (decision A — RESOLVED = vendor, see below).** The nine configs are **vendored** into `config/mapotf/pre-commit/` (top-level `config/`, kept out of the module tree) and mirrored from `Azure/avm-terraform-governance//mapotf-configs/pre-commit` at a pinned SHA via `scripts/Update-AvmMapotfConfig.ps1`. `Invoke-AvmTerraformTransform` resolves this in-repo path directly — no pinned-asset download, fully offline. See [`config/README.md`](../config/README.md).
 3. **Implement `Invoke-AvmTerraformTransform`** — drop the `AvmConfigurationException` stub; resolve the mapotf binary + the configs asset; run `mapotf transform --mptf-dir <asset.Path> --tf-dir <Context.Root>` then `mapotf clean-backup --tf-dir <Context.Root>` via `Invoke-AvmProcess`; return the standard envelope (`Engine='terraform'`, `Tool='mapotf/<version>'`, `Status`, `Issues`). `[CmdletBinding(SupportsShouldProcess)]` — it mutates files.
 4. **pr-check drift-check** — after transform + clean-backup, run `git status --porcelain` (or a `git diff --quiet` equivalent) scoped to `Context.Root`; non-empty ⇒ `Status='fail'` with the drifted files as `Issues`. This is the "flag" half of J.3.

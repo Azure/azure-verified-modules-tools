@@ -93,8 +93,14 @@ function Sync-AvmManagedFile {
 
     .PARAMETER RepoId
         The repository id used to look up overlays/exclusions in config.json.
-        Defaults to the leaf of $Context.Root with a leading
-        'terraform-azurerm-' / 'terraform-azapi-' prefix stripped.
+        When omitted it is resolved by Resolve-AvmManagedFilesRepoId: an explicit
+        AVM_MANAGED_FILES_REPO_ID environment value or '.avm/managed-files.json'
+        repoId override is authoritative; otherwise a candidate is derived from
+        the git origin remote, then the working-tree folder name, with a leading
+        'terraform-azurerm-' / 'terraform-azapi-' prefix stripped, and accepted
+        only when it matches a config.json repositoryGroups entry. If neither
+        candidate matches, an interactive host is prompted; a non-interactive run
+        (CI or redirected input) fails loudly rather than syncing zero overlays.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
@@ -156,13 +162,11 @@ function Sync-AvmManagedFile {
     $overlays = @()
     $excluded = @()
     $deprecated = @()
+    $repositoryConfig = $null
     if ($source.ConfigDir -and (Test-Path -LiteralPath $source.ConfigDir -PathType Container)) {
         $configFile = Join-Path $source.ConfigDir 'config.json'
         if (Test-Path -LiteralPath $configFile -PathType Leaf) {
             $repositoryConfig = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
-            $resolved = Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $settings.RepoId
-            $overlays = $resolved.ManagedFilesAdditional
-            $excluded = $resolved.ExcludedManagedFiles
         }
         $deprecatedFile = Join-Path $source.ConfigDir 'deprecated-files.json'
         if (Test-Path -LiteralPath $deprecatedFile -PathType Leaf) {
@@ -170,11 +174,24 @@ function Sync-AvmManagedFile {
         }
     }
 
+    $repoId = Resolve-AvmManagedFilesRepoId `
+        -Root $root `
+        -ExplicitRepoId $settings.RepoId `
+        -KnownRepoIds (Get-AvmManagedFilesKnownRepoId -RepositoryConfig $repositoryConfig) `
+        -GitPath $gitPath `
+        -Interactive (Test-AvmManagedFilesInteractive)
+
+    if ($repositoryConfig) {
+        $resolved = Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $repoId
+        $overlays = $resolved.ManagedFilesAdditional
+        $excluded = $resolved.ExcludedManagedFiles
+    }
+
     $map = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
         -Overlays $overlays `
         -Excluded $excluded `
-        -RepoId $settings.RepoId `
+        -RepoId $repoId `
         -GitPath $gitPath
 
     $desired = Get-AvmDesiredManagedFile -ManagedFiles $map
@@ -186,6 +203,21 @@ function Sync-AvmManagedFile {
     foreach ($p in @($desired.Keys)) {
         if ($deprecatedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
     }
+
+    # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
+    # overwritten wholesale, so the consumer keeps its own additions. The spec
+    # stacks across root + overlays like the files themselves. A path owned by
+    # the line spec must not also be whole-file managed (line-merge wins), and a
+    # deprecated removal still trumps a line merge.
+    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -Overlays $overlays
+    foreach ($p in @($lineSpec.Keys)) {
+        if ($deprecatedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
+    }
+    foreach ($p in @($lineSpec.Keys)) {
+        if ($desired.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
+    }
+    $linePlans = @(Get-AvmManagedLinePlan -Root $root -Spec $lineSpec)
+    $changedLinePlans = @($linePlans | Where-Object { $_.Changed })
 
     $targetModes = Get-AvmGitIndexMode -Dir $root -GitPath $gitPath
     $existingBlobs = @{}
@@ -220,6 +252,9 @@ function Sync-AvmManagedFile {
     }
     $toRemove = @($matchedDeprecated | Sort-Object)
 
+    $lineAdded = @($changedLinePlans | Where-Object { -not $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
+    $lineUpdated = @($changedLinePlans | Where-Object { $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
+
     $issues = @()
     if ($CheckDrift) {
         $issueList = New-Object System.Collections.Generic.List[object]
@@ -232,13 +267,17 @@ function Sync-AvmManagedFile {
         foreach ($p in $toUpdate) {
             $issueList.Add((New-AvmSyncIssue -File $p -Message 'managed file is out of date; it should be updated.'))
         }
+        foreach ($plan in $changedLinePlans) {
+            $detail = ('managed lines out of date; {0} to add, {1} to remove.' -f $plan.AddedLines.Count, $plan.RemovedLines.Count)
+            $issueList.Add((New-AvmSyncIssue -File $plan.Path -Message $detail))
+        }
         $issues = $issueList.ToArray()
         $status = if ($issueList.Count -gt 0) { 'fail' } else { 'pass' }
     }
     else {
-        $hasChanges = ($toAdd.Count + $toUpdate.Count + $toRemove.Count) -gt 0
+        $hasChanges = ($toAdd.Count + $toUpdate.Count + $toRemove.Count + $changedLinePlans.Count) -gt 0
         if ($hasChanges) {
-            $applyDesc = ('sync managed files (add {0}, update {1}, remove {2})' -f $toAdd.Count, $toUpdate.Count, $toRemove.Count)
+            $applyDesc = ('sync managed files (add {0}, update {1}, remove {2}, merge-lines {3})' -f $toAdd.Count, $toUpdate.Count, $toRemove.Count, $changedLinePlans.Count)
             if ($PSCmdlet.ShouldProcess($root, $applyDesc)) {
                 foreach ($p in $toRemove) {
                     $full = Join-Path $root ($p.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
@@ -254,15 +293,17 @@ function Sync-AvmManagedFile {
                     }
                     [System.IO.File]::WriteAllBytes($full, $desired[$p].Bytes)
 
-                    if ($desired[$p].Mode -eq '100755' -and $gitPath) {
-                        try {
-                            Invoke-AvmProcess -FilePath $gitPath -ArgumentList @('-C', $root, 'add', '--', $p) -IgnoreExitCode | Out-Null
-                            Invoke-AvmProcess -FilePath $gitPath -ArgumentList @('-C', $root, 'update-index', '--chmod=+x', '--', $p) -IgnoreExitCode | Out-Null
-                        }
-                        catch {
-                            Write-Verbose "Failed to set executable bit on '$p': $($_.Exception.Message)"
-                        }
+                    if ($desired[$p].Mode -eq '100755') {
+                        Set-AvmManagedFileExecutableBit -Path $full
                     }
+                }
+                $lineEncoding = [System.Text.UTF8Encoding]::new($false)
+                foreach ($plan in $changedLinePlans) {
+                    $parent = Split-Path -Parent $plan.Full
+                    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                    }
+                    [System.IO.File]::WriteAllText($plan.Full, $plan.NewText, $lineEncoding)
                 }
             }
         }
@@ -275,10 +316,10 @@ function Sync-AvmManagedFile {
         ToolPath       = $source.ToolPath
         ToolSource     = $source.SourceKind
         Status         = $status
-        FilesProcessed = $desired.Count
+        FilesProcessed = $desired.Count + $linePlans.Count
         Issues         = $issues
-        Added          = $toAdd
-        Updated        = $toUpdate
+        Added          = @($toAdd + $lineAdded)
+        Updated        = @($toUpdate + $lineUpdated)
         Removed        = $toRemove
     }
 }
@@ -331,14 +372,13 @@ function Resolve-AvmManagedFilesSetting {
     $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'tf-repo-mgmt/repository-config'
     $configLocalPath = & $pick $ConfigLocalPath 'AVM_MANAGED_FILES_CONFIG_LOCAL_PATH' 'configLocalPath' ''
 
-    $repoIdDefault = Split-Path -Leaf $Root
-    foreach ($prefix in @('terraform-azurerm-', 'terraform-azapi-')) {
-        if ($repoIdDefault.StartsWith($prefix)) {
-            $repoIdDefault = $repoIdDefault.Substring($prefix.Length)
-            break
-        }
-    }
-    $repoIdValue = & $pick $RepoId 'AVM_MANAGED_FILES_REPO_ID' 'repoId' $repoIdDefault
+    # RepoId is captured here only as its authoritative short-circuit value: an
+    # explicit -RepoId parameter, the AVM_MANAGED_FILES_REPO_ID environment
+    # variable, or a '.avm/managed-files.json' repoId override. Inference from the
+    # git origin or the folder leaf, and validation against config.json, happens
+    # later in Resolve-AvmManagedFilesRepoId once governance membership is known,
+    # so a wrong guess can never silently sync with zero overlays (F11).
+    $repoIdValue = & $pick $RepoId 'AVM_MANAGED_FILES_REPO_ID' 'repoId' ''
 
     return @{
         ManagedFilesRepo      = $repo
@@ -350,6 +390,250 @@ function Resolve-AvmManagedFilesSetting {
         ConfigPath            = $configPathValue
         ConfigLocalPath       = $configLocalPath
         RepoId                = $repoIdValue
+    }
+}
+
+function ConvertTo-AvmManagedFilesRepoId {
+    <#
+    .SYNOPSIS
+        Normalise a repository name into a managed-files repository id by
+        stripping a leading 'terraform-azurerm-' / 'terraform-azapi-' prefix.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+
+    $value = $Name.Trim()
+    foreach ($prefix in @('terraform-azurerm-', 'terraform-azapi-')) {
+        if ($value.StartsWith($prefix)) {
+            $value = $value.Substring($prefix.Length)
+            break
+        }
+    }
+
+    return $value
+}
+
+function Get-AvmRepoLeafFromUrl {
+    <#
+    .SYNOPSIS
+        Extract the repository leaf name from a git remote URL, handling HTTPS
+        (with or without a trailing '.git'), SCP-style SSH
+        (git@host:owner/repo.git) and ssh:// URLs.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $Url
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) { return '' }
+
+    $value = $Url.Trim().TrimEnd('/')
+    $leaf = @($value -split '[:/]' | Where-Object { $_ }) | Select-Object -Last 1
+    if ([string]::IsNullOrWhiteSpace($leaf)) { return '' }
+
+    if ($leaf.EndsWith('.git')) {
+        $leaf = $leaf.Substring(0, $leaf.Length - 4)
+    }
+
+    return $leaf
+}
+
+function Get-AvmManagedFilesOriginRepoId {
+    <#
+    .SYNOPSIS
+        Resolve a normalised repository id from the 'origin' git remote of a
+        working tree, or an empty string when there is no origin/git available.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [string] $GitPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GitPath) -or [string]::IsNullOrWhiteSpace($Root)) {
+        return ''
+    }
+
+    try {
+        $result = Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $Root, 'remote', 'get-url', 'origin') -IgnoreExitCode
+    }
+    catch {
+        return ''
+    }
+
+    if (-not $result -or $result.ExitCode -ne 0) { return '' }
+
+    $line = @($result.StdOut -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($line)) { return '' }
+
+    return ConvertTo-AvmManagedFilesRepoId -Name (Get-AvmRepoLeafFromUrl -Url $line)
+}
+
+function Get-AvmManagedFilesKnownRepoId {
+    <#
+    .SYNOPSIS
+        Return the de-duplicated set of repository ids declared across every
+        'repositoryGroups' entry of a parsed config.json.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [object] $RepositoryConfig
+    )
+
+    [string[]] $none = @()
+    if (-not $RepositoryConfig) { return $none }
+    if (-not ($RepositoryConfig.PSObject.Properties.Name -contains 'repositoryGroups')) { return $none }
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($group in @($RepositoryConfig.repositoryGroups)) {
+        if (-not $group) { continue }
+        if (-not ($group.PSObject.Properties.Name -contains 'repositories')) { continue }
+        foreach ($repo in @($group.repositories)) {
+            if (-not [string]::IsNullOrWhiteSpace($repo)) { $ids.Add([string]$repo) }
+        }
+    }
+
+    [string[]] $unique = @($ids | Select-Object -Unique)
+    return $unique
+}
+
+function Test-AvmManagedFilesInteractive {
+    <#
+    .SYNOPSIS
+        Return whether the current host can prompt the user for a repository id.
+        CI runs and redirected input are treated as non-interactive.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    try {
+        if (-not [string]::IsNullOrEmpty($env:CI)) { return $false }
+        if ([System.Console]::IsInputRedirected) { return $false }
+    }
+    catch {
+        return $false
+    }
+
+    return $true
+}
+
+function Resolve-AvmManagedFilesRepoId {
+    <#
+    .SYNOPSIS
+        Resolve the managed-files repository id using the F11 resolution order:
+        explicit value, validated git-origin candidate, validated folder-leaf
+        candidate, interactive prompt, then a hard failure - never a silent
+        zero-overlay sync.
+
+    .DESCRIPTION
+        An explicit -RepoId (already carrying the -RepoId parameter, the
+        AVM_MANAGED_FILES_REPO_ID environment value or a '.avm/managed-files.json'
+        override) short-circuits the whole chain and is authoritative.
+
+        Otherwise a candidate is derived from the git origin remote and from the
+        working-tree folder leaf, each normalised by stripping a leading
+        'terraform-azurerm-' / 'terraform-azapi-' prefix, and accepted only when
+        it matches a config.json repositoryGroups entry (KnownRepoIds). When no
+        governance config is supplied (offline callers) the inferred candidate is
+        returned unvalidated to preserve legacy behaviour. When governance is
+        present but neither candidate matches, an interactive host is prompted;
+        a non-interactive host fails loudly.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [AllowEmptyString()]
+        [string] $ExplicitRepoId = '',
+
+        [string[]] $KnownRepoIds = @(),
+
+        [string] $GitPath,
+
+        [bool] $Interactive = $false
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitRepoId)) {
+        return $ExplicitRepoId.Trim()
+    }
+
+    $known = @($KnownRepoIds | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $hasGovernance = $known.Count -gt 0
+
+    $originCandidate = Get-AvmManagedFilesOriginRepoId -Root $Root -GitPath $GitPath
+    $folderCandidate = ConvertTo-AvmManagedFilesRepoId -Name (Split-Path -Leaf $Root)
+
+    if (-not $hasGovernance) {
+        if (-not [string]::IsNullOrWhiteSpace($originCandidate)) { return $originCandidate }
+        return $folderCandidate
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($originCandidate) -and ($known -contains $originCandidate)) {
+        return $originCandidate
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($folderCandidate) -and ($known -contains $folderCandidate)) {
+        return $folderCandidate
+    }
+
+    if ($Interactive) {
+        $answer = Read-Host -Prompt 'Repository id could not be inferred. Enter the managed-files repository id'
+        if (-not [string]::IsNullOrWhiteSpace($answer)) {
+            $raw = $answer.Trim()
+            if ($known -contains $raw) { return $raw }
+            $normalised = ConvertTo-AvmManagedFilesRepoId -Name $raw
+            if ($known -contains $normalised) { return $normalised }
+        }
+    }
+
+    $tried = @(@($originCandidate, $folderCandidate) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "', '"
+    throw [AvmConfigurationException]::new(
+        ("Could not resolve a managed-files repository id for '{0}'. Tried '{1}', but none matched a repositoryGroups entry in config.json. " -f $Root, $tried) +
+        "Set it explicitly with -RepoId, the AVM_MANAGED_FILES_REPO_ID environment variable, or a repoId in '.avm/managed-files.json'.")
+}
+
+function Set-AvmManagedFileExecutableBit {
+    <#
+    .SYNOPSIS
+        Set the owner/group/other execute bits on a synced file's working-tree
+        entry without ever touching the git index (F13). No-op on Windows.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Working-tree file-mode repair; the caller already gates writes via ShouldProcess.')]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if ($IsWindows) { return }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force
+        $execute = [System.IO.UnixFileMode]::UserExecute -bor [System.IO.UnixFileMode]::GroupExecute -bor [System.IO.UnixFileMode]::OtherExecute
+        $item.UnixFileMode = $item.UnixFileMode -bor $execute
+    }
+    catch {
+        Write-Verbose "Failed to set executable bit on '$Path': $($_.Exception.Message)"
     }
 }
 
@@ -564,6 +848,8 @@ function Add-AvmManagedFilesFromDir {
     $baseDirAbsolute = (Get-Item -LiteralPath $BaseDir -Force).FullName
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
+    $lineSpecName = Get-AvmManagedLineSpecFileName
+
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
     Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
         # '.gitkeep' files exist only to keep otherwise-empty overlay
@@ -571,7 +857,9 @@ function Add-AvmManagedFilesFromDir {
         # content, so they must not be synced into target repos. The upstream
         # avm-terraform-governance sync applies the same filter; omitting it
         # here would make every drift check demand a file the sync never writes.
-        $_.Name -ne '.gitkeep'
+        # The line-managed-file spec is tooling metadata consumed separately, so
+        # it is filtered here for the same reason.
+        $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
     } | ForEach-Object {
         $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
         $absoluteSource = $_.FullName -replace '\\', '/'

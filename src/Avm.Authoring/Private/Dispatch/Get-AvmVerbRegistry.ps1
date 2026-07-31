@@ -92,27 +92,27 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('transform')
             Cmdlet  = 'Invoke-AvmTransform'
-            Summary = 'Regenerate README + test scaffolding (Phase 1 stub).'
+            Summary = 'Apply the mapotf pre-commit transforms to the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'policy')
             Cmdlet  = 'Invoke-AvmCheckPolicy'
-            Summary = 'Run policy checks (PSRule.Rules.Azure / Conftest; Phase 1 stub).'
+            Summary = 'Run the pinned AVM policy bundles (APRL, AVMSEC) with conftest.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'convention')
             Cmdlet  = 'Invoke-AvmCheckConvention'
-            Summary = 'Run convention checks (compliance Pester / grept; Phase 1 stub).'
+            Summary = 'Run the built-in AVM convention rules against the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Run format + lint + test as a pre-commit gauntlet.'
+            Summary = 'Run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, test, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')
             Cmdlet  = 'Invoke-AvmPrCheck'
-            Summary = 'Run the full PR gauntlet (format + transform + lint + check policy + check convention + test + docs).'
+            Summary = 'Run the full PR gauntlet (sync, format, transform, lint, check policy, check convention, test, docs).'
         }
     )
 }

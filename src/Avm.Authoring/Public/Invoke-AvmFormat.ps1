@@ -13,7 +13,7 @@ function Invoke-AvmFormat {
         the .avm/context.psd1 override file and the -Ecosystem filter.
 
         The required tool binary (bicep or terraform) is resolved against
-        the bundled tools.lock; install missing tools beforehand with
+        the bundled avm.pins; install missing tools beforehand with
         'avm tool install bicep' / 'avm tool install terraform'.
 
         Routed by the dispatcher: 'avm format'.
@@ -32,8 +32,8 @@ function Invoke-AvmFormat {
         want only the managed cache.
 
     .OUTPUTS
-        pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        FilesProcessed, Changed.
+        pscustomobject from the engine: Status, Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed.
 
     .EXAMPLE
         avm format

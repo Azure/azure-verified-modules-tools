@@ -242,23 +242,25 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
-        It 'pr-check reports pass with check policy skipped, and resolves tools from the AVM cache' {
+        It 'pr-check passes every step, including check policy on a repo with no .avm/config.json, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
             ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
 
+            # F07: check policy used to skip here because the fixture declared no
+            # APRL/AVMSEC bundles. The module now ships immutable descriptors in
+            # Resources/avm.pins.jsonc, so it must run and pass on a clean repo.
             foreach ($step in $result.Steps) {
-                if ($step.Step -eq 'check policy') {
-                    # No APRL/AVMSEC bundles declared in the fixture -> skipped by design.
-                    $step.Status | Should -Be 'skipped' -Because 'check policy has no pinned bundles in the fixture'
-                }
-                else {
-                    $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
-                }
+                $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
             $result.Status | Should -Be 'pass'
+
+            # F07: no verb may create a repo-local .avm/ folder. Persistent state
+            # belongs under $AVM_HOME.
+            (Test-Path -LiteralPath (Join-Path $script:StagedModule '.avm')) |
+                Should -BeFalse -Because 'pr-check must never create a repo-local .avm/ folder'
 
             # Every managed-tool step must resolve its binary from the AVM
             # cache we just populated (not a stray PATH binary).
