@@ -115,7 +115,9 @@ the `Avm.Authoring` verb you call instead.
 > An `avm test e2e` apply that fails on region or SKU capacity is
 > destroyed and retried (up to `-MaxRetry`, default 2) rather than
 > failing the run; add extra retryable patterns with
-> `$env:AVM_E2E_RETRY_PATTERN`.
+> `$env:AVM_E2E_RETRY_PATTERN`. `avm test e2e --example <name>` targets a
+> single example (leaf or `examples/<name>`) and `avm test e2e --list`
+> emits a JSON array of runnable example names for building a CI matrix.
 
 ### From `./avm <command>` / `./avm.ps1 <command>`
 

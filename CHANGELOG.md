@@ -85,6 +85,57 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.1.7] - 2026-07-31
+
+Second remediation round from end-to-end testing released `0.1.6` against the
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
+
+### Added
+
+- `avm test e2e --example <name>` targets a single example. It accepts either
+  the folder leaf (`example-a`) or a repo-relative path (`examples/example-a`)
+  and may be repeated. Omitting it keeps the existing behaviour of running every
+  runnable example sequentially. A name that does not exist, or that carries a
+  `.e2eignore` marker, is a hard error listing the valid names rather than a
+  silent pass, so a typo in a CI matrix cannot skip a real test. (F26)
+- `avm test e2e --list` emits a compact JSON array of runnable example names and
+  nothing else, so a workflow can build a matrix with `fromJson()` and no
+  post-processing. A module with no runnable examples emits `[]`. (F27)
+- The Terraform reusable workflow fans end-to-end tests out across a per-example
+  matrix with `fail-fast: false`, restoring the governance round-robin
+  subscription fan-out so parallel legs do not collide on quota. The matrix is
+  skipped cleanly when a module has no runnable examples.
+- Every step and sub-step now carries `StartTime`, `EndTime` and a duration, both
+  on the result objects and in the rendered output. (F29)
+- `RUNNER_DEBUG=1` (set when a workflow is re-run with debug logging) turns
+  verbose on, and verbose now cascades from the entry point to engines,
+  sub-cmdlets and `Invoke-AvmProcess`. `AVM_VERBOSE=1` does the same outside
+  GitHub Actions. (F30)
+
+### Changed
+
+- All module output routes through a single writer with levels, which is GitHub
+  Actions aware (`::group::`, `::error::`, `::warning::`, `::debug::`) instead of
+  mixing `Write-Host`, `Write-Information` and `Write-Verbose`. (F31)
+- Subprocess output is quiet by default and replayed in full at the point of
+  failure. Verbose or debug streams it live; GitHub Actions wraps it in a
+  collapsed `::group::` so the log is present but not noisy. Long-running
+  sub-steps emit a periodic elapsed-time heartbeat so a slow deploy is
+  distinguishable from a hang. (F28)
+- `avm` renders one summary per invocation instead of one per emitted result
+  object, and labels per-item rows with the item's own identity, so
+  `avm tool list` no longer reads as six conflicting statuses for one command.
+  (F25)
+- `avm` no longer writes result objects to the success stream by default; pass
+  `--passthru` to get them back for scripting. (F23)
+
+### Fixed
+
+- A failing `avm` command reports a clean one-line failure summary and exits
+  non-zero instead of surfacing a raw `OperationStopped` stack trace pointing at
+  module source. The remainder of a calling script no longer stops running, so
+  cleanup lines after an `avm` call execute as written. (F24)
+
 ## [0.1.6] - 2026-07-31
 
 ### Added
