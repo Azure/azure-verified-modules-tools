@@ -140,6 +140,18 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   quietly misconfigured — in which case the gauntlet will now say so. The step
   fails rather than errors, so the chain still runs to the end and reports
   every problem instead of stopping at the first. (F39)
+- **A test tier with no test files now reports `skipped`, not `pass`.**
+  `avm test unit`, `avm test integration` and `avm test e2e` returned
+  `Status: pass` with `FilesProcessed = 0` when the module shipped no
+  `tests/<tier>/*.tftest.hcl` (or no runnable `examples/`). Once F38 put the
+  unit tier inside `pr-check`, that rendered as `unit test -> pass` for a module
+  with no tests at all — indistinguishable from a real pass, and exactly the
+  vacuous-green failure mode the F33 run counts exist to prevent, one level up.
+  `skipped` does not flip the overall status and the CLI still exits `0`, so a
+  module with no tier is reported rather than broken. **Action required:** none,
+  unless you parse `Status` from these verbs — an absent tier now yields
+  `skipped`. A tier whose files exist but execute no `run` blocks still reports
+  `pass`; `RunsTotal = 0` is the signal there. (F40)
 
 ### Upgrade notes
 
@@ -220,6 +232,11 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   members, so the one shape that most needs to be conspicuous — a module with no
   tests — was the one shape indistinguishable from a real result. The tier also
   now says so on the console. (F38)
+- That same empty tier now reports `Status='skipped'` rather than `pass`, in the
+  suite engine and the e2e engine alike. Run counts made the gap legible on the
+  object, but inside a gauntlet the rendered status is what an author reads, and
+  `pass` there is indistinguishable from a real one. Fixed in the engines rather
+  than the gauntlet, so `avm test unit` on its own is honest too. (F40)
 - A failing `avm` command reports a clean one-line failure summary and exits
   non-zero instead of surfacing a raw `OperationStopped` stack trace pointing at
   module source. The remainder of a calling script no longer stops running, so

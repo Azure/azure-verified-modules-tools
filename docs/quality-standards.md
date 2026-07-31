@@ -1399,3 +1399,27 @@ module runs — so that guard made `avm test unit` throw on every
 governance-compliant module. A shell hook only matters when it has no `.ps1`
 counterpart, because only then does the hook silently never run. Guard on the
 absence of the counterpart, not on the presence of the `.sh`.
+### L.2 A step that did nothing is `skipped`, never `pass`
+
+The same shape as L, one level down. A test tier with no test files, or an e2e
+run with no runnable examples, used to return `Status = 'pass'`. That is
+indistinguishable from a real pass on the console, so a module that ships no
+tests stays green forever — the C01 failure mode. Report `skipped`.
+
+Three constraints make this safe rather than breaking:
+
+- `skipped` does not flip a gauntlet's overall status (`Invoke-AvmPrCheck` and
+  `Invoke-AvmPreCommit` react only to `fail`/`error`), and `Invoke-Avm` exits
+  non-zero only on those two. A module with no tier is reported, not broken.
+- Fix it in the **engine**, not the gauntlet. The gauntlets copy the engine
+  status verbatim, so one change makes both the standalone verb and every chain
+  that calls it honest. Fixing the gauntlet leaves the standalone verb lying.
+- Scope it to *nothing to run*, not *nothing happened*. A tier whose files exist
+  but execute no `run` blocks still reports `pass`; `RunsTotal = 0` is the signal
+  there, and conflating the two loses the distinction between "no tests written"
+  and "tests present but vacuous".
+
+The regression test that matters is the real-binary component tier on a fixture
+with no `tests/<tier>/`. A unit test asserting the returned status is easy to
+write against a mock and equally easy to write against the wrong constant; the
+component tier fails for real if the engine reverts.
