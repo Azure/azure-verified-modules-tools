@@ -246,6 +246,19 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   the diagnostic naming the file, line and cause, so the console summary, the
   GitHub Actions error annotation and the terminating error message all carried
   the least useful line while the actionable one sat in the body. (F24)
+- A failed command now emits exactly one GitHub Actions annotation, anchored on
+  the failing file, line and column so it renders inline on the offending line in
+  the PR Files-changed view. A single failing test run previously produced three
+  `::error::` annotations — the positionless progress line first, the actionable
+  diagnostic last — and none carried a position. Annotations are capped at ten
+  per step, so a badly broken PR could push the useful ones past the cap and show
+  a reviewer nothing but `run … -> fail`. Narration (the per-run progress line,
+  the subprocess `FAILED:` / `TIMEOUT:` lines and the gauntlet step error line)
+  is now plain text and can no longer crowd out the diagnostic. Paths are
+  normalised to forward slashes and rebased on `GITHUB_WORKSPACE`, because
+  GitHub only anchors repo-relative paths; a diagnostic with no position still
+  produces an unanchored annotation rather than none. Console output outside
+  Actions is unchanged. (F41)
 - A gauntlet step that fails or errors now narrates its error message at the
   point of failure, so callers that invoke `Invoke-AvmPrCheck` or
   `Invoke-AvmPreCommit` directly (bypassing the dispatcher's renderer) get a

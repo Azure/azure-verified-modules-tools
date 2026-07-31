@@ -1423,3 +1423,36 @@ The regression test that matters is the real-binary component tier on a fixture
 with no `tests/<tier>/`. A unit test asserting the returned status is easy to
 write against a mock and equally easy to write against the wrong constant; the
 component tier fails for real if the engine reverts.
+
+### L.3 Narration is not an annotation
+
+Every `::error::` line becomes a workflow annotation at the top of a GitHub
+Actions run summary — the surface most reviewers read and, for many, the only
+one. Annotations are capped at **10 per step and 50 per run**, and they are
+displayed in emission order, so anything you narrate at `Error` competes for the
+slot the actual diagnosis needs. A single failing terraform test used to emit
+three: the progress line, the summary, and the positioned diagnostic last.
+
+Two rules follow.
+
+- **Narrate at `Info`.** Progress lines, `FAILED:` / `TIMEOUT:` markers and
+  gauntlet step-error lines are context, not findings. Outside Actions this
+  costs nothing — `Write-AvmLog -Level Error` and `-Level Info` both write to
+  the information stream, so the level only ever changes CI behaviour.
+- **Emit exactly one annotation per failed command**, at the boundary that
+  already owns the failure (`Assert-AvmCommandSuccess`). Anchor it when a
+  position exists; fall back to unanchored when it does not, so a failure is
+  never silent.
+
+Anchoring is the payoff, and it has three constraints that are easy to miss:
+
+- Properties go **before** the separator: `::error file=a.tf,line=1,col=2::text`.
+- The path must be **repo-relative with forward slashes**, or GitHub cannot
+  match it to the diff and the annotation will not render inline on the failing
+  line. Normalise separators and strip a `GITHUB_WORKSPACE` prefix; do not use
+  `Resolve-Path`, which behaves differently on the Linux runner.
+- `col` without `line` is meaningless — suppress it.
+
+Finally, strip leading whitespace from annotation payloads at the writer, not at
+each call site. Console indentation is load-bearing locally and pure noise in an
+annotation.
