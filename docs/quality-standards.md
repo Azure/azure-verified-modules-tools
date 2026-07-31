@@ -1456,3 +1456,33 @@ Anchoring is the payoff, and it has three constraints that are easy to miss:
 Finally, strip leading whitespace from annotation payloads at the writer, not at
 each call site. Console indentation is load-bearing locally and pure noise in an
 annotation.
+### L.4 Check mode must not write
+
+A `-CheckDrift` / check-only switch has one contract: report, do not mutate. It
+is easy to honour when the underlying tool has a dry-run (`terraform fmt
+-write=false`) and easy to quietly break when it does not. Neither
+`terraform-docs` in inject mode nor `mapotf` offers one, so the obvious
+implementation — write, hash, compare, report — produces a correct status and a
+rewritten working copy.
+
+That is invisible in CI, where the checkout is thrown away, which is exactly why
+it survives. It bites the developer who runs the gate locally before pushing.
+
+Prefer **snapshot and restore over a tool-native check flag**:
+
+- The tool still runs unmodified, so drift detection stays byte-for-byte the
+  behaviour you already tested. The diff is purely additive.
+- A tool-native check flag usually collapses "drift found" and "tool failed"
+  into one exit code, which is a worse diagnostic than the one you have.
+- Restore from a `finally`, not after the loop: a tool that throws part-way
+  through must not leave the tree dirty. Pin that with a test.
+- Skip the write when the bytes already match, so files the tool did not touch
+  keep their timestamps.
+- If the tool can create or delete files, re-enumerate afterwards and reconcile
+  against the snapshot — restoring only the files you knew about up front will
+  leave new ones behind.
+
+The inverse matters just as much: the auto-fixing chain (`pre-commit`) must
+*not* inherit the switch. Gating a developer's commit hook on drift it is meant
+to remove breaks the loop that makes the hook worth having. Pin that inverse
+with its own test.

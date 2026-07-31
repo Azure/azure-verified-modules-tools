@@ -88,7 +88,7 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F43).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F44).
 
 Two numbering sequences collided during review, so the `F` tags below are
 branch-local. Where a reviewer used the same number for a different defect, the
@@ -239,6 +239,17 @@ shell-hook guard and the empty-tier status respectively.
 
 ### Fixed
 
+- `-CheckDrift` is now genuinely read-only for `docs` and `transform`. `format`
+  already checked without writing, but `terraform-docs` and `mapotf` have no
+  dry-run mode, so those two engines detected drift by writing first and
+  comparing hashes afterwards — leaving the caller's working copy rewritten by a
+  command whose whole job is to report rather than fix. Both now snapshot the
+  managed files before the tool runs and restore them from a `finally` block, so
+  the tree is byte-identical even when the tool throws part-way through. On an
+  ephemeral CI runner this was invisible; locally, `avm pr-check` silently
+  rewrote two of the three managed-content areas. Drift detection itself is
+  unchanged — the tool still runs and the changed-file list is still computed
+  from real hashes. (F44)
 - `avm pr-check` gates formatting and documentation instead of silently fixing
   them. `format` and `docs` had no `-CheckDrift` parameter — only `sync` and
   `transform` did — so two of the four managed-content steps could not gate at
