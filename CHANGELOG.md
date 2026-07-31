@@ -88,7 +88,7 @@ section when cutting a release.
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
-canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F33).
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
 
 ### Added
 
@@ -147,13 +147,21 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F33).
   point of failure, so callers that invoke `Invoke-AvmPrCheck` or
   `Invoke-AvmPreCommit` directly (bypassing the dispatcher's renderer) get a
   diagnosis instead of a bare status.
+- `terraform init` now receives the same `-test-directory` as `terraform test`.
+  Init only scans the default `tests/` directory when resolving modules declared
+  inside `.tftest.hcl` run blocks, so with AVM tiers under `tests/unit/` and
+  `tests/integration/` a `run { module { source = "./tests/integration/setup" } }`
+  helper was never installed and the tier failed immediately with
+  `Module not installed`. This affected a cold checkout identically, so CI was
+  hit as well as local runs, and it made the standard HashiCorp pattern for
+  prerequisite infrastructure unusable. (F34)
 - `terraform init` now always runs before `terraform validate` and
   `terraform test` unless `-NoInit` was passed. The previous gate on the
   existence of `.terraform/` only proved init had run at some point, against a
-  possibly different set of requirements, so adding a `.tftest.hcl` that sources
-  a helper module failed with `Module not installed`. CI never saw this (every
-  job is a fresh checkout); it only bit locally. `-backend=false` keeps the warm
-  path cheap. (F32)
+  possibly different set of requirements, so bumping or adding a module
+  dependency was not picked up on a warm working directory. CI never saw this
+  (every job is a fresh checkout); it only bit locally. `-backend=false` keeps
+  the warm path cheap. (F32)
 
 ## [0.1.6] - 2026-07-31
 
