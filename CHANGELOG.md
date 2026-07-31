@@ -92,6 +92,14 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
 
 ### Breaking
 
+- **`avm pr-check` now fails on formatting and documentation drift.** `format`
+  and `docs` previously rewrote your files in the CI working copy and reported
+  `pass`, so the fix was thrown away with the runner and the defect merged. Both
+  steps now check rather than fix, and report `fail` with one issue per file. A
+  repository with unformatted sources or a stale `README.md` that passed on
+  `0.1.6` will fail on `0.1.7`. **Action required:** run `avm pre-commit`
+  locally and commit the result. `pre-commit` still auto-fixes — only `pr-check`
+  gates. (F42)
 - **The end-to-end check name has changed.** Fanning e2e out across a per-example
   matrix renames the check from `End-to-end tests` to
   `End-to-end tests (<example>)`, one per example. A branch protection rule that
@@ -219,6 +227,13 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
 
 ### Fixed
 
+- `avm pr-check` gates formatting and documentation instead of silently fixing
+  them. `format` and `docs` had no `-CheckDrift` parameter — only `sync` and
+  `transform` did — so two of the four managed-content steps could not gate at
+  all. Both cmdlets gained the switch and all four steps now use it. Issues
+  carry relative, forward-slashed paths, so a drifted file is annotated inline
+  in the pull request. `avm pre-commit` is unchanged and still auto-fixes.
+  (F42)
 - A shell hook is now only a misconfiguration when it has no PowerShell
   counterpart. The guard rejected the mere presence of `setup.sh`,
   `teardown.sh`, `pre.sh` or `post.sh`, but upstream AVM governance ships both
@@ -278,6 +293,14 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   dependency was not picked up on a warm working directory. CI never saw this
   (every job is a fresh checkout); it only bit locally. `-backend=false` keeps
   the warm path cheap. (F32)
+
+### Tests
+
+- Negative mock assertions are no longer vacuous. `Should -Invoke -Times 0`
+  without `-Exactly` asserts "called at least zero times", which is always
+  true, so all 36 "this must never be called" guards in the suite passed
+  regardless of behaviour. Found by mutation-testing the new drift gate.
+  (F43)
 
 ## [0.1.6] - 2026-07-31
 
