@@ -40,3 +40,32 @@ function Assert-AvmCommandSuccess {
 
     & ([scriptblock]::Create('param($e) throw $e')) $exception
 }
+
+function Assert-AvmCleanFailure {
+    <#
+    .SYNOPSIS
+        Re-raise a typed AVM exception without a source-position stack trace.
+
+    .DESCRIPTION
+        F24: every AvmException subclass carries an actionable message, so the
+        dispatcher reports it as a one-line failure rather than letting the
+        default ConciseView print the module file, line number and the throw
+        source line. The error stays script-terminating so the hosting process
+        exits non-zero.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Verb,
+
+        [Parameter(Mandatory)]
+        [object] $Exception
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    Write-AvmLog ('avm {0} failed: {1}' -f $Verb, $Exception.Message) -Level Error
+
+    & ([scriptblock]::Create('param($e) throw $e')) $Exception
+}

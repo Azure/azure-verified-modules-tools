@@ -114,3 +114,54 @@ Describe 'Invoke-AvmTestE2e' {
         }
     }
 }
+
+Describe 'Invoke-AvmTestE2e per-example targeting (F26/F27)' {
+    It 'forwards -Example to the engine' {
+        $dir = Join-Path $TestDrive ("fwd-ex-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $ctx = [pscustomobject]@{
+                Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+            }
+            Mock Get-AvmModuleContext { $ctx }
+            Mock Invoke-AvmTerraformTestE2e {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
+            }
+            Invoke-AvmTestE2e -Path $D -Example 'example-a' | Out-Null
+
+            Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 1 -ParameterFilter {
+                $Example.Count -eq 1 -and $Example[0] -eq 'example-a'
+            }
+        }
+    }
+
+    It 'forwards -List to the engine' {
+        $dir = Join-Path $TestDrive ("fwd-list-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $ctx = [pscustomobject]@{
+                Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+            }
+            Mock Get-AvmModuleContext { $ctx }
+            Mock Invoke-AvmTerraformTestE2e { '["example-a"]' }
+            $out = Invoke-AvmTestE2e -Path $D -List
+
+            $out | Should -Be '["example-a"]'
+            Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 1 -ParameterFilter { $List.IsPresent }
+        }
+    }
+
+    It 'binds the kebab-case CLI flags --example and --list' {
+        $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
+        $entry = $reg | Where-Object { $_.Path.Count -eq 2 -and $_.Path[0] -eq 'test' -and $_.Path[1] -eq 'e2e' }
+        $cmd = Get-Command $entry.Cmdlet -Module Avm.Authoring
+        $cmd.Parameters.ContainsKey('Example') | Should -BeTrue
+        $cmd.Parameters.ContainsKey('List')    | Should -BeTrue
+        $cmd.Parameters['Example'].ParameterType.FullName | Should -Be 'System.String[]'
+        $cmd.Parameters['List'].SwitchParameter           | Should -BeTrue
+    }
+}

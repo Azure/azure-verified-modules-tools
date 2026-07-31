@@ -204,9 +204,15 @@ function Invoke-Avm {
         }
     }
 
-    $result = & $cmd @bound @positional
-
     $verbPath = ($match.Path -join ' ')
+
+    try {
+        $result = & $cmd @bound @positional
+    }
+    catch [AvmException] {
+        Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
+    }
+
     $items = @($result | Where-Object { $null -ne $_ })
     $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
     $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })

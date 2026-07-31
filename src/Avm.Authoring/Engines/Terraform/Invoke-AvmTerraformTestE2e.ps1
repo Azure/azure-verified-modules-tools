@@ -86,6 +86,16 @@ function Invoke-AvmTerraformTestE2e {
     .PARAMETER AllowPathFallback
         Pass through to Resolve-AvmTool.
 
+    .PARAMETER Example
+        Restrict the run to the named examples. Accepts either the folder leaf
+        ('example-a') or a repo-relative path ('examples/example-a'). Omitted,
+        every runnable example is processed sequentially. A name that does not
+        exist, or that carries a '.e2eignore' marker, is a hard error.
+
+    .PARAMETER List
+        Emit a compact JSON array of runnable example names and return without
+        running anything or resolving a terraform binary.
+
     .PARAMETER MaxRetry
         How many times to retry an example whose 'terraform apply' failed with
         a transient capacity/quota error. Defaults to 2 (up to three attempts
@@ -103,6 +113,11 @@ function Invoke-AvmTerraformTestE2e {
 
         [switch] $AllowPathFallback,
 
+        [AllowEmptyCollection()]
+        [string[]] $Example = @(),
+
+        [switch] $List,
+
         [ValidateRange(0, 10)]
         [int] $MaxRetry = 2
     )
@@ -115,23 +130,23 @@ function Invoke-AvmTerraformTestE2e {
             "Invoke-AvmTerraformTestE2e requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $allExamples = @(Get-AvmTerraformE2eExample -Root $Context.Root)
 
-    $examplesRoot = Join-Path $Context.Root 'examples'
-    $exampleDirs = @()
-    if (Test-Path -LiteralPath $examplesRoot) {
-        $exampleDirs = @(
-            Get-ChildItem -LiteralPath $examplesRoot -Directory -ErrorAction SilentlyContinue |
-                Sort-Object -Property Name |
-                Where-Object {
-                    $hasTf = @(Get-ChildItem -LiteralPath $_.FullName -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count -gt 0
-                    $ignored = Test-Path -LiteralPath (Join-Path $_.FullName '.e2eignore')
-                    $hasTf -and -not $ignored
-                }
-        )
+    # F27: discovery must not need a terraform binary, so short-circuit before
+    # Resolve-AvmTool and emit nothing but the JSON array.
+    if ($List) {
+        $names = @($allExamples | Where-Object { -not $_.Ignored } | ForEach-Object { $_.Name })
+        return ('[{0}]' -f (($names | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ','))
     }
 
+    $selected = @(Select-AvmTerraformE2eExample -Example $allExamples -Selector $Example)
+
+    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+
+    $exampleDirs = @($selected)
+
     if ($exampleDirs.Count -eq 0) {
+        $emptyNow = [datetime]::UtcNow
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
@@ -140,14 +155,17 @@ function Invoke-AvmTerraformTestE2e {
             Status         = 'pass'
             FilesProcessed = 0
             Issues         = @()
+            StartTime      = $emptyNow
+            EndTime        = $emptyNow
+            DurationMs     = 0
         }
     }
 
     $shHooks = New-Object System.Collections.Generic.List[string]
-    foreach ($example in $exampleDirs) {
+    foreach ($exampleInfo in $exampleDirs) {
         foreach ($shName in @('pre.sh', 'post.sh')) {
-            if (Test-Path -LiteralPath (Join-Path $example.FullName $shName) -PathType Leaf) {
-                $shHooks.Add(('examples/{0}/{1}' -f $example.Name, $shName))
+            if (Test-Path -LiteralPath (Join-Path $exampleInfo.Path $shName) -PathType Leaf) {
+                $shHooks.Add(('examples/{0}/{1}' -f $exampleInfo.Name, $shName))
             }
         }
     }
@@ -163,13 +181,19 @@ function Invoke-AvmTerraformTestE2e {
     }
 
     $issues = New-Object System.Collections.Generic.List[object]
+    $runStart = [datetime]::UtcNow
 
-    foreach ($example in $exampleDirs) {
-        $exampleDir = $example.FullName
-        $rel = ('examples/{0}' -f $example.Name)
+    $exampleIndex = 0
+    foreach ($exampleInfo in $exampleDirs) {
+        $exampleDir = $exampleInfo.Path
+        $rel = ('examples/{0}' -f $exampleInfo.Name)
+        $exampleIndex++
+        $exampleStart = [datetime]::UtcNow
+        $exampleIssueCount = $issues.Count
+        Write-AvmLog ('example {0}/{1}: {2} (started {3})' -f $exampleIndex, $exampleDirs.Count, $rel, (Format-AvmTimestamp -Timestamp $exampleStart)) -Level Info
 
         $preOk = $true
-        $preHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'pre.ps1') -WorkingDirectory $exampleDir -StreamOutput
+        $preHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'pre.ps1') -WorkingDirectory $exampleDir -Label ('{0}: pre.ps1' -f $rel) -StreamOutput
         if ($null -ne $preHook -and $preHook.ExitCode -ne 0) {
             $detail = if ($preHook.StdErr) { $preHook.StdErr.Trim() } elseif ($preHook.StdOut) { $preHook.StdOut.Trim() } else { '' }
             $issues.Add((New-AvmE2eIssue -File ('{0}/pre.ps1' -f $rel) -Message ('pre.ps1 hook failed (exit {0}): {1}' -f $preHook.ExitCode, $detail)))
@@ -182,6 +206,7 @@ function Invoke-AvmTerraformTestE2e {
             $init = Invoke-AvmProcess `
                 -FilePath $tool.Path `
                 -ArgumentList @('init', '-input=false', '-no-color') `
+                -Label ('{0}: terraform init' -f $rel) `
                 -WorkingDirectory $exampleDir `
                 -EnvVars $envVars `
                 -StreamOutput `
@@ -204,6 +229,7 @@ function Invoke-AvmTerraformTestE2e {
                     $apply = Invoke-AvmProcess `
                         -FilePath $tool.Path `
                         -ArgumentList $applyArgs `
+                        -Label ('{0}: terraform apply' -f $rel) `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
                         -StreamOutput `
@@ -224,6 +250,7 @@ function Invoke-AvmTerraformTestE2e {
                     $retryDestroy = Invoke-AvmProcess `
                         -FilePath $tool.Path `
                         -ArgumentList $destroyArgs `
+                        -Label ('{0}: terraform destroy (retry {1})' -f $rel, ($attempt)) `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
                         -StreamOutput `
@@ -252,6 +279,7 @@ function Invoke-AvmTerraformTestE2e {
                     $plan = Invoke-AvmProcess `
                         -FilePath $tool.Path `
                         -ArgumentList @('plan', '-detailed-exitcode', '-input=false', '-no-color') `
+                        -Label ('{0}: terraform plan (idempotency)' -f $rel) `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
                         -StreamOutput `
@@ -270,6 +298,7 @@ function Invoke-AvmTerraformTestE2e {
                 $destroy = Invoke-AvmProcess `
                     -FilePath $tool.Path `
                     -ArgumentList @('destroy', '-auto-approve', '-input=false', '-no-color') `
+                    -Label ('{0}: terraform destroy' -f $rel) `
                     -WorkingDirectory $exampleDir `
                     -EnvVars $envVars `
                     -StreamOutput `
@@ -282,13 +311,19 @@ function Invoke-AvmTerraformTestE2e {
             }
         }
 
-        $postHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'post.ps1') -WorkingDirectory $exampleDir -StreamOutput
+        $postHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'post.ps1') -WorkingDirectory $exampleDir -Label ('{0}: post.ps1' -f $rel) -StreamOutput
         if ($null -ne $postHook -and $postHook.ExitCode -ne 0) {
             $detail = if ($postHook.StdErr) { $postHook.StdErr.Trim() } elseif ($postHook.StdOut) { $postHook.StdOut.Trim() } else { '' }
             $issues.Add((New-AvmE2eIssue -File ('{0}/post.ps1' -f $rel) -Message ('post.ps1 hook failed (exit {0}): {1}' -f $postHook.ExitCode, $detail)))
         }
+
+        $exampleEnd = [datetime]::UtcNow
+        $newErrors = @($issues.ToArray() | Select-Object -Skip $exampleIssueCount | Where-Object { $_.Severity -eq 'error' }).Count
+        $exampleStatus = if ($newErrors -gt 0) { 'fail' } else { 'pass' }
+        Write-AvmLog ('example {0}/{1}: {2} -> {3} ({4})' -f $exampleIndex, $exampleDirs.Count, $rel, $exampleStatus, (Format-AvmDuration -Duration ($exampleEnd - $exampleStart))) -Level Info
     }
 
+    $runEnd = [datetime]::UtcNow
     $status = if ($issues | Where-Object { $_.Severity -eq 'error' }) { 'fail' } else { 'pass' }
 
     return [pscustomobject][ordered]@{
@@ -299,6 +334,9 @@ function Invoke-AvmTerraformTestE2e {
         Status         = $status
         FilesProcessed = $exampleDirs.Count
         Issues         = $issues.ToArray()
+        StartTime      = $runStart
+        EndTime        = $runEnd
+        DurationMs     = [int]([math]::Round(($runEnd - $runStart).TotalMilliseconds))
     }
 }
 
@@ -424,6 +462,8 @@ function Invoke-AvmE2eHook {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
+        [string] $Label,
+
         [switch] $StreamOutput
     )
 
@@ -431,10 +471,13 @@ function Invoke-AvmE2eHook {
         return $null
     }
 
+    $effectiveLabel = if ([string]::IsNullOrWhiteSpace($Label)) { Split-Path -Path $HookPath -Leaf } else { $Label }
+
     return Invoke-AvmProcess `
         -FilePath $PwshPath `
         -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $HookPath) `
         -WorkingDirectory $WorkingDirectory `
+        -Label $effectiveLabel `
         -StreamOutput:$StreamOutput `
         -IgnoreExitCode
 }

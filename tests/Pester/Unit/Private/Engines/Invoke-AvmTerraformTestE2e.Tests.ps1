@@ -632,3 +632,133 @@ Describe 'Test-AvmTerraformTransientError' {
         }
     }
 }
+
+Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
+    BeforeEach {
+        $script:moduleDir = Join-Path $TestDrive ("tf-tgt-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        foreach ($name in @('example-a', 'example-b', 'skipped')) {
+            $dir = Join-Path $script:moduleDir 'examples' $name
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir 'main.tf') -Value '# example' -Encoding utf8
+        }
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'skipped' '.e2eignore') -Value '' -Encoding utf8
+
+        $script:context = [pscustomobject][ordered]@{
+            Kind      = 'terraform-module-repo'
+            Root      = $script:moduleDir
+            Ecosystem = 'terraform'
+            Source    = 'path-heuristic'
+        }
+    }
+
+    It 'runs every runnable example when -Example is omitted' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 2
+    }
+
+    It 'runs only the named example when -Example is supplied' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C -Example 'example-b'
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+    }
+
+    It 'accepts a repo-relative example path' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestE2e -Context $C -Example 'examples/example-a'
+        }
+        $result.FilesProcessed | Should -Be 1
+    }
+
+    It 'hard-fails on an unknown example instead of passing with FilesProcessed=0' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool { throw 'should not resolve a tool' }
+                Mock Invoke-AvmProcess { throw 'should not shell out' }
+                Invoke-AvmTerraformTestE2e -Context $C -Example 'exampel-a'
+            }
+        }
+        catch { $err = $_.Exception }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmConfigurationException'
+        $err.Message        | Should -Match 'example-a, example-b'
+    }
+
+    It 'hard-fails when the named example carries .e2eignore' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool { throw 'should not resolve a tool' }
+                Mock Invoke-AvmProcess { throw 'should not shell out' }
+                Invoke-AvmTerraformTestE2e -Context $C -Example 'skipped'
+            }
+        }
+        catch { $err = $_.Exception }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmConfigurationException'
+        $err.Message        | Should -Match '\.e2eignore'
+    }
+
+    It 'emits a compact JSON array of runnable examples for -List without resolving a tool' {
+        $ctx = $script:context
+        $json = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool { throw 'should not resolve a tool' }
+            Mock Invoke-AvmProcess { throw 'should not shell out' }
+            Invoke-AvmTerraformTestE2e -Context $C -List
+        }
+        $json | Should -BeOfType ([string])
+        $json | Should -Be '["example-a","example-b"]'
+        (ConvertFrom-Json $json) | Should -Be @('example-a', 'example-b')
+    }
+
+    It 'emits [] for -List when there are no runnable examples' {
+        $empty = Join-Path $TestDrive ("tf-empty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $empty -Force | Out-Null
+        $ctx = [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = $empty; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+        $json = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool { throw 'should not resolve a tool' }
+            Invoke-AvmTerraformTestE2e -Context $C -List
+        }
+        $json | Should -Be '[]'
+    }
+
+    It 'omits .e2eignore examples from -List' {
+        $ctx = $script:context
+        $json = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmTerraformTestE2e -Context $C -List
+        }
+        $json | Should -Not -Match 'skipped'
+    }
+}

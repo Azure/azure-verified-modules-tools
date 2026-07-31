@@ -21,6 +21,10 @@ function Invoke-AvmTestE2e {
         '.e2eignore' marker file. Modules that ship no runnable example report
         a clean pass with FilesProcessed = 0.
 
+        Use -Example to target one or more named examples (this is how the
+        reusable workflow fans the tier out across a matrix), and -List to
+        discover the runnable example names as JSON.
+
         An apply that fails on region or SKU capacity is retried: the example
         is destroyed and redeployed up to -MaxRetry times. Retries are recorded
         as warning-level Issues, so a recovered example stays green while the
@@ -43,6 +47,20 @@ function Invoke-AvmTestE2e {
         When set, accept a PATH-resolved tool binary that self-reports the
         lock-pinned version.
 
+    .PARAMETER Example
+        Restrict the run to the named examples. Accepts either the folder leaf
+        ('example-a') or a repo-relative path ('examples/example-a'). Omitted,
+        every runnable example is processed sequentially, which is the local
+        default. A name that does not exist, or that carries a '.e2eignore'
+        marker, is a hard error rather than a silent skip, so a stale CI matrix
+        can never quietly drop a test.
+
+    .PARAMETER List
+        Emit a compact JSON array of runnable example names (honouring
+        '.e2eignore') and nothing else, then return. Intended to feed a
+        GitHub Actions matrix via fromJson(). Emits '[]' when the module ships
+        no runnable example. Does not resolve or install terraform.
+
     .PARAMETER MaxRetry
         How many times to retry an example whose 'terraform apply' failed with
         a transient capacity or quota error. Defaults to 2 (up to three
@@ -61,6 +79,12 @@ function Invoke-AvmTestE2e {
         avm test e2e -MaxRetry 0
 
     .EXAMPLE
+        avm test e2e --example example-a
+
+    .EXAMPLE
+        avm test e2e --list
+
+    .EXAMPLE
         Invoke-AvmTestE2e -Path C:\repos\terraform-azurerm-avm-res-foo
     #>
     [CmdletBinding()]
@@ -74,6 +98,11 @@ function Invoke-AvmTestE2e {
 
         [switch] $AllowPathFallback,
 
+        [AllowEmptyCollection()]
+        [string[]] $Example = @(),
+
+        [switch] $List,
+
         [ValidateRange(0, 10)]
         [int] $MaxRetry = 2
     )
@@ -85,7 +114,7 @@ function Invoke-AvmTestE2e {
 
     switch ($context.Ecosystem) {
         'terraform' {
-            Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback -MaxRetry $MaxRetry
+            Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback -Example $Example -List:$List -MaxRetry $MaxRetry
         }
         default {
             throw [AvmConfigurationException]::new(

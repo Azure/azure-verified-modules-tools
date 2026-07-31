@@ -234,3 +234,19 @@ Describe 'Invoke-Avm clean failure reporting (F24)' {
         $result.Output | Should -Not -Match 'Invoke-Avm\.ps1:\d+'
     }
 }
+
+Describe 'Invoke-Avm typed exception reporting (F24)' {
+    It 'renders a typed AvmException as a one-line failure without a stack trace' {
+        $body = "throw [AvmConfigurationException]::new('bad selector value')"
+        $result = Invoke-AvmChildVerb -Mode File -Body $body
+        $result.ExitCode | Should -Not -Be 0
+        $result.Output   | Should -Match 'avm spec-verb failed: bad selector value'
+        $result.Output   | Should -Not -Match '~~~~'
+        $result.Output   | Should -Not -Match '\.ps1:\d+'
+    }
+
+    It 'preserves the typed exception for callers that catch it' {
+        $result = Invoke-AvmChildVerb -Mode File -CaptureTypedError -Body "throw [AvmConfigurationException]::new('bad selector value')"
+        $result.Output | Should -Match 'AvmConfigurationException'
+    }
+}
