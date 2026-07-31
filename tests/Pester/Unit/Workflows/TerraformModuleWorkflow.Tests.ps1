@@ -47,3 +47,14 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
     }
 }
+
+Describe 'CI workflow' {
+    BeforeAll {
+        $script:ciPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'ci.yml'
+        $script:ci = Get-Content -LiteralPath $script:ciPath -Raw
+    }
+
+    It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
+        $script:ci | Should -Match 'GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}'
+    }
+}
