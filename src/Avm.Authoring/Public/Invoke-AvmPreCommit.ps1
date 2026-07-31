@@ -159,6 +159,10 @@ function Invoke-AvmPreCommit {
 
         Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
 
+        if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Error
+        }
+
         $steps.Add([pscustomobject][ordered]@{
                 Step       = $def.Name
                 Status     = $stepStatus

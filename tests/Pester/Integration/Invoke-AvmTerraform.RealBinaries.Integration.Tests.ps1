@@ -229,10 +229,10 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $result = Invoke-AvmPreCommit -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs'
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
             }
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs'
             $result.Status | Should -Be 'pass'
 
             # Fail the build if pre-commit changed anything: a canonical module
@@ -247,14 +247,13 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
-
             # F07: check policy used to skip here because the fixture declared no
             # APRL/AVMSEC bundles. The module now ships immutable descriptors in
             # Resources/avm.pins.jsonc, so it must run and pass on a clean repo.
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
             $result.Status | Should -Be 'pass'
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state
