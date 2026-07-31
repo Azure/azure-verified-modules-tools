@@ -384,6 +384,13 @@ shell-hook guard and the empty-tier status respectively.
   Actions-conditional leak is caught by this test and by **nothing else** in the
   suite (31 passed / 1 failed), where the same leak made unconditional is caught
   by four. (F47)
+- Documented the output-capture discard trap and the sweep that finds it
+  (Appendix L.10). `| Out-String` yields nothing when a terminating error unwinds
+  the pipeline, which turns any negative matcher on the capture into a vacuous
+  pass; redirect to a file instead. The sweep pattern is `\d?\*?>&1` — an earlier
+  audit that grepped only `*>&1` and `6>&1` missed two live `2>&1` sites. Each of
+  the four capture sites in the suite is safe for a *different* reason, so the
+  reason is now recorded alongside what would break it. (F47)
 
 ## [0.1.6] - 2026-07-31
 

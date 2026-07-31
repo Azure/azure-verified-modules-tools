@@ -1660,3 +1660,33 @@ The worst instance found was worse than negative-only — it read the wrong stre
 `-InformationVariable`, so the collection was empty under every input and the
 assertion could never fail in either direction. A negative matcher on a channel
 that never carries the value is indistinguishable from a passing test.
+
+### L.10 Capturing output: the discard trap, and how to sweep for it
+
+`... | Out-String` builds its result from a completed pipeline. If a terminating
+error fires part-way through, the pipeline unwinds and the capture is empty — the
+output you wanted is gone, and any negative matcher on it now passes vacuously
+(L.9). Redirect to a file instead, then read it back:
+
+```powershell
+$log = Join-Path ([IO.Path]::GetTempPath()) 'run.txt'
+./build.ps1 pre-commit *> $log          # survives a terminating error
+Select-String -Path $log -Pattern '...'
+```
+
+**When sweeping for this, match every stream merge, not the ones you remember.**
+An audit that grepped `*>&1` and `6>&1` missed two live `2>&1` sites. The pattern
+to use is `\d?\*?>&1`, which catches `2>&1`, `4>&1`, `6>&1` and `*>&1` alike.
+
+A capture site being safe is not the same as being safe *for the reason you
+assumed*, and the distinction matters because it decides what a future edit may
+break. The four sites in this repo are each safe differently:
+
+| Site | Why it is safe | What would break it |
+|---|---|---|
+| `Get-AvmVersion.Tests.ps1` | positive matcher — an empty capture fails | switching to a negative matcher |
+| `Invoke-Avm.Tests.ps1` (×2) | external process; a failing child `pwsh` raises no terminating error in the parent | moving the call in-process |
+| `Write-AvmLog.Tests.ps1` | negative, but paired with a positive control `It` on the same mechanism | deleting the control as redundant |
+
+Record which reason applies. "It passes" is not a finding; "it cannot pass while
+broken, because X" is.
