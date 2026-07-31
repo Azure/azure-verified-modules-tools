@@ -226,7 +226,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'composes all eight steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
+    It 'composes all nine steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -250,14 +250,15 @@ Describe 'Invoke-AvmPrCheck' {
 
             # sync runs first in drift-check mode: -CheckDrift is forwarded via
             # the step's ExtraArgs so CI treats stale governed files as a fail.
-            Should -Invoke Invoke-AvmSync            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
-            Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmLint            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckPolicy     -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckConvention -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTest            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
+            Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmLint            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckPolicy     -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTest            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTestUnit        -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
             $r
         }
@@ -334,7 +335,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTestUnit -Times 1
+            Should -Invoke Invoke-AvmTestUnit -Exactly 1
         }
 
         # A failing unit tier must fail the gauntlet. Before F38 the chain only

@@ -104,11 +104,11 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPreCommit -Path $D
 
-            Should -Invoke Invoke-AvmSync            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckConvention -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTransform       -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
             # pre-commit is the auto-fix surface: format and docs must rewrite
             # the working tree, never gate on drift the way pr-check does.
