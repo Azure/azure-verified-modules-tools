@@ -57,7 +57,7 @@ function Find-AvmToolOnPath {
         }
     }
     catch {
-        Write-Verbose "Find-AvmToolOnPath: '$path --version' failed: $($_.Exception.Message)"
+        Write-AvmLog "Find-AvmToolOnPath: '$path --version' failed: $($_.Exception.Message)" -Level Verbose
     }
 
     $versionMatches = $false

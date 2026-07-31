@@ -28,6 +28,20 @@ function Invoke-Avm {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
+    # logging. Turn verbose on and cascade it to every nested cmdlet through a
+    # cloned default-parameter table so the inherited/global one is untouched.
+    if (Test-AvmDebugMode) {
+        $VerbosePreference = 'Continue'
+        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+            $PSDefaultParameterValues.Clone()
+        }
+        else {
+            @{}
+        }
+        $PSDefaultParameterValues['*:Verbose'] = $true
+    }
+
     # Honour .avm/.disable sentinel anywhere up the path: spec section 8.
     # The opt-out lets a repo turn the dispatcher off without uninstalling
     # the module. We honour it even for read-only verbs like 'avm version'
@@ -52,14 +66,14 @@ function Invoke-Avm {
     }
 
     if ($helpRequested) {
-        Write-Information 'Avm.Authoring CLI' -InformationAction Continue
-        Write-Information '' -InformationAction Continue
-        Write-Information 'Usage: avm <verb> [<args>]' -InformationAction Continue
-        Write-Information '' -InformationAction Continue
-        Write-Information 'Available verbs:' -InformationAction Continue
+        Write-AvmLog 'Avm.Authoring CLI' -Level Info
+        Write-AvmLog '' -Level Info
+        Write-AvmLog 'Usage: avm <verb> [<args>]' -Level Info
+        Write-AvmLog '' -Level Info
+        Write-AvmLog 'Available verbs:' -Level Info
         foreach ($entry in $registry) {
             $verb = ($entry.Path -join ' ').PadRight(20)
-            Write-Information ('  {0}  {1}' -f $verb, $entry.Summary) -InformationAction Continue
+            Write-AvmLog ('  {0}  {1}' -f $verb, $entry.Summary) -Level Info
         }
         return
     }
