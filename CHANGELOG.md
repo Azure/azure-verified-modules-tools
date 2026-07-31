@@ -352,7 +352,13 @@ shell-hook guard and the empty-tier status respectively.
   so the component tier proves `check policy` can go **red** end-to-end rather
   than only proving it stays quiet. The previous stub emitted `[]` and the
   fixture asserted `pass` on it — the vacuous case encoded as the expectation,
-  which is how F46 survived a green suite. (F46)
+  which is how F46 survived a green suite. The real-binary integration tier had
+  encoded the same false expectation against *genuine* conftest and the
+  *genuine* pinned bundles, and now asserts the honest `skipped` /
+  `Evaluated = 0` / `avm.tf.policy-not-evaluated` triple instead. Pinning the
+  evaluated count doubles as a canary: if a future bundle re-packages into
+  conftest's default namespace, that assertion fails loudly rather than the gate
+  silently going quiet again. (F46)
 
 ## [0.1.6] - 2026-07-31
 

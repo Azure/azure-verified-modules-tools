@@ -242,18 +242,37 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
-        It 'pr-check passes every step, including check policy on a repo with no .avm/config.json, and resolves tools from the AVM cache' {
+        It 'pr-check runs every step on a repo with no .avm/config.json, reports check policy as skipped, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
             # F07: check policy used to skip here because the fixture declared no
             # APRL/AVMSEC bundles. The module now ships immutable descriptors in
-            # Resources/avm.pins.jsonc, so it must run and pass on a clean repo.
-            foreach ($step in $result.Steps) {
+            # Resources/avm.pins.jsonc, so it must run on a clean repo.
+            #
+            # F46: it runs, but it cannot yet *check* anything. conftest is driven
+            # with --parser hcl2 and the pinned APRL/AVMSEC bundles declare no
+            # rules in conftest's default 'main' namespace, so zero policies are
+            # evaluated. This tier is the real-binary one, so it is the assertion
+            # that proves that against genuine conftest and genuine bundles --
+            # and it previously asserted 'pass', which is exactly how the defect
+            # survived a green suite. It must report 'skipped' until the
+            # plan-JSON input path lands, at which point this flips back to pass
+            # and the diagnostic below disappears.
+            $policyStep = $result.Steps | Where-Object { $_.Step -eq 'check policy' }
+            $policyStep | Should -Not -BeNullOrEmpty
+            $policyStep.Status | Should -Be 'skipped'
+            $policyStep.Result.Evaluated | Should -Be 0
+            @($policyStep.Result.Issues |
+                    Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count |
+                Should -Be 1
+
+            foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
             ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,validate,unit test,docs'
+            # 'skipped' must not flip the gauntlet: a module is reported, not broken.
             $result.Status | Should -Be 'pass'
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state
