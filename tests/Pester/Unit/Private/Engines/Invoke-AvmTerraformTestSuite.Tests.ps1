@@ -58,6 +58,16 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $result.FilesProcessed | Should -Be 0
         $result.Issues         | Should -BeNullOrEmpty
 
+        # F38: the vacuous pass must still carry run counts. Without them the
+        # "this module has no tests at all" case is shape-indistinguishable from
+        # a real run, which is exactly how an empty tests/ tree passed unnoticed.
+        $result.PSObject.Properties.Name | Should -Contain 'RunsTotal'
+        $result.PSObject.Properties.Name | Should -Contain 'RunsPassed'
+        $result.PSObject.Properties.Name | Should -Contain 'RunsFailed'
+        $result.RunsTotal      | Should -Be 0
+        $result.RunsPassed     | Should -Be 0
+        $result.RunsFailed     | Should -Be 0
+
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Times 0
         }

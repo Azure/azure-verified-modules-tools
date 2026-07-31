@@ -89,6 +89,7 @@ function Invoke-AvmTerraformTestSuite {
     $targets = @(Get-AvmTerraformTestTarget -Root $Context.Root -Tier $Tier)
 
     if ($targets.Count -eq 0) {
+        Write-AvmLog ('no {0} tests found under tests/{0}' -f $Tier) -Level Warning
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
@@ -96,6 +97,9 @@ function Invoke-AvmTerraformTestSuite {
             ToolSource     = $tool.Source
             Status         = 'pass'
             FilesProcessed = 0
+            RunsTotal      = 0
+            RunsPassed     = 0
+            RunsFailed     = 0
             Issues         = @()
         }
     }
