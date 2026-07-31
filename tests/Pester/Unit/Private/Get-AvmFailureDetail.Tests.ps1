@@ -85,3 +85,67 @@ Describe 'Get-AvmFailureDetail' {
         $detail | Should -BeExactly ''
     }
 }
+
+Describe 'Get-AvmFailurePosition' {
+    It 'F41: reports the position of the issue the detail headlines' {
+        $position = InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'fail'
+                Issues = @(
+                    [pscustomobject]@{ Severity = 'error'; File = 'tests/unit/a.tftest.hcl'; Line = 0; Column = 0; Message = "test run 'x' fail" },
+                    [pscustomobject]@{ Severity = 'error'; File = 'tests/unit/a.tftest.hcl'; Line = 17; Column = 21; Message = 'Test assertion failed' }
+                )
+            }
+            Get-AvmFailurePosition -Result $result
+        }
+        $position.File | Should -BeExactly 'tests/unit/a.tftest.hcl'
+        $position.Line | Should -Be 17
+        $position.Column | Should -Be 21
+    }
+
+    It 'F41: reaches into a failing chain step' {
+        $position = InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'fail'
+                Steps  = @(
+                    [pscustomobject]@{ Step = 'lint'; Status = 'pass'; Result = $null },
+                    [pscustomobject]@{
+                        Step   = 'unit test'
+                        Status = 'fail'
+                        Result = [pscustomobject]@{
+                            Issues = @(
+                                [pscustomobject]@{ Severity = 'error'; File = 'main.tf'; Line = 4; Column = 2; Message = 'Unsupported argument' }
+                            )
+                        }
+                    }
+                )
+            }
+            Get-AvmFailurePosition -Result $result
+        }
+        $position.File | Should -BeExactly 'main.tf'
+        $position.Line | Should -Be 4
+    }
+
+    It 'F41: returns null when the step reports a bare error string' {
+        $position = InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'error'
+                Steps  = @(
+                    [pscustomobject]@{ Step = 'sync'; Status = 'error'; Error = 'tool missing'; Result = $null }
+                )
+            }
+            Get-AvmFailurePosition -Result $result
+        }
+        $position | Should -BeNullOrEmpty
+    }
+
+    It 'F41: returns null when no issue carries a file' {
+        $position = InModuleScope 'Avm.Authoring' {
+            Get-AvmFailurePosition -Result ([pscustomobject]@{
+                    Status = 'fail'
+                    Issues = @([pscustomobject]@{ Severity = 'error'; Message = 'no position' })
+                })
+        }
+        $position | Should -BeNullOrEmpty
+    }
+}

@@ -121,7 +121,14 @@ function Write-AvmLog {
         [string] $Message,
 
         [ValidateSet('Debug', 'Verbose', 'Info', 'Warning', 'Error')]
-        [string] $Level = 'Info'
+        [string] $Level = 'Info',
+
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
     )
 
     begin {
@@ -132,6 +139,7 @@ function Write-AvmLog {
 
     process {
         $text = if ($null -eq $Message) { '' } else { $Message }
+        $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
 
         switch ($Level) {
             'Debug' {
@@ -152,7 +160,7 @@ function Write-AvmLog {
             }
             'Warning' {
                 if ($actions) {
-                    Write-Information ('::warning::{0}' -f (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
+                    Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
                     Write-Warning $text
@@ -160,7 +168,7 @@ function Write-AvmLog {
             }
             'Error' {
                 if ($actions) {
-                    Write-Information ('::error::{0}' -f (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
+                    Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
                     Write-Information $text -InformationAction Continue
@@ -186,7 +194,80 @@ function ConvertTo-AvmAnnotationText {
         return ''
     }
 
-    return $Text.Replace("`r", '').Replace("`n", '%0A')
+    # Console indentation is load-bearing locally but leaks into the annotation
+    # payload in GitHub Actions, so it is stripped on this branch only.
+    return $Text.TrimStart().Replace("`r", '').Replace("`n", '%0A')
+}
+
+function ConvertTo-AvmAnnotationPath {
+    <#
+    .SYNOPSIS
+        Normalise a diagnostic path into the form GitHub anchors annotations on.
+
+    .DESCRIPTION
+        An annotation is only rendered inline on the failing line in the PR
+        Files-changed view when its path is repo-relative and uses forward
+        slashes. Terraform emits OS paths, so a Windows run yields
+        'tests\unit\x.tftest.hcl', which GitHub cannot match against the diff.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ''
+    }
+
+    $normalised = $Path.Trim().Replace('\', '/')
+
+    $roots = @($env:GITHUB_WORKSPACE, (Get-Location).Path) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    foreach ($root in $roots) {
+        $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'
+        if ($normalised.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $normalised = $normalised.Substring($prefix.Length)
+            break
+        }
+    }
+
+    while ($normalised.StartsWith('./')) {
+        $normalised = $normalised.Substring(2)
+    }
+
+    return $normalised
+}
+
+function Format-AvmAnnotationProperty {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
+    )
+
+    $path = ConvertTo-AvmAnnotationPath -Path $File
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        return ''
+    }
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add('file={0}' -f $path.Replace(',', '%2C'))
+    if ($Line -gt 0) {
+        $parts.Add('line={0}' -f $Line)
+        if ($Column -gt 0) {
+            $parts.Add('col={0}' -f $Column)
+        }
+    }
+
+    return ' ' + ($parts -join ',')
 }
 
 function Enter-AvmLogGroup {

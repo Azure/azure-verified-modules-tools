@@ -199,8 +199,11 @@ function Invoke-AvmTerraformTestSuite {
             $runStopwatch.Restart()
             $name = if ($runEvent.Name) { $runEvent.Name } else { '(unnamed)' }
             $where = if ($runEvent.Path) { '{0} ' -f $runEvent.Path } else { '' }
-            $level = if ($runEvent.Status -in @('fail', 'error')) { 'Error' } else { 'Info' }
-            Write-AvmLog ('    run {0}"{1}" -> {2} ({3})' -f $where, $name, $runEvent.Status, (Format-AvmDuration -Duration $elapsed)) -Level $level
+            # F41: a failing run is narration, not a diagnostic. Writing it at
+            # Error level turned every failing run into a GitHub Actions
+            # annotation, so the positionless progress line was shown first and
+            # the anchored diagnostic last, behind the 10-per-step cap.
+            Write-AvmLog ('    run {0}"{1}" -> {2} ({3})' -f $where, $name, $runEvent.Status, (Format-AvmDuration -Duration $elapsed))
         }
 
         $result = Invoke-AvmProcess `

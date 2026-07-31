@@ -111,6 +111,67 @@ Describe 'Write-AvmLog' {
             @($messages) | Should -Contain '::group::a group'
             @($messages) | Should -Contain '::endgroup::'
         }
+
+        It 'F41: strips leading indentation from the annotation payload' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog '    run something -> fail' -Level Error -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain '::error::run something -> fail'
+        }
+
+        It 'F41: anchors the annotation on file, line and column' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'assertion failed' -Level Error -File 'tests/unit/a.tftest.hcl' -Line 17 -Column 21 -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=17,col=21::assertion failed'
+        }
+
+        It 'F41: normalises Windows separators so GitHub can match the diff' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'assertion failed' -Level Error -File 'tests\unit\a.tftest.hcl' -Line 4 -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=4::assertion failed'
+        }
+
+        It 'F41: rebases an absolute path onto the workspace root' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $saved = $env:GITHUB_WORKSPACE
+                try {
+                    $env:GITHUB_WORKSPACE = 'C:\work\repo'
+                    $captured = @()
+                    Write-AvmLog 'boom' -Level Error -File 'C:\work\repo\tests\unit\a.tftest.hcl' -Line 2 -InformationVariable captured
+                    @($captured | ForEach-Object { [string]$_.MessageData })
+                }
+                finally {
+                    $env:GITHUB_WORKSPACE = $saved
+                }
+            }
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=2::boom'
+        }
+
+        It 'F41: falls back to an unanchored annotation when there is no position' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'no position here' -Level Error -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain '::error::no position here'
+        }
+
+        It 'F41: omits col when line is unknown' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'file only' -Level Error -File 'main.tf' -Column 9 -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain '::error file=main.tf::file only'
+        }
     }
 
     Context 'group markers outside GitHub Actions' {

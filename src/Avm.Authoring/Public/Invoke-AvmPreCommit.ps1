@@ -167,7 +167,9 @@ function Invoke-AvmPreCommit {
         Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
 
         if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Error
+            # F41: narration only. Assert-AvmCommandSuccess promotes the same
+            # text to the single GitHub Actions annotation for the run.
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info
         }
 
         $steps.Add([pscustomobject][ordered]@{

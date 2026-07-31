@@ -583,4 +583,35 @@ Describe 'Invoke-AvmTerraformTestSuite' {
 
         ($rendered -join "`n") | Should -Match 'run tests/unit/main\.tftest\.hcl "a" -> pass'
     }
+
+    It 'F41: narrates a failing run without raising it to annotation level' {
+        $ctx = $script:context
+        $json = '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"a","status":"fail"}}'
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            $script:avmProgressRecords = [System.Collections.Generic.List[object]]::new()
+            Mock Write-AvmLog {
+                param($Message, $Level)
+                $script:avmProgressRecords.Add([pscustomobject]@{ Message = [string]$Message; Level = [string]$Level })
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList, $OnStdOutLine)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                if ($null -ne $OnStdOutLine) { & $OnStdOutLine $J }
+                [pscustomobject]@{ ExitCode = 1; StdOut = $J; StdErr = '' }
+            }
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            , $script:avmProgressRecords.ToArray()
+        }
+
+        $runLines = @($observed | Where-Object { $_.Message -match 'run tests/unit/main\.tftest\.hcl "a" -> fail' })
+        $runLines.Count | Should -Be 1
+        $runLines[0].Level | Should -Not -Be 'Error'
+    }
 }

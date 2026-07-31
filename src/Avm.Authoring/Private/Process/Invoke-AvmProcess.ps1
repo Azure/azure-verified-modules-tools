@@ -271,7 +271,7 @@ function Invoke-AvmProcess {
 
     if ($timedOut) {
         if ($narrate) {
-            Write-AvmLog ('  TIMEOUT: {0} (after {1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Error
+            Write-AvmLog ('  TIMEOUT: {0} (after {1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Info
         }
         throw [System.TimeoutException]::new(
             "Process '$FilePath' did not exit within $TimeoutSec seconds; killed.")
@@ -285,7 +285,7 @@ function Invoke-AvmProcess {
             Write-AvmLog ('  done: {0} {1}' -f $displayLabel, $suffix) -Level Info
         }
         else {
-            Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Error
+            Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Info
             if ($hasLineHook) {
                 foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
                     Write-AvmLog $replayLine -Level Info
