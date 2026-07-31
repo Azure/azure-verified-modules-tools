@@ -149,6 +149,34 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         }
     }
 
+    It 'F34: passes -test-directory to terraform init so run-block modules are installed' -ForEach @(
+        @{ Tier = 'unit' }
+        @{ Tier = 'integration' }
+    ) {
+        $tierDir = Join-Path $script:moduleDir 'tests' $Tier
+        New-Item -ItemType Directory -Path $tierDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $tierDir 'f34.tftest.hcl') -Value 'run "z" {}' -Encoding utf8
+        $ctx = $script:context
+        $initArgs = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; T = $Tier } {
+            param($C, $T)
+            $captured = New-Object System.Collections.Generic.List[object]
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'init') { $captured.AddRange([object[]]$ArgumentList) }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier $T
+            , $captured.ToArray()
+        }
+
+        $initArgs | Should -Contain ('-test-directory=tests/{0}' -f $Tier)
+    }
+
     It 'honours -NoInit and skips terraform init even when .terraform/ is absent' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {

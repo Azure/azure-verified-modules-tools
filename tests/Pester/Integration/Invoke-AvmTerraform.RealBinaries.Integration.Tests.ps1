@@ -272,5 +272,35 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
                 $step.Result.ToolSource | Should -Be 'cache' -Because "pr-check step '$($step.Step)' should use the managed cache"
             }
         }
+
+        # F34: terraform init only scans the *default* test directory when
+        # resolving modules declared inside .tftest.hcl run blocks. AVM tiers
+        # live in tests/<tier>/, so without '-test-directory' on init the
+        # helper module is never installed and terraform test dies with
+        # 'Module not installed'. Runs from a cold copy (no .terraform/) so it
+        # is a genuine guard rather than a beneficiary of an earlier init.
+        It 'unit tier installs modules referenced by run blocks from a cold working directory' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azurerm-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the azurerm fixture carries a run-block helper module'
+                return
+            }
+
+            $cold = Join-Path $script:WorkRoot "$name-f34"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $cold -Recurse -Force
+            (Test-Path -LiteralPath (Join-Path $cold '.terraform')) |
+                Should -BeFalse -Because 'the guard is only meaningful from a cold working directory'
+
+            $result = Invoke-AvmTestUnit -Path $cold -Ecosystem terraform
+
+            $result.Status | Should -Be 'pass' -Because "issues: $($result.Issues | ConvertTo-Json -Depth 4 -Compress)"
+            $result.RunsTotal | Should -BeGreaterOrEqual 2
+            $result.RunsFailed | Should -Be 0
+
+            $modules = Join-Path $cold '.terraform' 'modules' 'modules.json'
+            (Test-Path -LiteralPath $modules) | Should -BeTrue
+            (Get-Content -LiteralPath $modules -Raw) |
+                Should -Match 'tests/unit/setup' -Because 'init must record the run-block helper module'
+        }
     }
 }

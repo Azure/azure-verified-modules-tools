@@ -32,8 +32,8 @@ function Invoke-AvmTestUnit {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Skip the auto 'terraform init -backend=false' step even when
-        '.terraform/' is missing.
+        Skip the auto 'terraform init -backend=false -test-directory=tests/unit'
+        step, which otherwise always runs.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,

@@ -30,8 +30,8 @@ function Invoke-AvmTest {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Terraform-only: skip the auto 'terraform init -backend=false' step
-        even when '.terraform/' is missing. Ignored for bicep contexts.
+        Terraform-only: skip the auto 'terraform init -backend=false' step,
+        which otherwise always runs. Ignored for bicep contexts.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
