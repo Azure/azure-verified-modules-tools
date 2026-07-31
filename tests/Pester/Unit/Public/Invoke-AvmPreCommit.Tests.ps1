@@ -154,6 +154,37 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | Where-Object Step -eq 'transform').Error      | Should -Match 'not wired'
     }
 
+    # F39b: a plain AvmConfigurationException means the repo is misconfigured, not
+    # that the verb is unsupported. Skipping it renders as a benign gauntlet pass -
+    # exactly how a step that never actually ran gets to look green.
+    It 'F39: fails the gauntlet on a configuration error but skips an unsupported verb' {
+        $dir = Join-Path $TestDrive ("precommit-f39-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync            { throw [AvmConfigurationException]::new('managed-files repo id could not be resolved') }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPreCommit -Path $D
+        }
+
+        ($result.Steps | Where-Object Step -eq 'sync').Status      | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'transform').Status | Should -Be 'skipped'
+        $result.Status                                            | Should -Be 'fail'
+
+        # 'fail' must not abort the chain the way 'error' does - the remaining
+        # steps still run so one bad config does not mask the next.
+        $result.Steps.Step | Should -Contain 'docs'
+    }
+
     It 'flips overall to fail when any step returns Status=fail but continues by default' {
         $dir = Join-Path $TestDrive ("precommit-fail-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
