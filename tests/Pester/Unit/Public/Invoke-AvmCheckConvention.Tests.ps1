@@ -43,7 +43,7 @@ Describe 'Invoke-AvmCheckConvention' {
             $result = Invoke-AvmCheckConvention -Path $D
             $result.Engine | Should -Be 'bicep'
             Should -Invoke Invoke-AvmBicepCheckConvention -Exactly 1
-            Should -Invoke Invoke-AvmTerraformCheckConvention -Times 0
+            Should -Invoke Invoke-AvmTerraformCheckConvention -Times 0 -Exactly
         }
     }
 
@@ -65,7 +65,7 @@ Describe 'Invoke-AvmCheckConvention' {
             $result = Invoke-AvmCheckConvention -Path $D
             $result.Engine | Should -Be 'terraform'
             Should -Invoke Invoke-AvmTerraformCheckConvention -Exactly 1
-            Should -Invoke Invoke-AvmBicepCheckConvention -Times 0
+            Should -Invoke Invoke-AvmBicepCheckConvention -Times 0 -Exactly
         }
     }
 

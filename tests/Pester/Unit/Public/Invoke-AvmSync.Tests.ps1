@@ -108,7 +108,7 @@ Describe 'Invoke-AvmSync' {
         $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Sync-AvmManagedFile -Times 0
+            Should -Invoke Sync-AvmManagedFile -Times 0 -Exactly
         }
     }
 

@@ -41,7 +41,7 @@ Describe 'Invoke-AvmTransform' {
             $result = Invoke-AvmTransform -Path $D
             $result.Engine | Should -Be 'bicep'
             Should -Invoke Invoke-AvmBicepTransform -Exactly 1
-            Should -Invoke Invoke-AvmTerraformTransform -Times 0
+            Should -Invoke Invoke-AvmTerraformTransform -Times 0 -Exactly
         }
     }
 
@@ -63,7 +63,7 @@ Describe 'Invoke-AvmTransform' {
             $result = Invoke-AvmTransform -Path $D
             $result.Engine | Should -Be 'terraform'
             Should -Invoke Invoke-AvmTerraformTransform -Exactly 1
-            Should -Invoke Invoke-AvmBicepTransform -Times 0
+            Should -Invoke Invoke-AvmBicepTransform -Times 0 -Exactly
         }
     }
 

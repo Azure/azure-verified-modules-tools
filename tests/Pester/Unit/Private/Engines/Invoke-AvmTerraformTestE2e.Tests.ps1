@@ -53,7 +53,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues         | Should -BeNullOrEmpty
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Times 0
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly
         }
     }
 
@@ -179,7 +179,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues[0].Message | Should -Match 'apply'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'plan' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'plan' }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
         }
     }
@@ -208,8 +208,8 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues[0].Message | Should -Match 'init'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
         }
     }
 
@@ -299,7 +299,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*post.ps1')
             }
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'apply' }
         }
     }
 
@@ -331,7 +331,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         $result.Issues[0].Message | Should -Match 'pre\.ps1 hook failed'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'init' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'init' }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 ($ArgumentList -contains '-File') -and (($ArgumentList -join ' ') -like '*post.ps1')
             }
@@ -380,7 +380,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             Mock Invoke-AvmProcess { throw 'should not shell out when a .sh hook is rejected' }
             { Invoke-AvmTerraformTestE2e -Context $C } |
                 Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage "*add a '.ps1' counterpart*"
-            Should -Invoke Invoke-AvmProcess -Times 0
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly
         }
     }
 
@@ -550,7 +550,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
-            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'plan' }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'plan' }
         }
     }
 

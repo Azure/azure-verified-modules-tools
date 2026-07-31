@@ -44,7 +44,7 @@ Describe 'Invoke-AvmLint' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmBicepLint -Exactly 1
-            Should -Invoke Invoke-AvmTerraformLint -Times 0
+            Should -Invoke Invoke-AvmTerraformLint -Times 0 -Exactly
         }
     }
 

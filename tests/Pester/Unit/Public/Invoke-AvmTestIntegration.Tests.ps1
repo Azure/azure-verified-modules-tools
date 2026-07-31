@@ -71,7 +71,7 @@ Describe 'Invoke-AvmTestIntegration' {
         $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformTestSuite -Times 0
+            Should -Invoke Invoke-AvmTerraformTestSuite -Times 0 -Exactly
         }
     }
 

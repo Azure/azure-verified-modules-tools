@@ -43,7 +43,7 @@ Describe 'Invoke-AvmCheckPolicy' {
             $result = Invoke-AvmCheckPolicy -Path $D
             $result.Engine | Should -Be 'bicep'
             Should -Invoke Invoke-AvmBicepCheckPolicy -Exactly 1
-            Should -Invoke Invoke-AvmTerraformCheckPolicy -Times 0
+            Should -Invoke Invoke-AvmTerraformCheckPolicy -Times 0 -Exactly
         }
     }
 
@@ -65,7 +65,7 @@ Describe 'Invoke-AvmCheckPolicy' {
             $result = Invoke-AvmCheckPolicy -Path $D
             $result.Engine | Should -Be 'terraform'
             Should -Invoke Invoke-AvmTerraformCheckPolicy -Exactly 1
-            Should -Invoke Invoke-AvmBicepCheckPolicy -Times 0
+            Should -Invoke Invoke-AvmBicepCheckPolicy -Times 0 -Exactly
         }
     }
 

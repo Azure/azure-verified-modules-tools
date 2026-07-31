@@ -71,7 +71,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $result.RunsFailed     | Should -Be 0
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Times 0
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly
         }
     }
 

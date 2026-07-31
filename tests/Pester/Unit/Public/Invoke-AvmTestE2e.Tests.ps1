@@ -90,7 +90,7 @@ Describe 'Invoke-AvmTestE2e' {
         $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformTestE2e -Times 0
+            Should -Invoke Invoke-AvmTerraformTestE2e -Times 0 -Exactly
         }
     }
 
