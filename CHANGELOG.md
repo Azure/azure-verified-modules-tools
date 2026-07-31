@@ -319,11 +319,16 @@ shell-hook guard and the empty-tier status respectively.
 
 ### Tests
 
-- Negative mock assertions are no longer vacuous. `Should -Invoke -Times 0`
-  without `-Exactly` asserts "called at least zero times", which is always
-  true, so all 36 "this must never be called" guards in the suite passed
-  regardless of behaviour. Found by mutation-testing the new drift gate.
-  (F43)
+- Mock-invocation assertions are pinned to exact counts. The original claim
+  under this heading was wrong: `Should -Invoke -Times 0` is *not* vacuous on
+  Pester 5, which special-cases zero as exact — that behaviour is Pester 4's,
+  and the repo pins `[5.5.0,)` everywhere. The genuinely loose assertions were
+  the positives: `-Times 1` without `-Exactly` means "at least once", and 15 of
+  them sat in the two gauntlet suites. A double-invoke injected into
+  `Invoke-AvmPrCheck` was caught by exactly one test — the F42 drift gate, the
+  only one already using `-Exactly`; the eight-assertion compose test passed
+  with every step invoked twice. All 15 are now `-Exactly`, and
+  `Invoke-AvmTestUnit` gained the compose assertion it never had. (F43, F45)
 
 ## [0.1.6] - 2026-07-31
 

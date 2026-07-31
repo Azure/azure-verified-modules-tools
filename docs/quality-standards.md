@@ -1486,3 +1486,87 @@ The inverse matters just as much: the auto-fixing chain (`pre-commit`) must
 *not* inherit the switch. Gating a developer's commit hook on drift it is meant
 to remove breaks the loop that makes the hook worth having. Pin that inverse
 with its own test.
+### L.5 `Should -Invoke`: the loose form is the positive, not the zero
+
+Pester 5 special-cases zero. Measured on 5.5.0 (the pinned floor) and 5.7.1:
+
+| assertion | mock invoked | result |
+| --- | --- | --- |
+| `-Times 0` *without* `-Exactly` | once | **fails** |
+| `-Times 1` *without* `-Exactly` | twice | **passes** |
+| `-Times 1` *with* `-Exactly` | twice | fails |
+
+So a negative guard is already exact, and the assertion that silently tolerates
+extra calls is the ordinary positive one. `-Times N` means "at least N" for
+every N except zero.
+
+The belief that `-Times 0` is vacuous is not folklore — it is true on Pester 4.
+The repo pins `[5.5.0,)` in `ci.yml`, `release.yml`, `build/avm.build.ps1` and
+every `#Requires`, so Pester 4 cannot run here. **Write `-Exactly N`
+everywhere** and the distinction stops mattering.
+
+Why it matters for the gauntlet suites specifically: `Invoke-AvmPrCheck` and
+`Invoke-AvmPreCommit` are tested almost entirely through mock-invocation
+assertions, because the steps themselves are mocked. Those assertions *are* the
+test. A double-invoke injected into the step loop — with the extra result
+discarded, so `Steps.Count` is unchanged — left the pr-check suite at 13/14,
+and the single failure was the one assertion that already used `-Exactly`. The
+eight-assertion compose test passed with every step called twice.
+
+Two habits follow:
+
+- Mutate the **product**, not the test, and mutate it in a way the *other*
+  assertions cannot catch. Breaking `Steps.Count` proves nothing about the
+  invocation assertions; adding a discarded extra call isolates them.
+- Run the negative control: revert the assertions and confirm the same mutation
+  goes green. Without it you have shown the test fails, not that the change is
+  what makes it fail.
+
+### L.6 Before believing a test failure, run an untouched control test
+
+A whole-suite failure is far more likely to be the apparatus than the code, and
+a corrupt test runner is indistinguishable from a product regression by
+inspection alone.
+
+Signature of a corrupt Pester install, seen on 5.7.1 in this repo:
+
+- A standalone `(1+1) | Should -Be 2` fails.
+- `-Output Detailed` prints the summary but **no per-test lines**.
+- `$result.Failed[0].ErrorRecord` has `.Count -eq 1` but `[0]` is `$null`.
+- Containers report `Result: NotRun`, `ShouldRun: False`, `Executed: False`
+  while still counting as failed.
+
+Diagnostic ladder, cheapest first: parse-check the file, stash your edits and
+re-run the original, run an **untouched** test file, run a trivial standalone
+test, then compare versions:
+
+```powershell
+foreach ($v in '5.5.0','5.7.1') {
+    pwsh -NoProfile -Command "Import-Module Pester -RequiredVersion $v -Force; ..."
+}
+```
+
+Fix: `Install-Module Pester -RequiredVersion <v> -Force -Scope CurrentUser -SkipPublisherCheck`.
+
+### L.7 Mutation tests must restore from a hash-verified copy
+
+Mutation testing has found more real defects here than any other technique, so
+it gets used often. Its failure mode is uniquely bad: it injects a defect into
+shipped source while reporting success.
+
+An in-place regex mutation restored by string comparison silently failed in this
+repo, the verification reported success anyway, and `# MUTATED` shipped in a
+commit. It was caught a run later — only because the tests it had disabled went
+red.
+
+Back up with a file copy and prove the restore by hash:
+
+```powershell
+Copy-Item $src $bak -Force
+$h0 = (Get-FileHash $src).Hash
+# ... mutate, run tests ...
+Copy-Item $bak $src -Force
+"restored byte-identical: $((Get-FileHash $src).Hash -eq $h0)"
+```
+
+Then `git status --porcelain` before you commit anything.
