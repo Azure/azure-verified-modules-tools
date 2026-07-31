@@ -169,7 +169,7 @@ function Invoke-AvmTerraformTestE2e {
         $rel = ('examples/{0}' -f $example.Name)
 
         $preOk = $true
-        $preHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'pre.ps1') -WorkingDirectory $exampleDir
+        $preHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'pre.ps1') -WorkingDirectory $exampleDir -StreamOutput
         if ($null -ne $preHook -and $preHook.ExitCode -ne 0) {
             $detail = if ($preHook.StdErr) { $preHook.StdErr.Trim() } elseif ($preHook.StdOut) { $preHook.StdOut.Trim() } else { '' }
             $issues.Add((New-AvmE2eIssue -File ('{0}/pre.ps1' -f $rel) -Message ('pre.ps1 hook failed (exit {0}): {1}' -f $preHook.ExitCode, $detail)))
@@ -184,6 +184,7 @@ function Invoke-AvmTerraformTestE2e {
                 -ArgumentList @('init', '-input=false', '-no-color') `
                 -WorkingDirectory $exampleDir `
                 -EnvVars $envVars `
+                -StreamOutput `
                 -IgnoreExitCode
 
             if ($init.ExitCode -ne 0) {
@@ -205,6 +206,7 @@ function Invoke-AvmTerraformTestE2e {
                         -ArgumentList $applyArgs `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
+                        -StreamOutput `
                         -IgnoreExitCode
 
                     if ($apply.ExitCode -eq 0) {
@@ -224,6 +226,7 @@ function Invoke-AvmTerraformTestE2e {
                         -ArgumentList $destroyArgs `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
+                        -StreamOutput `
                         -IgnoreExitCode
 
                     if ($retryDestroy.ExitCode -ne 0) {
@@ -251,6 +254,7 @@ function Invoke-AvmTerraformTestE2e {
                         -ArgumentList @('plan', '-detailed-exitcode', '-input=false', '-no-color') `
                         -WorkingDirectory $exampleDir `
                         -EnvVars $envVars `
+                        -StreamOutput `
                         -IgnoreExitCode
 
                     # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
@@ -268,6 +272,7 @@ function Invoke-AvmTerraformTestE2e {
                     -ArgumentList @('destroy', '-auto-approve', '-input=false', '-no-color') `
                     -WorkingDirectory $exampleDir `
                     -EnvVars $envVars `
+                    -StreamOutput `
                     -IgnoreExitCode
 
                 if ($destroy.ExitCode -ne 0) {
@@ -277,7 +282,7 @@ function Invoke-AvmTerraformTestE2e {
             }
         }
 
-        $postHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'post.ps1') -WorkingDirectory $exampleDir
+        $postHook = Invoke-AvmE2eHook -PwshPath $pwshPath -HookPath (Join-Path $exampleDir 'post.ps1') -WorkingDirectory $exampleDir -StreamOutput
         if ($null -ne $postHook -and $postHook.ExitCode -ne 0) {
             $detail = if ($postHook.StdErr) { $postHook.StdErr.Trim() } elseif ($postHook.StdOut) { $postHook.StdOut.Trim() } else { '' }
             $issues.Add((New-AvmE2eIssue -File ('{0}/post.ps1' -f $rel) -Message ('post.ps1 hook failed (exit {0}): {1}' -f $postHook.ExitCode, $detail)))
@@ -417,7 +422,9 @@ function Invoke-AvmE2eHook {
         [string] $HookPath,
 
         [Parameter(Mandatory)]
-        [string] $WorkingDirectory
+        [string] $WorkingDirectory,
+
+        [switch] $StreamOutput
     )
 
     if (-not (Test-Path -LiteralPath $HookPath -PathType Leaf)) {
@@ -428,5 +435,6 @@ function Invoke-AvmE2eHook {
         -FilePath $PwshPath `
         -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $HookPath) `
         -WorkingDirectory $WorkingDirectory `
+        -StreamOutput:$StreamOutput `
         -IgnoreExitCode
 }

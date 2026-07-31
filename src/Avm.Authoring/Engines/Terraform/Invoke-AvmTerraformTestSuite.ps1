@@ -127,7 +127,8 @@ function Invoke-AvmTerraformTestSuite {
         $setup = Invoke-AvmTerraformSetupHook `
             -PwshPath $pwshPath `
             -HookPath (Join-Path $targetDir (Join-Path 'tests' (Join-Path $Tier 'setup.ps1'))) `
-            -WorkingDirectory $targetDir
+            -WorkingDirectory $targetDir `
+            -StreamOutput:($Tier -eq 'integration')
         if ($null -ne $setup -and $setup.ExitCode -ne 0) {
             $detail = if ($setup.StdErr) { $setup.StdErr.Trim() } elseif ($setup.StdOut) { $setup.StdOut.Trim() } else { '' }
             $issues.Add([pscustomobject][ordered]@{
@@ -151,6 +152,7 @@ function Invoke-AvmTerraformTestSuite {
                 -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
                 -WorkingDirectory $targetDir `
                 -EnvVars $envVars `
+                -StreamOutput `
                 -IgnoreExitCode
 
             if ($initResult.ExitCode -ne 0) {
@@ -165,6 +167,7 @@ function Invoke-AvmTerraformTestSuite {
             -ArgumentList @('test', ('-test-directory={0}' -f $testDir), '-no-color', '-json') `
             -WorkingDirectory $targetDir `
             -EnvVars $envVars `
+            -StreamOutput:($Tier -eq 'integration') `
             -IgnoreExitCode
 
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
@@ -261,7 +264,9 @@ function Invoke-AvmTerraformSetupHook {
         [string] $HookPath,
 
         [Parameter(Mandatory)]
-        [string] $WorkingDirectory
+        [string] $WorkingDirectory,
+
+        [switch] $StreamOutput
     )
 
     Set-StrictMode -Version 3.0
@@ -275,6 +280,7 @@ function Invoke-AvmTerraformSetupHook {
         -FilePath $PwshPath `
         -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $HookPath) `
         -WorkingDirectory $WorkingDirectory `
+        -StreamOutput:$StreamOutput `
         -IgnoreExitCode
 }
 

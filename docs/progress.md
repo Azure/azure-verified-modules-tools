@@ -23,7 +23,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 
 - [x] **F19 — isolate mapotf's pinned terraform on child PATH.** A shared child-environment helper removes every PATH entry containing the platform terraform entrypoint before prepending the resolved pinned directory; the caller PATH is unchanged. Regression coverage injects a fake competing terraform.
 - [x] **F20/F21 — render command results and diagnostics.** The dispatcher now renders every status envelope through a shared Information-stream formatter, including chain step status/error/duration and nested issues; failures include the first diagnostic in `AvmCommandException`, and GitHub Actions runs append the same useful output to `GITHUB_STEP_SUMMARY`.
-- [ ] **F21 — stream long-running Terraform subprocess output while retaining capture.**
+- [x] **F21 — stream long-running Terraform subprocess output while retaining capture.** `Invoke-AvmProcess -StreamOutput` reads stdout/stderr concurrently, emits each line on the Information stream, and still returns both captured streams. Terraform init calls, integration tests, and every e2e hook/init/apply/plan/destroy opt in.
 - [ ] **F22 — preserve the selected subscription ID reusable-workflow output.**
 - [ ] **Release 0.1.6 — changelog, full gate, PR, and green CI.**
 

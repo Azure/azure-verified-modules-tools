@@ -38,6 +38,10 @@ function Invoke-AvmProcess {
         Suppress the AvmProcessException throw on non-zero exit. The exit
         code is still returned on the result object.
 
+    .PARAMETER StreamOutput
+        Emit child stdout and stderr lines to the Information stream while
+        retaining both captured values on the result object.
+
     .OUTPUTS
         pscustomobject with FileName, ArgumentList, ExitCode, StdOut, StdErr,
         Duration, TimedOut.
@@ -53,7 +57,8 @@ function Invoke-AvmProcess {
         [string] $WorkingDirectory,
         [hashtable] $EnvVars,
         [int] $TimeoutSec = 0,
-        [switch] $IgnoreExitCode
+        [switch] $IgnoreExitCode,
+        [switch] $StreamOutput
     )
 
     Set-StrictMode -Version 3.0
@@ -103,6 +108,8 @@ function Invoke-AvmProcess {
     $timedOut = $false
     $stdoutTask = $null
     $stderrTask = $null
+    $stdoutBuilder = [System.Text.StringBuilder]::new()
+    $stderrBuilder = [System.Text.StringBuilder]::new()
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         try {
@@ -115,29 +122,67 @@ function Invoke-AvmProcess {
                 $FilePath, $ArgumentList, -1, '', $_.Exception.Message)
         }
 
-        # Capture stdout / stderr by reading each stream to end on its own
-        # asynchronous task. A single reader per stream preserves the exact
-        # order of the child's output. The previous Register-ObjectEvent
-        # approach dispatched OutputDataReceived callbacks through the runspace
-        # event queue, which reordered rapid multi-line bursts (e.g. terraform's
-        # `validate -json` payload) and corrupted the captured text because the
-        # shared StringBuilder was appended from multiple job threads. Using one
-        # task per stream also avoids the full-buffer deadlock that a single
-        # synchronous ReadToEnd would risk when a child writes heavily to both
-        # streams at once.
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if ($StreamOutput) {
+            $stdoutTask = $process.StandardOutput.ReadLineAsync()
+            $stderrTask = $process.StandardError.ReadLineAsync()
 
-        if ($TimeoutSec -gt 0) {
-            $exited = $process.WaitForExit([int]($TimeoutSec * 1000))
-            if (-not $exited) {
-                $timedOut = $true
-                try { $process.Kill($true) }
-                catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
+            while ($null -ne $stdoutTask -or $null -ne $stderrTask) {
+                $pending = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+                if ($null -ne $stdoutTask) { $pending.Add($stdoutTask) }
+                if ($null -ne $stderrTask) { $pending.Add($stderrTask) }
+                if ($pending.Count -gt 0) {
+                    $null = [System.Threading.Tasks.Task]::WaitAny($pending.ToArray(), 100)
+                }
+
+                if ($null -ne $stdoutTask -and $stdoutTask.IsCompleted) {
+                    $line = $stdoutTask.GetAwaiter().GetResult()
+                    if ($null -eq $line) {
+                        $stdoutTask = $null
+                    }
+                    else {
+                        $null = $stdoutBuilder.AppendLine($line)
+                        Write-Information $line -InformationAction Continue
+                        $stdoutTask = $process.StandardOutput.ReadLineAsync()
+                    }
+                }
+
+                if ($null -ne $stderrTask -and $stderrTask.IsCompleted) {
+                    $line = $stderrTask.GetAwaiter().GetResult()
+                    if ($null -eq $line) {
+                        $stderrTask = $null
+                    }
+                    else {
+                        $null = $stderrBuilder.AppendLine($line)
+                        Write-Information $line -InformationAction Continue
+                        $stderrTask = $process.StandardError.ReadLineAsync()
+                    }
+                }
+
+                if (
+                    $TimeoutSec -gt 0 -and
+                    -not $timedOut -and
+                    -not $process.HasExited -and
+                    $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSec
+                ) {
+                    $timedOut = $true
+                    try { $process.Kill($true) }
+                    catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
+                }
             }
         }
-        # Block until the process has fully exited (also after a kill) so the
-        # exit code is readable and the async stream tasks reach EOF.
+        else {
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+
+            if ($TimeoutSec -gt 0) {
+                $exited = $process.WaitForExit([int]($TimeoutSec * 1000))
+                if (-not $exited) {
+                    $timedOut = $true
+                    try { $process.Kill($true) }
+                    catch { Write-Verbose "Failed to kill timed-out process: $($_.Exception.Message)" }
+                }
+            }
+        }
         $process.WaitForExit()
     }
     finally {
@@ -151,8 +196,14 @@ function Invoke-AvmProcess {
     $stdOut = ''
     $stdErr = ''
     if ($started) {
-        try { $stdOut = $stdoutTask.GetAwaiter().GetResult() } catch { $stdOut = '' }
-        try { $stdErr = $stderrTask.GetAwaiter().GetResult() } catch { $stdErr = '' }
+        if ($StreamOutput) {
+            $stdOut = $stdoutBuilder.ToString()
+            $stdErr = $stderrBuilder.ToString()
+        }
+        else {
+            try { $stdOut = $stdoutTask.GetAwaiter().GetResult() } catch { $stdOut = '' }
+            try { $stdErr = $stderrTask.GetAwaiter().GetResult() } catch { $stdErr = '' }
+        }
     }
 
     $exitCode = if ($started) { $process.ExitCode } else { -1 }
