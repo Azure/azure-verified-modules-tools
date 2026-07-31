@@ -19,15 +19,15 @@ function Invoke-AvmTerraformTestSuite {
              (this engine is PowerShell-only).
           3. Per runnable target (cwd = target root): runs an optional
              tests/<tier>/setup.ps1 hook in an isolated pwsh subprocess; a
-             failing hook records an issue and skips that target. Then, if the
-             target has no '.terraform/' and -NoInit was not passed, runs
+             failing hook records an issue and skips that target. Then, unless
+             -NoInit was passed, runs
                  terraform init -backend=false -upgrade=false -input=false
              followed by
                  terraform test -test-directory=tests/<tier> -no-color -json
           4. Parses each target's newline-delimited JSON stream into the shared
              Issue shape (failing 'test_run' entries and error-level
              'diagnostic' entries), prefixing submodule paths with
-             'modules/<name>/'.
+             'modules/<name>/', and renders a live progress line per test run.
 
         Status is 'fail' when any target reports a failing/errored run or a
         setup.ps1 hook fails; otherwise 'pass'. A terraform init failure or an
@@ -45,9 +45,12 @@ function Invoke-AvmTerraformTestSuite {
         Pass through to Resolve-AvmTool.
 
     .PARAMETER NoInit
-        Skip the implicit 'terraform init' even when '.terraform/' is
-        missing. Use when init is genuinely impossible (offline + no cached
-        providers) or when the caller has already run it.
+        Skip the implicit 'terraform init'. Use when init is genuinely
+        impossible (offline + no cached providers) or when the caller has
+        already run it. Init is otherwise always run: the presence of
+        '.terraform/' only proves init ran at some point, not that it ran
+        against the module sources and providers the current configuration
+        (including its .tftest.hcl files) requires.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
@@ -145,8 +148,7 @@ function Invoke-AvmTerraformTestSuite {
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $targetDir '.env')
 
-        $terraformDir = Join-Path $targetDir '.terraform'
-        if (-not $NoInit -and -not (Test-Path -LiteralPath $terraformDir)) {
+        if (-not $NoInit) {
             $initResult = Invoke-AvmProcess `
                 -FilePath $tool.Path `
                 -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `

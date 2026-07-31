@@ -129,7 +129,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         }
     }
 
-    It 'skips init when .terraform/ already exists' {
+    It 'F32: still runs init when .terraform/ already exists, so new module dependencies resolve' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir '.terraform') -Force | Out-Null
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
@@ -143,8 +143,8 @@ Describe 'Invoke-AvmTerraformTestSuite' {
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
 
-            Should -Invoke Invoke-AvmProcess -Exactly 1
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'init' }
+            Should -Invoke Invoke-AvmProcess -Exactly 2
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'init' }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'test' }
         }
     }

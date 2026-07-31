@@ -8,8 +8,7 @@ function Invoke-AvmTerraformTest {
         context is Ecosystem='terraform'. Resolves the 'terraform' binary
         via Resolve-AvmTool, then:
 
-          1. If the module root has no '.terraform/' directory and -NoInit
-             was not passed, runs
+          1. Unless -NoInit was passed, runs
                 terraform init -backend=false -upgrade=false -input=false
              so 'validate' can resolve provider requirements without
              needing real backend credentials.
@@ -30,9 +29,12 @@ function Invoke-AvmTerraformTest {
         Pass through to Resolve-AvmTool.
 
     .PARAMETER NoInit
-        Skip the implicit 'terraform init' even when '.terraform/' is
-        missing. Use when init is genuinely impossible (offline + no
-        cached providers) or when the caller has already run it.
+        Skip the implicit 'terraform init'. Use when init is genuinely
+        impossible (offline + no cached providers) or when the caller has
+        already run it. Init is otherwise always run: the presence of
+        '.terraform/' only proves init ran at some point, not that it ran
+        against the module sources and providers the current configuration
+        requires.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
@@ -67,13 +69,13 @@ function Invoke-AvmTerraformTest {
         }
     $files = @($discovered)
 
-    $terraformDir = Join-Path $Context.Root '.terraform'
-    if (-not $NoInit -and -not (Test-Path -LiteralPath $terraformDir)) {
+    if (-not $NoInit) {
         $initResult = Invoke-AvmProcess `
             -FilePath $tool.Path `
             -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
             -WorkingDirectory $Context.Root `
             -StreamOutput `
+            -Label ('terraform init {0}' -f $Context.Root) `
             -IgnoreExitCode
 
         if ($initResult.ExitCode -ne 0) {
