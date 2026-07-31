@@ -54,7 +54,7 @@ function Invoke-AvmTerraformTestSuite {
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
-        FilesProcessed, Issues.
+        FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -120,6 +120,9 @@ function Invoke-AvmTerraformTestSuite {
     $testDir = ('tests/{0}' -f $Tier)
     $issues = New-Object System.Collections.Generic.List[object]
     $filesProcessed = 0
+    $runsTotal = 0
+    $runsPassed = 0
+    $runsFailed = 0
     $anyFail = $false
 
     foreach ($target in $targets) {
@@ -131,7 +134,7 @@ function Invoke-AvmTerraformTestSuite {
             -PwshPath $pwshPath `
             -HookPath (Join-Path $targetDir (Join-Path 'tests' (Join-Path $Tier 'setup.ps1'))) `
             -WorkingDirectory $targetDir `
-            -StreamOutput:($Tier -eq 'integration')
+            -StreamOutput
         if ($null -ne $setup -and $setup.ExitCode -ne 0) {
             $detail = if ($setup.StdErr) { $setup.StdErr.Trim() } elseif ($setup.StdOut) { $setup.StdOut.Trim() } else { '' }
             $issues.Add([pscustomobject][ordered]@{
@@ -165,15 +168,37 @@ function Invoke-AvmTerraformTestSuite {
             }
         }
 
+        $runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $progress = {
+            param($line)
+            $runEvent = Read-AvmTerraformTestRunEvent -Line $line
+            if ($null -eq $runEvent) { return }
+            $elapsed = $runStopwatch.Elapsed
+            $runStopwatch.Restart()
+            $name = if ($runEvent.Name) { $runEvent.Name } else { '(unnamed)' }
+            $where = if ($runEvent.Path) { '{0} ' -f $runEvent.Path } else { '' }
+            $level = if ($runEvent.Status -in @('fail', 'error')) { 'Error' } else { 'Info' }
+            Write-AvmLog ('    run {0}"{1}" -> {2} ({3})' -f $where, $name, $runEvent.Status, (Format-AvmDuration -Duration $elapsed)) -Level $level
+        }
+
         $result = Invoke-AvmProcess `
             -FilePath $tool.Path `
             -ArgumentList @('test', ('-test-directory={0}' -f $testDir), '-no-color', '-json') `
             -WorkingDirectory $targetDir `
             -EnvVars $envVars `
-            -StreamOutput:($Tier -eq 'integration') `
+            -StreamOutput `
+            -OnStdOutLine $progress `
             -Label ('terraform test {0}{1}' -f $relPrefix, $testDir) `
             -SuccessExitCode @(0, 1) `
             -IgnoreExitCode
+
+        foreach ($rawLine in ([string]$result.StdOut -split "`r?`n")) {
+            $runEvent = Read-AvmTerraformTestRunEvent -Line $rawLine
+            if ($null -eq $runEvent) { continue }
+            $runsTotal++
+            if ($runEvent.Status -in @('fail', 'error')) { $runsFailed++ }
+            elseif ($runEvent.Status -eq 'pass') { $runsPassed++ }
+        }
 
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
         # or errored runs. Anything else is a terraform-internal failure -> rethrow.
@@ -199,6 +224,9 @@ function Invoke-AvmTerraformTestSuite {
         ToolSource     = $tool.Source
         Status         = $status
         FilesProcessed = $filesProcessed
+        RunsTotal      = $runsTotal
+        RunsPassed     = $runsPassed
+        RunsFailed     = $runsFailed
         Issues         = $issues.ToArray()
     }
 }
@@ -287,6 +315,45 @@ function Invoke-AvmTerraformSetupHook {
         -WorkingDirectory $WorkingDirectory `
         -StreamOutput:$StreamOutput `
         -IgnoreExitCode
+}
+
+function Read-AvmTerraformTestRunEvent {
+    <#
+        .SYNOPSIS
+            Extracts the terminal 'test_run' event from a single line of the
+            'terraform test -json' stream, or $null when the line is not one.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Line
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $trimmed = $Line.Trim()
+    if (-not $trimmed) { return $null }
+    if (-not $trimmed.StartsWith('{')) { return $null }
+
+    try { $obj = $trimmed | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $null }
+
+    $type = if ($obj.PSObject.Properties.Name -contains 'type') { [string]$obj.type } else { '' }
+    if ($type -ne 'test_run') { return $null }
+    if (-not ($obj.PSObject.Properties.Name -contains 'test_run') -or -not $obj.test_run) { return $null }
+
+    $run = $obj.test_run
+    $status = if (($run.PSObject.Properties.Name -contains 'status') -and $run.status) { ([string]$run.status).ToLowerInvariant() } else { '' }
+    if ($status -notin @('pass', 'fail', 'error', 'skip')) { return $null }
+
+    return [pscustomobject]@{
+        Name   = if (($run.PSObject.Properties.Name -contains 'run') -and $run.run) { [string]$run.run } else { '' }
+        Path   = if (($run.PSObject.Properties.Name -contains 'path') -and $run.path) { [string]$run.path } else { '' }
+        Status = $status
+    }
 }
 
 function ConvertFrom-AvmTerraformTestJson {

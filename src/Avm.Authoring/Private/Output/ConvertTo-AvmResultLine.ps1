@@ -88,6 +88,9 @@ function ConvertTo-AvmResultDetailLine {
 
             $resultProperty = $step.PSObject.Properties['Result']
             if ($null -ne $resultProperty -and $null -ne $resultProperty.Value) {
+                foreach ($summaryLine in @(ConvertTo-AvmRunSummaryLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
+                    $lines.Add($summaryLine)
+                }
                 foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
                     $lines.Add($issueLine)
                 }
@@ -97,11 +100,45 @@ function ConvertTo-AvmResultDetailLine {
         return $lines.ToArray()
     }
 
+    foreach ($summaryLine in @(ConvertTo-AvmRunSummaryLine -Result $Result -Indent $Indent)) {
+        $lines.Add($summaryLine)
+    }
+
     foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $Result -Indent $Indent)) {
         $lines.Add($issueLine)
     }
 
     return $lines.ToArray()
+}
+
+function ConvertTo-AvmRunSummaryLine {
+    <#
+        .SYNOPSIS
+            Renders the test-run tally ('14 runs, 14 passed, 0 failed') for
+            results that carry one. File counts alone are a poor coverage
+            signal; run counts expose an empty suite immediately.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [object] $Result,
+
+        [string] $Indent = ''
+    )
+
+    $totalProperty = $Result.PSObject.Properties['RunsTotal']
+    if ($null -eq $totalProperty -or $null -eq $totalProperty.Value) {
+        return @()
+    }
+
+    $total = [int]$totalProperty.Value
+    $passedProperty = $Result.PSObject.Properties['RunsPassed']
+    $failedProperty = $Result.PSObject.Properties['RunsFailed']
+    $passed = if ($null -ne $passedProperty) { [int]$passedProperty.Value } else { 0 }
+    $failed = if ($null -ne $failedProperty) { [int]$failedProperty.Value } else { 0 }
+
+    return @(('{0}{1} runs, {2} passed, {3} failed' -f $Indent, $total, $passed, $failed))
 }
 
 function ConvertTo-AvmIssueLine {

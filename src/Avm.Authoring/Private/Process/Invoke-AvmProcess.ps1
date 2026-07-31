@@ -49,6 +49,11 @@ function Invoke-AvmProcess {
         Friendly name for the invocation used in narration. Defaults to the
         executable leaf plus its arguments.
 
+    .PARAMETER OnStdOutLine
+        Scriptblock invoked with each stdout line as it arrives. When supplied
+        the caller owns stdout rendering, so raw stdout lines are not echoed
+        even when live streaming is on. Requires -StreamOutput.
+
     .PARAMETER SuccessExitCode
         Exit codes treated as success for narration and failure replay. Does
         not affect the AvmProcessException throw, which is governed by
@@ -72,6 +77,7 @@ function Invoke-AvmProcess {
         [switch] $IgnoreExitCode,
         [switch] $StreamOutput,
         [string] $Label,
+        [scriptblock] $OnStdOutLine,
         [int[]] $SuccessExitCode = @(0)
     )
 
@@ -93,6 +99,7 @@ function Invoke-AvmProcess {
 
     $inActions = Test-AvmGitHubActionsContext
     $narrate = [bool]$StreamOutput
+    $hasLineHook = $null -ne $OnStdOutLine
     $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
     $grouped = $narrate -and $inActions
     $heartbeatSeconds = 30
@@ -180,7 +187,10 @@ function Invoke-AvmProcess {
                     }
                     else {
                         $null = $stdoutBuilder.AppendLine($line)
-                        if ($live) { Write-AvmLog $line -Level Info }
+                        if ($hasLineHook) {
+                            & $OnStdOutLine $line
+                        }
+                        elseif ($live) { Write-AvmLog $line -Level Info }
                         $stdoutTask = $process.StandardOutput.ReadLineAsync()
                     }
                 }
@@ -274,7 +284,12 @@ function Invoke-AvmProcess {
         }
         else {
             Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Error
-            if (-not $live) {
+            if ($hasLineHook) {
+                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
+                    Write-AvmLog $replayLine -Level Info
+                }
+            }
+            elseif (-not $live) {
                 foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $stdErr)) {
                     Write-AvmLog $replayLine -Level Info
                 }

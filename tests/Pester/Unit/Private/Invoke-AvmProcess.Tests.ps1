@@ -306,4 +306,41 @@ Describe 'Invoke-AvmProcess' {
         $parsed.valid | Should -BeTrue
         @($parsed.diagnostics).Count | Should -Be 0
     }
+
+    It 'F33: invokes -OnStdOutLine per stdout line and suppresses the raw echo' {
+        $exe = $script:pwsh
+        $script = "Write-Output 'alpha'; Write-Output 'beta'"
+        $saved = $env:GITHUB_ACTIONS
+        try {
+            $env:GITHUB_ACTIONS = $null
+            $captured = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+                param($E, $S)
+                $seen = [System.Collections.Generic.List[string]]::new()
+                $hook = { param($line) $seen.Add($line) }
+                $null = Invoke-AvmProcess -FilePath $E `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                    -StreamOutput -OnStdOutLine $hook -Verbose 6>$null 4>$null
+                , $seen.ToArray()
+            }
+
+            $captured | Should -Contain 'alpha'
+            $captured | Should -Contain 'beta'
+        }
+        finally {
+            $env:GITHUB_ACTIONS = $saved
+        }
+    }
+
+    It 'F33: still captures stdout on the result when -OnStdOutLine is supplied' {
+        $exe = $script:pwsh
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe } {
+            param($E)
+            $hook = { param($line) }
+            Invoke-AvmProcess -FilePath $E `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', "Write-Output 'kept'") `
+                -StreamOutput -OnStdOutLine $hook
+        }
+        $result.ExitCode | Should -Be 0
+        $result.StdOut.TrimEnd() | Should -Be 'kept'
+    }
 }

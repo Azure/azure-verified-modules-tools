@@ -409,4 +409,116 @@ Describe 'Invoke-AvmTerraformTestSuite' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'test' }
         }
     }
+
+    It 'F33: reports run counts, not just file counts' {
+        $ctx = $script:context
+        $json = @(
+            '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"a","status":"pass"}}'
+            '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"b","status":"pass"}}'
+            '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"c","status":"fail"}}'
+        ) -join "`n"
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                [pscustomobject]@{ ExitCode = 1; StdOut = $J; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+
+        $result.FilesProcessed | Should -Be 1
+        $result.RunsTotal      | Should -Be 3
+        $result.RunsPassed     | Should -Be 2
+        $result.RunsFailed     | Should -Be 1
+    }
+
+    It 'F33: reports zero runs for a vacuous suite that never executes a run' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+        }
+
+        $result.Status    | Should -Be 'pass'
+        $result.RunsTotal | Should -Be 0
+    }
+
+    It 'F33: both tiers invoke terraform test identically and never stream raw json' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'tests' 'integration') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'integration' 'deploy.tftest.hcl') -Value 'run "z" {}' -Encoding utf8
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier integration
+
+            # A stdout hook means the engine owns rendering, so raw NDJSON never
+            # reaches the human channel on either tier.
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $ArgumentList[0] -eq 'test' -and $StreamOutput -and $null -ne $OnStdOutLine
+            }
+        }
+    }
+
+    It 'F33: Read-AvmTerraformTestRunEvent parses terminal run events and ignores everything else' {
+        InModuleScope 'Avm.Authoring' {
+            $passed = Read-AvmTerraformTestRunEvent -Line '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"a","status":"pass"}}'
+            $passed.Name   | Should -Be 'a'
+            $passed.Path   | Should -Be 'tests/unit/main.tftest.hcl'
+            $passed.Status | Should -Be 'pass'
+
+            Read-AvmTerraformTestRunEvent -Line '' | Should -BeNullOrEmpty
+            Read-AvmTerraformTestRunEvent -Line 'not json at all' | Should -BeNullOrEmpty
+            Read-AvmTerraformTestRunEvent -Line '{"@level":"info","type":"test_file","test_file":{}}' | Should -BeNullOrEmpty
+            Read-AvmTerraformTestRunEvent -Line '{"@level":"info","type":"test_run","test_run":{"run":"a","status":"running"}}' | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'F33: the progress hook resolves module-private helpers when invoked from Invoke-AvmProcess' {
+        $ctx = $script:context
+        $json = '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"a","status":"pass"}}'
+        $rendered = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            $script:avmProgressLines = [System.Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { param($Message) $script:avmProgressLines.Add([string]$Message) }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList, $OnStdOutLine)
+                if ($ArgumentList[0] -eq 'init') { return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                if ($null -ne $OnStdOutLine) { & $OnStdOutLine $J }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+            }
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            , $script:avmProgressLines.ToArray()
+        }
+
+        ($rendered -join "`n") | Should -Match 'run tests/unit/main\.tftest\.hcl "a" -> pass'
+    }
 }
