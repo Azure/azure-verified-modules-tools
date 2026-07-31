@@ -126,6 +126,20 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   tier is included, because it is the one tier that is credential-free by
   design; `integration` and `e2e` need a live subscription and stay out.
   `avm pre-commit` is unchanged and still offline. (F38)
+- **A repo misconfiguration now fails the gauntlet instead of skipping it.**
+  `avm pr-check` and `avm pre-commit` mapped every `AvmConfigurationException`
+  to `skipped`, which does not flip the overall status. That type is thrown
+  both for "this verb does not apply to this ecosystem" and for real
+  misconfigurations — an unresolvable tflint or mapotf config bundle, an
+  unresolvable managed-files repo id, an invalid `.avm` context override,
+  `AVM_OFFLINE=1`, an invalid `AVM_MIRROR`, an unknown or `.e2eignore`d e2e
+  example. Any of those inside a gauntlet step rendered as a benign green run.
+  Ecosystem gates now throw the new `AvmNotSupportedException` (which derives
+  from `AvmConfigurationException`, so nothing else changes), and only that
+  type still skips. **Action required:** none, unless one of your repos was
+  quietly misconfigured — in which case the gauntlet will now say so. The step
+  fails rather than errors, so the chain still runs to the end and reports
+  every problem instead of stopping at the first. (F39)
 
 ### Upgrade notes
 
@@ -193,6 +207,13 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
 
 ### Fixed
 
+- A shell hook is now only a misconfiguration when it has no PowerShell
+  counterpart. The guard rejected the mere presence of `setup.sh`,
+  `teardown.sh`, `pre.sh` or `post.sh`, but upstream AVM governance ships both
+  a `.ps1` and a `.sh` side by side — so `avm test unit`, `avm test
+  integration` and `avm test e2e` threw on every governance-compliant module.
+  A `.sh` only matters when there is no `.ps1` beside it, because only then
+  does the hook silently never run. (F39)
 - The test suite result object now carries `RunsTotal` / `RunsPassed` /
   `RunsFailed` even when a tier ships no `.tftest.hcl` files at all. That case
   previously returned `Status='pass'` with `FilesProcessed=0` and no run-count

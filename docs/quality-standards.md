@@ -1355,3 +1355,47 @@ registry. A registry source makes the test suite dependent on network reach and
 on the GitHub API rate limit — the same budget that produced the intermittent
 `tflint --init` failure documented in the 0.1.7 upgrade notes. A local helper
 exercises the identical code path in `terraform init` while staying hermetic.
+## Appendix L. `AvmNotSupportedException` vs `AvmConfigurationException`
+
+The two gauntlets (`Invoke-AvmPrCheck`, `Invoke-AvmPreCommit`) run a chain of
+verbs across both ecosystems, so they need a way to tell "this verb does not
+apply here" apart from "this repo is broken". Before F39 they could not: both
+arrived as `AvmConfigurationException`, both were caught, and both rendered as
+`skipped` — a status that deliberately does not flip the overall result. A repo
+with an unresolvable tflint config bundle, an invalid `.avm` context override or
+`AVM_OFFLINE=1` set by accident therefore produced an all-green gauntlet.
+
+The rule:
+
+- **`AvmNotSupportedException`** — the verb does not apply to the resolved
+  ecosystem, or is not implemented for it yet. Throw this from an ecosystem gate
+  or an engine stub. The gauntlets skip it; overall status is unaffected.
+- **`AvmConfigurationException`** — the repo or the environment is misconfigured
+  and a human must fix it. The gauntlets **fail** the step. They do not *error*
+  it, so the chain runs to completion and reports every problem rather than
+  stopping at the first.
+
+`AvmNotSupportedException` derives from `AvmConfigurationException` on purpose,
+so every existing `catch [AvmConfigurationException]`, the CLI's exit-code
+handling and any `-ExceptionType` assertion keep working unchanged. That also
+means a `catch` ladder must list the derived type **first** — the CLR matches
+the first assignable clause, so putting the base type first swallows both.
+
+The two exception classes are module-private, so a Pester test outside
+`InModuleScope` cannot resolve `[AvmNotSupportedException]` as a type literal.
+Assert on names instead:
+
+```powershell
+$err.GetType().Name          | Should -Be 'AvmNotSupportedException'
+$err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
+```
+
+### L.1 A shell hook is only wrong when it is alone
+
+Related, and found in the same change. The test engines rejected the presence of
+`setup.sh` / `teardown.sh` / `pre.sh` / `post.sh` outright. Upstream AVM
+governance ships a `.ps1` and a `.sh` **side by side** — the `.ps1` is what this
+module runs — so that guard made `avm test unit` throw on every
+governance-compliant module. A shell hook only matters when it has no `.ps1`
+counterpart, because only then does the hook silently never run. Guard on the
+absence of the counterpart, not on the presence of the `.sh`.
