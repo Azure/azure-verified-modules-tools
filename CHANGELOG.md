@@ -239,6 +239,19 @@ shell-hook guard and the empty-tier status respectively.
 
 ### Fixed
 
+- The release workflow no longer fails at the point of publishing. The `build`
+  task stamps the tag's whole CHANGELOG section into the staged manifest's
+  `ReleaseNotes`, and the PowerShell Gallery rejects any package whose
+  `ReleaseNotes` exceeds 10600 characters — 0.1.7's section is 23987, so the
+  first attempt was rejected with `400 (The package is invalid)` *after* the tag
+  and the GitHub Release already existed. `Get-AvmReleaseNotes.ps1` gained
+  `-MaxLength`, which truncates on a line boundary from the bottom (a section
+  leads with `### Breaking`, so the tail is the safe end to lose) and appends a
+  link to the full notes on the GitHub Release, which has no such limit. Newlines
+  are measured at their CRLF worst case, because the packer may rewrite them on
+  the way into the nuspec. The `build` task then re-reads the stamped manifest
+  and fails locally if the value is still over the limit, so the cap is verified
+  against what actually ships rather than trusted from the generator. (F49)
 - `-CheckDrift` is now genuinely read-only for `docs` and `transform`. `format`
   already checked without writing, but `terraform-docs` and `mapotf` have no
   dry-run mode, so those two engines detected drift by writing first and

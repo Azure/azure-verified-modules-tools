@@ -209,8 +209,97 @@ Present and correct.
         }
     }
 
-    Context 'repository CHANGELOG sanity' {
+    Context '-MaxLength' {
 
+        BeforeAll {
+            # Mirrors the worst case the gallery can see: NuGet may rewrite LF
+            # as CRLF when it lifts the value out of the manifest.
+            $script:Measure = { param([string] $Text) $Text.Length + ([regex]::Matches($Text, "`n")).Count }
+
+            function New-LongChangelog {
+                param([int] $BodyLines = 400)
+                $body = @('### Breaking', '', '- The one thing a consumer must not miss.', '')
+                $body += 1..$BodyLines | ForEach-Object { "- Filler entry number $_ padded out to a realistic changelog width." }
+                $text = "# Changelog`n`n## [0.1.0] - 2026-05-18`n`n" + ($body -join "`n") + "`n`n## [0.0.1] - 2026-05-12`n`nPlaceholder.`n"
+                return (New-Changelog $text)
+            }
+        }
+
+        It 'returns the section unchanged when it already fits' {
+            $changelog = New-Changelog @'
+# Changelog
+
+## [0.1.0] - 2026-05-18
+
+Short body.
+'@
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 10600
+            $notes | Should -Be 'Short body.'
+            $notes | Should -Not -Match 'truncated'
+        }
+
+        It 'treats the default of 0 as unlimited' {
+            $changelog = New-LongChangelog
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog
+            (& $script:Measure $notes) | Should -BeGreaterThan 10600
+            $notes | Should -Match 'Filler entry number 400'
+        }
+
+        It 'truncates to within the cap, counting newlines at their CRLF worst case' {
+            $changelog = New-LongChangelog
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 2000
+
+            $notes | Should -Not -BeNullOrEmpty
+            (& $script:Measure $notes) | Should -BeLessOrEqual 2000
+            # Positive anchor: proves the cap did not simply empty the value.
+            (& $script:Measure $notes) | Should -BeGreaterThan 1000
+        }
+
+        It 'keeps the head of the section and drops the tail' {
+            $changelog = New-LongChangelog
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 2000
+
+            $notes | Should -Match '### Breaking'
+            $notes | Should -Match 'must not miss'
+            $notes | Should -Not -Match 'Filler entry number 400\b'
+        }
+
+        It 'appends a footer linking the full notes for the tag' {
+            $changelog = New-LongChangelog
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 2000
+
+            $notes | Should -Match 'truncated to fit the PowerShell Gallery'
+            $notes | Should -Match 'releases/tag/v0\.1\.0'
+        }
+
+        It 'cuts on a line boundary, never mid-line' {
+            $changelog = New-LongChangelog
+            $notes = & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 2000
+
+            $sourceLines = (& $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog) -split "`n"
+            # Everything before the footer separator must be a whole source line.
+            $kept = ($notes -split "`n---`n")[0] -split "`n"
+            $kept.Count | Should -BeGreaterThan 1
+            foreach ($line in $kept) {
+                if ($line -eq '') { continue }
+                $sourceLines | Should -Contain $line
+            }
+        }
+
+        It 'throws when the cap cannot even hold the footer' {
+            $changelog = New-LongChangelog
+            { & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength 20 } |
+                Should -Throw -ExpectedMessage '*too small to hold the truncation footer*'
+        }
+
+        It 'rejects a negative cap at parameter bind time' {
+            $changelog = New-Changelog "# Changelog`n`n## [0.1.0] - 2026-05-18`n`nBody.`n"
+            { & $script:ScriptPath -Version '0.1.0' -ChangelogPath $changelog -MaxLength -1 } |
+                Should -Throw
+        }
+    }
+
+    Context 'repository CHANGELOG sanity' {
         BeforeAll {
             $script:RepoChangelog = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))) 'CHANGELOG.md'
         }
@@ -222,6 +311,26 @@ Present and correct.
 
             $notes = & $script:ScriptPath -Version $version -ChangelogPath $script:RepoChangelog
             $notes | Should -Not -BeNullOrEmpty
+        }
+
+        It 'caps every released section under the gallery limit the release workflow uses' {
+            # The build stamps each tag's section into the manifest, and the
+            # gallery rejects the package over 10600 characters at publish time
+            # -- after the tag exists. Every section must survive that path, not
+            # just the one that happens to be current.
+            $limit   = 10600
+            $measure = { param([string] $Text) $Text.Length + ([regex]::Matches($Text, "`n")).Count }
+
+            $versions = Select-String -Path $script:RepoChangelog -Pattern '^## \[(?<v>\d+\.\d+\.\d+)\]' |
+                ForEach-Object { $_.Matches[0].Groups['v'].Value }
+
+            $versions.Count | Should -BeGreaterThan 0
+
+            foreach ($v in $versions) {
+                $capped = & $script:ScriptPath -Version $v -ChangelogPath $script:RepoChangelog -MaxLength $limit
+                $capped | Should -Not -BeNullOrEmpty -Because "section $v must produce notes"
+                (& $measure $capped) | Should -BeLessOrEqual $limit -Because "section $v must fit the gallery limit"
+            }
         }
     }
 }
