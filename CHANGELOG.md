@@ -135,6 +135,10 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F31).
   non-zero instead of surfacing a raw `OperationStopped` stack trace pointing at
   module source. The remainder of a calling script no longer stops running, so
   cleanup lines after an `avm` call execute as written. (F24)
+- A gauntlet step that fails or errors now narrates its error message at the
+  point of failure, so callers that invoke `Invoke-AvmPrCheck` or
+  `Invoke-AvmPreCommit` directly (bypassing the dispatcher's renderer) get a
+  diagnosis instead of a bare status.
 
 ## [0.1.6] - 2026-07-31
 
