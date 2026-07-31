@@ -147,12 +147,15 @@ function Invoke-AvmTerraformTestE2e {
 
     if ($exampleDirs.Count -eq 0) {
         $emptyNow = [datetime]::UtcNow
+        Write-AvmLog 'no runnable examples found under examples/' -Level Warning
+        # See Invoke-AvmTerraformTestSuite: a tier that ran nothing reports
+        # 'skipped', so it can never look like a real pass.
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
             ToolPath       = $tool.Path
             ToolSource     = $tool.Source
-            Status         = 'pass'
+            Status         = 'skipped'
             FilesProcessed = 0
             Issues         = @()
             StartTime      = $emptyNow

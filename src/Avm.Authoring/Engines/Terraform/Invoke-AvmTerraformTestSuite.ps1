@@ -90,12 +90,16 @@ function Invoke-AvmTerraformTestSuite {
 
     if ($targets.Count -eq 0) {
         Write-AvmLog ('no {0} tests found under tests/{0}' -f $Tier) -Level Warning
+        # A tier that ran nothing is 'skipped', never 'pass': inside a gauntlet a
+        # pass is indistinguishable from a real one, which is how a module with no
+        # tests stays green forever. 'skipped' does not flip the overall status, so
+        # this reports the gap without breaking modules that ship no tier.
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
             ToolPath       = $tool.Path
             ToolSource     = $tool.Source
-            Status         = 'pass'
+            Status         = 'skipped'
             FilesProcessed = 0
             RunsTotal      = 0
             RunsPassed     = 0

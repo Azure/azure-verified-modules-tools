@@ -319,6 +319,46 @@ Describe 'Invoke-AvmPrCheck' {
         $validate.Result.PSObject.Properties.Name | Should -Not -Contain 'RunsTotal'
     }
 
+    It 'F40: surfaces a module with no unit tier as skipped rather than a green pass' {
+        $dir = Join-Path $TestDrive ("prcheck-notier-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 17 } }
+            # What the engine returns for a module that ships no tests/unit.
+            Mock Invoke-AvmTestUnit {
+                [pscustomobject]@{
+                    Engine = 'terraform'; Status = 'skipped'; FilesProcessed = 0
+                    RunsTotal = 0; RunsPassed = 0; RunsFailed = 0
+                }
+            }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        # An absent tier must be visible, but it must not fail the gauntlet -
+        # that would break every repo that ships no unit tests at once.
+        $unit = $result.Steps | Where-Object Step -eq 'unit test'
+        $unit.Status           | Should -Be 'skipped'
+        $unit.Result.RunsTotal | Should -Be 0
+        $result.Status         | Should -Be 'pass'
+
+        # The chain must still run to the end.
+        ($result.Steps | Select-Object -Last 1).Step | Should -Be 'docs'
+    }
+
     It 'does not run the unit tier as part of pre-commit, which stays offline and init-free' {
         $dir = Join-Path $TestDrive ("precommit-nounit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

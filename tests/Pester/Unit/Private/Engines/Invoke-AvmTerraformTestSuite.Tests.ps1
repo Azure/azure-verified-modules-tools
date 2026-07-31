@@ -54,13 +54,15 @@ Describe 'Invoke-AvmTerraformTestSuite' {
             Mock Invoke-AvmProcess { throw 'should not shell out' }
             Invoke-AvmTerraformTestSuite -Context $C -Tier unit
         }
-        $result.Status         | Should -Be 'pass'
+        $result.Status         | Should -Be 'skipped'
         $result.FilesProcessed | Should -Be 0
         $result.Issues         | Should -BeNullOrEmpty
 
-        # F38: the vacuous pass must still carry run counts. Without them the
-        # "this module has no tests at all" case is shape-indistinguishable from
-        # a real run, which is exactly how an empty tests/ tree passed unnoticed.
+        # F40: a tier with no test files must not report 'pass'. Inside a gauntlet
+        # a pass is indistinguishable from a real one, so a module that ships no
+        # tests stays green forever - the C01 shape, one level up.
+        # F38: it must still carry run counts, so the empty case is not
+        # shape-indistinguishable from a real run either.
         $result.PSObject.Properties.Name | Should -Contain 'RunsTotal'
         $result.PSObject.Properties.Name | Should -Contain 'RunsPassed'
         $result.PSObject.Properties.Name | Should -Contain 'RunsFailed'

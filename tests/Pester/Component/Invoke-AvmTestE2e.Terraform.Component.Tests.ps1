@@ -86,7 +86,7 @@ Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Co
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 
-    It 'reports a clean pass with FilesProcessed=0 when the module ships no runnable examples' {
+    It 'F40: reports skipped when the module ships no runnable examples' {
         $emptyModule = Join-Path $TestDrive 'empty-module'
         $null = New-Item -ItemType Directory -Path $emptyModule -Force
         $mainTf = @(
@@ -99,7 +99,7 @@ Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Co
 
         $result = Invoke-AvmTestE2e -Path $emptyModule -Ecosystem terraform -AllowPathFallback
 
-        $result.PSObject.Properties['Status'].Value          | Should -Be 'pass'
+        $result.PSObject.Properties['Status'].Value          | Should -Be 'skipped'
         $result.PSObject.Properties['FilesProcessed'].Value  | Should -Be 0
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }

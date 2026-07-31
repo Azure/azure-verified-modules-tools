@@ -35,7 +35,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'returns a clean pass with FilesProcessed=0 and never shells out when there are no runnable examples' {
+    It 'F40: reports skipped, not pass, and never shells out when there are no runnable examples' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -48,7 +48,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             Mock Invoke-AvmProcess { throw 'should not shell out' }
             Invoke-AvmTerraformTestE2e -Context $C
         }
-        $result.Status         | Should -Be 'pass'
+        $result.Status         | Should -Be 'skipped'
         $result.FilesProcessed | Should -Be 0
         $result.Issues         | Should -BeNullOrEmpty
 

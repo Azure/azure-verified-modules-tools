@@ -248,7 +248,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes nine steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -281,12 +281,21 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         # transform runs under -CheckDrift in pr-check; the no-op mapotf stub
         # leaves the tree untouched so the drift-check finds nothing and passes.
         # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'validate', 'unit test', 'docs')) {
+        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'validate', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
+
+        # F40: the fixture ships no tests/unit tier, so the step reports 'skipped'
+        # with zero runs rather than a pass. A pass here is indistinguishable from
+        # a real one, which is how a module with no tests stays green forever.
+        # 'skipped' does not flip the overall status, so the gauntlet still passes.
+        $byName['unit test'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        $unitResult = $byName['unit test'].PSObject.Properties['Result'].Value
+        $unitResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
+        $unitResult.PSObject.Properties['RunsTotal'].Value | Should -Be 0
 
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
         # rather than 'path'. The fixture writes all the files required by the
