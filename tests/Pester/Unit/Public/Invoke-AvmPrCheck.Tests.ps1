@@ -34,7 +34,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
@@ -62,7 +62,7 @@ Describe 'Invoke-AvmPrCheck' {
         ($result.Steps | Where-Object Step -notin @('sync', 'unit test') | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
-    It 'reports a stubbed engine (AvmConfigurationException) as skipped and continues the chain' {
+    It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain' {
         $dir = Join-Path $TestDrive ("prcheck-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -73,12 +73,12 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmTransform { throw [AvmConfigurationException]::new('transform not wired yet') }
+            Mock Invoke-AvmTransform { throw [AvmNotSupportedException]::new('transform not wired yet') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmCheckPolicy { throw [AvmConfigurationException]::new('check policy not wired yet') }
-            Mock Invoke-AvmCheckConvention { throw [AvmConfigurationException]::new('check convention not wired yet') }
+            Mock Invoke-AvmCheckPolicy { throw [AvmNotSupportedException]::new('check policy not wired yet') }
+            Mock Invoke-AvmCheckConvention { throw [AvmNotSupportedException]::new('check convention not wired yet') }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Invoke-AvmPrCheck -Path $D
@@ -106,7 +106,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'fail' } }
@@ -134,7 +134,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'fail' } }
@@ -159,7 +159,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'aborts the chain and flips overall to error on a thrown non-AvmConfigurationException' {
+    It 'aborts the chain and flips overall to error on a thrown non-Avm exception' {
         $dir = Join-Path $TestDrive ("prcheck-err-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -170,7 +170,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmSync { throw [AvmConfigurationException]::new('sync is terraform-only') }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTransform { throw [System.InvalidOperationException]::new('engine blew up') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
@@ -258,10 +258,10 @@ Describe 'Invoke-AvmPrCheck' {
             }
             Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTransform { throw [AvmConfigurationException]::new('transform not wired yet') }
+            Mock Invoke-AvmTransform { throw [AvmNotSupportedException]::new('transform not wired yet') }
             Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmCheckPolicy { throw [AvmConfigurationException]::new('check policy not wired yet') }
-            Mock Invoke-AvmCheckConvention { throw [AvmConfigurationException]::new('check convention not wired yet') }
+            Mock Invoke-AvmCheckPolicy { throw [AvmNotSupportedException]::new('check policy not wired yet') }
+            Mock Invoke-AvmCheckConvention { throw [AvmNotSupportedException]::new('check convention not wired yet') }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; RunsTotal = 3; RunsPassed = 3; RunsFailed = 0 } }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -345,5 +345,40 @@ Describe 'Invoke-AvmPrCheck' {
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmTestUnit -Times 0
         }
+    }
+
+    # F39: 'skipped' means the verb does not apply to this ecosystem. It must not
+    # also mean 'your repo is misconfigured', because a skip renders as a benign
+    # gauntlet pass - which is exactly how a step that never ran looks green.
+    It 'F39: fails the gauntlet on a configuration error but skips an unsupported verb' {
+        $dir = Join-Path $TestDrive ("prcheck-f39-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmLint { throw [AvmConfigurationException]::new('AVM_MIRROR is not a valid absolute URL') }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTestUnit { throw [AvmNotSupportedException]::new('not implemented for this ecosystem') }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'unit test').Status | Should -Be 'skipped'
+        $result.Status | Should -Be 'fail'
+
+        # 'fail' must not abort the chain the way 'error' does - the remaining
+        # steps still run so one bad config does not mask the next.
+        $result.Steps.Step | Should -Contain 'docs'
     }
 }

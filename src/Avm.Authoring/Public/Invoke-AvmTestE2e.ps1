@@ -117,7 +117,7 @@ function Invoke-AvmTestE2e {
             Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback -Example $Example -List:$List -MaxRetry $MaxRetry
         }
         default {
-            throw [AvmConfigurationException]::new(
+            throw [AvmNotSupportedException]::new(
                 "avm test e2e is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep e2e-test tiers are not implemented.")
         }
     }

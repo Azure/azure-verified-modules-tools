@@ -45,6 +45,6 @@ function Invoke-AvmBicepCheckConvention {
 
     $null = $AllowPathFallback
 
-    throw [AvmConfigurationException]::new(
+    throw [AvmNotSupportedException]::new(
         "Bicep convention check is not yet wired: the module.tests.ps1 compliance suite port is the next bicep-check-convention slice. Track it in docs/avm-consolidation-plan.md.")
 }

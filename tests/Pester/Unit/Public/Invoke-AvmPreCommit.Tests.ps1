@@ -128,7 +128,7 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
-    It 'reports a stubbed engine (AvmConfigurationException) as skipped and continues the chain (terraform)' {
+    It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
         $dir = Join-Path $TestDrive ("precommit-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -141,7 +141,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTransform       { throw [AvmConfigurationException]::new('transform engine not wired yet') }
+            Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
@@ -208,7 +208,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
-    It 'aborts the chain and flips overall to error on a thrown non-AvmConfigurationException' {
+    It 'aborts the chain and flips overall to error on a thrown non-Avm exception' {
         $dir = Join-Path $TestDrive ("precommit-err-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 

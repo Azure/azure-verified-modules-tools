@@ -76,7 +76,7 @@ function Invoke-AvmTestIntegration {
             Invoke-AvmTerraformTestSuite -Context $context -Tier 'integration' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
         }
         default {
-            throw [AvmConfigurationException]::new(
+            throw [AvmNotSupportedException]::new(
                 "avm test integration is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep integration-test tiers are not implemented.")
         }
     }

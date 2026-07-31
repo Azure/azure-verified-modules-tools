@@ -45,6 +45,6 @@ function Invoke-AvmBicepTransform {
 
     $null = $AllowPathFallback
 
-    throw [AvmConfigurationException]::new(
+    throw [AvmNotSupportedException]::new(
         "Bicep transform is not yet wired: the Set-AVMModule.ps1 README + tests scaffolding regenerator is the next bicep-transform slice. Track it in docs/avm-consolidation-plan.md.")
 }

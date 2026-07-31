@@ -69,7 +69,7 @@ function Invoke-AvmTestUnit {
             Invoke-AvmTerraformTestSuite -Context $context -Tier 'unit' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
         }
         default {
-            throw [AvmConfigurationException]::new(
+            throw [AvmNotSupportedException]::new(
                 "avm test unit is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep unit-test tiers are not implemented.")
         }
     }

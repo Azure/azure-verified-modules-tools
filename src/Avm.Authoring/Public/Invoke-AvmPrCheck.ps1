@@ -149,8 +149,17 @@ function Invoke-AvmPrCheck {
                 $stepStatus = $stepResult.Status
             }
         }
-        catch [AvmConfigurationException] {
+        catch [AvmNotSupportedException] {
+            # Verb genuinely does not apply to this ecosystem. Continue the
+            # chain; do not flip overall status.
             $stepStatus = 'skipped'
+            $stepError = $_.Exception.Message
+        }
+        catch [AvmConfigurationException] {
+            # The repo is misconfigured, not unsupported. This must fail rather
+            # than skip: a skip renders as a benign gauntlet pass, which is how
+            # a step that never actually ran gets to look green.
+            $stepStatus = 'fail'
             $stepError = $_.Exception.Message
         }
         catch {

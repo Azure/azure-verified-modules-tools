@@ -66,7 +66,7 @@ Describe 'Invoke-AvmTestE2e' {
         }
     }
 
-    It 'rejects a bicep context with AvmConfigurationException' {
+    It 'rejects a bicep context with AvmNotSupportedException' {
         $dir = Join-Path $TestDrive ("bicep-e2e-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -86,7 +86,8 @@ Describe 'Invoke-AvmTestE2e' {
             $err = $_.Exception
         }
         $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmConfigurationException'
+        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
+        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmTerraformTestE2e -Times 0

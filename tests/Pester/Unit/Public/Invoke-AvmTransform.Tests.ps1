@@ -67,7 +67,7 @@ Describe 'Invoke-AvmTransform' {
         }
     }
 
-    It 'the bicep engine stub throws AvmConfigurationException for its own ecosystem' {
+    It 'the bicep engine stub throws AvmNotSupportedException for its own ecosystem' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
                 Invoke-AvmBicepTransform -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
@@ -76,7 +76,8 @@ Describe 'Invoke-AvmTransform' {
             catch { $_.Exception }
         }
         $err                       | Should -Not -BeNullOrEmpty
-        $err.GetType().Name        | Should -Be 'AvmConfigurationException'
+        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
+        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
         $err.Message               | Should -Match 'Bicep transform is not yet wired'
     }
 

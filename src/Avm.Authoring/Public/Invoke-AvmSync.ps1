@@ -140,7 +140,7 @@ function Invoke-AvmSync {
                 -RepoId $RepoId
         }
         default {
-            throw [AvmConfigurationException]::new(
+            throw [AvmNotSupportedException]::new(
                 "avm sync is a terraform-only command; the resolved module ecosystem is '$($context.Ecosystem)'. Managed-files sync for bicep is not implemented.")
         }
     }
