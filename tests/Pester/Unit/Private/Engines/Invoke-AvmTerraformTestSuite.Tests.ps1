@@ -122,7 +122,9 @@ Describe 'Invoke-AvmTerraformTestSuite' {
             $null = Invoke-AvmTerraformTestSuite -Context $C -Tier integration
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'test' -and ($ArgumentList -contains '-test-directory=tests/integration')
+                $ArgumentList[0] -eq 'test' -and
+                ($ArgumentList -contains '-test-directory=tests/integration') -and
+                $StreamOutput
             }
         }
     }

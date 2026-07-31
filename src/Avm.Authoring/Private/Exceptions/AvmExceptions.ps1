@@ -91,4 +91,16 @@ class AvmCommandException : AvmException {
         $this.CommandStatus = $commandStatus
         $this.Result = $result
     }
+
+    AvmCommandException([string] $verb, [string] $commandStatus, [object] $result, [string] $detail) : base(
+        $(if ([string]::IsNullOrWhiteSpace($detail)) {
+                "avm $verb reported Status '$commandStatus'."
+            }
+            else {
+                "avm $verb reported Status '$commandStatus'. $detail"
+            }), 'AVM1040') {
+        $this.Verb = $verb
+        $this.CommandStatus = $commandStatus
+        $this.Result = $result
+    }
 }

@@ -73,6 +73,7 @@ function Invoke-AvmTerraformTest {
             -FilePath $tool.Path `
             -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
             -WorkingDirectory $Context.Root `
+            -StreamOutput `
             -IgnoreExitCode
 
         if ($initResult.ExitCode -ne 0) {

@@ -216,13 +216,9 @@ function Invoke-AvmTerraformTransform {
     # AvmToolException, which the chain surfaces as 'skipped' just like a
     # missing mapotf binary.
     $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
-    $mapotfEnv = $null
-    $terraformDir = Split-Path -Parent $terraform.Path
-    if ($terraformDir) {
-        $mapotfEnv = @{
-            PATH = ($terraformDir + [System.IO.Path]::PathSeparator + $env:PATH)
-        }
-    }
+    $mapotfEnv = New-AvmToolPathEnvironment `
+        -ToolPath $terraform.Path `
+        -ToolName 'terraform'
 
     $transform = Invoke-AvmProcess `
         -FilePath $tool.Path `

@@ -1,6 +1,6 @@
 @{
     RootModule           = 'Avm.Authoring.psm1'
-    ModuleVersion        = '0.1.2'
+    ModuleVersion        = '0.1.6'
     GUID                 = '356c238f-88dd-48bf-ad0a-b7de6a5bb877'
     Author               = 'Azure Verified Modules'
     CompanyName          = 'Microsoft'

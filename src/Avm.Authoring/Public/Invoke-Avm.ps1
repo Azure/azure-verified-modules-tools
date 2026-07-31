@@ -178,6 +178,13 @@ function Invoke-Avm {
 
     $result = & $cmd @bound @positional
 
+    foreach ($item in @($result)) {
+        if ($null -eq $item) { continue }
+        $statusProp = $item.PSObject.Properties['Status']
+        if ($null -eq $statusProp) { continue }
+        Write-AvmResult -Result $item -Verb ($match.Path -join ' ')
+    }
+
     # F02: a gauntlet verb that reports Status 'fail' or 'error' must make the
     # hosting process exit non-zero, so wrapping git hooks and CI steps cannot
     # pass silently. Read-only verbs (e.g. 'version') emit no 'Status' property
@@ -188,7 +195,8 @@ function Invoke-Avm {
         if ($null -eq $statusProp) { continue }
         $status = ([string]$statusProp.Value).Trim()
         if ($status.ToLowerInvariant() -in @('fail', 'error')) {
-            throw [AvmCommandException]::new(($match.Path -join ' '), $status, $item)
+            $detail = Get-AvmFailureDetail -Result $item
+            throw [AvmCommandException]::new(($match.Path -join ' '), $status, $item, $detail)
         }
     }
 

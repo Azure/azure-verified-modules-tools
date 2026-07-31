@@ -107,10 +107,6 @@ jobs:
               throw "Selected subscription entry has no 'id' property."
           }
 
-          # Subscription ids are not secrets, but keep them out of the logs to
-          # match the governance behaviour.
-          Write-Host "::add-mask::$($chosen.id)"
-
           "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "subscriptionName=$($chosen.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Selected test subscription '$($chosen.name)'."

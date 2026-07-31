@@ -333,6 +333,7 @@ The module's own state lives under per-user folders per §7. It never drops dotf
 - Always pass the **resolved absolute path** to the binary (from the tool resolver, §10). Never rely on `PATH` for managed tools.
 - Quote nothing. The array form bypasses the shell entirely — no quoting bugs possible.
 - Always check `$LASTEXITCODE` after every shell-out. The standard helper `Invoke-AvmProcess` (in `Private/`) wraps the pattern, captures stdout/stderr, and throws on non-zero unless `-IgnoreExitCode` is set.
+- Long-running calls pass `-StreamOutput`, which emits both child streams on the Information stream while retaining their captured values on the process result.
 - Stdout and stderr captured separately via `Start-Process -RedirectStandardOutput/-RedirectStandardError` so they can be re-emitted on their respective streams without merging.
 - Long-running processes emit `Write-Progress` every 5 seconds; cancellable via `Ctrl+C`, which sends `SIGINT`/`Ctrl+Break` to the child and waits up to 10 seconds before `SIGKILL`/`TerminateProcess`.
 
@@ -425,6 +426,11 @@ Schema enforced by `Test-AvmPins`:
 | Pipeline output    | Structured `pscustomobject`s; the **only** data contract       |
 
 `-Verbose`, `-Debug`, and `-InformationAction` work via standard `[CmdletBinding()]`.
+
+The `avm` dispatcher renders every result carrying `Status`, including each
+composition step and nested issue, before returning or throwing. When
+`GITHUB_ACTIONS` is set, the same rendering is appended to
+`GITHUB_STEP_SUMMARY`.
 
 ### `--json` mode
 

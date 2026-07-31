@@ -40,6 +40,28 @@ Describe 'Invoke-AvmProcess' {
         $result.StdErr.TrimEnd() | Should -Be 'to-stderr'
     }
 
+    It 'streams stdout and stderr while retaining both captured values' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('live-out'); [Console]::Error.WriteLine('live-error')"
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $messages = @()
+            $result = Invoke-AvmProcess `
+                -FilePath $E `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                -StreamOutput `
+                -InformationVariable messages
+            [pscustomobject]@{
+                Result   = $result
+                Messages = @($messages | ForEach-Object { [string]$_.MessageData })
+            }
+        }
+        $observed.Result.StdOut.TrimEnd() | Should -Be 'live-out'
+        $observed.Result.StdErr.TrimEnd() | Should -Be 'live-error'
+        $observed.Messages | Should -Contain 'live-out'
+        $observed.Messages | Should -Contain 'live-error'
+    }
+
     It 'throws AvmProcessException on a non-zero exit' {
         $exe = $script:pwsh
         $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe } {

@@ -85,6 +85,28 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.1.6] - 2026-07-31
+
+### Added
+
+- Every `avm` status result now renders a concise command status, chain step
+  status/error/duration, and issue detail on the Information stream. GitHub
+  Actions runs append the same diagnostics to `GITHUB_STEP_SUMMARY`. (F20, F21)
+- `Invoke-AvmProcess -StreamOutput` emits child stdout and stderr while retaining
+  both captured values. Terraform init, integration tests, and e2e lifecycle
+  operations and hooks enable it by default. (F21)
+
+### Fixed
+
+- `avm transform` removes every PATH entry containing another platform-specific
+  terraform executable before exposing the resolved pinned terraform to mapotf.
+  The override is scoped to the mapotf child process. (F19)
+- `AvmCommandException` includes the first failing step or issue diagnostic
+  instead of reporting only the aggregate status. (F20)
+- The Terraform reusable workflow no longer masks the non-secret subscription
+  ID before publishing it as a job output, so downstream Azure test jobs receive
+  `ARM_SUBSCRIPTION_ID`. (F22)
+
 ## [0.1.5] - 2026-07-30
 
 Remediation of the 18 defects (F01–F18) found while end-to-end testing `0.1.4`

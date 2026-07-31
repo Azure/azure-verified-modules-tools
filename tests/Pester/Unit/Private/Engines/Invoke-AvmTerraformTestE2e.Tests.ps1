@@ -84,16 +84,16 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             # Real backend init: -input=false but NOT -backend=false.
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'init' -and ($ArgumentList -contains '-input=false') -and
-                (-not ($ArgumentList -contains '-backend=false'))
+                (-not ($ArgumentList -contains '-backend=false')) -and $StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'apply' -and ($ArgumentList -contains '-auto-approve')
+                $ArgumentList[0] -eq 'apply' -and ($ArgumentList -contains '-auto-approve') -and $StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'plan' -and ($ArgumentList -contains '-detailed-exitcode')
+                $ArgumentList[0] -eq 'plan' -and ($ArgumentList -contains '-detailed-exitcode') -and $StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'destroy' -and ($ArgumentList -contains '-auto-approve')
+                $ArgumentList[0] -eq 'destroy' -and ($ArgumentList -contains '-auto-approve') -and $StreamOutput
             }
         }
     }
