@@ -19,7 +19,8 @@ function Invoke-AvmTestE2e {
 
         An example directory can opt out of the e2e run by containing a
         '.e2eignore' marker file. Modules that ship no runnable example report
-        a clean pass with FilesProcessed = 0.
+        Status 'skipped' rather than a pass, so an absent tier can never look
+        like a green one.
 
         Use -Example to target one or more named examples (this is how the
         reusable workflow fans the tier out across a matrix), and -List to
@@ -30,8 +31,8 @@ function Invoke-AvmTestE2e {
         as warning-level Issues, so a recovered example stays green while the
         flake remains visible. The idempotency check is never retried.
 
-        This verb is a standalone command; it is NOT part of the offline
-        pre-commit / pr-check chains, which keep the validate-only 'test'.
+        This verb is a standalone command; it needs credentials, so it is NOT
+        part of the 'avm pre-commit' or 'avm pr-check' gauntlets.
 
         Routed by the dispatcher: 'avm test e2e'.
 

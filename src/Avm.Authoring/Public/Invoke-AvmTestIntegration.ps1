@@ -18,11 +18,12 @@ function Invoke-AvmTestIntegration {
         or ARM_* environment variables). Authentication is left to
         terraform and its providers; this verb performs no preflight.
 
-        Modules that ship no tests/integration/*.tftest.hcl report a clean
-        pass with FilesProcessed = 0.
+        Modules that ship no tests/integration/*.tftest.hcl report Status
+        'skipped' with RunsTotal = 0 rather than a pass, so an absent tier can
+        never look like a green one.
 
-        This verb is a standalone command; it is NOT part of the offline
-        pre-commit / pr-check chains, which keep the validate-only 'test'.
+        This verb is a standalone command; it needs credentials, so it is NOT
+        part of the 'avm pre-commit' or 'avm pr-check' gauntlets.
 
         Routed by the dispatcher: 'avm test integration'.
 
@@ -44,7 +45,7 @@ function Invoke-AvmTestIntegration {
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Issues.
+        Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
 
     .EXAMPLE
         avm test integration
