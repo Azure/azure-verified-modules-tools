@@ -15,6 +15,13 @@ function Format-AvmBicepModule {
         avm.pins. -AllowPathFallback is passed through so callers can opt
         in to the host PATH when the managed cache is empty.
 
+        Drift mode (-CheckDrift, used by pr-check): 'bicep format' has no
+        dry-run, so the format still runs and any file it rewrote becomes a
+        Status='fail' Issue - the same write-then-flag contract the mapotf
+        transform uses. The working copy is therefore modified in drift
+        mode; the point is that the drift is now reported rather than
+        silently discarded with the runner.
+
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='bicep'.
@@ -23,9 +30,14 @@ function Format-AvmBicepModule {
         Pass through to Resolve-AvmTool: accept a PATH-resolved bicep if the
         lock-pinned version matches.
 
+    .PARAMETER CheckDrift
+        When set, treat any file 'bicep format' rewrote as a failure
+        (Status='fail' with one Issue per file) instead of a silent fix.
+        Used by the pr-check chain.
+
     .OUTPUTS
-        pscustomobject with Status ('pass'), Engine, Tool, ToolPath,
-        ToolSource, FilesProcessed, Changed (string[]).
+        pscustomobject with Status, Engine, Tool, ToolPath,
+        ToolSource, FilesProcessed, Changed (string[]), Issues.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -33,7 +45,9 @@ function Format-AvmBicepModule {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [switch] $CheckDrift
     )
 
     Set-StrictMode -Version 3.0
@@ -59,13 +73,31 @@ function Format-AvmBicepModule {
         if ($before -ne $after) { $changed.Add($file.FullName) }
     }
 
+    $status = 'pass'
+    $issues = New-Object System.Collections.Generic.List[object]
+    if ($CheckDrift -and $changed.Count -gt 0) {
+        $status = 'fail'
+        foreach ($item in $changed) {
+            $rel = ([System.IO.Path]::GetRelativePath($Context.Root, $item)).Replace('\', '/')
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = $rel
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = 'avm.bicep.fmt-drift'
+                    Message  = ("'{0}' is not formatted; run 'avm format' and commit the result." -f $rel)
+                })
+        }
+    }
+
     return [pscustomobject][ordered]@{
-        Status         = 'pass'
+        Status         = $status
         Engine         = 'bicep'
         Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
         ToolPath       = $tool.Path
         ToolSource     = $tool.Source
         FilesProcessed = $files.Count
         Changed        = $changed.ToArray()
+        Issues         = $issues.ToArray()
     }
 }

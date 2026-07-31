@@ -62,6 +62,38 @@ Describe 'Invoke-AvmPrCheck' {
         ($result.Steps | Where-Object Step -notin @('sync', 'unit test') | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
+    It 'runs every managed-content step in drift mode so a CI auto-fix cannot report a pass' {
+        $dir = Join-Path $TestDrive ("prcheck-drift-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; RunsTotal = 3 } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+            Invoke-AvmPrCheck -Path $D | Out-Null
+
+            # All four steps that rewrite tracked files must gate, or the fix is
+            # made in the throwaway runner copy and thrown away with it.
+            Should -Invoke Invoke-AvmSync -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmFormat -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmTransform -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmDocs -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+        }
+    }
+
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain' {
         $dir = Join-Path $TestDrive ("prcheck-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -152,10 +184,10 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[-1].Status             | Should -Be 'fail'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmCheckPolicy -Times 0
-            Should -Invoke Invoke-AvmCheckConvention -Times 0
-            Should -Invoke Invoke-AvmTest -Times 0
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmCheckPolicy -Times 0 -Exactly
+            Should -Invoke Invoke-AvmCheckConvention -Times 0 -Exactly
+            Should -Invoke Invoke-AvmTest -Times 0 -Exactly
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 
@@ -189,8 +221,8 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmLint -Times 0
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmLint -Times 0 -Exactly
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 
@@ -383,7 +415,7 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps.Step | Should -Not -Contain 'unit test'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTestUnit -Times 0
+            Should -Invoke Invoke-AvmTestUnit -Times 0 -Exactly
         }
     }
 

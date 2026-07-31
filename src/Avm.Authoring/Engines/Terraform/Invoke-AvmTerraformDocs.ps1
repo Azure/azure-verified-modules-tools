@@ -109,6 +109,14 @@ function Invoke-AvmTerraformDocs {
           0 - success
           others - tool error, surfaced as AvmProcessException.
 
+        Drift mode (-CheckDrift, used by pr-check): terraform-docs has no
+        dry-run for inject/replace mode, so generation still runs and any
+        README it rewrote becomes a Status='fail' Issue - the same
+        write-then-flag contract the mapotf transform uses. The contract is
+        "a module that already ran pre-commit has an up-to-date README"; a
+        non-empty change set in CI therefore means the author did not
+        regenerate the docs.
+
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='terraform'.
@@ -120,9 +128,14 @@ function Invoke-AvmTerraformDocs {
         README path (relative to each module root) to generate. Defaults
         to 'README.md'.
 
+    .PARAMETER CheckDrift
+        When set, treat any README terraform-docs rewrote as a failure
+        (Status='fail' with one Issue per file) instead of a silent
+        regeneration. Used by the pr-check chain.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
-        FilesProcessed, Changed.
+        FilesProcessed, Changed, Issues.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
@@ -134,7 +147,9 @@ function Invoke-AvmTerraformDocs {
 
         [switch] $AllowPathFallback,
 
-        [string] $OutputFile = 'README.md'
+        [string] $OutputFile = 'README.md',
+
+        [switch] $CheckDrift
     )
 
     Set-StrictMode -Version 3.0
@@ -220,13 +235,30 @@ function Invoke-AvmTerraformDocs {
         }
     }
 
+    $status = 'pass'
+    $issues = New-Object System.Collections.Generic.List[object]
+    if ($CheckDrift -and $changed.Count -gt 0) {
+        $status = 'fail'
+        foreach ($rel in $changed) {
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = $rel
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = 'avm.tf.docs-drift'
+                    Message  = ("'{0}' is out of date; run 'avm docs' and commit the result." -f $rel)
+                })
+        }
+    }
+
     return [pscustomobject][ordered]@{
         Engine         = 'terraform'
         Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
         ToolPath       = $tool.Path
         ToolSource     = $tool.Source
-        Status         = 'pass'
+        Status         = $status
         FilesProcessed = $targets.Count
         Changed        = [string[]]$changed.ToArray()
+        Issues         = $issues.ToArray()
     }
 }

@@ -29,12 +29,23 @@ function Invoke-AvmDocs {
         README path (relative to module root) to inject into. Defaults to
         'README.md'.
 
+    .PARAMETER CheckDrift
+        Report-only mode used by pr-check. Any README that regeneration
+        would change makes the result Status 'fail' and is emitted as an
+        Issue, instead of being silently rewritten. Without it a CI run
+        regenerates docs in the throwaway working copy and reports a pass,
+        so stale READMEs merge unnoticed.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Changed.
+        Status, FilesProcessed, Changed, Issues.
 
     .EXAMPLE
         avm docs
+
+    .EXAMPLE
+        avm docs --check-drift
+        # Fail instead of regenerating: what pr-check runs.
 
     .EXAMPLE
         Invoke-AvmDocs -Path C:\repos\my-tf-module -Ecosystem terraform
@@ -52,7 +63,9 @@ function Invoke-AvmDocs {
 
         [switch] $AllowPathFallback,
 
-        [string] $OutputFile = 'README.md'
+        [string] $OutputFile = 'README.md',
+
+        [switch] $CheckDrift
     )
 
     Set-StrictMode -Version 3.0
@@ -62,10 +75,12 @@ function Invoke-AvmDocs {
 
     switch ($context.Ecosystem) {
         'bicep' {
+            # The bicep walker is stubbed and throws AvmNotSupportedException
+            # before drift could matter, so -CheckDrift is not forwarded.
             Invoke-AvmBicepDocs -Context $context -AllowPathFallback:$AllowPathFallback -OutputFile $OutputFile
         }
         'terraform' {
-            Invoke-AvmTerraformDocs -Context $context -AllowPathFallback:$AllowPathFallback -OutputFile $OutputFile
+            Invoke-AvmTerraformDocs -Context $context -AllowPathFallback:$AllowPathFallback -OutputFile $OutputFile -CheckDrift:$CheckDrift
         }
         default {
             throw [AvmContextException]::new(

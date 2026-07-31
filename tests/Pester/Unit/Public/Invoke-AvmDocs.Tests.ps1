@@ -43,7 +43,7 @@ Describe 'Invoke-AvmDocs' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmTerraformDocs -Exactly 1
-            Should -Invoke Invoke-AvmBicepDocs -Times 0
+            Should -Invoke Invoke-AvmBicepDocs -Times 0 -Exactly
         }
     }
 
@@ -88,6 +88,39 @@ Describe 'Invoke-AvmDocs' {
             }
             Invoke-AvmDocs -Path $D -OutputFile 'docs/MODULE.md' | Out-Null
             $script:capturedFile | Should -Be 'docs/MODULE.md'
+        }
+    }
+    It 'threads -CheckDrift to the terraform engine' {
+        $dir = Join-Path $TestDrive ("docs-drift-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmTerraformDocs {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'fail'; FilesProcessed = 1; Changed = @('README.md'); Issues = @() }
+            }
+            Invoke-AvmDocs -Path $D -CheckDrift | Out-Null
+            Should -Invoke Invoke-AvmTerraformDocs -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+        }
+    }
+
+    It 'never forwards -CheckDrift to the bicep engine, which does not accept it' {
+        $dir = Join-Path $TestDrive ("docs-drift-bicep-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmBicepDocs { throw [AvmNotSupportedException]::new('bicep docs is not implemented') }
+            { Invoke-AvmDocs -Path $D -CheckDrift } | Should -Throw -ExceptionType ([AvmNotSupportedException])
+            Should -Invoke Invoke-AvmBicepDocs -Exactly 1 -ParameterFilter { -not $PSBoundParameters.ContainsKey('CheckDrift') }
         }
     }
 }

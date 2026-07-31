@@ -110,9 +110,14 @@ Describe 'Invoke-AvmPreCommit' {
             Should -Invoke Invoke-AvmFormat          -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmDocs            -Times 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
+            # pre-commit is the auto-fix surface: format and docs must rewrite
+            # the working tree, never gate on drift the way pr-check does.
+            Should -Invoke Invoke-AvmFormat -Times 0 -Exactly -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmDocs   -Times 0 -Exactly -ParameterFilter { $CheckDrift -eq $true }
+
             # lint + test are pr-check-only on the terraform chain; pre-commit must not call them.
-            Should -Invoke Invoke-AvmLint -Times 0
-            Should -Invoke Invoke-AvmTest -Times 0
+            Should -Invoke Invoke-AvmLint -Times 0 -Exactly
+            Should -Invoke Invoke-AvmTest -Times 0 -Exactly
 
             $r
         }
@@ -235,7 +240,7 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[-1].Status             | Should -Be 'fail'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 
@@ -265,7 +270,7 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmDocs -Times 0
+            Should -Invoke Invoke-AvmDocs -Times 0 -Exactly
         }
     }
 }

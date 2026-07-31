@@ -265,4 +265,45 @@ Describe 'Invoke-AvmTerraformDocs' {
             }
         }
     }
+    It 'fails with one Issue per stale README in drift mode' {
+        $ctx = $script:context
+        $readme = $script:readme
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $readme } {
+            param($C, $R)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                Add-Content -LiteralPath $R -Value "`n| name | description |`n"
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformDocs -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Count | Should -Be 1
+        $result.Issues[0].File | Should -Be 'README.md'
+        $result.Issues[0].Code | Should -Be 'avm.tf.docs-drift'
+        $result.Issues[0].Severity | Should -Be 'error'
+        $result.Issues[0].Message | Should -Match 'avm docs'
+    }
+
+    It 'passes with no Issues in drift mode when the README is already current' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformDocs -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues.Count | Should -Be 0
+    }
 }

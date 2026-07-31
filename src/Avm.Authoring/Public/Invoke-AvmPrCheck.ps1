@@ -113,14 +113,14 @@ function Invoke-AvmPrCheck {
 
     $stepDefs = @(
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
-        [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
+        [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
         [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
         [pscustomobject]@{ Name = 'unit test'; Cmdlet = 'Invoke-AvmTestUnit' }
-        [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
+        [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
     )
 
     $steps = New-Object System.Collections.Generic.List[object]

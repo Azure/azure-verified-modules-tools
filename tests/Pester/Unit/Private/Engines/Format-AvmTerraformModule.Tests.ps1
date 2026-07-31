@@ -113,4 +113,90 @@ Describe 'Format-AvmTerraformModule' {
         }
         $result.Changed.Count | Should -Be 0
     }
+
+    It 'writes by default and still reports pass when files were rewritten' {
+        $ctx = $script:context
+        $outcome = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $captured = [pscustomobject]@{ Args = $null }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                $captured.Args = $ArgumentList
+                [pscustomobject]@{ ExitCode = 0; StdOut = "main.tf`n"; StdErr = '' }
+            }
+            [pscustomobject]@{ Result = (Format-AvmTerraformModule -Context $C); Args = $captured.Args }
+        }
+        $outcome.Args | Should -Contain '-write=true'
+        $outcome.Result.Status | Should -Be 'pass'
+        $outcome.Result.Issues.Count | Should -Be 0
+    }
+
+    It 'does not write in drift mode' {
+        $ctx = $script:context
+        $captured = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $captured = [pscustomobject]@{ Args = $null }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                $captured.Args = $ArgumentList
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Format-AvmTerraformModule -Context $C -CheckDrift | Out-Null
+            $captured
+        }
+        $captured.Args | Should -Contain '-write=false'
+        $captured.Args | Should -Not -Contain '-write=true'
+    }
+
+    It 'fails with one Issue per unformatted file in drift mode' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = "main.tf`nvariables.tf`n"; StdErr = '' }
+            }
+            Format-AvmTerraformModule -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Count | Should -Be 2
+        $result.Issues[0].File | Should -Be 'main.tf'
+        $result.Issues[0].Code | Should -Be 'avm.tf.fmt-drift'
+        $result.Issues[0].Severity | Should -Be 'error'
+        $result.Issues[0].Message | Should -Match "avm format"
+    }
+
+    It 'passes with no Issues in drift mode when everything is formatted' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Format-AvmTerraformModule -Context $C -CheckDrift
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues.Count | Should -Be 0
+    }
 }
