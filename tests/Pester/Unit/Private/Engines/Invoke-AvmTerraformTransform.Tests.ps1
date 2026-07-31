@@ -80,38 +80,58 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'prepends the resolved terraform directory to PATH for the mapotf subprocess' {
+    It 'removes competing terraform binaries from the child PATH without mutating the caller PATH' {
         $ctx = $script:context
-        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
-            param($C)
-            Mock Resolve-AvmTool {
-                if ($Name -eq 'terraform') {
-                    [pscustomobject]@{
-                        Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
-                        Source = 'cache'; Path = '/fake/tools/terraform/1.15.3/terraform'
-                    }
-                }
-                else {
-                    [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
-                        Source = 'cache'; Path = '/fake/mapotf'
-                    }
-                }
-            }
-            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-            Invoke-AvmTerraformTransform -Context $C
+        $entrypoint = if ([OperatingSystem]::IsWindows()) { 'terraform.exe' } else { 'terraform' }
+        $pinnedDir = Join-Path $TestDrive 'pinned-terraform'
+        $strayDir = Join-Path $TestDrive 'stray-terraform'
+        $safeDir = Join-Path $TestDrive 'safe-bin'
+        New-Item -ItemType Directory -Path $pinnedDir, $strayDir, $safeDir -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $pinnedDir $entrypoint), (Join-Path $strayDir $entrypoint) -Force | Out-Null
+        $injectedPath = @($strayDir, $safeDir, $pinnedDir) -join [System.IO.Path]::PathSeparator
 
-            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'terraform' }
-            # Both mapotf calls (transform + clean-backup) carry the PATH override.
-            # Derive the expected prefix with the same Split-Path the engine uses
-            # so the assertion is OS-agnostic (Windows yields backslashes).
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
-                $expectedDir = Split-Path -Parent '/fake/tools/terraform/1.15.3/terraform'
-                $null -ne $EnvVars -and
-                $EnvVars.ContainsKey('PATH') -and
-                $EnvVars['PATH'].StartsWith($expectedDir + [System.IO.Path]::PathSeparator)
+        $originalPath = $env:PATH
+        try {
+            $env:PATH = $injectedPath
+            $observedPath = InModuleScope 'Avm.Authoring' -Parameters @{
+                C = $ctx
+                P = (Join-Path $pinnedDir $entrypoint)
+            } {
+                param($C, $P)
+                Mock Resolve-AvmTool {
+                    if ($Name -eq 'terraform') {
+                        [pscustomobject]@{
+                            Name = 'terraform'; Version = '1.15.3'; Platform = 'test'
+                            Source = 'cache'; Path = $P
+                        }
+                    }
+                    else {
+                        [pscustomobject]@{
+                            Name = 'mapotf'; Version = '0.1.4'; Platform = 'test'
+                            Source = 'cache'; Path = (Join-Path $TestDrive 'mapotf')
+                        }
+                    }
+                }
+                Mock Resolve-AvmMapotfConfigDir { $TestDrive }
+                Mock Invoke-AvmProcess {
+                    $script:childPath = $EnvVars['PATH']
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Invoke-AvmTerraformTransform -Context $C | Out-Null
+                return $script:childPath
             }
+
+            $entries = @($observedPath -split [regex]::Escape([string][System.IO.Path]::PathSeparator))
+            $entries[0] | Should -Be $pinnedDir
+            $entries | Should -Contain $safeDir
+            $entries | Should -Not -Contain $strayDir
+            @($entries | Where-Object {
+                    Test-Path -LiteralPath (Join-Path $_ $entrypoint) -PathType Leaf
+                }).Count | Should -Be 1
+            $env:PATH | Should -Be $injectedPath
+        }
+        finally {
+            $env:PATH = $originalPath
         }
     }
 

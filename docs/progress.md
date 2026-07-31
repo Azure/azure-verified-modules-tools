@@ -3,7 +3,8 @@
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
 **Last updated**: 2026-07-30 — **E2E 0.1.4 remediation: all seven slices landed; [PR #15](https://github.com/Azure/azure-verified-modules-tools/pull/15) open against `main`, all 12 checks green, `mergeStateStatus: CLEAN`.** The `[0.1.5]` CHANGELOG heading was dated `2026-08-06` (a week in the future) and is corrected to the real merge date `2026-07-30`; `scripts/Get-AvmReleaseNotes.ps1` re-verified against the live file (15/15 unit tests, section extracts cleanly). **Governance [#536](https://github.com/Azure/avm-terraform-governance/pull/536) needs an approving review before it can merge** — it is `BLOCKED` on `REVIEW_REQUIRED`, and it was raised despite a user hold ("hold both until the tooling PR lands"); content is correct (2 files, 6/6 checks green) so it was left open rather than closed. Slice 7 shipped as governance PR [#536](https://github.com/Azure/avm-terraform-governance/pull/536) (SKILL.md + `references/terraform-test.md` moved off the deprecated `./avm` launcher); the F07 governance `.gitignore` follow-up turned out to be **not-applicable** because `managed-files/root` has no `.gitignore`. Three stale "(Phase 1 stub)" verb summaries (`transform`, `check policy`, `check convention`) were corrected in the registry — all three are real engines now. The in-repo manifest is deliberately **not** bumped: `release.yml` stamps the git tag via `build -ReleaseVersion`. **`./build.ps1 pre-commit` now runs the Component tier too** — it previously ran the Unit tier only, so a green local gate did not predict a green CI run (see Known issues for the `pwsh -File` argv quirk that gap concealed). The `integration` tier was separately red **before** that fix — a stale `check policy` → `'skipped'` assertion that Slice 5 (F07) invalidated — and is now rewritten as a positive F07 proof; `integration` remains outside both `pre-commit` and `ci` by design, so it needs watching independently.
-**Active branch**: `jaredfholgate-fix-avm-authoring-e2e-defects` (off `origin/main` tip `b3b49f4`; E2E 0.1.4 defect remediation → one PR → `main` → 0.1.5 release. `feat/avm-authoring-initial` was merged to `main` via PR #1 + #8 and deleted on the remote — never push there)
+**Last updated**: 2026-07-31 — **F19-F22 remediation is active on `jaredfholgate-fix-avm-tooling-f19-f22`; F19 is complete and the remaining output, streaming, workflow, and 0.1.6 release slices are queued below.**
+**Active branch**: `jaredfholgate-fix-avm-tooling-f19-f22` (off `main` tip `20afcf8`; F19-F22 remediation → one PR → `main` → 0.1.6 release)
 **Working commit**: `7755de9 — WIP: initial Avm.Authoring module scaffold and CI`
 
 ## Snapshot
@@ -17,6 +18,14 @@ Single source of truth for what's done, what's in flight, and what's next on the
 | 4     | Selective `mapotf`/`grept`  | Not started                                                                              |
 | 5     | Governance script port      | Not started                                                                              |
 | 6     | Upstream promotion          | Not started                                                                              |
+
+## E2E 0.1.5 remediation (in flight)
+
+- [x] **F19 — isolate mapotf's pinned terraform on child PATH.** A shared child-environment helper removes every PATH entry containing the platform terraform entrypoint before prepending the resolved pinned directory; the caller PATH is unchanged. Regression coverage injects a fake competing terraform.
+- [ ] **F20/F21 — render command results and diagnostics.**
+- [ ] **F21 — stream long-running Terraform subprocess output while retaining capture.**
+- [ ] **F22 — preserve the selected subscription ID reusable-workflow output.**
+- [ ] **Release 0.1.6 — changelog, full gate, PR, and green CI.**
 
 ## E2E 0.1.4 remediation (in flight)
 
