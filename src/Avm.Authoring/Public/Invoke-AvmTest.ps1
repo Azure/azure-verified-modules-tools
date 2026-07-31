@@ -12,9 +12,13 @@ function Invoke-AvmTest {
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
 
-        This verb covers the cheap, no-network build-validation pass. It is
-        not the same as 'avm test unit' / 'avm test integration' / 'avm test
-        e2e' which will live under nested dispatcher paths in later slices.
+        This verb covers the cheap build-validation pass and runs no
+        tests: it reports FilesProcessed (source files validated) and
+        carries no run counts. The real test tiers are the separate
+        'avm test unit', 'avm test integration' and 'avm test e2e'
+        verbs, which execute 'terraform test' and report
+        RunsTotal/RunsPassed/RunsFailed. In the gauntlets this verb is
+        the step named 'validate' for that reason.
 
         Routed by the dispatcher: 'avm test'.
 

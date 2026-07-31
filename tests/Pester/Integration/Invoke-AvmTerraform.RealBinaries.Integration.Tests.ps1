@@ -253,7 +253,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,test,docs'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,validate,unit test,docs'
             $result.Status | Should -Be 'pass'
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state
@@ -264,7 +264,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             # Every managed-tool step must resolve its binary from the AVM
             # cache we just populated (not a stray PATH binary).
             $toolSteps = $result.Steps | Where-Object {
-                ($_.Step -in @('format', 'transform', 'lint', 'test', 'docs')) -and
+                ($_.Step -in @('format', 'transform', 'lint', 'validate', 'unit test', 'docs')) -and
                 $_.Result -and ($_.Result.PSObject.Properties.Name -contains 'ToolSource')
             }
             $toolSteps.Count | Should -BeGreaterThan 0

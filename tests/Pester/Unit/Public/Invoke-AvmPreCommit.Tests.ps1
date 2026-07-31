@@ -46,7 +46,7 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps.Count               | Should -Be 4
         $result.Steps[0].Step             | Should -Be 'format'
         $result.Steps[1].Step             | Should -Be 'lint'
-        $result.Steps[2].Step             | Should -Be 'test'
+        $result.Steps[2].Step             | Should -Be 'validate'
         $result.Steps[3].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }

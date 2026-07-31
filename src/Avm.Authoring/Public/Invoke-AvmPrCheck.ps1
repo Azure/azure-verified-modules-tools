@@ -3,7 +3,7 @@ function Invoke-AvmPrCheck {
     .SYNOPSIS
         Run the full pull-request gauntlet against the resolved module:
         sync -> format -> transform -> lint -> check policy ->
-        check convention -> test -> docs.
+        check convention -> validate -> unit test -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -15,9 +15,20 @@ function Invoke-AvmPrCheck {
 
         This is the broader sibling of Invoke-AvmPreCommit: where
         pre-commit runs the fast, locally meaningful checks (format,
-        lint, test, docs), pr-check runs **every check that runs in
+        lint, validate, docs), pr-check runs **every check that runs in
         CI** (per plan section 4), including the convention-policy
         steps that compare the module against the AVM specs.
+
+        The 'validate' step is a build-validation pass ('terraform
+        validate' / 'bicep build'), NOT a test run - it is named for
+        what it does. The 'unit test' step that follows is the real
+        thing: it runs the tests/unit tier and reports run counts, so a
+        module with no tests cannot read as a green gauntlet. It is
+        included because the unit tier is credential-free and therefore
+        the only tier that can honestly run anywhere; the integration
+        and e2e tiers need a live subscription and stay out. For bicep
+        the unit-test step throws AvmConfigurationException and is
+        skipped.
 
         The chain opens with the managed-files sync step (terraform
         only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
@@ -107,7 +118,8 @@ function Invoke-AvmPrCheck {
         [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
         [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
-        [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
+        [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
+        [pscustomobject]@{ Name = 'unit test'; Cmdlet = 'Invoke-AvmTestUnit' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
     )
 

@@ -2,7 +2,7 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     format -> lint -> test -> docs.
+        bicep:     format -> lint -> validate -> docs.
         terraform: sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
@@ -23,7 +23,7 @@ function Invoke-AvmPreCommit {
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
         The two checks that require an
-        initialised working directory - lint (tflint) and test
+        initialised working directory - lint (tflint) and validate
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
         upstream porch, which runs tflint and the policy/plan checks in
         pr-check rather than pre-commit.
@@ -113,7 +113,7 @@ function Invoke-AvmPreCommit {
         @(
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
             [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-            [pscustomobject]@{ Name = 'test'; Cmdlet = 'Invoke-AvmTest' }
+            [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )
     }

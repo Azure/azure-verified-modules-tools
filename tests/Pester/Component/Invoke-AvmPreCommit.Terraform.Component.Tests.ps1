@@ -256,8 +256,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 8
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'test', 'docs')
+        $steps.Count | Should -Be 9
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'unit test', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -281,7 +281,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         # transform runs under -CheckDrift in pr-check; the no-op mapotf stub
         # leaves the tree untouched so the drift-check finds nothing and passes.
         # External-tool passing steps (each shells out via Invoke-AvmProcess).
-        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'test', 'docs')) {
+        foreach ($passing in @('format', 'transform', 'lint', 'check policy', 'validate', 'unit test', 'docs')) {
             $byName[$passing].PSObject.Properties['Status'].Value | Should -Be 'pass'
             $engineResult = $byName[$passing].PSObject.Properties['Result'].Value
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
