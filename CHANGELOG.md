@@ -375,6 +375,15 @@ shell-hook guard and the empty-tier status respectively.
   ever reaches stream 4, so it could never fail in either direction. Each fix is
   proven load-bearing by mutating the source and confirming the new anchor
   catches. (F47)
+- Pinned the `avm test e2e -List` discovery contract under GitHub Actions. The
+  reusable workflow feeds that string straight to `fromJson()` to build the
+  per-example e2e matrix, so a single `::group::` marker leaking onto the same
+  channel collapses every e2e leg — and the F31 logging overhaul emits those
+  markers only when `GITHUB_ACTIONS` is set, so no existing test ran under the
+  condition that enables them. Proven decisive by mutation: an
+  Actions-conditional leak is caught by this test and by **nothing else** in the
+  suite (31 passed / 1 failed), where the same leak made unconditional is caught
+  by four. (F47)
 
 ## [0.1.6] - 2026-07-31
 

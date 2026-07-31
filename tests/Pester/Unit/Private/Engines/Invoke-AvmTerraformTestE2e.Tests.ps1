@@ -788,4 +788,25 @@ Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
         (ConvertFrom-Json $json).Count | Should -BeGreaterThan 0
         $json | Should -Not -Match 'skipped'
     }
+
+    It 'keeps -List output fromJson-clean under GITHUB_ACTIONS' {
+        $ctx = $script:context
+        $previous = $env:GITHUB_ACTIONS
+        try {
+            $env:GITHUB_ACTIONS = 'true'
+            $json = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Invoke-AvmTerraformTestE2e -Context $C -List
+            }
+        }
+        finally {
+            $env:GITHUB_ACTIONS = $previous
+        }
+        # The workflow feeds this straight to fromJson() to build the e2e matrix,
+        # so a single ::group:: marker leaking onto the same channel collapses
+        # every e2e leg. Pin the whole string, not just its contents.
+        $json | Should -Be '["example-a","example-b"]'
+        $json | Should -Not -Match '::'
+        (ConvertFrom-Json $json).Count | Should -Be 2
+    }
 }
