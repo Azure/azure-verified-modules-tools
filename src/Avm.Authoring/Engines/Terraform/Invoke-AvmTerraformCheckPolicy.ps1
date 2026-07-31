@@ -66,6 +66,19 @@ function Invoke-AvmTerraformCheckPolicy {
         why (b) is detected independently. When the plan-JSON slice lands,
         $parserMode stops being 'hcl2' and both skips stop firing.
 
+        Measured on conftest 0.68.2 against a storage account deliberately
+        carrying min_tls_version='TLS1_0', public_network_access_enabled
+        and account_replication_type='LRS' - i.e. violations these very
+        bundles do catch when fed plan JSON:
+
+          as invoked (no flag)   0 evaluated,   0 failures, exit 0
+          + --all-namespaces   520 evaluated,   0 failures, exit 0
+          plan JSON + flag     260 evaluated,   3 failures, exit 1
+
+        The middle row is the trap: 520 successes on a module that is
+        genuinely non-compliant. Vacuity here is not 'nothing to check',
+        it is 'checked, and wrong', which is why (b) must stay a skip.
+
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='terraform'.
