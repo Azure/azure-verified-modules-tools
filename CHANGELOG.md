@@ -136,6 +136,10 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   and the integration tier dumping raw `-json` NDJSON on the human channel. The
   `terraform init` sub-step follows the same quiet-by-default rule as everything
   else. (F33)
+- Caller-rendered progress is no longer collapsed behind a GitHub Actions
+  `::group::`. Grouping exists to fold away raw child output, and a sub-step that
+  supplies its own line renderer emits no raw output, so the fold hid exactly the
+  curated per-run progress it was meant to reveal. (F33)
 
 ### Fixed
 
@@ -143,6 +147,11 @@ canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F23–F34).
   non-zero instead of surfacing a raw `OperationStopped` stack trace pointing at
   module source. The remainder of a calling script no longer stops running, so
   cleanup lines after an `avm` call execute as written. (F24)
+- The failure headline now prefers a diagnostic that carries a file position.
+  A failing terraform test records a bare `test run '<name>' fail` issue ahead of
+  the diagnostic naming the file, line and cause, so the console summary, the
+  GitHub Actions error annotation and the terminating error message all carried
+  the least useful line while the actionable one sat in the body. (F24)
 - A gauntlet step that fails or errors now narrates its error message at the
   point of failure, so callers that invoke `Invoke-AvmPrCheck` or
   `Invoke-AvmPreCommit` directly (bypassing the dispatcher's renderer) get a
