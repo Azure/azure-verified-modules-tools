@@ -88,8 +88,8 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $result.Tool       | Should -Be 'conftest/0.68.2'
         $result.ToolPath   | Should -Be '/fake/conftest'
         $result.ToolSource | Should -Be 'cache'
-        $result.Status     | Should -Be 'pass'
-        $result.Issues.Count | Should -Be 0
+        $result.Status     | Should -Be 'skipped'
+        $result.Issues.Count | Should -Be 1
 
         $expectedRoot = $ctx.Root
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $expectedRoot } {
@@ -408,6 +408,75 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                     $ArgumentList[7] -eq '--output'
                 }
             }
+        }
+    }
+
+    Context 'vacuous-evaluation detection (F46)' {
+        It 'reports skipped, not pass, when conftest evaluates zero policies' {
+            # The shipped bundles declare no 'package main' rules, so conftest's
+            # default namespace yields successes=0 and exit 0 on any module.
+            $json = '[{"filename":"main.tf","namespace":"main","successes":0}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status    | Should -Be 'skipped'
+            $result.Evaluated | Should -Be 0
+            $result.Issues.Count | Should -Be 1
+            $result.Issues[0].Code     | Should -Be 'avm.tf.policy-not-evaluated'
+            $result.Issues[0].Severity | Should -Be 'warning'
+            $result.Issues[0].Message  | Should -Match 'evaluated 0 policies'
+        }
+
+        It 'reports skipped when every policy is evaluated but nothing can match (the --all-namespaces trap)' {
+            # Adding --all-namespaces without the plan-JSON path moves the engine
+            # from 0 evaluated to 260 vacuously passed. That must not read as pass.
+            $json = '[{"filename":"main.tf","namespace":"avmsec","successes":100},{"filename":"main.tf","namespace":"Azure_Proactive_Resiliency_Library_v2","successes":160}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status    | Should -Be 'skipped'
+            $result.Evaluated | Should -Be 260
+            $result.Issues[0].Code    | Should -Be 'avm.tf.policy-not-evaluated'
+            $result.Issues[0].Message | Should -Match "evaluated 260 policies from the 'hcl2' parser"
+        }
+
+        It 'still reports fail when a policy genuinely fires' {
+            $json = '[{"filename":"main.tf","namespace":"avmsec","successes":259,"failures":[{"msg":"AVM_SEC_2_1: CMK required"}]}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = $J; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status    | Should -Be 'fail'
+            $result.Evaluated | Should -Be 260
+            @($result.Issues | Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 0
+        }
+
+        It 'does not skip when only warnings fire, because a rule that fired proves the input matched' {
+            $json = '[{"filename":"main.tf","namespace":"avmsec","successes":259,"warnings":[{"msg":"advisory"}]}]'
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+                param($C, $J)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/conftest' } }
+                Mock Resolve-AvmPinnedAsset { param($Name, $Asset) [pscustomobject]@{ Name = $Name; Path = "/fake/cache/$Name"; Action = 'cache-hit' } }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' } }
+                Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+
+            $result.Status | Should -Be 'pass'
+            @($result.Issues | Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 0
         }
     }
 }

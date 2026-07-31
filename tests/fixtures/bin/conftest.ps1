@@ -4,10 +4,13 @@
 # Handles only the verbs Invoke-AvmTerraformCheckPolicy actually invokes:
 # `--version` (so Resolve-AvmTool -AllowPathFallback succeeds) and `test`
 # (which the engine drives as `test --policy <APRL> --policy <AVMSEC>
-# --output json --parser hcl2 .`). The happy "no issues" path emits an
-# empty JSON array on stdout; integration consumers that need failures
-# can swap the stub via a future $env:AVM_STUB_CONFTEST_OUTPUT escape
-# hatch (not needed for the first consumer).
+# --output json --parser hcl2 .`).
+#
+# Default `test` output is an empty JSON array, which is what real conftest
+# emits today for the pinned bundles under --parser hcl2: zero policies
+# evaluated. Set $env:AVM_STUB_CONFTEST_OUTPUT to a JSON document to drive
+# any other shape; the stub then exits 1 if that document carries failures,
+# matching real conftest's exit contract.
 
 if ($args.Count -eq 0) {
     Write-Error 'stub conftest: no arguments'
@@ -20,9 +23,29 @@ switch ($args[0]) {
         exit 0
     }
     'test' {
-        # Empty JSON array == zero per-file records == zero issues.
-        # Invoke-AvmTerraformCheckPolicy parses this as Status='pass'.
-        Write-Output '[]'
+        $override = $env:AVM_STUB_CONFTEST_OUTPUT
+        if ([string]::IsNullOrWhiteSpace($override)) {
+            # Empty JSON array == zero per-file records == zero policies
+            # evaluated, which Invoke-AvmTerraformCheckPolicy reports as
+            # Status='skipped' rather than a pass it cannot justify.
+            Write-Output '[]'
+            exit 0
+        }
+
+        Write-Output $override
+        $hasFailures = $false
+        try {
+            foreach ($record in @($override | ConvertFrom-Json -ErrorAction Stop)) {
+                if ($record -and $record.PSObject.Properties['failures'] -and $record.failures) {
+                    $hasFailures = $true
+                }
+            }
+        }
+        catch {
+            Write-Error "stub conftest: AVM_STUB_CONFTEST_OUTPUT is not valid JSON: $($_.Exception.Message)"
+            exit 64
+        }
+        if ($hasFailures) { exit 1 }
         exit 0
     }
     default {
