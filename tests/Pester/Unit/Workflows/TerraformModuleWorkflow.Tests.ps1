@@ -5,6 +5,10 @@ Describe 'terraform-module reusable workflow' {
     BeforeAll {
         $script:workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
         $script:workflow = Get-Content -LiteralPath $script:workflowPath -Raw
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
+        $script:e2eJob = $jobMatch.Value
     }
 
     It 'passes the non-secret subscription ID as a job output without masking it' {
@@ -37,6 +41,23 @@ Describe 'terraform-module reusable workflow' {
     It 'keeps the e2e environment static so one approval releases every matrix leg' {
         $script:workflow | Should -Match 'environment:\s*examples-test'
         $script:workflow | Should -Not -Match 'environment:\s*.*\$\{\{\s*matrix\.'
+    }
+
+    It 'gates the whole e2e matrix behind a single pending deployment' {
+        # Environment protection is evaluated when a job becomes ready to dispatch,
+        # not when the run starts. max-parallel releases the legs in waves, and each
+        # wave raises a fresh pending deployment - so N legs become ceil(N/limit)
+        # approvals. It is exactly the lever someone reaches for when the
+        # subscription round-robin is not enough to stay inside Azure quota.
+        $script:e2eJob | Should -Not -Match '(?m)^\s*max-parallel\s*:'
+        ([regex]::Matches($script:e2eJob, '(?m)^\s*strategy:\s*$')).Count | Should -Be 1
+    }
+
+    It 'declares the e2e approval gate on exactly one job' {
+        # A second job on examples-test would become ready at a different time and
+        # raise its own pending deployment, which one approval would not release.
+        ([regex]::Matches($script:workflow, '(?m)^\s*environment:\s*examples-test\s*$')).Count | Should -Be 1
+        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
     }
 
     It 'round-robins the subscription across matrix legs using strategy.job-index' {

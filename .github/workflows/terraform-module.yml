@@ -516,6 +516,10 @@ jobs:
       # Every failing example must be reported, and every deployed example must
       # be destroyed - not just the first one to fail.
       fail-fast: false
+      # Do NOT add max-parallel here. Environment protection is evaluated when a
+      # job becomes ready to dispatch, so limiting concurrency releases the legs
+      # in waves and each wave raises its own approval prompt. Stay inside Azure
+      # quota with the subscription round-robin below instead.
       matrix:
         example: ${{ fromJson(needs.discover-examples.outputs.examples) }}
     steps:
