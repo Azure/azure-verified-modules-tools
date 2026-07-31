@@ -111,11 +111,11 @@ function Invoke-AvmTerraformDocs {
 
         Drift mode (-CheckDrift, used by pr-check): terraform-docs has no
         dry-run for inject/replace mode, so generation still runs and any
-        README it rewrote becomes a Status='fail' Issue - the same
-        write-then-flag contract the mapotf transform uses. The contract is
-        "a module that already ran pre-commit has an up-to-date README"; a
-        non-empty change set in CI therefore means the author did not
-        regenerate the docs.
+        README it rewrote becomes a Status='fail' Issue. The generated content
+        is then rolled back, so drift mode leaves the working copy
+        byte-identical. The contract is "a module that already ran pre-commit
+        has an up-to-date README"; a non-empty change set in CI therefore means
+        the author did not regenerate the docs.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -190,48 +190,64 @@ function Invoke-AvmTerraformDocs {
 
     $changed = [System.Collections.Generic.List[string]]::new()
 
-    foreach ($target in $targets) {
-        $readmePath = Join-Path $target.Dir $OutputFile
-        $beforeHash = if (Test-Path -LiteralPath $readmePath) {
-            (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
-        }
-        else {
-            ''
-        }
+    # Drift mode must not mutate the caller's working copy, but terraform-docs
+    # has no dry-run for inject/replace mode. Snapshot every README up front and
+    # restore it in the finally, so generation still runs (and still reports
+    # drift) while the tree is left byte-identical even if the tool throws.
+    $snapshot = $null
+    if ($CheckDrift) {
+        $snapshot = Get-AvmFileSnapshot -Path @($targets | ForEach-Object { Join-Path $_.Dir $OutputFile })
+    }
 
-        $positional = [System.IO.Path]::GetRelativePath($root, $target.Dir)
+    try {
+        foreach ($target in $targets) {
+            $readmePath = Join-Path $target.Dir $OutputFile
+            $beforeHash = if (Test-Path -LiteralPath $readmePath) {
+                (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
+            }
+            else {
+                ''
+            }
 
-        if ($target.Config) {
-            $configArg = [System.IO.Path]::GetRelativePath($root, $target.Config)
-            $argumentList = @('--config', $configArg, $positional)
-        }
-        else {
-            $argumentList = @('markdown', 'table', '--output-file', $OutputFile, '--output-mode', 'inject', $positional)
-        }
+            $positional = [System.IO.Path]::GetRelativePath($root, $target.Dir)
 
-        $result = Invoke-AvmProcess `
-            -FilePath $tool.Path `
-            -ArgumentList $argumentList `
-            -WorkingDirectory $root `
-            -IgnoreExitCode
+            if ($target.Config) {
+                $configArg = [System.IO.Path]::GetRelativePath($root, $target.Config)
+                $argumentList = @('--config', $configArg, $positional)
+            }
+            else {
+                $argumentList = @('markdown', 'table', '--output-file', $OutputFile, '--output-mode', 'inject', $positional)
+            }
 
-        if ($result.ExitCode -ne 0) {
-            $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
-            $tail = if ($stderr) { ": $stderr" } else { '.' }
-            throw [AvmProcessException]::new(
-                ('terraform-docs exited with code {0} for {1}{2}' -f $result.ExitCode, $positional, $tail))
-        }
+            $result = Invoke-AvmProcess `
+                -FilePath $tool.Path `
+                -ArgumentList $argumentList `
+                -WorkingDirectory $root `
+                -IgnoreExitCode
 
-        $afterHash = if (Test-Path -LiteralPath $readmePath) {
-            (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
-        }
-        else {
-            ''
-        }
+            if ($result.ExitCode -ne 0) {
+                $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
+                $tail = if ($stderr) { ": $stderr" } else { '.' }
+                throw [AvmProcessException]::new(
+                    ('terraform-docs exited with code {0} for {1}{2}' -f $result.ExitCode, $positional, $tail))
+            }
 
-        if ($beforeHash -ne $afterHash) {
-            $relative = [System.IO.Path]::GetRelativePath($root, $readmePath).Replace('\', '/')
-            $changed.Add($relative)
+            $afterHash = if (Test-Path -LiteralPath $readmePath) {
+                (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
+            }
+            else {
+                ''
+            }
+
+            if ($beforeHash -ne $afterHash) {
+                $relative = [System.IO.Path]::GetRelativePath($root, $readmePath).Replace('\', '/')
+                $changed.Add($relative)
+            }
+        }
+    }
+    finally {
+        if ($null -ne $snapshot) {
+            Restore-AvmFileSnapshot -Snapshot $snapshot
         }
     }
 

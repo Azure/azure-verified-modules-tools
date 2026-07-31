@@ -137,11 +137,13 @@ function Invoke-AvmTerraformTransform {
         'Changed' field (relative paths of every '*.tf' mapotf added, removed
         or modified).
 
-        Drift mode (-CheckDrift, used by pr-check): the transform still runs,
-        but any 'Changed' file becomes a Status='fail' Issue. The contract is
-        "a module that already ran pre-commit has nothing for mapotf to
-        change"; a non-empty change set in CI therefore means the author did
-        not run pre-commit, and pr-check flags it.
+        Drift mode (-CheckDrift, used by pr-check): mapotf has no dry-run, so
+        the transform still runs and any 'Changed' file becomes a Status='fail'
+        Issue. The transformed content is then rolled back, so drift mode leaves
+        the working copy byte-identical. The contract is "a module that already
+        ran pre-commit has nothing for mapotf to change"; a non-empty change set
+        in CI therefore means the author did not run pre-commit, and pr-check
+        flags it.
 
         mapotf exit codes: 0 = success; anything else is surfaced as
         AvmProcessException. A missing mapotf binary (AvmToolException) or a
@@ -207,62 +209,79 @@ function Invoke-AvmTerraformTransform {
         $before[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
     }
 
-    # mapotf reads provider schemas (order_resource_attrs et al.) by shelling
-    # out to terraform, which it finds by name on PATH. GitHub-hosted runners
-    # no longer ship terraform on PATH, so resolve the pinned terraform the
-    # same way as mapotf (managed cache, not a stray PATH binary) and prepend
-    # its directory to PATH for the mapotf subprocess. The override propagates
-    # to mapotf's terraform grandchild. A missing terraform throws
-    # AvmToolException, which the chain surfaces as 'skipped' just like a
-    # missing mapotf binary.
-    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
-    $mapotfEnv = New-AvmToolPathEnvironment `
-        -ToolPath $terraform.Path `
-        -ToolName 'terraform'
-
-    $transform = Invoke-AvmProcess `
-        -FilePath $tool.Path `
-        -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
-        -WorkingDirectory $Context.Root `
-        -EnvVars $mapotfEnv `
-        -IgnoreExitCode
-    if ($transform.ExitCode -ne 0) {
-        $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
-        $tail = if ($stderr) { ": $stderr" } else { '.' }
-        throw [AvmProcessException]::new(
-            ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
+    # Drift mode must not mutate the caller's working copy. mapotf has no
+    # dry-run, so snapshot every '*.tf' up front and roll back in the finally -
+    # drift is still computed from the post-transform tree, but the tree is left
+    # byte-identical even if mapotf throws part-way through.
+    $snapshot = $null
+    if ($CheckDrift) {
+        $snapshot = Get-AvmFileSnapshot -Path @($beforeFiles | ForEach-Object { $_.FullName })
     }
 
-    $clean = Invoke-AvmProcess `
-        -FilePath $tool.Path `
-        -ArgumentList @('clean-backup', '--tf-dir', $Context.Root) `
-        -WorkingDirectory $Context.Root `
-        -EnvVars $mapotfEnv `
-        -IgnoreExitCode
-    if ($clean.ExitCode -ne 0) {
-        $stderr = if ($clean.StdErr) { $clean.StdErr.Trim() } else { '' }
-        $tail = if ($stderr) { ": $stderr" } else { '.' }
-        throw [AvmProcessException]::new(
-            ('mapotf clean-backup exited with code {0}{1}' -f $clean.ExitCode, $tail))
-    }
+    try {
+        # mapotf reads provider schemas (order_resource_attrs et al.) by shelling
+        # out to terraform, which it finds by name on PATH. GitHub-hosted runners
+        # no longer ship terraform on PATH, so resolve the pinned terraform the
+        # same way as mapotf (managed cache, not a stray PATH binary) and prepend
+        # its directory to PATH for the mapotf subprocess. The override propagates
+        # to mapotf's terraform grandchild. A missing terraform throws
+        # AvmToolException, which the chain surfaces as 'skipped' just like a
+        # missing mapotf binary.
+        $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+        $mapotfEnv = New-AvmToolPathEnvironment `
+            -ToolPath $terraform.Path `
+            -ToolName 'terraform'
 
-    $afterFiles = Get-AvmTerraformFile -Root $Context.Root
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
-    $changed = New-Object System.Collections.Generic.List[string]
-    foreach ($f in $afterFiles) {
-        $null = $seen.Add($f.FullName)
-        $rel = [System.IO.Path]::GetRelativePath($Context.Root, $f.FullName)
-        $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
-        if (-not $before.ContainsKey($f.FullName)) {
-            $changed.Add($rel)
+        $transform = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
+            -WorkingDirectory $Context.Root `
+            -EnvVars $mapotfEnv `
+            -IgnoreExitCode
+        if ($transform.ExitCode -ne 0) {
+            $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
+            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            throw [AvmProcessException]::new(
+                ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
         }
-        elseif ($before[$f.FullName] -ne $hash) {
-            $changed.Add($rel)
+
+        $clean = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList @('clean-backup', '--tf-dir', $Context.Root) `
+            -WorkingDirectory $Context.Root `
+            -EnvVars $mapotfEnv `
+            -IgnoreExitCode
+        if ($clean.ExitCode -ne 0) {
+            $stderr = if ($clean.StdErr) { $clean.StdErr.Trim() } else { '' }
+            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            throw [AvmProcessException]::new(
+                ('mapotf clean-backup exited with code {0}{1}' -f $clean.ExitCode, $tail))
+        }
+
+        $afterFiles = Get-AvmTerraformFile -Root $Context.Root
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        $changed = New-Object System.Collections.Generic.List[string]
+        foreach ($f in $afterFiles) {
+            $null = $seen.Add($f.FullName)
+            $rel = [System.IO.Path]::GetRelativePath($Context.Root, $f.FullName)
+            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+            if (-not $before.ContainsKey($f.FullName)) {
+                $changed.Add($rel)
+            }
+            elseif ($before[$f.FullName] -ne $hash) {
+                $changed.Add($rel)
+            }
+        }
+        foreach ($key in $before.Keys) {
+            if (-not $seen.Contains($key)) {
+                $changed.Add([System.IO.Path]::GetRelativePath($Context.Root, $key))
+            }
         }
     }
-    foreach ($key in $before.Keys) {
-        if (-not $seen.Contains($key)) {
-            $changed.Add([System.IO.Path]::GetRelativePath($Context.Root, $key))
+    finally {
+        if ($null -ne $snapshot) {
+            $current = @(Get-AvmTerraformFile -Root $Context.Root | ForEach-Object { $_.FullName })
+            Restore-AvmFileSnapshot -Snapshot $snapshot -CurrentPath $current
         }
     }
 

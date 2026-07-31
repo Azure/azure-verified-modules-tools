@@ -306,4 +306,99 @@ Describe 'Invoke-AvmTerraformDocs' {
         $result.Status | Should -Be 'pass'
         $result.Issues.Count | Should -Be 0
     }
+
+    It 'leaves the README byte-identical after a drift-mode run that found drift' {
+        $ctx = $script:context
+        $readme = $script:readme
+        $originalBytes = [System.IO.File]::ReadAllBytes($readme)
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $readme } {
+            param($C, $R)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                Add-Content -LiteralPath $R -Value "`n| name | description |`n"
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformDocs -Context $C -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        [System.IO.File]::ReadAllBytes($readme) | Should -Be $originalBytes
+    }
+
+    It 'removes a README that drift mode created' {
+        $ctx = $script:context
+        $readme = $script:readme
+        Remove-Item -LiteralPath $readme -Force
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $readme } {
+            param($C, $R)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                Set-Content -LiteralPath $R -Value 'generated' -Encoding utf8
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformDocs -Context $C -CheckDrift
+        }
+
+        Test-Path -LiteralPath $readme | Should -BeFalse
+    }
+
+    It 'restores the README even when terraform-docs fails part-way through' {
+        $ctx = $script:context
+        $readme = $script:readme
+        $originalBytes = [System.IO.File]::ReadAllBytes($readme)
+
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $readme } {
+                param($C, $R)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/terraform-docs'
+                    }
+                }
+                Mock Invoke-AvmProcess {
+                    Add-Content -LiteralPath $R -Value "`nhalf-written"
+                    [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'boom' }
+                }
+                Invoke-AvmTerraformDocs -Context $C -CheckDrift
+            }
+        } | Should -Throw
+
+        [System.IO.File]::ReadAllBytes($readme) | Should -Be $originalBytes
+    }
+
+    It 'still rewrites the README when drift mode is off' {
+        $ctx = $script:context
+        $readme = $script:readme
+        $originalBytes = [System.IO.File]::ReadAllBytes($readme)
+
+        $null = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; R = $readme } {
+            param($C, $R)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform-docs'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                Add-Content -LiteralPath $R -Value "`n| name | description |`n"
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformDocs -Context $C
+        }
+
+        [System.IO.File]::ReadAllBytes($readme) | Should -Not -Be $originalBytes
+    }
 }
