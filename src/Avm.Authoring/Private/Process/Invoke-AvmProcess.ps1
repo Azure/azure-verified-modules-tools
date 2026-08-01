@@ -315,6 +315,10 @@ function Invoke-AvmProcess {
     if (-not $IgnoreExitCode -and $exitCode -ne 0) {
         $argDisplay = if ($ArgumentList.Count -gt 0) { ' ' + ($ArgumentList -join ' ') } else { '' }
         $message = "Process exited with code $exitCode`: $FilePath$argDisplay"
+        $diagnostic = Get-AvmProcessFailureDetail -StdOut $stdOut -StdErr $stdErr
+        if (-not [string]::IsNullOrWhiteSpace($diagnostic)) {
+            $message = $message + [Environment]::NewLine + $diagnostic
+        }
         throw [AvmProcessException]::new($message, $FilePath, $ArgumentList, $exitCode, $stdOut, $stdErr)
     }
 
@@ -353,4 +357,66 @@ function Get-AvmProcessReplayLine {
     $lines.AddRange($body)
     $lines.Add('  ---- end captured output ----')
     return $lines.ToArray()
+}
+
+function Get-AvmProcessFailureDetail {
+    <#
+    .SYNOPSIS
+        Render the diagnostic a failing process wrote, for the exception message.
+
+    .DESCRIPTION
+        F57: the exit code and argv say a tool failed but never say why. The
+        replay written by Get-AvmProcessReplayLine only fires for narrated
+        invocations, so a quiet one - terraform fmt, for example - surfaced
+        nothing but 'Process exited with code 2: <path> fmt ...' while the file
+        name, line number and cause sat unread on the exception.
+
+        Standard error is preferred because that is where a tool reports why it
+        failed, with standard output as the fallback for tools that report there
+        instead. Output is emitted verbatim so the reader sees what the tool
+        actually said, minus blank lines, and is bounded so a runaway log cannot
+        bury the summary.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $StdOut = '',
+
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $StdErr = '',
+
+        [int] $MaxLines = 20,
+
+        [int] $MaxChars = 2000
+    )
+
+    Set-StrictMode -Version 3.0
+
+    foreach ($chunk in @($StdErr, $StdOut)) {
+        if ([string]::IsNullOrWhiteSpace($chunk)) { continue }
+
+        $lines = @($chunk -split "`r?`n" |
+                ForEach-Object { $_.TrimEnd() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -eq 0) { continue }
+
+        $truncated = $lines.Count -gt $MaxLines
+        if ($truncated) { $lines = $lines[0..($MaxLines - 1)] }
+
+        $text = ($lines | ForEach-Object { '  ' + $_ }) -join [Environment]::NewLine
+        if ($text.Length -gt $MaxChars) {
+            $text = $text.Substring(0, $MaxChars)
+            $truncated = $true
+        }
+        if ($truncated) {
+            $text = $text + [Environment]::NewLine + '  ... output truncated ...'
+        }
+
+        return $text
+    }
+
+    return ''
 }
