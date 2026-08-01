@@ -1756,3 +1756,116 @@ file in the `main` namespace; `[]` is what you see when it *crashes*. The stub
 was modelling the bug, so the component tier could not have caught it. Measure
 what the real tool emits before encoding it in a stub, and if a fixture comment
 states a fact about the real world, it needs the same evidence as a finding.
+
+### L.12 Capturing a diagnostic is not reporting it
+
+`Invoke-AvmProcess` read a failing tool's standard error, stored it, attached it
+to the exception it threw — and printed none of it. A typo in a `.tf` file
+produced this and nothing more:
+
+```
+[error] format
+  Process exited with code 2: C:\...\terraform.exe fmt -recursive -list=true ...
+```
+
+while the answer sat on the exception object, unread:
+
+```
+Error: Argument or block definition required
+  on broken.tf line 2, in this "is" "not" "valid" "hcl":
+   2: this is not valid hcl {{{
+```
+
+Nothing was missing from the capture. What was missing was a path from the
+capture to a stream the user reads. The code that *would* have printed it existed
+too, and was gated on narration — `terraform fmt` is quiet, so the gate was never
+open on the one invocation that needed it.
+
+Two things follow. First, a field that is written and never read is not
+diagnostics, it is dead weight, and a review that checks the tool's output is
+captured has checked the easy half. Second, the gate on the rendering path is
+where the defect lives: a conditional that is true for the loud cases and false
+for the quiet ones will pass every test written against a loud tool.
+
+The test to apply: **take the field you are relying on and trace it to something
+a user sees.** If the trace ends at an assignment, or passes through a condition
+that the failing case turns off, the information does not exist as far as the
+user is concerned. Same class as L.3 — narration is not an annotation — one layer
+further in.
+
+### L.13 When ranking a hierarchy, the levels may need opposite weightings
+
+`pr-check` emits one GitHub Actions annotation per run, so it has to choose. It
+chose by step order, and a run with a lint nit and four broken unit tests
+annotated the nit — twelve `error` diagnostics carrying file, line and column
+produced nothing in the Files-changed view.
+
+The obvious repair is "prefer the more severe", applied everywhere. That is
+wrong, and it regresses F24b. The two levels are not the same kind of choice:
+
+| Level | Members are | So the rule is |
+| --- | --- | --- |
+| issues within one step | descriptions of **the same** failure | **position** dominates, severity breaks ties |
+| steps within one run | **different** problems | **severity** dominates, precision breaks ties |
+
+Within a step, terraform's positionless `test run 'apply' fail` scores `error`
+while the diagnostic beneath it — the one naming the assertion and the line —
+scores `error` too but carries a position. It is a restatement, not a second
+problem, so it must lose; ranking on severity first would headline it and undo
+F24b. Across steps, format drift and a broken test are genuinely different
+problems, and there the test must win even though drift also names a file.
+
+Encode the precedence in the arithmetic rather than in a comment, with
+non-overlapping weights, so no combination of the weaker term can outrank the
+stronger:
+
+```powershell
+# within a step: position outranks severity outright
+$score = (Get-AvmIssueSeverityWeight -Issue $issue)
+if ($positioned) { $score += 10 }
+
+# across steps: severity outranks precision outright
+return ((Get-AvmStepSeverityWeight -Step $Step) * 10) + $precision
+```
+
+Score an unrecognised severity in the middle, not at either end, so an engine
+that introduces a new name can neither silently outrank a real error nor lose to
+a nit.
+
+Two further traps sit inside this one. A step that short-circuits — `if
+($bestRank -eq $max) { break }` — cannot see a better candidate later in the
+list, and looks like an optimisation rather than a selection bug. And ranking
+alone is not enough: the lint step chose the *first positioned* issue, an `info`
+nit, while lint gates on `warning`. The annotation named a cause that could not
+have failed the step. **Whatever you select must be capable of being the
+reason**; check the selected item against the gate that fired.
+
+### L.14 A fixture that echoes the expectation cannot fail
+
+Three tests for L.12 asserted the tool's stderr reached the exception message.
+All three passed against the broken code.
+
+The fixture launched the child process as `pwsh -Command "<script that writes the
+expected string>"`, and the exception message embeds the full command line. So
+the expected string was present in the message whether or not the fix worked —
+carried there by the argv, not by the capture. Rewritten with
+`-EncodedCommand`, the script is base64 in the argv and the assertion has only
+one way to pass.
+
+The same round produced a second instance in the mutation harness. Its guard
+checked the source contained the line it was about to replace:
+
+```powershell
+if ($src -notlike "*$old*") { ... }      # $old contains [int] and [string]
+```
+
+PowerShell's `-like` treats `[` and `]` as character-class metacharacters, so the
+pattern never matched any real code and the guard was permanently tripped. Use
+`.Contains()` for literal substring checks against source. A harness that can
+report a clean sweep when it matched nothing is worse than no harness, so make
+the no-match branch say so explicitly rather than fall through.
+
+Both are the L.9 shape stated positively: an assertion can pass for a reason
+unrelated to the behaviour under test. The check is to **mutate the thing you
+believe you are measuring and confirm the test goes red.** If it stays green,
+the assertion is reading a different channel than you think it is.
