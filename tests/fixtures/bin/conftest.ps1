@@ -1,17 +1,8 @@
 # AVM test-only stub for `conftest`. Pinned to avm.pins version 0.68.2 so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
-# Handles only the verbs Invoke-AvmTerraformCheckPolicy actually invokes:
-# `--version` (so Resolve-AvmTool -AllowPathFallback succeeds) and `test`
-# (which the engine drives as `test --policy <APRL> --policy <AVMSEC>
-# --output json --parser hcl2 .`).
-#
-# Default `test` output mirrors what real conftest 0.68.2 emits for the pinned
-# bundles under --parser hcl2: one record per input file in the default 'main'
-# namespace with successes=0, because no bundled rule declares `package main`.
-# The records are built by enumerating the working directory, so the stub also
-# witnesses that the engine stages only Terraform sources (F48) - a real repo's
-# .gitignore reaching conftest aborts it before any policy loads.
+# Handles only `--version` and the plan-JSON `test` invocation used by the
+# Terraform policy engine.
 # Set $env:AVM_STUB_CONFTEST_OUTPUT to a JSON document to drive any other shape;
 # the stub then exits 1 if that document carries failures, matching real
 # conftest's exit contract.
@@ -29,27 +20,38 @@ switch ($args[0]) {
     'test' {
         $override = $env:AVM_STUB_CONFTEST_OUTPUT
         if ([string]::IsNullOrWhiteSpace($override)) {
-            $inputs = @(Get-ChildItem -LiteralPath (Get-Location).Path -Recurse -File -ErrorAction SilentlyContinue |
-                    ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName).Replace('\', '/') } |
-                    Sort-Object)
-            # Real conftest aborts in 'parse configurations' on the first file the
-            # HCL parser cannot read, emitting nothing on stdout and exiting 1.
-            $unparseable = @($inputs | Where-Object { $_ -notmatch '\.(tf|tfvars)$' })
-            if ($unparseable.Count -gt 0) {
-                [Console]::Error.WriteLine(('Error: running test: parse configurations: parser unmarshal: convert to bytes: parse config: [:1,1-2: Argument or block definition required], path: {0}' -f $unparseable[0]))
+            if ($args -notcontains '--all-namespaces' -or $args[-1] -ne 'tfplan.json') {
+                [Console]::Error.WriteLine('stub conftest: expected --all-namespaces and tfplan.json input')
                 exit 1
             }
-            $records = @($inputs | ForEach-Object {
-                    [pscustomobject][ordered]@{ filename = $_; namespace = 'main'; successes = 0 }
-                })
-            Write-Output (ConvertTo-Json -InputObject $records -Depth 4 -AsArray -Compress)
+            $namespace = if (($args -join ' ') -match '(?i)(^|[\\/])avmsec($|[\\/ ])') {
+                'avmsec'
+            }
+            else {
+                'Azure_Proactive_Resiliency_Library_v2'
+            }
+            Write-Output (ConvertTo-Json -InputObject ([pscustomobject][ordered]@{
+                        filename  = 'tfplan.json'
+                        namespace = $namespace
+                        successes = 130
+                    }) -Depth 4 -Compress)
             exit 0
         }
 
-        Write-Output $override
+        $records = @($override | ConvertFrom-Json -ErrorAction Stop)
+        $isAvmsec = ($args -join ' ') -match '(?i)(^|[\\/])avmsec($|[\\/ ])'
+        $records = @($records | Where-Object {
+                if ($isAvmsec) {
+                    $_.namespace -eq 'avmsec'
+                }
+                else {
+                    $_.namespace -ne 'avmsec'
+                }
+            })
+        Write-Output (ConvertTo-Json -InputObject $records -Depth 8 -Compress)
         $hasFailures = $false
         try {
-            foreach ($record in @($override | ConvertFrom-Json -ErrorAction Stop)) {
+            foreach ($record in $records) {
                 if ($record -and $record.PSObject.Properties['failures'] -and $record.failures) {
                     $hasFailures = $true
                 }

@@ -228,7 +228,7 @@ exactly this status today.
 | `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented).                                                                          |
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → init → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `setup.sh` / `teardown.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
-| `avm check policy`    | `conftest`              | `test --policy <APRL> --policy <AVMSEC> [--policy <exceptions>...] --output json --parser hcl2 .` from `cwd=<root>`          |   ✅   | Needs `avm-policy-aprl` + `avm-policy-avmsec` declared in `.avm/config.json` (see [§ 4](#4-pinned-asset-config)). Otherwise reports `skipped`.   |
+| `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): hooks → init → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. Requires provider credentials for planning. |
 | `avm transform`       | `mapotf`                | _engine stub, `AvmConfigurationException` → `skipped`_                                                                       |   ❌   | Blocked: `Azure/mapotf` ships no GitHub binary releases; see [§ 6](#6-whats-not-migrated-yet).                                                   |
 | `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
@@ -262,15 +262,6 @@ status here will lag the canonical checklist by at most one slice.
   runs an optional `pre.ps1` / `post.ps1` per example. Setup hooks must
   be PowerShell — a `setup.sh` / `teardown.sh` is rejected with an
   `AvmConfigurationException`.
-- **Default APRL / AVMSEC descriptors bundled with the module** — for
-  now both must be declared per-repo in `.avm/config.json`. Bundling
-  the canonical Azure-owned descriptors is a deliberate follow-up
-  slice.
-- **`terraform plan` → conftest** — today `avm check policy` runs
-  against the HCL source via `--parser hcl2`. The plan-JSON path
-  (`terraform plan -out=tfplan && terraform show -json | conftest test --parser json`)
-  is a follow-up; it needs real provider auth, so it's out of scope
-  for the unit-tier coverage today.
 - **Governance-side fleet automation** — three workflows in
   `Azure/avm-terraform-governance` shell out to the repo-local `./avm`
   shim rather than to this module: `dependabot-precommit.yml` (added

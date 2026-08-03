@@ -21,9 +21,8 @@
 #     workflow adds `Add-MpPreference -ExclusionPath` on its Windows leg so CI
 #     gets a real pass instead of a skip.
 #
-# No Azure credentials are required: the `test` step runs only
-# `terraform init -backend=false` + `terraform validate -json` (no plan /
-# apply), so even the azurerm fixture validates offline.
+# The integration workflow provides Azure OIDC credentials because pr-check
+# policy evaluation now creates a plan for every runnable example.
 
 Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
@@ -242,46 +241,24 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
-        It 'pr-check runs every step on a repo with no .avm/config.json, reports check policy as skipped, and resolves tools from the AVM cache' {
+        It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
-            # F07: check policy used to skip here because the fixture declared no
-            # APRL/AVMSEC bundles. The module now ships immutable descriptors in
-            # Resources/avm.pins.jsonc, so it must run on a clean repo.
-            #
-            # F46: it runs, but it cannot yet *check* anything. conftest is driven
-            # with --parser hcl2 and the pinned APRL/AVMSEC bundles declare no
-            # rules in conftest's default 'main' namespace, so zero policies are
-            # evaluated. This tier is the real-binary one, so it is the assertion
-            # that proves that against genuine conftest and genuine bundles --
-            # and it previously asserted 'pass', which is exactly how the defect
-            # survived a green suite. It must report 'skipped' until the
-            # plan-JSON input path lands, at which point this flips back to pass
-            # and the diagnostic below disappears.
+            # F59: genuine Terraform and Conftest must complete plan-JSON policy
+            # evaluation. Pin both the status and a positive evaluation count so
+            # an empty/vacuous result cannot satisfy the test.
             $policyStep = $result.Steps | Where-Object { $_.Step -eq 'check policy' }
             $policyStep | Should -Not -BeNullOrEmpty
-            $policyStep.Status | Should -Be 'skipped'
-            $policyStep.Result.Evaluated | Should -Be 0
-            $diagnostics = @($policyStep.Result.Issues |
-                    Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
-            $diagnostics.Count | Should -Be 1
-            # F48: Evaluated=0 is produced by two different causes - the namespace
-            # vacuity below, and conftest aborting in 'parse configurations' before
-            # loading a policy. Pinning the shared value ratified the crash for as
-            # long as it existed, so pin the cause: 'main' can only be reported by
-            # a run that completed.
-            $diagnostics[0].Message | Should -Match 'namespaces seen: main'
-            @($policyStep.Result.Issues |
-                    Where-Object { $_.Code -eq 'avm.tf.policy-run-failed' }).Count |
-                Should -Be 0
+            $policyStep.Status | Should -Be 'pass'
+            $policyStep.Result.Evaluated | Should -BeGreaterThan 0
+            @($policyStep.Result.Issues).Count | Should -Be 0
 
             foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
             ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,validate,unit test,docs'
-            # 'skipped' must not flip the gauntlet: a module is reported, not broken.
             $result.Status | Should -Be 'pass'
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state

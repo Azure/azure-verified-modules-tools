@@ -21,11 +21,11 @@ section when cutting a release.
 
 ### Added
 
-- `avm check policy` for Terraform: real `conftest` integration that runs the
-  pinned APRL + AVMSEC Rego bundles against the `terraform plan` JSON for each
-  example, with per-example `exceptions/*.rego` discovery. Bundles are
-  materialised on demand from the `pinned-assets.psd1` registry, sha256-verified
-  on first download, cached under `AVM_HOME`, and re-used offline.
+- `avm check policy` for Terraform now evaluates each runnable `examples/*`
+  directory against real `terraform show -json` output. The lifecycle honours
+  `.e2eignore`, `pre.sh` / `pre.ps1`, `.env`, `post.sh` / `post.ps1`, pinned
+  default exemptions, and example-local `exceptions/`, then runs the pinned
+  APRL and AVMSEC bundles separately with all namespaces enabled.
 - `pinned-assets.psd1` configuration reader (`Get-AvmPinnedAsset`) and cache
   materialiser (`Resolve-AvmPinnedAsset`) that honour `AVM_OFFLINE` and
   `AVM_MIRROR` and reuse the existing `Get-AvmFolder` cache layout.
@@ -59,6 +59,14 @@ section when cutting a release.
   `format → transform → lint → check policy → check convention → test → docs`
   for `pr-check`, with `skipped` semantics for stubbed engines).
 
+### Fixed
+
+- `avm check policy` no longer feeds raw HCL to policies designed for Terraform
+  plan JSON. The old path could not match a resource and therefore reported
+  `skipped` in every PR check. Policy evaluation now uses isolated per-example
+  plans, keeps each example's exceptions scoped locally, and has executable
+  failure coverage for both APRL and AVMSEC.
+
 ### Tests
 
 - Terraform engine stub harness under `tests/Pester/Integration/Terraform/`
@@ -85,7 +93,7 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
-## [0.1.8] - unreleased
+## [0.1.8] - 2026-08-03
 
 Log-fidelity round from post-release failure-path testing of `0.1.7` against the
 canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F57, F58). Both
