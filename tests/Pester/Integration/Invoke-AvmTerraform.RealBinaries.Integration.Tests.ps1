@@ -244,6 +244,17 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
+            & git -C $script:StagedModule init --quiet
+            if ($LASTEXITCODE -ne 0) { throw "git init failed with exit code $LASTEXITCODE." }
+            & git -C $script:StagedModule config user.name 'AVM Integration Tests'
+            if ($LASTEXITCODE -ne 0) { throw "git config user.name failed with exit code $LASTEXITCODE." }
+            & git -C $script:StagedModule config user.email 'avm-integration-tests@example.invalid'
+            if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE." }
+            & git -C $script:StagedModule add -A
+            if ($LASTEXITCODE -ne 0) { throw "git add failed with exit code $LASTEXITCODE." }
+            & git -C $script:StagedModule commit --quiet -m 'Initial fixture'
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE." }
+
             $result = Invoke-AvmPrCheck -Path $script:StagedModule -Ecosystem terraform
 
             # F59: genuine Terraform and Conftest must complete plan-JSON policy
