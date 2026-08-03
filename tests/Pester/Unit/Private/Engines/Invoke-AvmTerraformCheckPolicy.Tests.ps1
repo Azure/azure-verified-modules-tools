@@ -188,7 +188,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $calls.Count | Should -Be 4
         foreach ($call in $calls) {
             $call.Arguments[6] | Should -Be '--policy'
-            $call.Arguments[7] | Should -Be (Join-Path $call.WorkingDirectory 'exceptions')
+            $localExceptions = $call.Arguments[7]
+            $stageRoot = Split-Path -Path (Split-Path -Path $call.WorkingDirectory -Parent) -Parent
+            $localExceptions | Should -Be (Join-Path $call.WorkingDirectory 'exceptions')
+            $localExceptions | Should -BeLike "$stageRoot*"
+            $localExceptions | Should -Not -BeLike "$($script:moduleDir)*"
+            [System.IO.Path]::GetPathRoot($localExceptions) |
+                Should -Be ([System.IO.Path]::GetPathRoot($stageRoot))
         }
     }
 
