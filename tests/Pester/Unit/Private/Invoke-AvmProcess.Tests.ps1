@@ -373,4 +373,104 @@ Describe 'Invoke-AvmProcess' {
         $result.ExitCode | Should -Be 0
         $result.StdOut.TrimEnd() | Should -Be 'kept'
     }
+
+    It 'F57: renders the failing tool stderr in the exception message' {
+        # -EncodedCommand keeps the expected text out of argv. With -Command the
+        # script is echoed into the message verbatim, so the assertion would
+        # match the echoed command line whether or not the diagnostic was
+        # appended, and would pass against the unfixed code.
+        $exe = $script:pwsh
+        $script = "[Console]::Error.WriteLine('Argument or block definition required'); " +
+        "[Console]::Error.WriteLine('  on broken.tf line 2'); exit 2"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+        $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $encoded } {
+            param($E, $S)
+            try {
+                Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $S)
+                return $null
+            }
+            catch { return $_.Exception }
+        }
+        $err | Should -Not -BeNullOrEmpty
+        $err.Message | Should -Match 'Argument or block definition required'
+        $err.Message | Should -Match 'broken\.tf line 2'
+        # The prefix is load-bearing: callers and tests match on it.
+        $err.Message | Should -Match 'Process exited with code 2'
+    }
+
+    It 'F57: falls back to stdout when the tool reports the cause there' {
+        $exe = $script:pwsh
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("Write-Output 'stdout-only diagnostic'; exit 4"))
+        $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $encoded } {
+            param($E, $S)
+            try {
+                Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $S)
+                return $null
+            }
+            catch { return $_.Exception }
+        }
+        $err.Message | Should -Match 'stdout-only diagnostic'
+    }
+
+    It 'F57: leaves the message unchanged when the tool said nothing' {
+        $exe = $script:pwsh
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('exit 7'))
+        $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $encoded } {
+            param($E, $S)
+            try {
+                Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $S)
+                return $null
+            }
+            catch { return $_.Exception }
+        }
+        $err.Message | Should -Match 'Process exited with code 7'
+        $err.Message | Should -Not -Match '\r?\n'
+    }
+}
+
+Describe 'Get-AvmProcessFailureDetail' {
+    It 'F57: prefers stderr over stdout' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Get-AvmProcessFailureDetail -StdOut 'from-stdout' -StdErr 'from-stderr'
+        }
+        $text | Should -Match 'from-stderr'
+        $text | Should -Not -Match 'from-stdout'
+    }
+
+    It 'F57: falls back to stdout when stderr is blank' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Get-AvmProcessFailureDetail -StdOut 'from-stdout' -StdErr "  `n  "
+        }
+        $text | Should -Match 'from-stdout'
+    }
+
+    It 'F57: returns an empty string when both streams are empty' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Get-AvmProcessFailureDetail -StdOut '' -StdErr ''
+        }
+        $text | Should -BeExactly ''
+    }
+
+    It 'F57: drops blank lines and indents what it keeps' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Get-AvmProcessFailureDetail -StdErr "first`n`n`nsecond"
+        }
+        $lines = @($text -split "`r?`n")
+        $lines.Count | Should -Be 2
+        $lines[0] | Should -BeExactly '  first'
+        $lines[1] | Should -BeExactly '  second'
+    }
+
+    It 'F57: bounds a runaway diagnostic and says that it did' {
+        $text = InModuleScope 'Avm.Authoring' {
+            $flood = (1..500 | ForEach-Object { "line $_" }) -join "`n"
+            Get-AvmProcessFailureDetail -StdErr $flood -MaxLines 20
+        }
+        $lines = @($text -split "`r?`n")
+        # 20 kept plus the truncation marker.
+        $lines.Count | Should -Be 21
+        $text | Should -Match 'output truncated'
+        $text | Should -Match 'line 20'
+        $text | Should -Not -Match 'line 21\b'
+    }
 }

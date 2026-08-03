@@ -85,6 +85,39 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.1.8] - unreleased
+
+Log-fidelity round from post-release failure-path testing of `0.1.7` against the
+canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F57, F58). Both
+defects were found by deliberately injecting ordinary mistakes — a typo in a
+`.tf` file, and format drift alongside a broken test — and reading what the
+tooling actually reported.
+
+### Fixed
+
+- **Tool failures now report what the tool said.** `Invoke-AvmProcess` built its
+  exception message from the exit code and the command line alone, so a
+  malformed `.tf` file produced `Process exited with code 2: terraform.exe fmt
+  ...` and nothing else. The stderr was captured and attached to the exception
+  the whole time, but the only code that rendered it was gated on narration, and
+  `terraform fmt` does not narrate. The message now carries the tool's own
+  diagnostic — file, line and reason — bounded to 20 lines / 2000 characters.
+  This affects every managed tool: terraform, tflint, terraform-docs, conftest
+  and mapotf. (F57)
+- **The single GitHub Actions annotation now names the most severe failure, not
+  the first one.** `pr-check` emits one annotation per run (deliberately, so the
+  Files-changed view is not buried). It was selected by step order, so a run with
+  both `terraform_variable_separate` lint nits and four broken unit tests
+  annotated the nit and left twelve `error` diagnostics unannotated. Selection is
+  now severity-ranked. Within a step, position still wins so the F24b headline
+  behaviour is unchanged; across steps, severity wins so a real error outranks a
+  positioned style nit. (F58)
+
+  A second defect surfaced in the same measurement: within the lint step the
+  first positioned issue was chosen, which is an `info` finding — but lint gates
+  on `warning`, so the annotation named a cause that could not have failed the
+  step. Equal-precision issues are now tie-broken on severity.
+
 ## [0.1.7] - 2026-07-31
 
 Second remediation round from end-to-end testing released `0.1.6` against the
