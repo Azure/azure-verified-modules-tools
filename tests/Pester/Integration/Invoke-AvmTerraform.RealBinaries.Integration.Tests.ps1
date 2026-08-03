@@ -253,13 +253,6 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
                 Set-Content -LiteralPath $policyViolation -Value $compliantPolicyFixture -Encoding utf8NoBOM -NoNewline
             }
 
-            foreach ($hookName in @('pre.sh', 'post.sh')) {
-                $legacyHook = Join-Path $script:StagedModule 'examples' 'default' $hookName
-                if (Test-Path -LiteralPath $legacyHook -PathType Leaf) {
-                    Remove-Item -LiteralPath $legacyHook -Force
-                }
-            }
-
             & git -C $script:StagedModule init --quiet
             if ($LASTEXITCODE -ne 0) { throw "git init failed with exit code $LASTEXITCODE." }
             & git -C $script:StagedModule config user.name 'AVM Integration Tests'
@@ -314,13 +307,6 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
             $policyModule = Join-Path $script:WorkRoot "$name-policy-isolation"
             Copy-Item -LiteralPath $script:OriginalModule -Destination $policyModule -Recurse -Force
-
-            foreach ($hookName in @('pre.sh', 'post.sh')) {
-                $legacyHook = Join-Path $policyModule 'examples' 'default' $hookName
-                if (Test-Path -LiteralPath $legacyHook -PathType Leaf) {
-                    Remove-Item -LiteralPath $legacyHook -Force
-                }
-            }
 
             $unscoped = Invoke-AvmCheckPolicy -Path $policyModule -Ecosystem terraform
             $unscoped.Status | Should -Be 'fail'

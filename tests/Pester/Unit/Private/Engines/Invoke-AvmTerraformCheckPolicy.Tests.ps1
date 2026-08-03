@@ -239,7 +239,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $result.Issues[0].Message | Should -Be 'zone redundancy required'
     }
 
-    It 'runs post hooks when Terraform plan fails' {
+    It 'preserves a Terraform plan failure when the post hook also fails' {
         Set-Content -LiteralPath (Join-Path $script:exampleDir 'post.ps1') -Value '$null = 1' -Encoding utf8
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{
             C = $script:context
@@ -259,7 +259,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Mock Invoke-AvmProcess {
                 if ($ArgumentList[-1] -like '*post.ps1') {
                     $script:postRan = $true
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                    throw [AvmConfigurationException]::new('post hook failed')
                 }
                 if ($ArgumentList[0] -eq 'plan') {
                     throw [AvmProcessException]::new('terraform plan failed')
@@ -267,17 +267,23 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
 
-            $errorName = ''
+            $caught = $null
             try {
                 $null = Invoke-AvmTerraformCheckPolicy -Context $C
             }
             catch {
-                $errorName = $_.Exception.GetType().Name
+                $caught = $_
             }
-            [pscustomobject]@{ ErrorName = $errorName; PostRan = $script:postRan }
+            [pscustomobject]@{
+                ErrorName = $caught.Exception.GetType().Name
+                Message   = $caught.Exception.Message
+                PostRan   = $script:postRan
+            }
         }
 
         $probe.ErrorName | Should -Be 'AvmProcessException'
+        $probe.Message | Should -Match 'terraform plan failed'
+        $probe.Message | Should -Not -Match 'post hook failed'
         $probe.PostRan | Should -BeTrue
     }
 

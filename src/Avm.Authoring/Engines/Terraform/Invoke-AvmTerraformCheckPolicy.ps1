@@ -123,6 +123,7 @@ function Invoke-AvmTerraformCheckPolicy {
             $stagedExample = Join-Path $stageRoot $relativeExample
             $exampleName = Split-Path -Path $sourceExample -Leaf
             $envVars = @{}
+            $primaryError = $null
 
             try {
                 Invoke-AvmScriptHook `
@@ -201,12 +202,25 @@ function Invoke-AvmTerraformCheckPolicy {
                     }
                 }
             }
-            finally {
+            catch {
+                $primaryError = $_
+            }
+
+            try {
                 Invoke-AvmScriptHook `
                     -HookPath (Join-Path $stagedExample 'post.ps1') `
                     -WorkingDirectory $stagedExample `
                     -EnvVars $envVars `
                     -Label ("policy {0} post.ps1" -f $exampleName)
+            }
+            catch {
+                if ($null -eq $primaryError) {
+                    throw
+                }
+            }
+
+            if ($null -ne $primaryError) {
+                throw $primaryError
             }
         }
     }
