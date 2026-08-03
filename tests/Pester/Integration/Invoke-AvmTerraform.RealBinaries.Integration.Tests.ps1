@@ -244,6 +244,13 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
+            foreach ($hookName in @('pre.sh', 'post.sh')) {
+                $legacyHook = Join-Path $script:StagedModule 'examples' 'default' $hookName
+                if (Test-Path -LiteralPath $legacyHook -PathType Leaf) {
+                    Remove-Item -LiteralPath $legacyHook -Force
+                }
+            }
+
             & git -C $script:StagedModule init --quiet
             if ($LASTEXITCODE -ne 0) { throw "git init failed with exit code $LASTEXITCODE." }
             & git -C $script:StagedModule config user.name 'AVM Integration Tests'

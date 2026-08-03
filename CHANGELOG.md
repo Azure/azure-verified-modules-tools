@@ -95,7 +95,8 @@ section when cutting a release.
 - Real-binary pr-check fixtures are initialized as clean committed Git
   repositories before the gauntlet runs, so the integration tier exercises the
   restored dirty-worktree preflight instead of failing setup with "not a git
-  repository".
+  repository". Staged legacy `pre.sh` / `post.sh` duplicates are removed where
+  the canonical fixture already provides equivalent PowerShell hooks.
 - Terraform engine stub harness under `tests/Pester/Integration/Terraform/`
   that exercises `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck` end-to-end
   against stub `terraform` / `tflint` / `terraform-docs` / `conftest`
