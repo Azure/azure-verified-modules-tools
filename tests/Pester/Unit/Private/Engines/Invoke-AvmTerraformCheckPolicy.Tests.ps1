@@ -262,6 +262,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
             }
             Mock Get-AvmFolder { $Cache }
+            Mock Write-AvmLog
             Mock Invoke-AvmProcess {
                 if ($ArgumentList[-1] -like '*post.ps1') {
                     $script:postRan = $true
@@ -284,6 +285,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 ErrorName = $caught.Exception.GetType().Name
                 Message   = $caught.Exception.Message
                 PostRan   = $script:postRan
+            }
+
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and
+                $File -like '*examples*default*post.ps1' -and
+                $Message -match 'post hook failed' -and
+                $Message -match 'preserving the primary error'
             }
         }
 

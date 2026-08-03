@@ -54,7 +54,8 @@ section when cutting a release.
   Module authors must refactor `pre.sh`, `post.sh`, and `tflint-pre.sh` hooks
   to their corresponding PowerShell `.ps1` form.
 - Policy cleanup still attempts `post.ps1` after Terraform or Conftest fails,
-  but a post-hook failure no longer replaces the primary tool diagnostic.
+  but a post-hook failure no longer replaces the primary tool diagnostic and
+  is reported as a secondary warning.
 - The release workflow no longer requires `ModuleVersion` in the repo manifest
   to match the tag being released, and no longer fails when the tag has no
   CHANGELOG section. `./build.ps1 build -ReleaseVersion X.Y.Z` stamps the

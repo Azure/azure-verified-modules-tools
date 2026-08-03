@@ -217,6 +217,10 @@ function Invoke-AvmTerraformCheckPolicy {
                 if ($null -eq $primaryError) {
                     throw
                 }
+                Write-AvmLog `
+                    -Level Warning `
+                    -File (Join-Path $relativeExample 'post.ps1') `
+                    -Message ("Policy post hook also failed; preserving the primary error: {0}" -f $_.Exception.Message)
             }
 
             if ($null -ne $primaryError) {
