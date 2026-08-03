@@ -164,6 +164,15 @@ BeforeAll {
         'terraform.rc'
     )
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot '.gitignore') -Value (($gitignoreGlobs -join "`n") + "`n") -Encoding utf8NoBOM
+
+    & git -C $script:fixtureRoot init --quiet
+    & git -C $script:fixtureRoot config user.name 'AVM Component Tests'
+    & git -C $script:fixtureRoot config user.email 'avm-component-tests@example.invalid'
+    & git -C $script:fixtureRoot add -A
+    & git -C $script:fixtureRoot commit --quiet -m 'Initial fixture'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to initialize the component fixture Git repository (exit $LASTEXITCODE)."
+    }
 }
 
 AfterAll {
@@ -191,6 +200,12 @@ AfterAll {
     }
     else {
         $env:AVM_POLICY_LIBRARY_SHA256 = $script:originalPolicySha
+    }
+    $fixtureGitDir = Join-Path $script:fixtureRoot '.git'
+    if (Test-Path -LiteralPath $fixtureGitDir -PathType Container) {
+        Get-ChildItem -LiteralPath $fixtureGitDir -File -Recurse -Force |
+            ForEach-Object { $_.IsReadOnly = $false }
+        Remove-Item -LiteralPath $fixtureGitDir -Recurse -Force
     }
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
@@ -320,6 +335,11 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
     It 'pr-check rejects a shell hook with PowerShell migration guidance' {
         $shellHook = Join-Path $script:fixtureRoot 'examples' 'foo' 'tflint-pre.sh'
         Set-Content -LiteralPath $shellHook -Value '#!/bin/sh' -Encoding utf8NoBOM
+        & git -C $script:fixtureRoot add -- 'examples/foo/tflint-pre.sh'
+        & git -C $script:fixtureRoot commit --quiet -m 'Add shell hook fixture'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to commit the shell-hook fixture (exit $LASTEXITCODE)."
+        }
 
         try {
             $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
@@ -333,6 +353,32 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
         finally {
             Remove-Item -LiteralPath $shellHook -Force -ErrorAction SilentlyContinue
+            & git -C $script:fixtureRoot add -A
+            & git -C $script:fixtureRoot commit --quiet -m 'Remove shell hook fixture'
+        }
+    }
+
+    It 'pr-check rejects a dirty worktree before running its tool chain' {
+        $dirtyFile = Join-Path $script:fixtureRoot 'uncommitted.txt'
+        Set-Content -LiteralPath $dirtyFile -Value 'dirty' -Encoding utf8NoBOM
+
+        try {
+            $errorName = ''
+            $message = ''
+            try {
+                $null = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+            }
+            catch {
+                $errorName = $_.Exception.GetType().Name
+                $message = $_.Exception.Message
+            }
+
+            $errorName | Should -Be 'AvmConfigurationException'
+            $message | Should -Match 'clean working tree'
+            $message | Should -Match 'uncommitted\.txt'
+        }
+        finally {
+            Remove-Item -LiteralPath $dirtyFile -Force -ErrorAction SilentlyContinue
         }
     }
 

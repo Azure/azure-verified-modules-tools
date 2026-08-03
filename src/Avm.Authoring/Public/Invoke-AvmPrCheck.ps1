@@ -15,7 +15,8 @@ function Invoke-AvmPrCheck {
 
         This is the broader sibling of Invoke-AvmPreCommit. It adds the
         credentialled policy evaluation and read-only drift checks used to
-        verify that pre-commit output is current.
+        verify that pre-commit output is current. Before any step runs, git
+        status must report a clean working tree.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a
@@ -101,6 +102,7 @@ function Invoke-AvmPrCheck {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    Assert-AvmGitWorkingTreeClean -Path $context.Root
 
     $stepDefs = @(
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }

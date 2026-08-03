@@ -11,6 +11,12 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmPrCheck' {
+    BeforeEach {
+        InModuleScope 'Avm.Authoring' {
+            Mock Assert-AvmGitWorkingTreeClean {}
+        }
+    }
+
     It 'is exported by the manifest' {
         (Get-Command Invoke-AvmPrCheck -Module Avm.Authoring -ErrorAction Stop) |
             Should -Not -BeNullOrEmpty
@@ -21,6 +27,40 @@ Describe 'Invoke-AvmPrCheck' {
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'pr-check' }
         $entry          | Should -Not -BeNullOrEmpty
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPrCheck'
+    }
+
+    It 'rejects a dirty working tree before invoking any gauntlet step' {
+        $dir = Join-Path $TestDrive ("prcheck-dirty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Assert-AvmGitWorkingTreeClean {
+                throw [AvmConfigurationException]::new('Pr-check requires a clean working tree.')
+            }
+            Mock Invoke-AvmSync { throw 'No gauntlet step may run.' }
+
+            try {
+                $null = Invoke-AvmPrCheck -Path $D
+            }
+            catch {
+                [pscustomobject]@{
+                    ErrorName = $_.Exception.GetType().Name
+                    Message = $_.Exception.Message
+                }
+            }
+
+            Should -Invoke Assert-AvmGitWorkingTreeClean -Exactly 1 -ParameterFilter { $Path -eq $D }
+            Should -Invoke Invoke-AvmSync -Exactly 0
+        }
+
+        $probe.ErrorName | Should -Be 'AvmConfigurationException'
+        $probe.Message | Should -Match 'clean working tree'
     }
 
     It 'composes all eight steps in order on a passing chain; the terraform-only sync step is skipped for bicep' {

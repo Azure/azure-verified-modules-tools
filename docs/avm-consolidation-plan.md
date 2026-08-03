@@ -138,7 +138,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
 | `avm pre-commit`              | Composition (as wired today): `format` → `lint` → `test` → `docs`        | Composition (as wired today): `format` → `lint` → `test` → `docs`          |
-| `avm pr-check`                | Composition (as wired today): `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Composition (as wired today): same 8-step chain |
+| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 8-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |
 | `avm index update`            | `Invoke-AvmJsonModuleIndexGeneration.ps1`                                | Update governance index entry                                              |

@@ -70,6 +70,9 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm pr-check` now fails before its tool chain when `git status
+  --porcelain` reports tracked or untracked changes, restoring the legacy
+  clean-worktree preflight.
 - Repository-root `avm.tflint.override.hcl`,
   `avm.tflint_example.override.hcl`, and
   `avm.tflint_module.override.hcl` files are merged over the vendored rulesets
