@@ -441,15 +441,16 @@ rule "managed_identities" {
         }
     }
 
-    It 'rejects example shell hooks with PowerShell migration guidance' {
+    It 'rejects example shell hooks even when a PowerShell sibling exists' {
         $ctx = $script:context
         $exampleDir = Join-Path $script:moduleDir 'examples/default'
         New-Item -ItemType Directory -Path $exampleDir -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'module "m" {}' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.sh') -Value '#!/bin/sh' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value '$null = 1' -Encoding utf8
 
-        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; E = $exampleDir } {
-            param($C, $E)
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
             }
@@ -471,16 +472,7 @@ rule "managed_identities" {
                 }
             }
 
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList.Count -gt 0 -and
-                $ArgumentList[0] -eq 'init' -and
-                $WorkingDirectory -ne $E -and
-                (($WorkingDirectory -replace '\\', '/') -like '*/examples/default')
-            }
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
-                ($ArgumentList -contains '--init' -or $ArgumentList -contains '--format=json') -and
-                (($WorkingDirectory -replace '\\', '/') -like '*/examples/default')
-            }
+            Should -Invoke Invoke-AvmProcess -Exactly 0
         }
 
         $probe.ErrorName | Should -Be 'AvmConfigurationException'

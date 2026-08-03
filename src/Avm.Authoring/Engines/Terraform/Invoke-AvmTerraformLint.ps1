@@ -212,6 +212,18 @@ function Invoke-AvmTerraformLint {
             "Invoke-AvmTerraformLint requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
+    $shellHooks = @(Get-ChildItem `
+            -LiteralPath (Join-Path $Context.Root 'examples') `
+            -Filter 'tflint-pre.sh' `
+            -File `
+            -Depth 1 `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object { [System.IO.Path]::GetRelativePath($Context.Root, $_.FullName).Replace('\', '/') })
+    if ($shellHooks.Count -gt 0) {
+        throw [AvmConfigurationException]::new(
+            ("The terraform lint engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shellHooks -join ', ')))
+    }
+
     $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
     $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
@@ -247,12 +259,10 @@ function Invoke-AvmTerraformLint {
                 -Label ('{0}: terraform init' -f $scope.Label)
 
             if ($scope.Label -like 'examples/*') {
-                foreach ($hookName in @('tflint-pre.sh', 'tflint-pre.ps1')) {
-                    Invoke-AvmScriptHook `
-                        -HookPath (Join-Path $scope.Dir $hookName) `
-                        -WorkingDirectory $scope.Dir `
-                        -Label ('{0}: {1}' -f $scope.Label, $hookName)
-                }
+                Invoke-AvmScriptHook `
+                    -HookPath (Join-Path $scope.Dir 'tflint-pre.ps1') `
+                    -WorkingDirectory $scope.Dir `
+                    -Label ('{0}: tflint-pre.ps1' -f $scope.Label)
             }
 
             # Install the plugins the ruleset declares (terraform + avm). Idempotent

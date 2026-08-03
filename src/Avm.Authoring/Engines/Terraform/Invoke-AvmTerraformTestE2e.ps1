@@ -164,21 +164,18 @@ function Invoke-AvmTerraformTestE2e {
         }
     }
 
-    # Governance ships pre.sh and pre.ps1 side by side, so a .sh is only a
-    # misconfiguration when it has no .ps1 counterpart.
     $shHooks = New-Object System.Collections.Generic.List[string]
     foreach ($exampleInfo in $exampleDirs) {
         foreach ($hookName in @('pre', 'post')) {
             $shPath = Join-Path $exampleInfo.Path ('{0}.sh' -f $hookName)
-            $ps1Path = Join-Path $exampleInfo.Path ('{0}.ps1' -f $hookName)
-            if ((Test-Path -LiteralPath $shPath -PathType Leaf) -and -not (Test-Path -LiteralPath $ps1Path -PathType Leaf)) {
+            if (Test-Path -LiteralPath $shPath -PathType Leaf) {
                 $shHooks.Add(('examples/{0}/{1}.sh' -f $exampleInfo.Name, $hookName))
             }
         }
     }
     if ($shHooks.Count -gt 0) {
         throw [AvmConfigurationException]::new(
-            ("The terraform e2e engine runs PowerShell hooks only; add a '.ps1' counterpart for these shell hooks: {0}" -f ($shHooks -join ', ')))
+            ("The terraform e2e engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shHooks -join ', ')))
     }
 
     $pwshPath = [Environment]::ProcessPath

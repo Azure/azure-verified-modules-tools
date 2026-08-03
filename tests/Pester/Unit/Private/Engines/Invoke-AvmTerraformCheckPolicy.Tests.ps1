@@ -281,8 +281,11 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.PostRan | Should -BeTrue
     }
 
-    It 'rejects shell hooks with PowerShell migration guidance' {
-        Set-Content -LiteralPath (Join-Path $script:exampleDir 'pre.sh') -Value '#!/bin/sh' -Encoding utf8
+    It 'rejects all shell hooks before process execution' {
+        foreach ($hookName in @('pre', 'post')) {
+            Set-Content -LiteralPath (Join-Path $script:exampleDir "$hookName.sh") -Value '#!/bin/sh' -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $script:exampleDir "$hookName.ps1") -Value '$null = 1' -Encoding utf8
+        }
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{
             C = $script:context
             Cache = $script:cacheDir
@@ -317,6 +320,8 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.ErrorName | Should -Be 'AvmConfigurationException'
         $probe.Message | Should -Match 'Refactor'
         $probe.Message | Should -Match '\.ps1'
+        $probe.Message | Should -Match 'pre\.sh'
+        $probe.Message | Should -Match 'post\.sh'
     }
 
     It 'returns skipped when every example is ignored' {

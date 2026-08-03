@@ -85,6 +85,20 @@ function Invoke-AvmTerraformCheckPolicy {
         }
     }
 
+    $shellHooks = [System.Collections.Generic.List[string]]::new()
+    foreach ($sourceExample in $activeExamples) {
+        $exampleName = Split-Path -Path $sourceExample -Leaf
+        foreach ($hookName in @('pre.sh', 'post.sh')) {
+            if (Test-Path -LiteralPath (Join-Path $sourceExample $hookName) -PathType Leaf) {
+                $shellHooks.Add(('examples/{0}/{1}' -f $exampleName, $hookName))
+            }
+        }
+    }
+    if ($shellHooks.Count -gt 0) {
+        throw [AvmConfigurationException]::new(
+            ("The terraform policy engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shellHooks -join ', ')))
+    }
+
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'policy-stage'
     $stageRoot = Join-Path $stageParent ('avm-policy-' + [guid]::NewGuid().ToString('N'))
     $issues = [System.Collections.Generic.List[object]]::new()
@@ -111,12 +125,10 @@ function Invoke-AvmTerraformCheckPolicy {
             $envVars = @{}
 
             try {
-                foreach ($hookName in @('pre.sh', 'pre.ps1')) {
-                    Invoke-AvmScriptHook `
-                        -HookPath (Join-Path $stagedExample $hookName) `
-                        -WorkingDirectory $stagedExample `
-                        -Label ("policy {0} {1}" -f $exampleName, $hookName)
-                }
+                Invoke-AvmScriptHook `
+                    -HookPath (Join-Path $stagedExample 'pre.ps1') `
+                    -WorkingDirectory $stagedExample `
+                    -Label ("policy {0} pre.ps1" -f $exampleName)
 
                 $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $stagedExample '.env')
 
@@ -190,13 +202,11 @@ function Invoke-AvmTerraformCheckPolicy {
                 }
             }
             finally {
-                foreach ($hookName in @('post.sh', 'post.ps1')) {
-                    Invoke-AvmScriptHook `
-                        -HookPath (Join-Path $stagedExample $hookName) `
-                        -WorkingDirectory $stagedExample `
-                        -EnvVars $envVars `
-                        -Label ("policy {0} {1}" -f $exampleName, $hookName)
-                }
+                Invoke-AvmScriptHook `
+                    -HookPath (Join-Path $stagedExample 'post.ps1') `
+                    -WorkingDirectory $stagedExample `
+                    -EnvVars $envVars `
+                    -Label ("policy {0} post.ps1" -f $exampleName)
             }
         }
     }

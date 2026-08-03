@@ -1390,15 +1390,14 @@ $err.GetType().Name          | Should -Be 'AvmNotSupportedException'
 $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
 ```
 
-### L.1 A shell hook is only wrong when it is alone
+### L.1 Shell hooks are unsupported
 
-Related, and found in the same change. The test engines rejected the presence of
-`setup.sh` / `teardown.sh` / `pre.sh` / `post.sh` outright. Upstream AVM
-governance ships a `.ps1` and a `.sh` **side by side** — the `.ps1` is what this
-module runs — so that guard made `avm test unit` throw on every
-governance-compliant module. A shell hook only matters when it has no `.ps1`
-counterpart, because only then does the hook silently never run. Guard on the
-absence of the counterpart, not on the presence of the `.sh`.
+The module is OS-agnostic and never executes a shell interpreter. Any lifecycle
+`.sh` hook is a configuration error, even when a `.ps1` sibling exists. Detect
+all forbidden shell hooks before invoking Terraform, TFLint, or Conftest so the
+configuration error cannot replace a more useful in-flight tool failure. The
+error must name every offending hook and direct the author to refactor it to
+PowerShell.
 ### L.2 A step that did nothing is `skipped`, never `pass`
 
 The same shape as L, one level down. A test tier with no test files, or an e2e
