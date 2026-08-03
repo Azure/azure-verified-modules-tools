@@ -370,7 +370,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `test-examples.porch.yaml` → `Build/Tasks/TestExamples.ps1`.
   - `terraform-test.porch.yaml` → `Build/Tasks/TerraformTest.ps1`.
   - `global-setup` / `global-teardown` → matching tasks.
-- Per-example pre/post-hook engine (`pre.sh`/`pre.ps1`/`post.sh`/`post.ps1`, plus `.env` sourcing) reimplemented inside the CLI.
+- Per-example PowerShell pre/post-hook engine (`pre.ps1`/`post.ps1`, plus `.env` sourcing) reimplemented inside the CLI; shell hooks fail with PowerShell migration guidance.
 - TUI replacement via [Spectre.Console](https://spectreconsole.net/) (if Hybrid kicks in) or [PoshGui-like progress UI](https://github.com/PoshCode/Pester) in pure PS for now.
 - `avm` retains a `--use-porch` flag that forces the legacy path for one release for safety.
 

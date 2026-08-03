@@ -9,13 +9,13 @@ function Invoke-AvmTerraformCheckPolicy {
         examples/* directory is evaluated independently:
 
           - examples carrying .e2eignore are skipped
-          - pre.sh and pre.ps1 hooks run when present
+          - pre.ps1 runs when present; pre.sh is rejected with migration guidance
           - .env is loaded into Terraform and Conftest subprocesses
           - terraform init, plan, and show produce a plan-JSON input
           - APRL and AVMSEC run separately with all namespaces enabled
           - the pinned AVMSEC exemptions and that example's local exceptions/
             directory are included in both evaluations
-          - post.sh and post.ps1 hooks run after the example
+          - post.ps1 runs after the example; post.sh is rejected likewise
 
         The staging directory is deliberately beneath the policy bundle cache.
         Conftest 0.68.2 strips the drive letter from --policy paths on Windows;
@@ -112,7 +112,7 @@ function Invoke-AvmTerraformCheckPolicy {
 
             try {
                 foreach ($hookName in @('pre.sh', 'pre.ps1')) {
-                    Invoke-AvmPolicyHook `
+                    Invoke-AvmScriptHook `
                         -HookPath (Join-Path $stagedExample $hookName) `
                         -WorkingDirectory $stagedExample `
                         -Label ("policy {0} {1}" -f $exampleName, $hookName)
@@ -191,7 +191,7 @@ function Invoke-AvmTerraformCheckPolicy {
             }
             finally {
                 foreach ($hookName in @('post.sh', 'post.ps1')) {
-                    Invoke-AvmPolicyHook `
+                    Invoke-AvmScriptHook `
                         -HookPath (Join-Path $stagedExample $hookName) `
                         -WorkingDirectory $stagedExample `
                         -EnvVars $envVars `
@@ -244,51 +244,6 @@ function Copy-AvmPolicyModuleTree {
         }
         Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop
     }
-}
-
-function Invoke-AvmPolicyHook {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string] $HookPath,
-
-        [Parameter(Mandatory)]
-        [string] $WorkingDirectory,
-
-        [hashtable] $EnvVars = @{},
-
-        [string] $Label
-    )
-
-    if (-not (Test-Path -LiteralPath $HookPath -PathType Leaf)) {
-        return
-    }
-
-    $extension = [System.IO.Path]::GetExtension($HookPath)
-    if ($extension -eq '.ps1') {
-        $filePath = [System.Environment]::ProcessPath
-        $argumentList = @('-NoProfile', '-NonInteractive', '-File', $HookPath)
-    }
-    elseif ($extension -eq '.sh') {
-        $shell = Get-Command -Name 'sh' -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if (-not $shell) {
-            throw [AvmConfigurationException]::new(
-                "Policy hook '$HookPath' requires 'sh', but no shell executable was found on PATH.")
-        }
-        $filePath = $shell.Source
-        $argumentList = @($HookPath)
-    }
-    else {
-        throw [AvmConfigurationException]::new("Unsupported policy hook extension: '$HookPath'.")
-    }
-
-    $null = Invoke-AvmProcess `
-        -FilePath $filePath `
-        -ArgumentList $argumentList `
-        -WorkingDirectory $WorkingDirectory `
-        -EnvVars $EnvVars `
-        -Label $Label
 }
 
 function ConvertFrom-AvmPolicyResult {

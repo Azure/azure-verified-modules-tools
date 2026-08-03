@@ -372,6 +372,92 @@ rule "managed_identities" {
         }
     }
 
+    It 'rejects example shell hooks with PowerShell migration guidance' {
+        $ctx = $script:context
+        $exampleDir = Join-Path $script:moduleDir 'examples/default'
+        New-Item -ItemType Directory -Path $exampleDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'module "m" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.sh') -Value '#!/bin/sh' -Encoding utf8
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; E = $exampleDir } {
+            param($C, $E)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            try {
+                $null = Invoke-AvmTerraformLint -Context $C
+            }
+            catch {
+                [pscustomobject]@{
+                    ErrorName = $_.Exception.GetType().Name
+                    Message = $_.Exception.Message
+                }
+            }
+
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                $WorkingDirectory -eq $E
+            }
+        }
+
+        $probe.ErrorName | Should -Be 'AvmConfigurationException'
+        $probe.Message | Should -Match 'Refactor'
+        $probe.Message | Should -Match '\.ps1'
+    }
+
+    It 'runs an example PowerShell pre-hook before TFLint' {
+        $ctx = $script:context
+        $exampleDir = Join-Path $script:moduleDir 'examples/default'
+        New-Item -ItemType Directory -Path $exampleDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'module "m" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value '$null = 1' -Encoding utf8
+
+        $sequence = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; E = $exampleDir } {
+            param($C, $E)
+            $script:sequence = @()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '-File' } {
+                if ($WorkingDirectory -eq $E) {
+                    $script:sequence += 'tflint-pre.ps1'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                if ($WorkingDirectory -eq $E) {
+                    $script:sequence += 'tflint-init'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                if ($WorkingDirectory -eq $E) {
+                    $script:sequence += 'tflint'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $null = Invoke-AvmTerraformLint -Context $C
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and
+                ($ArgumentList[-1] -like '*tflint-pre.ps1') -and
+                $WorkingDirectory -eq $E
+            }
+            $script:sequence
+        }
+
+        $sequence | Should -Be @('tflint-pre.ps1', 'tflint-init', 'tflint')
+    }
+
     It 'tags issue filenames with the scope relative path for nested scopes' {
         $ctx = $script:context
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir (Join-Path 'modules' 'foo')) -Force | Out-Null

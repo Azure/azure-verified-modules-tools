@@ -155,9 +155,10 @@ function Invoke-AvmTerraformLint {
 
         This mirrors the upstream avm-terraform-governance pre-check flow,
         including its repository-root override lookup and override-first
-        attribute precedence. A single recursive invocation with no '--config'
-        (the previous behaviour) applied none of the AVM rules and could not
-        express the per-directory rulesets.
+        attribute precedence. Example scopes reject tflint-pre.sh and run
+        tflint-pre.ps1, when present, before TFLint starts. A single recursive
+        invocation with no '--config' (the previous behaviour) applied none of
+        the AVM rules and could not express the per-directory rulesets.
 
         The failure threshold defaults to 'warning', so any warning-severity
         rule fails the gauntlet - most built-in tflint rules are warnings, so an
@@ -234,6 +235,15 @@ function Invoke-AvmTerraformLint {
             # non-recursively per scope, and nested modules/examples are their own
             # scopes, so this does not double-count.
             $filesProcessed += @(Get-ChildItem -LiteralPath $scope.Dir -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count
+
+            if ($scope.Label -like 'examples/*') {
+                foreach ($hookName in @('tflint-pre.sh', 'tflint-pre.ps1')) {
+                    Invoke-AvmScriptHook `
+                        -HookPath (Join-Path $scope.Dir $hookName) `
+                        -WorkingDirectory $scope.Dir `
+                        -Label ('{0}: {1}' -f $scope.Label, $hookName)
+                }
+            }
 
             # Install the plugins the ruleset declares (terraform + avm). Idempotent
             # and cached under the shared tflint plugin dir, so repeat scopes are

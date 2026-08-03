@@ -132,6 +132,9 @@ BeforeAll {
     $exampleDir = Join-Path $script:fixtureRoot 'examples' 'foo'
     Set-Content -LiteralPath (Join-Path $exampleDir 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $exampleDir '_header.md') -Value "# Fixture example`n" -Encoding utf8NoBOM
+    $script:tflintHookMarker = Join-Path $env:AVM_HOME 'tflint-hook-ran'
+    $tflintHook = "Set-Content -LiteralPath '$($script:tflintHookMarker.Replace("'", "''"))' -Value 'ran' -Encoding utf8NoBOM"
+    Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value $tflintHook -Encoding utf8NoBOM
 
     # avm.tf.gitignore-essentials requires all 24 canonical globs from
     # upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
@@ -311,6 +314,26 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $policyResult.PSObject.Properties['Evaluated'].Value | Should -Be 260
         @($policyResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
         $policyResult.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
+        $script:tflintHookMarker | Should -Exist
+    }
+
+    It 'pr-check rejects a shell hook with PowerShell migration guidance' {
+        $shellHook = Join-Path $script:fixtureRoot 'examples' 'foo' 'tflint-pre.sh'
+        Set-Content -LiteralPath $shellHook -Value '#!/bin/sh' -Encoding utf8NoBOM
+
+        try {
+            $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+            $result.Status | Should -Be 'fail'
+
+            $lintStep = @($result.Steps | Where-Object Step -eq 'lint')
+            $lintStep.Count | Should -Be 1
+            $lintStep[0].Status | Should -Be 'fail'
+            $lintStep[0].Error | Should -Match 'Refactor'
+            $lintStep[0].Error | Should -Match '\.ps1'
+        }
+        finally {
+            Remove-Item -LiteralPath $shellHook -Force -ErrorAction SilentlyContinue
+        }
     }
 
     It 'F59: Invoke-AvmCheckPolicy evaluates both policy bundles against plan JSON' {

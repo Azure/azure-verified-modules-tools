@@ -281,16 +281,15 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.PostRan | Should -BeTrue
     }
 
-    It 'runs shell hooks through sh when they are present' {
+    It 'rejects shell hooks with PowerShell migration guidance' {
         Set-Content -LiteralPath (Join-Path $script:exampleDir 'pre.sh') -Value '#!/bin/sh' -Encoding utf8
-        $firstCall = InModuleScope 'Avm.Authoring' -Parameters @{
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
             C = $script:context
             Cache = $script:cacheDir
             Aprl = $script:aprlDir
             Avmsec = $script:avmsecDir
         } {
             param($C, $Cache, $Aprl, $Avmsec)
-            $script:seen = $null
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
@@ -298,26 +297,26 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
             }
             Mock Get-AvmFolder { $Cache }
-            Mock Get-Command { [pscustomobject]@{ Source = '/fake/sh' } } -ParameterFilter { $Name -eq 'sh' }
             Mock Invoke-AvmProcess {
-                if ($null -eq $script:seen) {
-                    $script:seen = [pscustomobject]@{ FilePath = $FilePath; Arguments = @($ArgumentList) }
-                }
-                if ($ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
-                }
-                if ($FilePath -eq '/fake/conftest') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
-                }
-                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                throw 'A shell hook must fail before any process starts.'
             }
-            $null = Invoke-AvmTerraformCheckPolicy -Context $C
-            $script:seen
+
+            try {
+                $null = Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+            catch {
+                [pscustomobject]@{
+                    ErrorName = $_.Exception.GetType().Name
+                    Message = $_.Exception.Message
+                }
+            }
+
+            Should -Invoke Invoke-AvmProcess -Exactly 0
         }
 
-        $firstCall.FilePath | Should -Be '/fake/sh'
-        $firstCall.Arguments.Count | Should -Be 1
-        $firstCall.Arguments[0] | Should -BeLike '*pre.sh'
+        $probe.ErrorName | Should -Be 'AvmConfigurationException'
+        $probe.Message | Should -Match 'Refactor'
+        $probe.Message | Should -Match '\.ps1'
     }
 
     It 'returns skipped when every example is ignored' {

@@ -23,9 +23,11 @@ section when cutting a release.
 
 - `avm check policy` for Terraform now evaluates each runnable `examples/*`
   directory against real `terraform show -json` output. The lifecycle honours
-  `.e2eignore`, `pre.sh` / `pre.ps1`, `.env`, `post.sh` / `post.ps1`, pinned
+  `.e2eignore`, `pre.ps1`, `.env`, `post.ps1`, pinned
   default exemptions, and example-local `exceptions/`, then runs the pinned
   APRL and AVMSEC bundles separately with all namespaces enabled.
+- `avm lint` runs an optional `tflint-pre.ps1` hook in each direct example
+  before TFLint initializes its plugins and evaluates that example.
 - `pinned-assets.psd1` configuration reader (`Get-AvmPinnedAsset`) and cache
   materialiser (`Resolve-AvmPinnedAsset`) that honour `AVM_OFFLINE` and
   `AVM_MIRROR` and reuse the existing `Get-AvmFolder` cache layout.
@@ -44,6 +46,9 @@ section when cutting a release.
   `check convention` step now requires at least one direct
   `tests/unit/*.tftest.hcl` fixture, retaining the no-tests safeguard without
   executing the same unit tier twice.
+- Shell lifecycle hooks are rejected with an actionable configuration error.
+  Module authors must refactor `pre.sh`, `post.sh`, and `tflint-pre.sh` hooks
+  to their corresponding PowerShell `.ps1` form.
 - The release workflow no longer requires `ModuleVersion` in the repo manifest
   to match the tag being released, and no longer fails when the tag has no
   CHANGELOG section. `./build.ps1 build -ReleaseVersion X.Y.Z` stamps the
