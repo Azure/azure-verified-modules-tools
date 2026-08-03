@@ -244,6 +244,15 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
 
+            $policyViolation = Join-Path $script:StagedModule 'examples' 'second_example' 'policy-violation.tf'
+            if (Test-Path -LiteralPath $policyViolation -PathType Leaf) {
+                $compliantPolicyFixture = (Get-Content -LiteralPath $policyViolation -Raw).
+                    Replace('isAutoInflateEnabled = false', 'isAutoInflateEnabled = true').
+                    Replace('minimumTlsVersion    = "1.0"', 'minimumTlsVersion    = "1.2"').
+                    Replace('zoneRedundant        = false', 'zoneRedundant        = true')
+                Set-Content -LiteralPath $policyViolation -Value $compliantPolicyFixture -Encoding utf8NoBOM -NoNewline
+            }
+
             foreach ($hookName in @('pre.sh', 'post.sh')) {
                 $legacyHook = Join-Path $script:StagedModule 'examples' 'default' $hookName
                 if (Test-Path -LiteralPath $legacyHook -PathType Leaf) {
@@ -294,6 +303,48 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $toolSteps) {
                 $step.Result.ToolSource | Should -Be 'cache' -Because "pr-check step '$($step.Step)' should use the managed cache"
             }
+        }
+
+        It 'keeps a real policy exception scoped to its own example' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the Azure fixture carries the adversarial policy isolation case'
+                return
+            }
+
+            $policyModule = Join-Path $script:WorkRoot "$name-policy-isolation"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $policyModule -Recurse -Force
+
+            foreach ($hookName in @('pre.sh', 'post.sh')) {
+                $legacyHook = Join-Path $policyModule 'examples' 'default' $hookName
+                if (Test-Path -LiteralPath $legacyHook -PathType Leaf) {
+                    Remove-Item -LiteralPath $legacyHook -Force
+                }
+            }
+
+            $unscoped = Invoke-AvmCheckPolicy -Path $policyModule -Ecosystem terraform
+            $unscoped.Status | Should -Be 'fail'
+            $unscoped.Evaluated | Should -BeGreaterThan 0
+
+            $tlsIssues = @($unscoped.Issues | Where-Object {
+                    $_.File -eq 'examples/second_example/tfplan.json' -and
+                    $_.Code -eq 'avmsec' -and
+                    $_.Message -match 'AVM_SEC_223'
+                })
+            $tlsIssues.Count | Should -BeGreaterThan 0 -Because 'the default example exception must not leak into second_example'
+
+            $secondExceptions = Join-Path $policyModule 'examples' 'second_example' 'exceptions'
+            $null = New-Item -ItemType Directory -Path $secondExceptions -Force
+            Copy-Item -LiteralPath (Join-Path $policyModule 'examples' 'default' 'exceptions' 'avmsec.rego') `
+                -Destination (Join-Path $secondExceptions 'avmsec.rego') -Force
+
+            $scoped = Invoke-AvmCheckPolicy -Path $policyModule -Ecosystem terraform
+            $scoped.Evaluated | Should -BeGreaterThan 0
+            @($scoped.Issues | Where-Object {
+                    $_.File -eq 'examples/second_example/tfplan.json' -and
+                    $_.Code -eq 'avmsec' -and
+                    $_.Message -match 'AVM_SEC_223'
+                }).Count | Should -Be 0 -Because 'the exception must suppress AVM_SEC_223 when it belongs to second_example'
         }
 
         # F34: terraform init only scans the *default* test directory when
