@@ -70,8 +70,9 @@ section when cutting a release.
 - `docs/avm-consolidation-plan.md` verb-table entries for `avm docs` (Bicep),
   `avm pre-commit`, and `avm pr-check` rewritten to match the engines as
   wired today (`format → lint → test → docs` for `pre-commit`;
-  `format → transform → lint → check policy → check convention → test → docs`
-  for `pr-check`, with `skipped` semantics for stubbed engines).
+  clean-worktree preflight then
+  `sync → format → transform → lint → check policy → check convention → validate → docs`
+  for `pr-check`, with unit tests retained as a separate CI job).
 
 ### Fixed
 
