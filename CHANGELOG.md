@@ -21,11 +21,13 @@ section when cutting a release.
 
 ### Added
 
-- `avm check policy` for Terraform: real `conftest` integration that runs the
-  pinned APRL + AVMSEC Rego bundles against the `terraform plan` JSON for each
-  example, with per-example `exceptions/*.rego` discovery. Bundles are
-  materialised on demand from the `pinned-assets.psd1` registry, sha256-verified
-  on first download, cached under `AVM_HOME`, and re-used offline.
+- `avm check policy` for Terraform now evaluates each runnable `examples/*`
+  directory against real `terraform show -json` output. The lifecycle honours
+  `.e2eignore`, `pre.ps1`, `.env`, `post.ps1`, pinned
+  default exemptions, and example-local `exceptions/`, then runs the pinned
+  APRL and AVMSEC bundles separately with all namespaces enabled.
+- `avm lint` runs an optional `tflint-pre.ps1` hook in each direct example
+  before TFLint initializes its plugins and evaluates that example.
 - `pinned-assets.psd1` configuration reader (`Get-AvmPinnedAsset`) and cache
   materialiser (`Resolve-AvmPinnedAsset`) that honour `AVM_OFFLINE` and
   `AVM_MIRROR` and reuse the existing `Get-AvmFolder` cache layout.
@@ -40,6 +42,20 @@ section when cutting a release.
 
 ### Changed
 
+- `avm lint` now copies the Terraform module to a cleaned temporary tree and
+  runs `terraform init -input=false` in every root, module, and example scope.
+  Example `tflint-pre.ps1` hooks run after Terraform initialization and before
+  TFLint plugin initialization, while generated files and hook output remain
+  isolated from the source repository.
+- `avm pr-check` no longer repeats the standalone `unit-test` CI job. Unit,
+  integration, and end-to-end test commands report `skipped`, not `pass`, when
+  no matching tests are discovered.
+- Shell lifecycle hooks are rejected with an actionable configuration error.
+  Module authors must refactor `pre.sh`, `post.sh`, and `tflint-pre.sh` hooks
+  to their corresponding PowerShell `.ps1` form.
+- Policy cleanup still attempts `post.ps1` after Terraform or Conftest fails,
+  but a post-hook failure no longer replaces the primary tool diagnostic and
+  is reported as a secondary warning.
 - The release workflow no longer requires `ModuleVersion` in the repo manifest
   to match the tag being released, and no longer fails when the tag has no
   CHANGELOG section. `./build.ps1 build -ReleaseVersion X.Y.Z` stamps the
@@ -56,11 +72,33 @@ section when cutting a release.
 - `docs/avm-consolidation-plan.md` verb-table entries for `avm docs` (Bicep),
   `avm pre-commit`, and `avm pr-check` rewritten to match the engines as
   wired today (`format → lint → test → docs` for `pre-commit`;
-  `format → transform → lint → check policy → check convention → test → docs`
-  for `pr-check`, with `skipped` semantics for stubbed engines).
+  clean-worktree preflight then
+  `sync → format → transform → lint → check policy → check convention → validate → docs`
+  for `pr-check`, with unit tests retained as a separate CI job).
+
+### Fixed
+
+- `avm pr-check` now fails before its tool chain when `git status
+  --porcelain` reports tracked or untracked changes, restoring the legacy
+  clean-worktree preflight.
+- Repository-root `avm.tflint.override.hcl`,
+  `avm.tflint_example.override.hcl`, and
+  `avm.tflint_module.override.hcl` files are merged over the vendored rulesets
+  before TFLint runs. Migrated repositories no longer silently lose their
+  ruleset customizations.
+- `avm check policy` no longer feeds raw HCL to policies designed for Terraform
+  plan JSON. The old path could not match a resource and therefore reported
+  `skipped` in every PR check. Policy evaluation now uses isolated per-example
+  plans, keeps each example's exceptions scoped locally, and has executable
+  failure coverage for both APRL and AVMSEC.
 
 ### Tests
 
+- Real-binary pr-check fixtures are initialized as clean committed Git
+  repositories before the gauntlet runs, so the integration tier exercises the
+  restored dirty-worktree preflight instead of failing setup with "not a git
+  repository". Staged legacy `pre.sh` / `post.sh` duplicates are removed where
+  the canonical fixture already provides equivalent PowerShell hooks.
 - Terraform engine stub harness under `tests/Pester/Integration/Terraform/`
   that exercises `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck` end-to-end
   against stub `terraform` / `tflint` / `terraform-docs` / `conftest`
@@ -85,7 +123,7 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
-## [0.1.8] - unreleased
+## [0.1.8] - 2026-08-03
 
 Log-fidelity round from post-release failure-path testing of `0.1.7` against the
 canary repo `Azure/terraform-azurerm-avm-ptn-example-repo` (F57, F58). Both

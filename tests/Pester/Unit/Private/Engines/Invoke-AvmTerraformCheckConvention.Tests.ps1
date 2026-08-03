@@ -32,7 +32,8 @@ BeforeAll {
         [System.IO.File]::WriteAllText((Join-Path $root 'terraform.tf'), '# stub', $utf8)
         [System.IO.File]::WriteAllText((Join-Path $root '_header.md'), '# header', $utf8)
         New-Item -ItemType Directory -Path (Join-Path $root 'examples') -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $root 'tests') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'tests/unit') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'tests/unit/main.tftest.hcl'), '# test', $utf8)
         $globs = @(
             '.DS_Store', '.terraform.lock.hcl', '.terraformrc', '*.md.tmp', '*.mptfbackup',
             '*.tfstate.*', '*.tfstate', '*.tfvars.json', '*.tfvars', '**/.terraform/*',

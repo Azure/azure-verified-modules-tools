@@ -157,7 +157,12 @@ function Test-AvmRule {
         $ErrorActionPreference = 'Stop'
 
         $idRegex = '^[a-z][a-z0-9.-]*$'
-        $validKinds = @('FileMustNotExist', 'FileMustExist', 'DirectoryMustExist', 'GitignoreMustContain')
+        $validKinds = @(
+            'FileMustNotExist'
+            'FileMustExist'
+            'DirectoryMustExist'
+            'GitignoreMustContain'
+        )
         $validSeverities = @('error', 'warning')
         $validAppliesTo = @('root', 'examples', 'modules', 'all')
         $knownKeys = @('Id', 'Kind', 'Description', 'Severity', 'Parameters', 'AppliesTo')

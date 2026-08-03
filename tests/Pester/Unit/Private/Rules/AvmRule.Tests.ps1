@@ -47,6 +47,7 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                     AppliesTo   = 'examples'
                     Parameters  = @{ Path = 'docs' }
                 }
+
                 $rule = New-AvmRule -Definition $def
                 $rule.Severity | Should -Be 'warning'
                 $rule.AppliesTo | Should -Be 'examples'
@@ -286,6 +287,7 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                     Description = 'd'
                     Parameters  = @{ RequiredGlobs = @() }
                 }
+
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match 'must have at least one entry'

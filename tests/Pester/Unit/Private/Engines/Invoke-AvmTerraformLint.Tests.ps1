@@ -49,6 +49,128 @@ Describe 'Resolve-AvmTflintConfigDir' {
     }
 }
 
+Describe 'Merge-AvmTflintConfig' {
+    BeforeEach {
+        $script:basePath = Join-Path $TestDrive 'base.hcl'
+        $script:overridePath = Join-Path $TestDrive 'override.hcl'
+        $script:destinationPath = Join-Path $TestDrive 'merged.hcl'
+    }
+
+    It 'applies a genuine rule-disable override without dropping base attributes' {
+        @'
+plugin "avm" {
+  enabled = true
+  version = "0.16.0"
+  source  = "github.com/Azure/tflint-ruleset-avm"
+}
+
+rule "managed_identities" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+# Used by terraform-azurerm-avm-res-containerservice-managedcluster.
+rule "managed_identities" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
+        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
+    }
+
+    It 'merges attributes into the last duplicate block like pinned hclmerge' {
+        @'
+rule "diagnostic_settings" {
+  enabled = true
+}
+
+rule "diagnostic_settings" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+rule "diagnostic_settings" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $blocks = [regex]::Matches($merged, '(?s)rule "diagnostic_settings"\s*\{(?<body>[^{}]*)\}')
+        $blocks.Count | Should -Be 2
+        $blocks[0].Groups['body'].Value | Should -Match 'enabled = true'
+        $blocks[1].Groups['body'].Value | Should -Match 'enabled = false'
+    }
+
+    It 'retains unspecified plugin attributes and appends new blocks' {
+        @'
+plugin "avm" {
+  enabled = true
+  version = "0.16.0"
+  source  = "github.com/Azure/tflint-ruleset-avm"
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+plugin "avm" {
+  enabled = false
+}
+
+rule "custom_rule" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
+        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
+    }
+
+    It 'rejects unsupported nested override blocks instead of silently changing semantics' {
+        'rule "x" { enabled = true }' | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+rule "x" {
+  enabled = false
+  option {
+    value = true
+  }
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+            } {
+                param($B, $O, $D)
+                Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            }
+        } | Should -Throw '*unsupported HCL*'
+    }
+}
+
 Describe 'Get-AvmTflintScope' {
     BeforeEach {
         $script:root = Join-Path $TestDrive ("scope-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -109,6 +231,18 @@ Describe 'Invoke-AvmTerraformLint' {
             Ecosystem = 'terraform'
             Source    = 'path-heuristic'
         }
+
+        $script:lintCache = Join-Path $TestDrive ("lint-cache-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        InModuleScope 'Avm.Authoring' -Parameters @{ Cache = $script:lintCache } {
+            param($Cache)
+            $script:lintTestCache = $Cache
+            Mock Get-AvmFolder { $script:lintTestCache } -ParameterFilter { $Kind -eq 'Cache' }
+            Mock Invoke-AvmProcess -ParameterFilter {
+                $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
+            } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+        }
     }
 
     It 'rejects a non-terraform context' {
@@ -126,7 +260,7 @@ Describe 'Invoke-AvmTerraformLint' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'runs --init then a JSON lint for the root scope with the root ruleset' {
+    It 'initializes Terraform in an isolated copy before TFLint runs the root ruleset' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -146,6 +280,12 @@ Describe 'Invoke-AvmTerraformLint' {
             $r = Invoke-AvmTerraformLint -Context $C
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList.Count -eq 2 -and
+                $ArgumentList[0] -eq 'init' -and
+                $ArgumentList[1] -eq '-input=false' -and
+                $WorkingDirectory -ne $C.Root
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/tflint' -and
                 ($ArgumentList -contains '--init') -and
                 (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
@@ -164,6 +304,107 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
         $result.FilesProcessed | Should -Be 2
+    }
+
+    It 'copies a clean tree and removes the temporary lint stage' {
+        $ctx = $script:context
+        $cache = $script:lintCache
+        $terraformDir = Join-Path $script:moduleDir '.terraform'
+        New-Item -ItemType Directory -Path $terraformDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $terraformDir 'plugin.bin') -Value 'cached' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform.lock.hcl') -Value 'lock' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'terraform.tfstate') -Value '{}' -Encoding utf8
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Cache = $cache } {
+            param($C, $Cache)
+            $script:artifactCount = -1
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter {
+                $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
+            } {
+                $script:artifactCount = @(
+                    '.terraform'
+                    '.terraform.lock.hcl'
+                    'terraform.tfstate'
+                ) | Where-Object { Test-Path -LiteralPath (Join-Path $WorkingDirectory $_) } |
+                    Measure-Object |
+                    Select-Object -ExpandProperty Count
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            [pscustomobject]@{
+                ArtifactCount = $script:artifactCount
+                Result = $result
+                StageChildren = @(Get-ChildItem -LiteralPath (Join-Path $Cache 'lint-stage') -Force).Count
+            }
+        }
+
+        $probe.Result.Status | Should -Be 'pass'
+        $probe.ArtifactCount | Should -Be 0
+        $probe.StageChildren | Should -Be 0
+        Join-Path $script:moduleDir '.terraform.lock.hcl' | Should -Exist
+        Join-Path $script:moduleDir 'terraform.tfstate' | Should -Exist
+        Join-Path $terraformDir 'plugin.bin' | Should -Exist
+    }
+
+    It 'uses a root override to build a temporary merged config and removes it afterward' {
+        $ctx = $script:context
+        $configDir = Join-Path $TestDrive 'override-configs'
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        foreach ($name in @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')) {
+            @'
+rule "managed_identities" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
+        }
+        @'
+rule "managed_identities" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint.override.hcl') -Encoding utf8
+
+        $capture = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Config = $configDir; Cache = $TestDrive } {
+            param($C, $Config, $Cache)
+            $script:capturedConfigPath = $null
+            $script:capturedConfigText = $null
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { $Config }
+            Mock Get-AvmFolder { $Cache }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                $configIndex = [array]::IndexOf($ArgumentList, '--config') + 1
+                $script:capturedConfigPath = $ArgumentList[$configIndex]
+                $script:capturedConfigText = Get-Content -LiteralPath $script:capturedConfigPath -Raw
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            [pscustomobject]@{
+                Result     = $result
+                ConfigPath = $script:capturedConfigPath
+                ConfigText = $script:capturedConfigText
+            }
+        }
+
+        $capture.Result.Status | Should -Be 'pass'
+        $capture.ConfigText | Should -Match 'enabled = false'
+        $capture.ConfigPath | Should -Not -BeLike "$configDir*"
+        $capture.ConfigPath | Should -Not -Exist
     }
 
     It 'applies the module and example rulesets to nested scopes' {
@@ -198,6 +439,100 @@ Describe 'Invoke-AvmTerraformLint' {
                 ($ArgumentList -contains '--format=json') -and (($ArgumentList -join '|') -like '*avm.tflint_example.hcl*')
             }
         }
+    }
+
+    It 'rejects example shell hooks even when a PowerShell sibling exists' {
+        $ctx = $script:context
+        $exampleDir = Join-Path $script:moduleDir 'examples/default'
+        New-Item -ItemType Directory -Path $exampleDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'module "m" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.sh') -Value '#!/bin/sh' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value '$null = 1' -Encoding utf8
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            try {
+                $null = Invoke-AvmTerraformLint -Context $C
+            }
+            catch {
+                [pscustomobject]@{
+                    ErrorName = $_.Exception.GetType().Name
+                    Message = $_.Exception.Message
+                }
+            }
+
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+
+        $probe.ErrorName | Should -Be 'AvmConfigurationException'
+        $probe.Message | Should -Match 'Refactor'
+        $probe.Message | Should -Match '\.ps1'
+    }
+
+    It 'runs an example PowerShell pre-hook before TFLint' {
+        $ctx = $script:context
+        $exampleDir = Join-Path $script:moduleDir 'examples/default'
+        New-Item -ItemType Directory -Path $exampleDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'module "m" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value '$null = 1' -Encoding utf8
+
+        $sequence = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; E = $exampleDir } {
+            param($C, $E)
+            $script:sequence = @()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter {
+                $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
+            } {
+                if (($WorkingDirectory -replace '\\', '/') -like '*/examples/default') {
+                    $script:sequence += 'terraform-init'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '-File' } {
+                if (($WorkingDirectory -replace '\\', '/') -like '*/examples/default') {
+                    $script:sequence += 'tflint-pre.ps1'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                if (($WorkingDirectory -replace '\\', '/') -like '*/examples/default') {
+                    $script:sequence += 'tflint-init'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                if (($WorkingDirectory -replace '\\', '/') -like '*/examples/default') {
+                    $script:sequence += 'tflint'
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $null = Invoke-AvmTerraformLint -Context $C
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '-File') -and
+                ($ArgumentList[-1] -like '*tflint-pre.ps1') -and
+                $WorkingDirectory -ne $E -and
+                (($WorkingDirectory -replace '\\', '/') -like '*/examples/default')
+            }
+            $script:sequence
+        }
+
+        $sequence | Should -Be @('terraform-init', 'tflint-pre.ps1', 'tflint-init', 'tflint')
     }
 
     It 'tags issue filenames with the scope relative path for nested scopes' {

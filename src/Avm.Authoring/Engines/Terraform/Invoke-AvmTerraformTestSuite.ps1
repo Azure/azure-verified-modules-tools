@@ -12,7 +12,7 @@ function Invoke-AvmTerraformTestSuite {
           1. Enumerates test targets: the module root plus each immediate
              'modules/*' subdirectory. A target is runnable when it ships at
              least one '*.tftest.hcl' under tests/<tier>/. If no target is
-             runnable, returns a pass envelope with FilesProcessed = 0 without
+             runnable, returns a skipped envelope with FilesProcessed = 0 without
              invoking terraform.
           2. Rejects shell hooks fail-fast: any tests/<tier>/setup.sh or
              teardown.sh throws AvmConfigurationException before terraform runs
@@ -108,24 +108,20 @@ function Invoke-AvmTerraformTestSuite {
         }
     }
 
-    # Governance ships setup.sh and setup.ps1 side by side, so a .sh is only a
-    # misconfiguration when it has no .ps1 counterpart - that is the case where
-    # the hook would silently never run.
     $shHooks = New-Object System.Collections.Generic.List[string]
     foreach ($target in $targets) {
         $relPrefix = if ($target.Rel) { $target.Rel + '/' } else { '' }
         foreach ($hookName in @('setup', 'teardown')) {
             $hookDir = Join-Path $target.Path (Join-Path 'tests' $Tier)
             $shPath = Join-Path $hookDir ('{0}.sh' -f $hookName)
-            $ps1Path = Join-Path $hookDir ('{0}.ps1' -f $hookName)
-            if ((Test-Path -LiteralPath $shPath -PathType Leaf) -and -not (Test-Path -LiteralPath $ps1Path -PathType Leaf)) {
+            if (Test-Path -LiteralPath $shPath -PathType Leaf) {
                 $shHooks.Add(('{0}tests/{1}/{2}.sh' -f $relPrefix, $Tier, $hookName))
             }
         }
     }
     if ($shHooks.Count -gt 0) {
         throw [AvmConfigurationException]::new(
-            ("The terraform {0} test engine runs PowerShell setup hooks only; add a '.ps1' counterpart for these shell hooks: {1}" -f $Tier, ($shHooks -join ', ')))
+            ("The terraform {0} test engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {1}" -f $Tier, ($shHooks -join ', ')))
     }
 
     $pwshPath = [Environment]::ProcessPath

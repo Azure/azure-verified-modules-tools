@@ -37,7 +37,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'returns a clean pass with FilesProcessed=0 and never shells out when the tier ships no tftest files' {
+    It 'returns a clean skip with FilesProcessed=0 and never shells out when the tier ships no tftest files' {
         $emptyDir = Join-Path $TestDrive ("tf-empty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
         $ctx = [pscustomobject][ordered]@{
@@ -398,7 +398,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $result.Issues[0].Message | Should -Match 'setup boom'
     }
 
-    It 'throws AvmConfigurationException when a shell hook has no PowerShell counterpart' {
+    It 'throws AvmConfigurationException when a shell hook is present' {
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.sh') -Value 'echo hi' -Encoding utf8
         $ctx = $script:context
         $err = $null
@@ -424,15 +424,11 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         $err.Message        | Should -Match '\.ps1'
     }
 
-    # F39: upstream AVM governance ships setup.sh and setup.ps1 side by side, so
-    # rejecting the mere presence of a .sh made `avm test unit` throw on every
-    # governance-compliant module. Only a .sh with no .ps1 counterpart is a
-    # misconfiguration, because only then does the hook silently never run.
-    It 'F39: accepts a shell hook that has a PowerShell counterpart' {
+    It 'rejects a shell hook that has a PowerShell counterpart' {
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.sh') -Value 'echo hi' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'tests' 'unit' 'setup.ps1') -Value 'exit 0' -Encoding utf8
         $ctx = $script:context
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
@@ -440,10 +436,11 @@ Describe 'Invoke-AvmTerraformTestSuite' {
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-            Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            Mock Invoke-AvmProcess { throw 'should not shell out' }
+            { Invoke-AvmTerraformTestSuite -Context $C -Tier unit } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*setup.sh*'
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly
         }
-        $result.Status | Should -Be 'pass'
     }
 
     It 'skips a modules/* subdirectory that ships no tests for the tier' {

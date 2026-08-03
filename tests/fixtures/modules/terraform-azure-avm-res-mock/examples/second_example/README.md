@@ -17,14 +17,24 @@ The following requirements are needed by this module:
 
 - <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9.0, < 2.0.0)
 
+- <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.4)
+
 ## Resources
 
-No resources.
+The following resources are used by this module:
+
+- [azapi_resource.policy_violation](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 
 <!-- markdownlint-disable MD013 -->
 ## Required Inputs
 
-No required inputs.
+The following input variables are required:
+
+### <a name="input_policy_fixture_name"></a> [policy\_fixture\_name](#input\_policy\_fixture\_name)
+
+Description: n/a
+
+Type: `string`
 
 ## Optional Inputs
 

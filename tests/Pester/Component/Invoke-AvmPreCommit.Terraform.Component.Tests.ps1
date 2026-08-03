@@ -54,7 +54,7 @@ BeforeAll {
 
     $script:fixtureRoot = Join-Path $TestDrive 'module'
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
-    $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests') -Force
+    $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests/unit') -Force
 
     # Pre-stage the pinned policy-library cache so
     # Invoke-AvmTerraformCheckPolicy's Resolve-AvmPinnedAsset short-circuits
@@ -83,6 +83,9 @@ BeforeAll {
         $null = New-Item -ItemType Directory -Path $bundleDir -Force
         Set-Content -LiteralPath (Join-Path $versionDir '.verified') -Value '' -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $bundleDir $bundle.File) -Value "package $($bundle.Package)`n" -Encoding utf8NoBOM
+        if ($bundle.Name -eq 'avm-policy-avmsec') {
+            Set-Content -LiteralPath (Join-Path $bundleDir 'avm_exceptions.rego.bak') -Value "package avmsec`n" -Encoding utf8NoBOM
+        }
     }
 
     $mainTf = @(
@@ -100,7 +103,7 @@ BeforeAll {
         '<!-- END_TF_DOCS -->'
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'README.md') -Value $readme -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'tests' '.keep') -Value '' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'tests/unit' 'main.tftest.hcl') -Value '# fixture' -Encoding utf8NoBOM
 
     # Per-example exception .rego fixture so the integration smoke also
     # exercises Invoke-AvmTerraformCheckPolicy's per-example exceptions
@@ -129,6 +132,12 @@ BeforeAll {
     $exampleDir = Join-Path $script:fixtureRoot 'examples' 'foo'
     Set-Content -LiteralPath (Join-Path $exampleDir 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $exampleDir '_header.md') -Value "# Fixture example`n" -Encoding utf8NoBOM
+    $script:tflintHookMarker = Join-Path $env:AVM_HOME 'tflint-hook-ran'
+    $tflintHook = @(
+        "Set-Content -LiteralPath '$($script:tflintHookMarker.Replace("'", "''"))' -Value 'ran' -Encoding utf8NoBOM"
+        'Set-Content -LiteralPath (Join-Path $PSScriptRoot ''hook-output.txt'') -Value ''staged'' -Encoding utf8NoBOM'
+    ) -join "`n"
+    Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value $tflintHook -Encoding utf8NoBOM
 
     # avm.tf.gitignore-essentials requires all 24 canonical globs from
     # upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
@@ -158,6 +167,15 @@ BeforeAll {
         'terraform.rc'
     )
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot '.gitignore') -Value (($gitignoreGlobs -join "`n") + "`n") -Encoding utf8NoBOM
+
+    & git -C $script:fixtureRoot init --quiet
+    & git -C $script:fixtureRoot config user.name 'AVM Component Tests'
+    & git -C $script:fixtureRoot config user.email 'avm-component-tests@example.invalid'
+    & git -C $script:fixtureRoot add -A
+    & git -C $script:fixtureRoot commit --quiet -m 'Initial fixture'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to initialize the component fixture Git repository (exit $LASTEXITCODE)."
+    }
 }
 
 AfterAll {
@@ -185,6 +203,12 @@ AfterAll {
     }
     else {
         $env:AVM_POLICY_LIBRARY_SHA256 = $script:originalPolicySha
+    }
+    $fixtureGitDir = Join-Path $script:fixtureRoot '.git'
+    if (Test-Path -LiteralPath $fixtureGitDir -PathType Container) {
+        Get-ChildItem -LiteralPath $fixtureGitDir -File -Recurse -Force |
+            ForEach-Object { $_.IsReadOnly = $false }
+        Remove-Item -LiteralPath $fixtureGitDir -Recurse -Force
     }
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
@@ -248,7 +272,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes nine steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -256,8 +280,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 9
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'unit test', 'docs')
+        $steps.Count | Should -Be 8
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -288,15 +312,6 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
 
-        # F40: the fixture ships no tests/unit tier, so the step reports 'skipped'
-        # with zero runs rather than a pass. A pass here is indistinguishable from
-        # a real one, which is how a module with no tests stays green forever.
-        # 'skipped' does not flip the overall status, so the gauntlet still passes.
-        $byName['unit test'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
-        $unitResult = $byName['unit test'].PSObject.Properties['Result'].Value
-        $unitResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
-        $unitResult.PSObject.Properties['RunsTotal'].Value | Should -Be 0
-
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
         # rather than 'path'. The fixture writes all the files required by the
         # built-in rules in BeforeAll, so every rule passes with zero issues
@@ -308,45 +323,83 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
         @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
 
-        # F46: conftest evaluates zero policies under --parser hcl2 because the
-        # pinned APRL + AVMSEC bundles declare no rules in the default 'main'
-        # namespace. The step reports 'skipped' with a diagnostic rather than a
-        # pass it cannot justify. 'skipped' does not flip the overall status.
-        $byName['check policy'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        # F59: policy evaluation now plans each example and evaluates the JSON
+        # plan independently against APRL and AVMSEC.
+        $byName['check policy'].PSObject.Properties['Status'].Value | Should -Be 'pass'
         $policyResult = $byName['check policy'].PSObject.Properties['Result'].Value
         $policyResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
         $policyResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
-        $policyResult.PSObject.Properties['Evaluated'].Value | Should -Be 0
-        # Tool-prefix assertion catches future engine-envelope regressions on
-        # the check-policy engine, as format/lint/test/docs do for their tools.
+        $policyResult.PSObject.Properties['Evaluated'].Value | Should -Be 260
+        @($policyResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
         $policyResult.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
-        $policyDiagnostics = @($policyResult.PSObject.Properties['Issues'].Value |
-                Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' })
-        $policyDiagnostics.Count | Should -Be 1
-        # F48: Evaluated=0 has two causes - this vacuity, and conftest aborting
-        # before it loads a policy. Pin the cause, not the value they share.
-        $policyDiagnostics[0].Message | Should -Match 'namespaces seen: main'
+        $script:tflintHookMarker | Should -Exist
+        Join-Path $script:fixtureRoot 'examples' 'foo' 'hook-output.txt' | Should -Not -Exist
     }
 
-    It 'F46: Invoke-AvmCheckPolicy reports skipped, not pass, when conftest evaluates nothing' {
+    It 'pr-check rejects a shell hook with PowerShell migration guidance' {
+        $shellHook = Join-Path $script:fixtureRoot 'examples' 'foo' 'tflint-pre.sh'
+        Set-Content -LiteralPath $shellHook -Value '#!/bin/sh' -Encoding utf8NoBOM
+        & git -C $script:fixtureRoot add -- 'examples/foo/tflint-pre.sh'
+        & git -C $script:fixtureRoot commit --quiet -m 'Add shell hook fixture'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to commit the shell-hook fixture (exit $LASTEXITCODE)."
+        }
+
+        try {
+            $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+            $result.Status | Should -Be 'fail'
+
+            $lintStep = @($result.Steps | Where-Object Step -eq 'lint')
+            $lintStep.Count | Should -Be 1
+            $lintStep[0].Status | Should -Be 'fail'
+            $lintStep[0].Error | Should -Match 'Refactor'
+            $lintStep[0].Error | Should -Match '\.ps1'
+        }
+        finally {
+            Remove-Item -LiteralPath $shellHook -Force -ErrorAction SilentlyContinue
+            & git -C $script:fixtureRoot add -A
+            & git -C $script:fixtureRoot commit --quiet -m 'Remove shell hook fixture'
+        }
+    }
+
+    It 'pr-check rejects a dirty worktree before running its tool chain' {
+        $dirtyFile = Join-Path $script:fixtureRoot 'uncommitted.txt'
+        Set-Content -LiteralPath $dirtyFile -Value 'dirty' -Encoding utf8NoBOM
+
+        try {
+            $errorName = ''
+            $message = ''
+            try {
+                $null = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+            }
+            catch {
+                $errorName = $_.Exception.GetType().Name
+                $message = $_.Exception.Message
+            }
+
+            $errorName | Should -Be 'AvmConfigurationException'
+            $message | Should -Match 'clean working tree'
+            $message | Should -Match 'uncommitted\.txt'
+        }
+        finally {
+            Remove-Item -LiteralPath $dirtyFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'F59: Invoke-AvmCheckPolicy evaluates both policy bundles against plan JSON' {
         $result = Invoke-AvmCheckPolicy -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
         $result.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
-        $result.PSObject.Properties['Status'].Value | Should -Be 'skipped'
+        $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
         $result.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
         $result.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
         $result.PSObject.Properties['ToolPath'].Value | Should -Not -BeNullOrEmpty
-        $result.PSObject.Properties['Evaluated'].Value | Should -Be 0
-
-        $issues = @($result.PSObject.Properties['Issues'].Value)
-        $issues.Count | Should -Be 1
-        $issues[0].Code     | Should -Be 'avm.tf.policy-not-evaluated'
-        $issues[0].Severity | Should -Be 'warning'
-        $issues[0].Message  | Should -Match 'namespaces seen: main'
+        $result.PSObject.Properties['Evaluated'].Value | Should -Be 260
+        @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 
-    It 'F46: Invoke-AvmCheckPolicy fails and surfaces the rule when conftest reports a real violation' {
+    It 'F59: Invoke-AvmCheckPolicy fails and surfaces a real plan-JSON violation' {
         # Proves the gate can go red end-to-end. Without this the suite only
         # ever proves it does nothing quietly.
         $env:AVM_STUB_CONFTEST_OUTPUT = @'
@@ -366,9 +419,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $issues.Count | Should -Be 1
         $issues[0].Severity | Should -Be 'error'
         $issues[0].Code     | Should -Be 'avmsec'
-        $issues[0].File     | Should -Be 'main.tf'
+        $issues[0].File     | Should -Be 'examples/foo/tfplan.json'
         $issues[0].Message  | Should -Match 'public network access'
-        # The vacuity diagnostic must not fire once a rule has genuinely matched.
-        @($issues | Where-Object { $_.Code -eq 'avm.tf.policy-not-evaluated' }).Count | Should -Be 0
     }
 }

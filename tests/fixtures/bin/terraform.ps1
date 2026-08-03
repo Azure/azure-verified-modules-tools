@@ -45,10 +45,16 @@ switch ($args[0]) {
         exit 0
     }
     'plan' {
-        # e2e idempotency check runs 'plan -detailed-exitcode ...'. Exit 0 =
-        # no changes (idempotent). The engine treats exit 2 as drift; the stub
-        # always reports a clean, idempotent plan.
+        $outArg = @($args | Where-Object { $_ -like '-out=*' } | Select-Object -First 1)
+        if ($outArg.Count -gt 0) {
+            $planName = $outArg[0].Substring('-out='.Length)
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path $planName) -Value 'stub plan' -Encoding utf8
+        }
         Write-Output 'No changes. Your infrastructure matches the configuration.'
+        exit 0
+    }
+    'show' {
+        Write-Output '{"format_version":"1.2","terraform_version":"1.15.3","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'
         exit 0
     }
     'destroy' {

@@ -129,7 +129,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
 | `avm new`                     | Scaffold new resource/pattern/utility module (replaces `Set-ModuleFileAndFolderSetup.ps1`) | Scaffold new module from `tfmod-scaffold` template                         |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
-| `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | `tflint` with merged AVM config                                            |
+| `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
 | `avm check convention`        | Compliance Pester suite (`module.tests.ps1`)                             | `grept run`                                                                |
 | `avm transform`               | Regenerate README + test scaffolding (`Set-AVMModule`)                   | `mapotf transform` + clean-backup                                          |
@@ -138,7 +138,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
 | `avm pre-commit`              | Composition (as wired today): `format` → `lint` → `test` → `docs`        | Composition (as wired today): `format` → `lint` → `test` → `docs`          |
-| `avm pr-check`                | Composition (as wired today): `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `unit test` → `docs` (stubbed Bicep engines for `transform` / `check policy` / `check convention` report as `skipped`, as does the terraform-only `unit test` tier) | Composition (as wired today): same 9-step chain; `transform` / `check convention` report as `skipped` until the Phase 2 §2 supply-chain decision unblocks `mapotf` / `grept` |
+| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 8-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |
 | `avm index update`            | `Invoke-AvmJsonModuleIndexGeneration.ps1`                                | Update governance index entry                                              |
@@ -345,7 +345,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 
 - `avm` verbs route to the Terraform stack:
   - `format` → `terraform fmt` + `avmfix`.
-  - `lint` → `tflint` with merged AVM config (resolver picks `avm.tflint_module.hcl` vs `avm.tflint_example.hcl`).
+  - `lint` → cleaned temporary module copy, `terraform init` per scope, optional example `tflint-pre.ps1`, then `tflint` with merged AVM config (resolver picks `avm.tflint_module.hcl` vs `avm.tflint_example.hcl`).
   - `check policy` → `conftest test` with APRL + AVMSEC bundles.
   - `check convention` → `grept run`.
   - `transform` → `mapotf transform --mptf-dir … --tf-dir …` then `mapotf clean-backup`.
@@ -370,7 +370,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `test-examples.porch.yaml` → `Build/Tasks/TestExamples.ps1`.
   - `terraform-test.porch.yaml` → `Build/Tasks/TerraformTest.ps1`.
   - `global-setup` / `global-teardown` → matching tasks.
-- Per-example pre/post-hook engine (`pre.sh`/`pre.ps1`/`post.sh`/`post.ps1`, plus `.env` sourcing) reimplemented inside the CLI.
+- Per-example PowerShell pre/post-hook engine (`pre.ps1`/`post.ps1`, plus `.env` sourcing) reimplemented inside the CLI; shell hooks fail with PowerShell migration guidance.
 - TUI replacement via [Spectre.Console](https://spectreconsole.net/) (if Hybrid kicks in) or [PoshGui-like progress UI](https://github.com/PoshCode/Pester) in pure PS for now.
 - `avm` retains a `--use-porch` flag that forces the legacy path for one release for safety.
 
