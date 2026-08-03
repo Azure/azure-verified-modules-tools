@@ -49,6 +49,128 @@ Describe 'Resolve-AvmTflintConfigDir' {
     }
 }
 
+Describe 'Merge-AvmTflintConfig' {
+    BeforeEach {
+        $script:basePath = Join-Path $TestDrive 'base.hcl'
+        $script:overridePath = Join-Path $TestDrive 'override.hcl'
+        $script:destinationPath = Join-Path $TestDrive 'merged.hcl'
+    }
+
+    It 'applies a genuine rule-disable override without dropping base attributes' {
+        @'
+plugin "avm" {
+  enabled = true
+  version = "0.16.0"
+  source  = "github.com/Azure/tflint-ruleset-avm"
+}
+
+rule "managed_identities" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+# Used by terraform-azurerm-avm-res-containerservice-managedcluster.
+rule "managed_identities" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
+        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
+    }
+
+    It 'merges attributes into the last duplicate block like pinned hclmerge' {
+        @'
+rule "diagnostic_settings" {
+  enabled = true
+}
+
+rule "diagnostic_settings" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+rule "diagnostic_settings" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $blocks = [regex]::Matches($merged, '(?s)rule "diagnostic_settings"\s*\{(?<body>[^{}]*)\}')
+        $blocks.Count | Should -Be 2
+        $blocks[0].Groups['body'].Value | Should -Match 'enabled = true'
+        $blocks[1].Groups['body'].Value | Should -Match 'enabled = false'
+    }
+
+    It 'retains unspecified plugin attributes and appends new blocks' {
+        @'
+plugin "avm" {
+  enabled = true
+  version = "0.16.0"
+  source  = "github.com/Azure/tflint-ruleset-avm"
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+plugin "avm" {
+  enabled = false
+}
+
+rule "custom_rule" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
+        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
+    }
+
+    It 'rejects unsupported nested override blocks instead of silently changing semantics' {
+        'rule "x" { enabled = true }' | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+rule "x" {
+  enabled = false
+  option {
+    value = true
+  }
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+            } {
+                param($B, $O, $D)
+                Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            }
+        } | Should -Throw '*unsupported HCL*'
+    }
+}
+
 Describe 'Get-AvmTflintScope' {
     BeforeEach {
         $script:root = Join-Path $TestDrive ("scope-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -164,6 +286,56 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
         $result.FilesProcessed | Should -Be 2
+    }
+
+    It 'uses a root override to build a temporary merged config and removes it afterward' {
+        $ctx = $script:context
+        $configDir = Join-Path $TestDrive 'override-configs'
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        foreach ($name in @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')) {
+            @'
+rule "managed_identities" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
+        }
+        @'
+rule "managed_identities" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint.override.hcl') -Encoding utf8
+
+        $capture = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Config = $configDir; Cache = $TestDrive } {
+            param($C, $Config, $Cache)
+            $script:capturedConfigPath = $null
+            $script:capturedConfigText = $null
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+            }
+            Mock Resolve-AvmTflintConfigDir { $Config }
+            Mock Get-AvmFolder { $Cache }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                $configIndex = [array]::IndexOf($ArgumentList, '--config') + 1
+                $script:capturedConfigPath = $ArgumentList[$configIndex]
+                $script:capturedConfigText = Get-Content -LiteralPath $script:capturedConfigPath -Raw
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            [pscustomobject]@{
+                Result     = $result
+                ConfigPath = $script:capturedConfigPath
+                ConfigText = $script:capturedConfigText
+            }
+        }
+
+        $capture.Result.Status | Should -Be 'pass'
+        $capture.ConfigText | Should -Match 'enabled = false'
+        $capture.ConfigPath | Should -Not -BeLike "$configDir*"
+        $capture.ConfigPath | Should -Not -Exist
     }
 
     It 'applies the module and example rulesets to nested scopes' {

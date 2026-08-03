@@ -61,6 +61,11 @@ section when cutting a release.
 
 ### Fixed
 
+- Repository-root `avm.tflint.override.hcl`,
+  `avm.tflint_example.override.hcl`, and
+  `avm.tflint_module.override.hcl` files are merged over the vendored rulesets
+  before TFLint runs. Migrated repositories no longer silently lose their
+  ruleset customizations.
 - `avm check policy` no longer feeds raw HCL to policies designed for Terraform
   plan JSON. The old path could not match a resource and therefore reported
   `skipped` in every PR check. Policy evaluation now uses isolated per-example
