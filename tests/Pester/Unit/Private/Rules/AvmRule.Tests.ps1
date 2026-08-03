@@ -47,9 +47,26 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                     AppliesTo   = 'examples'
                     Parameters  = @{ Path = 'docs' }
                 }
+
                 $rule = New-AvmRule -Definition $def
                 $rule.Severity | Should -Be 'warning'
                 $rule.AppliesTo | Should -Be 'examples'
+            }
+        }
+
+        It 'accepts DirectoryMustContainFile with a path and pattern' {
+            InModuleScope 'Avm.Authoring' {
+                $rule = New-AvmRule -Definition @{
+                    Id          = 'avm.test.unit-fixture'
+                    Kind        = 'DirectoryMustContainFile'
+                    Description = 'unit test fixture exists'
+                    Parameters  = @{
+                        Path    = 'tests/unit'
+                        Pattern = '*.tftest.hcl'
+                    }
+                }
+                $rule.Parameters.Path | Should -Be 'tests/unit'
+                $rule.Parameters.Pattern | Should -Be '*.tftest.hcl'
             }
         }
 
@@ -286,9 +303,40 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                     Description = 'd'
                     Parameters  = @{ RequiredGlobs = @() }
                 }
+
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match 'must have at least one entry'
+            }
+        }
+
+        It 'rejects DirectoryMustContainFile without Pattern' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.no-pattern'
+                    Kind        = 'DirectoryMustContainFile'
+                    Description = 'd'
+                    Parameters  = @{ Path = 'tests/unit' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err | Should -BeOfType ([System.Data.DataException])
+                $err.Message | Should -Match 'DirectoryMustContainFile requires Parameters.Pattern'
+            }
+        }
+
+        It 'rejects DirectoryMustContainFile without Path' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.no-directory'
+                    Kind        = 'DirectoryMustContainFile'
+                    Description = 'd'
+                    Parameters  = @{ Pattern = '*.tftest.hcl' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err | Should -BeOfType ([System.Data.DataException])
+                $err.Message | Should -Match 'DirectoryMustContainFile requires Parameters.Path'
             }
         }
 

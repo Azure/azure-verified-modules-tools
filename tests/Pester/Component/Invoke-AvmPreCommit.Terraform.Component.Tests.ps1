@@ -54,7 +54,7 @@ BeforeAll {
 
     $script:fixtureRoot = Join-Path $TestDrive 'module'
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
-    $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests') -Force
+    $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests/unit') -Force
 
     # Pre-stage the pinned policy-library cache so
     # Invoke-AvmTerraformCheckPolicy's Resolve-AvmPinnedAsset short-circuits
@@ -103,7 +103,7 @@ BeforeAll {
         '<!-- END_TF_DOCS -->'
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'README.md') -Value $readme -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'tests' '.keep') -Value '' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'tests/unit' 'main.tftest.hcl') -Value '# fixture' -Encoding utf8NoBOM
 
     # Per-example exception .rego fixture so the integration smoke also
     # exercises Invoke-AvmTerraformCheckPolicy's per-example exceptions
@@ -251,7 +251,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
-    It 'pr-check composes nine steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -259,8 +259,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 9
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'unit test', 'docs')
+        $steps.Count | Should -Be 8
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -290,15 +290,6 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $engineResult.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
-
-        # F40: the fixture ships no tests/unit tier, so the step reports 'skipped'
-        # with zero runs rather than a pass. A pass here is indistinguishable from
-        # a real one, which is how a module with no tests stays green forever.
-        # 'skipped' does not flip the overall status, so the gauntlet still passes.
-        $byName['unit test'].PSObject.Properties['Status'].Value | Should -Be 'skipped'
-        $unitResult = $byName['unit test'].PSObject.Properties['Result'].Value
-        $unitResult.PSObject.Properties['Engine'].Value    | Should -Be 'terraform'
-        $unitResult.PSObject.Properties['RunsTotal'].Value | Should -Be 0
 
         # check convention is pure-PowerShell, so it reports ToolSource='builtin'
         # rather than 'path'. The fixture writes all the files required by the

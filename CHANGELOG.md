@@ -40,6 +40,10 @@ section when cutting a release.
 
 ### Changed
 
+- `avm pr-check` no longer repeats the standalone `unit-test` CI job. The
+  `check convention` step now requires at least one direct
+  `tests/unit/*.tftest.hcl` fixture, retaining the no-tests safeguard without
+  executing the same unit tier twice.
 - The release workflow no longer requires `ModuleVersion` in the repo manifest
   to match the tag being released, and no longer fails when the tag has no
   CHANGELOG section. `./build.ps1 build -ReleaseVersion X.Y.Z` stamps the

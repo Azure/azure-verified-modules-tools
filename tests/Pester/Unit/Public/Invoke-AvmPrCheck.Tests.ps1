@@ -23,7 +23,7 @@ Describe 'Invoke-AvmPrCheck' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPrCheck'
     }
 
-    It 'composes all nine steps in order on a passing chain; the terraform-only sync and unit test steps are skipped for bicep' {
+    It 'composes all eight steps in order on a passing chain; the terraform-only sync step is skipped for bicep' {
         $dir = Join-Path $TestDrive ("prcheck-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -47,7 +47,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 9
+        $result.Steps.Count               | Should -Be 8
         $result.Steps[0].Step             | Should -Be 'sync'
         $result.Steps[0].Status           | Should -Be 'skipped'
         $result.Steps[1].Step             | Should -Be 'format'
@@ -56,10 +56,8 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[4].Step             | Should -Be 'check policy'
         $result.Steps[5].Step             | Should -Be 'check convention'
         $result.Steps[6].Step             | Should -Be 'validate'
-        $result.Steps[7].Step             | Should -Be 'unit test'
-        $result.Steps[7].Status           | Should -Be 'skipped'
-        $result.Steps[8].Step             | Should -Be 'docs'
-        ($result.Steps | Where-Object Step -notin @('sync', 'unit test') | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+        $result.Steps[7].Step             | Should -Be 'docs'
+        ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
     It 'runs every managed-content step in drift mode so a CI auto-fix cannot report a pass' {
@@ -80,7 +78,6 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; RunsTotal = 3 } }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
 
             Invoke-AvmPrCheck -Path $D | Out-Null
@@ -117,13 +114,12 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                  | Should -Be 'pass'
-        $result.Steps.Count                             | Should -Be 9
-        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 5
+        $result.Steps.Count                             | Should -Be 8
+        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 4
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
-        ($result.Steps | Where-Object Step -eq 'unit test').Status         | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'docs').Status              | Should -Be 'pass'
     }
 
@@ -150,7 +146,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                | Should -Be 'fail'
-        $result.Steps.Count                           | Should -Be 9
+        $result.Steps.Count                           | Should -Be 8
         ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status | Should -Be 'pass'
     }
@@ -226,7 +222,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'composes all nine steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
+    It 'composes all eight steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -244,7 +240,7 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; RunsTotal = 3; RunsPassed = 3; RunsFailed = 0 } }
+            Mock Invoke-AvmTestUnit { throw 'pr-check must not run the standalone unit tier' }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPrCheck -Path $D
 
@@ -257,7 +253,7 @@ Describe 'Invoke-AvmPrCheck' {
             Should -Invoke Invoke-AvmCheckPolicy     -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTest            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTestUnit        -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTestUnit        -Times 0 -Exactly
             Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
             $r
@@ -265,7 +261,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 9
+        $result.Steps.Count               | Should -Be 8
         $result.Steps[0].Step             | Should -Be 'sync'
         $result.Steps[1].Step             | Should -Be 'format'
         $result.Steps[2].Step             | Should -Be 'transform'
@@ -273,8 +269,7 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[4].Step             | Should -Be 'check policy'
         $result.Steps[5].Step             | Should -Be 'check convention'
         $result.Steps[6].Step             | Should -Be 'validate'
-        $result.Steps[7].Step             | Should -Be 'unit test'
-        $result.Steps[8].Step             | Should -Be 'docs'
+        $result.Steps[7].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -296,14 +291,13 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { throw [AvmNotSupportedException]::new('check policy not wired yet') }
             Mock Invoke-AvmCheckConvention { throw [AvmNotSupportedException]::new('check convention not wired yet') }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; RunsTotal = 3; RunsPassed = 3; RunsFailed = 0 } }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPrCheck -Path $D
         }
 
         $result.Status                                                     | Should -Be 'pass'
         $result.Ecosystem                                                  | Should -Be 'terraform'
-        $result.Steps.Count                                                | Should -Be 9
+        $result.Steps.Count                                                | Should -Be 8
         ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'pass'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
@@ -311,87 +305,6 @@ Describe 'Invoke-AvmPrCheck' {
         ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'docs').Status              | Should -Be 'pass'
     }
-    It 'runs the credential-free unit tier so a green pr-check cannot hide a module whose tests never ran' {
-        $dir = Join-Path $TestDrive ("prcheck-unit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
-            param($D)
-            Mock Get-AvmModuleContext {
-                [pscustomobject]@{
-                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
-                }
-            }
-            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 17 } }
-            Mock Invoke-AvmTestUnit { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail'; RunsTotal = 2; RunsPassed = 1; RunsFailed = 1 } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Invoke-AvmPrCheck -Path $D
-        }
-
-        InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTestUnit -Exactly 1
-        }
-
-        # A failing unit tier must fail the gauntlet. Before F38 the chain only
-        # ran 'terraform validate', so a module with broken (or entirely absent)
-        # tests still reported an all-green pr-check.
-        $result.Status | Should -Be 'fail'
-        $unit = $result.Steps | Where-Object Step -eq 'unit test'
-        $unit.Status           | Should -Be 'fail'
-        $unit.Result.RunsTotal | Should -Be 2
-
-        # The validate step keeps its own shape and carries no run counts, which
-        # is why it must not be called 'test'.
-        $validate = $result.Steps | Where-Object Step -eq 'validate'
-        $validate.Result.PSObject.Properties.Name | Should -Not -Contain 'RunsTotal'
-    }
-
-    It 'F40: surfaces a module with no unit tier as skipped rather than a green pass' {
-        $dir = Join-Path $TestDrive ("prcheck-notier-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
-            param($D)
-            Mock Get-AvmModuleContext {
-                [pscustomobject]@{
-                    Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
-                }
-            }
-            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmLint { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 17 } }
-            # What the engine returns for a module that ships no tests/unit.
-            Mock Invoke-AvmTestUnit {
-                [pscustomobject]@{
-                    Engine = 'terraform'; Status = 'skipped'; FilesProcessed = 0
-                    RunsTotal = 0; RunsPassed = 0; RunsFailed = 0
-                }
-            }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Invoke-AvmPrCheck -Path $D
-        }
-
-        # An absent tier must be visible, but it must not fail the gauntlet -
-        # that would break every repo that ships no unit tests at once.
-        $unit = $result.Steps | Where-Object Step -eq 'unit test'
-        $unit.Status           | Should -Be 'skipped'
-        $unit.Result.RunsTotal | Should -Be 0
-        $result.Status         | Should -Be 'pass'
-
-        # The chain must still run to the end.
-        ($result.Steps | Select-Object -Last 1).Step | Should -Be 'docs'
-    }
-
     It 'does not run the unit tier as part of pre-commit, which stays offline and init-free' {
         $dir = Join-Path $TestDrive ("precommit-nounit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -441,13 +354,11 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            Mock Invoke-AvmTestUnit { throw [AvmNotSupportedException]::new('not implemented for this ecosystem') }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Invoke-AvmPrCheck -Path $D
         }
 
         ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
-        ($result.Steps | Where-Object Step -eq 'unit test').Status | Should -Be 'skipped'
         $result.Status | Should -Be 'fail'
 
         # 'fail' must not abort the chain the way 'error' does - the remaining

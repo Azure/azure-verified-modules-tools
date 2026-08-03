@@ -131,9 +131,9 @@ function Test-AvmRule {
         Schema:
           - Id          : required, lowercase kebab/dot identifier
                           (^[a-z][a-z0-9.-]*$), unique within the loaded set.
-          - Kind        : required, one of the four primitive kinds:
+          - Kind        : required, one of the five primitive kinds:
                           FileMustNotExist, FileMustExist, DirectoryMustExist,
-                          GitignoreMustContain.
+                          DirectoryMustContainFile, GitignoreMustContain.
           - Description : required, non-empty string.
           - Severity    : optional, 'error' | 'warning' (default 'error').
           - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all',
@@ -143,6 +143,7 @@ function Test-AvmRule {
               FileMustNotExist     : Path (string). Optional: FixRenameTo (string).
               FileMustExist        : Path (string).
               DirectoryMustExist   : Path (string).
+              DirectoryMustContainFile : Path (string), Pattern (string).
               GitignoreMustContain : RequiredGlobs (string[]), at least one entry.
     #>
     [CmdletBinding()]
@@ -157,7 +158,13 @@ function Test-AvmRule {
         $ErrorActionPreference = 'Stop'
 
         $idRegex = '^[a-z][a-z0-9.-]*$'
-        $validKinds = @('FileMustNotExist', 'FileMustExist', 'DirectoryMustExist', 'GitignoreMustContain')
+        $validKinds = @(
+            'FileMustNotExist'
+            'FileMustExist'
+            'DirectoryMustExist'
+            'DirectoryMustContainFile'
+            'GitignoreMustContain'
+        )
         $validSeverities = @('error', 'warning')
         $validAppliesTo = @('root', 'examples', 'modules', 'all')
         $knownKeys = @('Id', 'Kind', 'Description', 'Severity', 'Parameters', 'AppliesTo')
@@ -250,6 +257,16 @@ function Test-AvmRule {
                 if (-not $params.ContainsKey('Path') -or [string]::IsNullOrWhiteSpace([string]$params.Path)) {
                     throw [System.Data.DataException]::new(
                         "avm-rule '$id': DirectoryMustExist requires Parameters.Path.")
+                }
+            }
+            'DirectoryMustContainFile' {
+                if (-not $params.ContainsKey('Path') -or [string]::IsNullOrWhiteSpace([string]$params.Path)) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': DirectoryMustContainFile requires Parameters.Path.")
+                }
+                if (-not $params.ContainsKey('Pattern') -or [string]::IsNullOrWhiteSpace([string]$params.Pattern)) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': DirectoryMustContainFile requires Parameters.Pattern.")
                 }
             }
             'GitignoreMustContain' {

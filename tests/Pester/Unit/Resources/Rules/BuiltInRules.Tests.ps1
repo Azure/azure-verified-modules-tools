@@ -114,13 +114,14 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             [string]$r.Parameters.Path | Should -Be 'examples'
         }
 
-        It 'ships avm.tf.tests-dir-must-exist (root only)' {
+        It 'ships avm.tf.tests-dir-must-exist with a real unit fixture requirement' {
             $r = $script:rulesById['avm.tf.tests-dir-must-exist']
             $r | Should -Not -BeNullOrEmpty
-            $r.Kind | Should -Be 'DirectoryMustExist'
+            $r.Kind | Should -Be 'DirectoryMustContainFile'
             $r.Severity | Should -Be 'error'
             $r.AppliesTo | Should -Be 'root'
-            [string]$r.Parameters.Path | Should -Be 'tests'
+            [string]$r.Parameters.Path | Should -Be 'tests/unit'
+            [string]$r.Parameters.Pattern | Should -Be '*.tftest.hcl'
         }
 
         It 'ships avm.tf.gitignore-essentials with the upstream glob set, minus .avm' {

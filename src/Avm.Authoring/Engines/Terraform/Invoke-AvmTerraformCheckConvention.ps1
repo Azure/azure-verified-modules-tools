@@ -179,6 +179,9 @@ function Invoke-AvmRulePrimitive {
         'DirectoryMustExist' {
             Test-AvmRuleDirectoryMustExist -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
         }
+        'DirectoryMustContainFile' {
+            Test-AvmRuleDirectoryMustContainFile -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
+        }
         'GitignoreMustContain' {
             Test-AvmRuleGitignoreMustContain -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
         }

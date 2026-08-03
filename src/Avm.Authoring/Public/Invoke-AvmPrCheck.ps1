@@ -1,9 +1,9 @@
 function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
-        Run the full pull-request gauntlet against the resolved module:
+        Run the pull-request linting and drift gauntlet against the resolved module:
         sync -> format -> transform -> lint -> check policy ->
-        check convention -> validate -> unit test -> docs.
+        check convention -> validate -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -13,22 +13,16 @@ function Invoke-AvmPrCheck {
         executed step reports Status='pass' (or didn't throw, for verbs
         that don't carry a Status field).
 
-        This is the broader sibling of Invoke-AvmPreCommit: where
-        pre-commit runs the fast, locally meaningful checks (format,
-        lint, validate, docs), pr-check runs **every check that runs in
-        CI** (per plan section 4), including the convention-policy
-        steps that compare the module against the AVM specs.
+        This is the broader sibling of Invoke-AvmPreCommit. It adds the
+        credentialled policy evaluation and read-only drift checks used to
+        verify that pre-commit output is current.
 
         The 'validate' step is a build-validation pass ('terraform
-        validate' / 'bicep build'), NOT a test run - it is named for
-        what it does. The 'unit test' step that follows is the real
-        thing: it runs the tests/unit tier and reports run counts, so a
-        module with no tests cannot read as a green gauntlet. It is
-        included because the unit tier is credential-free and therefore
-        the only tier that can honestly run anywhere; the integration
-        and e2e tiers need a live subscription and stay out. For bicep
-        the unit-test step throws AvmConfigurationException and is
-        skipped.
+        validate' / 'bicep build'), not a test run. Unit tests remain a
+        separate CI job so a failure produces one actionable signal and
+        fork contributors receive results without environment approval.
+        The convention step requires a tests/unit/*.tftest.hcl fixture,
+        preventing an empty unit tier from reading as a green gauntlet.
 
         The chain opens with the managed-files sync step (terraform
         only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
@@ -43,13 +37,10 @@ function Invoke-AvmPrCheck {
           - 'pass'    : step returned Status='pass' (or didn't throw for
                         format).
           - 'fail'    : step returned Status='fail'.
-          - 'error'   : step threw any exception other than
-                        AvmConfigurationException; the chain aborts.
-          - 'skipped' : step threw AvmConfigurationException - the engine
-                        is a deliberate placeholder for a future slice
-                        (e.g. bicep-docs, transform, check policy,
-                        check convention). The chain CONTINUES and
-                        overall status is NOT marked failed by a skip.
+          - 'error'   : step threw an unexpected exception; the chain aborts.
+          - 'skipped' : step threw AvmNotSupportedException because it does
+                        not apply to the selected ecosystem.
+          - configuration exceptions are failures, not skips.
 
         By default the gauntlet is fail-soft: a step that returns
         Status='fail' does NOT abort subsequent steps - the caller gets
@@ -119,7 +110,6 @@ function Invoke-AvmPrCheck {
         [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
-        [pscustomobject]@{ Name = 'unit test'; Cmdlet = 'Invoke-AvmTestUnit' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
     )
 
