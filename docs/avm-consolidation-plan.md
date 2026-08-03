@@ -129,7 +129,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
 | `avm new`                     | Scaffold new resource/pattern/utility module (replaces `Set-ModuleFileAndFolderSetup.ps1`) | Scaffold new module from `tfmod-scaffold` template                         |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
-| `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | `tflint` with merged AVM config                                            |
+| `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
 | `avm check convention`        | Compliance Pester suite (`module.tests.ps1`)                             | `grept run`                                                                |
 | `avm transform`               | Regenerate README + test scaffolding (`Set-AVMModule`)                   | `mapotf transform` + clean-backup                                          |
@@ -345,7 +345,7 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 
 - `avm` verbs route to the Terraform stack:
   - `format` → `terraform fmt` + `avmfix`.
-  - `lint` → `tflint` with merged AVM config (resolver picks `avm.tflint_module.hcl` vs `avm.tflint_example.hcl`).
+  - `lint` → cleaned temporary module copy, `terraform init` per scope, optional example `tflint-pre.ps1`, then `tflint` with merged AVM config (resolver picks `avm.tflint_module.hcl` vs `avm.tflint_example.hcl`).
   - `check policy` → `conftest test` with APRL + AVMSEC bundles.
   - `check convention` → `grept run`.
   - `transform` → `mapotf transform --mptf-dir … --tf-dir …` then `mapotf clean-backup`.

@@ -42,6 +42,11 @@ section when cutting a release.
 
 ### Changed
 
+- `avm lint` now copies the Terraform module to a cleaned temporary tree and
+  runs `terraform init -input=false` in every root, module, and example scope.
+  Example `tflint-pre.ps1` hooks run after Terraform initialization and before
+  TFLint plugin initialization, while generated files and hook output remain
+  isolated from the source repository.
 - `avm pr-check` no longer repeats the standalone `unit-test` CI job. The
   `check convention` step now requires at least one direct
   `tests/unit/*.tftest.hcl` fixture, retaining the no-tests safeguard without

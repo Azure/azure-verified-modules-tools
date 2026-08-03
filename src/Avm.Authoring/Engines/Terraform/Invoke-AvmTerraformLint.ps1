@@ -146,9 +146,11 @@ function Invoke-AvmTerraformLint {
         vendored AVM rulesets via Resolve-AvmTflintConfigDir. Repository-root
         avm.tflint.override.hcl, avm.tflint_example.override.hcl, and
         avm.tflint_module.override.hcl files are merged over those immutable
-        bases in an isolated cache directory before every scope produced by
-        Get-AvmTflintScope is evaluated:
+        bases in an isolated cache directory. The repository is copied to a
+        clean temporary tree before every scope produced by Get-AvmTflintScope
+        is evaluated:
 
+            terraform init -input=false
             tflint --init   --config <absolute ruleset>          (install plugins)
             tflint --config <absolute ruleset> --format=json \
                    --minimum-failure-severity=<threshold>        (lint)
@@ -156,9 +158,11 @@ function Invoke-AvmTerraformLint {
         This mirrors the upstream avm-terraform-governance pre-check flow,
         including its repository-root override lookup and override-first
         attribute precedence. Example scopes reject tflint-pre.sh and run
-        tflint-pre.ps1, when present, before TFLint starts. A single recursive
-        invocation with no '--config' (the previous behaviour) applied none of
-        the AVM rules and could not express the per-directory rulesets.
+        tflint-pre.ps1, when present, after Terraform initialization and before
+        TFLint starts. Generated Terraform state remains confined to the
+        temporary tree. A single recursive invocation with no '--config' (the
+        previous behaviour) applied none of the AVM rules and could not express
+        the per-directory rulesets.
 
         The failure threshold defaults to 'warning', so any warning-severity
         rule fails the gauntlet - most built-in tflint rules are warnings, so an
@@ -172,11 +176,6 @@ function Invoke-AvmTerraformLint {
           0  - no issues at or above the threshold
           2  - issues found (parsed; drives Status via the threshold)
           other - tflint itself failed (throws AvmProcessException)
-
-        Note: unlike the governance porch flow, this engine does not run
-        'terraform init' before tflint. The vendored AVM rulesets are satisfied
-        by tflint's plugin '--init' alone; keeping lint free of a terraform
-        backend/network round-trip makes 'avm lint' fast and offline-friendly.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -214,9 +213,11 @@ function Invoke-AvmTerraformLint {
     }
 
     $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
+    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
     $configSet = New-AvmTflintConfigSet -Root $Context.Root -BaseConfigDir $baseConfigDir
-    $scopes = Get-AvmTflintScope -Root $Context.Root -ConfigDir $configSet.ConfigDir
+    $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'
+    $stageRoot = Join-Path $stageParent ('avm-lint-' + [guid]::NewGuid().ToString('N'))
 
     # Severities at or above the threshold fail the run. tflint emits lowercase
     # 'error' / 'warning' / 'notice'.
@@ -230,11 +231,20 @@ function Invoke-AvmTerraformLint {
     $filesProcessed = 0
 
     try {
+        Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
+        $scopes = Get-AvmTflintScope -Root $stageRoot -ConfigDir $configSet.ConfigDir
+
         foreach ($scope in $scopes) {
             # Count only the top-level '*.tf' in this scope - tflint is invoked
             # non-recursively per scope, and nested modules/examples are their own
             # scopes, so this does not double-count.
             $filesProcessed += @(Get-ChildItem -LiteralPath $scope.Dir -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count
+
+            $null = Invoke-AvmProcess `
+                -FilePath $terraform.Path `
+                -ArgumentList @('init', '-input=false') `
+                -WorkingDirectory $scope.Dir `
+                -Label ('{0}: terraform init' -f $scope.Label)
 
             if ($scope.Label -like 'examples/*') {
                 foreach ($hookName in @('tflint-pre.sh', 'tflint-pre.ps1')) {
@@ -328,6 +338,9 @@ function Invoke-AvmTerraformLint {
         }
     }
     finally {
+        if (Test-Path -LiteralPath $stageRoot) {
+            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
         if ($configSet.StageDir -and (Test-Path -LiteralPath $configSet.StageDir)) {
             Remove-Item -LiteralPath $configSet.StageDir -Recurse -Force -ErrorAction SilentlyContinue
         }

@@ -133,7 +133,10 @@ BeforeAll {
     Set-Content -LiteralPath (Join-Path $exampleDir 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $exampleDir '_header.md') -Value "# Fixture example`n" -Encoding utf8NoBOM
     $script:tflintHookMarker = Join-Path $env:AVM_HOME 'tflint-hook-ran'
-    $tflintHook = "Set-Content -LiteralPath '$($script:tflintHookMarker.Replace("'", "''"))' -Value 'ran' -Encoding utf8NoBOM"
+    $tflintHook = @(
+        "Set-Content -LiteralPath '$($script:tflintHookMarker.Replace("'", "''"))' -Value 'ran' -Encoding utf8NoBOM"
+        'Set-Content -LiteralPath (Join-Path $PSScriptRoot ''hook-output.txt'') -Value ''staged'' -Encoding utf8NoBOM'
+    ) -join "`n"
     Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value $tflintHook -Encoding utf8NoBOM
 
     # avm.tf.gitignore-essentials requires all 24 canonical globs from
@@ -330,6 +333,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($policyResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
         $policyResult.PSObject.Properties['Tool'].Value | Should -Match '^conftest/'
         $script:tflintHookMarker | Should -Exist
+        Join-Path $script:fixtureRoot 'examples' 'foo' 'hook-output.txt' | Should -Not -Exist
     }
 
     It 'pr-check rejects a shell hook with PowerShell migration guidance' {
