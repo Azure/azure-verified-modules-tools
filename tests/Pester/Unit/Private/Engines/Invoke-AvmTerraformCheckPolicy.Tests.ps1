@@ -287,6 +287,54 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.PostRan | Should -BeTrue
     }
 
+    It 'surfaces a post hook failure when policy evaluation succeeds' {
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'post.ps1') -Value '$null = 1' -Encoding utf8
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context
+            Cache = $script:cacheDir
+            Aprl = $script:aprlDir
+            Avmsec = $script:avmsecDir
+        } {
+            param($C, $Cache, $Aprl, $Avmsec)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmPolicyBundle {
+                [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
+            }
+            Mock Get-AvmFolder { $Cache }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[-1] -like '*post.ps1') {
+                    throw [AvmConfigurationException]::new('post hook failed')
+                }
+                if ($ArgumentList[0] -eq 'show') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                }
+                if ($ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut   = '[{"filename":"tfplan.json","namespace":"main","successes":1}]'
+                        StdErr   = ''
+                    }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            try {
+                $null = Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+            catch {
+                [pscustomobject]@{
+                    ErrorName = $_.Exception.GetType().Name
+                    Message   = $_.Exception.Message
+                }
+            }
+        }
+
+        $probe.ErrorName | Should -Be 'AvmConfigurationException'
+        $probe.Message | Should -Match 'post hook failed'
+    }
+
     It 'rejects all shell hooks before process execution' {
         foreach ($hookName in @('pre', 'post')) {
             Set-Content -LiteralPath (Join-Path $script:exampleDir "$hookName.sh") -Value '#!/bin/sh' -Encoding utf8
