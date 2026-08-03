@@ -115,23 +115,6 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         ($result.Issues | Where-Object Code -eq 'avm.err.requires-terraform-tf') | Should -Not -BeNullOrEmpty
     }
 
-    It 'fails when tests/unit contains no Terraform test fixture' {
-        $root = script:NewBaselineRoot
-        Remove-Item -LiteralPath (Join-Path $root 'tests/unit/main.tftest.hcl') -Force
-
-        $ctx = script:NewTerraformContext $root
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
-            param($C)
-            Invoke-AvmTerraformCheckConvention -Context $C
-        }
-
-        $result.Status | Should -Be 'fail'
-        $issues = @($result.Issues | Where-Object Code -eq 'avm.tf.tests-dir-must-exist')
-        $issues.Count | Should -Be 1
-        $issues[0].File | Should -Be 'tests/unit'
-        $issues[0].Message | Should -Match ([regex]::Escape('*.tftest.hcl'))
-    }
-
     It 'expands AppliesTo=examples into each examples/{name} subdirectory' {
         $root = script:NewRoot
         New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null

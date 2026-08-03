@@ -47,10 +47,9 @@ section when cutting a release.
   Example `tflint-pre.ps1` hooks run after Terraform initialization and before
   TFLint plugin initialization, while generated files and hook output remain
   isolated from the source repository.
-- `avm pr-check` no longer repeats the standalone `unit-test` CI job. The
-  `check convention` step now requires at least one direct
-  `tests/unit/*.tftest.hcl` fixture, retaining the no-tests safeguard without
-  executing the same unit tier twice.
+- `avm pr-check` no longer repeats the standalone `unit-test` CI job. Unit,
+  integration, and end-to-end test commands report `skipped`, not `pass`, when
+  no matching tests are discovered.
 - Shell lifecycle hooks are rejected with an actionable configuration error.
   Module authors must refactor `pre.sh`, `post.sh`, and `tflint-pre.sh` hooks
   to their corresponding PowerShell `.ps1` form.

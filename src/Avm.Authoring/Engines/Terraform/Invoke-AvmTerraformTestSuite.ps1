@@ -12,7 +12,7 @@ function Invoke-AvmTerraformTestSuite {
           1. Enumerates test targets: the module root plus each immediate
              'modules/*' subdirectory. A target is runnable when it ships at
              least one '*.tftest.hcl' under tests/<tier>/. If no target is
-             runnable, returns a pass envelope with FilesProcessed = 0 without
+             runnable, returns a skipped envelope with FilesProcessed = 0 without
              invoking terraform.
           2. Rejects shell hooks fail-fast: any tests/<tier>/setup.sh or
              teardown.sh throws AvmConfigurationException before terraform runs

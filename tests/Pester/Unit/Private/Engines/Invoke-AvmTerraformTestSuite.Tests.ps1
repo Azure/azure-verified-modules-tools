@@ -37,7 +37,7 @@ Describe 'Invoke-AvmTerraformTestSuite' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'returns a clean pass with FilesProcessed=0 and never shells out when the tier ships no tftest files' {
+    It 'returns a clean skip with FilesProcessed=0 and never shells out when the tier ships no tftest files' {
         $emptyDir = Join-Path $TestDrive ("tf-empty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
         $ctx = [pscustomobject][ordered]@{

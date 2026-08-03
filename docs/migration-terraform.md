@@ -150,9 +150,9 @@ The composition cmdlets and the exact order of engines they call:
   - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 
-Unit tests remain a separate CI job. `check convention` requires at least one
-direct `tests/unit/*.tftest.hcl` fixture so testless modules fail before that
-standalone tier runs.
+Unit tests remain a separate CI job. Unit, integration, and end-to-end test
+commands report `Status='skipped'`, not `pass`, when no matching tests are
+discovered, so optional test tiers never produce a vacuous green result.
 
 A step that raises `AvmNotSupportedException` is reported as
 `Status='skipped'`; an `AvmConfigurationException` is a hard failure. Pass

@@ -14,7 +14,7 @@ function Invoke-AvmTerraformTestE2e {
 
           1. Enumerates immediate subdirectories of examples/ that contain at
              least one '*.tf' file. Directories carrying a '.e2eignore' marker
-             file are skipped. If no runnable example exists, returns a pass
+             file are skipped. If no runnable example exists, returns a skipped
              envelope with FilesProcessed = 0 without invoking terraform.
           2. Before provisioning, scans every runnable example for a legacy
              shell hook (pre.sh / post.sh). This engine runs PowerShell hooks
