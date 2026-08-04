@@ -21,6 +21,10 @@
 #     workflow adds `Add-MpPreference -ExclusionPath` on its Windows leg so CI
 #     gets a real pass instead of a skip.
 #
+# When AVM_HOME is not supplied, Windows state lives under
+# %LOCALAPPDATA%\Avm\IntegrationTests rather than %TEMP% to reduce Defender ML
+# false positives against unsigned mapotf; Linux and macOS continue using temp.
+#
 # The integration workflow provides Azure OIDC credentials because pr-check
 # policy evaluation now creates a plan for every runnable example.
 
@@ -85,15 +89,23 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         $script:Offline = ((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1'))
         $script:SkipReason = $null
 
+        $runId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $script:RunRoot = if ($IsWindows) {
+            Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Avm' 'IntegrationTests' $runId
+        }
+        else {
+            Join-Path ([IO.Path]::GetTempPath()) "avm-integration-$runId"
+        }
+
         # Respect an externally-provided AVM_HOME: the CI workflow sets it to a
         # known path so it can add a Defender exclusion to that exact directory
-        # BEFORE this test installs tools into it. Otherwise own a temp dir.
+        # BEFORE this test installs tools into it. Otherwise own the run home.
         if ($env:AVM_HOME) {
             $script:AvmHome = $env:AVM_HOME
             $script:OwnsHome = $false
         }
         else {
-            $script:AvmHome = Join-Path ([IO.Path]::GetTempPath()) ('avm-integration-home-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+            $script:AvmHome = Join-Path $script:RunRoot 'home'
             $env:AVM_HOME = $script:AvmHome
             $script:OwnsHome = $true
         }
@@ -112,7 +124,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
         # Writable staging area for fixture copies (transform/format/docs mutate
         # files in place, so we never touch the checked-in fixtures).
-        $script:WorkRoot = Join-Path ([IO.Path]::GetTempPath()) ('avm-integration-work-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $script:WorkRoot = Join-Path $script:RunRoot 'work'
         $null = New-Item -ItemType Directory -Path $script:WorkRoot -Force
 
         if ($script:Offline) {
@@ -171,11 +183,8 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
     }
 
     AfterAll {
-        if ($script:WorkRoot -and (Test-Path -LiteralPath $script:WorkRoot)) {
-            Remove-Item -LiteralPath $script:WorkRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        if ($script:OwnsHome -and $script:AvmHome -and (Test-Path -LiteralPath $script:AvmHome)) {
-            Remove-Item -LiteralPath $script:AvmHome -Recurse -Force -ErrorAction SilentlyContinue
+        if ($script:RunRoot -and (Test-Path -LiteralPath $script:RunRoot)) {
+            Remove-Item -LiteralPath $script:RunRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         # Restore ambient env.

@@ -82,6 +82,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Real-binary Terraform integration tests keep their self-owned Windows home
+  and fixture work tree under `%LOCALAPPDATA%\Avm\IntegrationTests` instead of
+  `%TEMP%`, reducing Defender ML false positives against unsigned `mapotf.exe`.
 - Latest-version discovery now uses `Find-PSResource` and validates empty or
   malformed results without leaking internal PowerShell runtime errors into
   warnings. Repository tests suppress the public version gate centrally, while
