@@ -80,6 +80,11 @@ Describe 'Avm.Authoring module' {
                 Should -Not -BeNullOrEmpty
         }
 
+        It 'exports Update-AvmAuthoring' {
+            Get-Command -Module 'Avm.Authoring' -Name 'Update-AvmAuthoring' -ErrorAction SilentlyContinue |
+                Should -Not -BeNullOrEmpty
+        }
+
         It 'does not leak private helpers (Get-AvmFolder is module-private)' {
             Get-Command -Module 'Avm.Authoring' -Name 'Get-AvmFolder' -ErrorAction SilentlyContinue |
                 Should -BeNullOrEmpty
@@ -95,13 +100,19 @@ Describe 'Avm.Authoring module' {
                 Should -BeNullOrEmpty
         }
 
-        It 'adds SkipModuleVersionCheck to every exported function' {
-            $commands = Get-Command -Module 'Avm.Authoring' -CommandType Function
+        It 'adds SkipModuleVersionCheck to every exported function except self-update' {
+            $commands = Get-Command -Module 'Avm.Authoring' -CommandType Function |
+                Where-Object Name -cne 'Update-AvmAuthoring'
             $commands.Count | Should -BeGreaterThan 0
             foreach ($command in $commands) {
                 $command.Parameters.ContainsKey('SkipModuleVersionCheck') |
                     Should -BeTrue -Because "$($command.Name) must expose the module version check opt-out"
             }
+        }
+
+        It 'does not expose a redundant module-version opt-out on self-update' {
+            $command = Get-Command -Module 'Avm.Authoring' -Name 'Update-AvmAuthoring'
+            $command.Parameters.ContainsKey('SkipModuleVersionCheck') | Should -BeFalse
         }
     }
 }

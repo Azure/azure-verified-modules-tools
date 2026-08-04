@@ -33,7 +33,12 @@ function Invoke-Avm {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    $rawArguments = @($args)
+    $isUpdateCommand = $rawArguments.Count -gt 0 -and
+        [string]$rawArguments[0] -ceq 'update'
+    if (-not $isUpdateCommand) {
+        Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    }
 
     if ($SkipModuleVersionCheck) {
         $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
@@ -70,7 +75,6 @@ function Invoke-Avm {
             "avm is disabled in this repository (remove $sentinel to re-enable).")
     }
 
-    $rawArguments = @($args)
     $passThru = $false
     $arguments = @(
         foreach ($arg in $rawArguments) {

@@ -28,7 +28,8 @@
         'Invoke-AvmTestE2e',
         'Invoke-AvmTestIntegration',
         'Invoke-AvmTestUnit',
-        'Invoke-AvmTransform'
+        'Invoke-AvmTransform',
+        'Update-AvmAuthoring'
     )
     CmdletsToExport      = @()
     VariablesToExport    = @()

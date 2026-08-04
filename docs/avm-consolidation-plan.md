@@ -150,6 +150,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm tool which <name>`       | Print the resolved path the CLI would use for the given tool             | Same                                                                       |
 | `avm doctor`                  | Diagnose: PS version, Bicep version, Az modules, OIDC config, tool-cache status | Diagnose: Terraform/TFLint/`terraform-docs`/Conftest/`avmfix`/`mapotf`/`grept` versions vs lock, OIDC; `--install` bootstraps anything missing |
 | `avm version`                 | Print CLI version + each underlying tool's version                       | Same                                                                       |
+| `avm update`                  | Update Avm.Authoring to the latest PowerShell Gallery version in the CurrentUser scope | Same                                                        |
 
 Global flags: `--ecosystem bicep|terraform|auto` (default `auto`), `--module <path>`, `--json` (machine output), `--verbose`, `--dry-run`, `--auto-install` / `AVM_AUTO_INSTALL=1` (install any missing managed tool without prompting).
 
