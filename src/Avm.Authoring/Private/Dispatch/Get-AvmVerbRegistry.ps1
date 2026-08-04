@@ -25,6 +25,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Print module, runtime and OS version info.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('update')
+            Cmdlet  = 'Update-AvmAuthoring'
+            Summary = 'Update Avm.Authoring to the latest PowerShell Gallery version.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('doctor')
             Cmdlet  = 'Invoke-AvmDoctor'
             Summary = 'Diagnose the local environment.'

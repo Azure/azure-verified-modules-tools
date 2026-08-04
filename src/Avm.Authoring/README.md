@@ -2,7 +2,7 @@
 
 Source for the **`Avm.Authoring`** PowerShell module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/Avm.Authoring).
 
-An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
+An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm update`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
 
 ## Layout
 
@@ -13,6 +13,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/`                                         | One file per exported function. File basename equals function name.                |
 | `Public/Invoke-Avm.ps1`                           | The `avm` dispatcher. Routes verb paths to cmdlets. Accepts kebab-case flags.      |
 | `Public/Get-AvmVersion.ps1`                       | `avm version` -> runtime + module info.                                            |
+| `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
 | `Public/Get-AvmTool.ps1`                          | `avm tool list` / `avm tool which` -> inspect locked tools and cache/PATH state.   |
@@ -100,6 +101,7 @@ Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
 
 avm                 # dispatcher help (writes via Information stream)
 avm version         # Get-AvmVersion
+avm update          # Update-AvmAuthoring
 avm doctor          # Invoke-AvmDoctor
 avm doctor --json   # GNU-style flag translates to -Json
 avm context         # Get-AvmModuleContext (current working directory)

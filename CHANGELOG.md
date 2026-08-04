@@ -21,6 +21,9 @@ section when cutting a release.
 
 ### Added
 
+- `avm update` safely upgrades Avm.Authoring in the CurrentUser scope. It reuses
+  the cached PowerShell Gallery version lookup, reports when already current,
+  supports `-WhatIf`, and remains available when the running module is stale.
 - Enforce the latest PowerShell Gallery release at every public command entry point. Confirmed stale versions fail with exit code 10 and an upgrade command; `-SkipModuleVersionCheck` warns and continues, as do Gallery lookup failures.
 - `avm check policy` for Terraform now evaluates each runnable `examples/*`
   directory against real `terraform show -json` output. The lifecycle honours

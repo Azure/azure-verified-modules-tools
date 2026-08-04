@@ -15,26 +15,12 @@ function Test-AvmModuleVersion {
         return
     }
 
-    if (-not $script:AvmModuleVersionCheckCompleted) {
-        try {
-            $response = Invoke-RestMethod `
-                -Uri "https://www.powershellgallery.com/api/v2/FindPackagesById()?id='Avm.Authoring'&`$orderby=Version%20desc&`$top=1" `
-                -Headers @{ Accept = 'application/json' } `
-                -TimeoutSec 10
-
-            $latestVersionText = [string]$response.value[0].Version
-            if ([string]::IsNullOrWhiteSpace($latestVersionText)) {
-                throw [System.InvalidOperationException]::new(
-                    'The PowerShell Gallery response did not contain an Avm.Authoring version.')
-            }
-
-            $script:AvmLatestModuleVersion = [version]$latestVersionText
-            $script:AvmModuleVersionCheckCompleted = $true
-        }
-        catch {
-            Write-Warning "Unable to check PowerShell Gallery for the latest Avm.Authoring version. Continuing with the installed module. $($_.Exception.Message)"
-            return
-        }
+    try {
+        $latestVersion = Get-AvmLatestModuleVersion
+    }
+    catch {
+        Write-Warning "Unable to check PowerShell Gallery for the latest Avm.Authoring version. Continuing with the installed module. $($_.Exception.Message)"
+        return
     }
 
     $currentModule = Get-Module -Name 'Avm.Authoring' |
@@ -45,11 +31,11 @@ function Test-AvmModuleVersion {
         return
     }
 
-    if ($currentModule.Version -lt $script:AvmLatestModuleVersion) {
+    if ($currentModule.Version -lt $latestVersion) {
         $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
         throw [AvmModuleVersionException]::new(
             $currentModule.Version,
-            $script:AvmLatestModuleVersion,
-            "Avm.Authoring $($currentModule.Version) is outdated. The latest PowerShell Gallery version is $script:AvmLatestModuleVersion. Running the latest version ensures current fixes and behavior. Upgrade with:`n$upgradeScript")
+            $latestVersion,
+            "Avm.Authoring $($currentModule.Version) is outdated. The latest PowerShell Gallery version is $latestVersion. Running the latest version ensures current fixes and behavior. Upgrade with:`n$upgradeScript")
     }
 }
