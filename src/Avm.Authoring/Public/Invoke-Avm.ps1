@@ -26,10 +26,24 @@ function Invoke-Avm {
         PS> avm pre-commit --passthru
     #>
     [Alias('avm')]
-    param()
+    param(
+        [switch] $SkipModuleVersionCheck
+    )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+
+    if ($SkipModuleVersionCheck) {
+        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+            $PSDefaultParameterValues.Clone()
+        }
+        else {
+            @{}
+        }
+        $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
+    }
 
     # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
     # logging. Turn verbose on and cascade it to every nested cmdlet through a

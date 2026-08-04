@@ -39,11 +39,15 @@ function Install-AvmTool {
         # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
-        [switch] $AllowFileUrls
+        [switch] $AllowFileUrls,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $lock = if ($PinsPath) {
         Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls

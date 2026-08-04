@@ -94,5 +94,14 @@ Describe 'Avm.Authoring module' {
             Get-Command -Module 'Avm.Authoring' -Name 'Test-AvmPins' -ErrorAction SilentlyContinue |
                 Should -BeNullOrEmpty
         }
+
+        It 'adds SkipModuleVersionCheck to every exported function' {
+            $commands = Get-Command -Module 'Avm.Authoring' -CommandType Function
+            $commands.Count | Should -BeGreaterThan 0
+            foreach ($command in $commands) {
+                $command.Parameters.ContainsKey('SkipModuleVersionCheck') |
+                    Should -BeTrue -Because "$($command.Name) must expose the module version check opt-out"
+            }
+        }
     }
 }

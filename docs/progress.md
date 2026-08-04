@@ -3,9 +3,9 @@
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
 **Previously**: 2026-07-31 — **The 0.1.7 release failed at the publish step and is fixed on `fix/psgallery-release-notes-limit`.** The tag pushed, the workflow built and tested cleanly, the GitHub Release was created — and then `Publish-PSResource` was rejected with `400 (The package is invalid)`: the PowerShell Gallery caps a manifest's `ReleaseNotes` at 10600 characters and the `build` task stamps the tag's entire CHANGELOG section into that field, which for 0.1.7 is 23987. The limit is enforced server-side at the last step of the pipeline, so it costs a whole release to discover and leaves a tag and a Release pointing at a version that was never published. `Get-AvmReleaseNotes.ps1` gained `-MaxLength`, which truncates on a line boundary from the *bottom* — a section leads with `### Breaking`, so the tail is the safe end to lose — and appends a link to the GitHub Release, which has no such limit and still carries the full notes. Newlines are measured at their CRLF worst case because the packer may rewrite them on the way into the nuspec. The important half is the second guard: the `build` task re-reads the stamped manifest with `Import-PowerShellDataFile` and fails if the value is still over, so the cap is verified against what actually ships rather than trusted from the generator — which is the same principle as F48's `namespaces seen` and is what caught a mutation that disabled the cap silently. A repo-wide test also asserts every released CHANGELOG section fits, so a future section that outgrows the limit fails in `pre-commit` rather than after the tag. Tracked as **F49**.
-**Last updated**: 2026-08-03 — **F76 surfaces secondary policy post-hook failures without replacing the primary diagnostic.**
-**Active branch**: `jaredfholgate-pr-check-parity` (off `main` tip `9009af2`; F59-F66)
-**Working commit**: `7802f86` — F68 durable parity edge-case fixtures
+**Last updated**: 2026-08-04 — **F77 enforces the latest PowerShell Gallery module version across all public commands.**
+**Active branch**: `jaredfholgate-enforce-latest-module-version` (off `main` tip `bbdce1c`; F77)
+**Working commit**: pending — F77 latest-module enforcement
 
 ## Snapshot
 
@@ -18,6 +18,10 @@ Single source of truth for what's done, what's in flight, and what's next on the
 | 4     | Selective `mapotf`/`grept`  | Not started                                                                              |
 | 5     | Governance script port      | Not started                                                                              |
 | 6     | Upstream promotion          | Not started                                                                              |
+
+## Module version enforcement (in flight)
+
+- [x] **F77 — require the latest PowerShell Gallery module version at every public entry point.** Queries PSGallery once per module session, fails confirmed stale versions with `AvmModuleVersionException` / exit code `10` and an actionable `Update-PSResource` command, warns and continues when the lookup fails, and exposes `-SkipModuleVersionCheck` for advanced use with a warning instead of failure.
 
 ## PR-check parity remediation (in flight)
 

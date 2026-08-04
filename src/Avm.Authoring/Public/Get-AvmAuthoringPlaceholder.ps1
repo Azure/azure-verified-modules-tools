@@ -13,7 +13,14 @@ function Get-AvmAuthoringPlaceholder {
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
-    param()
+    param(
+        [switch] $SkipModuleVersionCheck
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     [pscustomobject]@{
         Module     = 'Avm.Authoring'

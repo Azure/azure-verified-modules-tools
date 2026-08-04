@@ -105,11 +105,15 @@ function Invoke-AvmTestE2e {
         [switch] $List,
 
         [ValidateRange(0, 10)]
-        [int] $MaxRetry = 2
+        [int] $MaxRetry = 2,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 
