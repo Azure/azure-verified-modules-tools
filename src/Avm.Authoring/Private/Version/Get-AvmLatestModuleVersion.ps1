@@ -10,18 +10,50 @@ function Get-AvmLatestModuleVersion {
         return $script:AvmLatestModuleVersion
     }
 
-    $response = Invoke-RestMethod `
-        -Uri "https://www.powershellgallery.com/api/v2/FindPackagesById()?id='Avm.Authoring'&`$orderby=Version%20desc&`$top=1" `
-        -Headers @{ Accept = 'application/json' } `
-        -TimeoutSec 10
-
-    $latestVersionText = [string]$response.value[0].Version
-    if ([string]::IsNullOrWhiteSpace($latestVersionText)) {
-        throw [System.InvalidOperationException]::new(
-            'The PowerShell Gallery response did not contain an Avm.Authoring version.')
+    $resources = @(
+        Find-PSResource `
+            -Name 'Avm.Authoring' `
+            -Repository 'PSGallery' `
+            -ErrorAction Stop |
+            Where-Object { $null -ne $_ }
+    )
+    if ($resources.Count -eq 0) {
+        throw [AvmGalleryLookupException]::new(
+            'Find-PSResource returned no Avm.Authoring package from PSGallery.')
     }
 
-    $script:AvmLatestModuleVersion = [version]$latestVersionText
+    $matchingResource = $resources |
+        Where-Object {
+            $nameProperty = $_.PSObject.Properties['Name']
+            $nameProperty -and [string]$nameProperty.Value -ceq 'Avm.Authoring'
+        } |
+        Select-Object -First 1
+    if ($null -eq $matchingResource) {
+        throw [AvmGalleryLookupException]::new(
+            'Find-PSResource did not return the requested Avm.Authoring package from PSGallery.')
+    }
+
+    $versionProperty = $matchingResource.PSObject.Properties['Version']
+    $latestVersionText = if ($versionProperty) {
+        [string]$versionProperty.Value
+    }
+    else {
+        ''
+    }
+    if ([string]::IsNullOrWhiteSpace($latestVersionText)) {
+        throw [AvmGalleryLookupException]::new(
+            'The Avm.Authoring package returned by Find-PSResource did not contain a version.')
+    }
+
+    try {
+        $script:AvmLatestModuleVersion = [version]$latestVersionText
+    }
+    catch {
+        throw [AvmGalleryLookupException]::new(
+            'Find-PSResource returned an invalid Avm.Authoring version.',
+            $_.Exception)
+    }
+
     $script:AvmModuleVersionCheckCompleted = $true
     return $script:AvmLatestModuleVersion
 }

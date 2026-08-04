@@ -7,6 +7,15 @@ function Test-AvmModuleVersion {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $testRunId = $env:AVM_TEST_RUN_ID
+    $parsedTestRunId = [guid]::Empty
+    $hasTestRunId = -not [string]::IsNullOrWhiteSpace($testRunId)
+    $hasValidTestRunId = [guid]::TryParse($testRunId, [ref]$parsedTestRunId)
+    $isRepositoryTestRun = $hasTestRunId -and $hasValidTestRunId -and ($env:AVM_TEST_SKIP_MODULE_VERSION_CHECK -ceq $testRunId)
+    if ($isRepositoryTestRun) {
+        return
+    }
+
     if ($SkipModuleVersionCheck) {
         if (-not $script:AvmModuleVersionSkipWarningWritten) {
             Write-Warning 'The Avm.Authoring PowerShell Gallery version check was skipped. The current command may run with an outdated module.'
@@ -19,7 +28,21 @@ function Test-AvmModuleVersion {
         $latestVersion = Get-AvmLatestModuleVersion
     }
     catch {
-        Write-Warning "Unable to check PowerShell Gallery for the latest Avm.Authoring version. Continuing with the installed module. $($_.Exception.Message)"
+        $failure = $_.Exception
+        $detail = if ($failure -is [AvmGalleryLookupException]) {
+            $failure.Message
+        }
+        elseif ($failure -is [System.Net.Http.HttpRequestException]) {
+            'The Gallery request failed.'
+        }
+        elseif ($failure -is [System.TimeoutException] -or
+            $failure -is [System.Threading.Tasks.TaskCanceledException]) {
+            'The Gallery request timed out.'
+        }
+        else {
+            'The Gallery lookup failed unexpectedly.'
+        }
+        Write-Warning "Unable to check PowerShell Gallery for the latest Avm.Authoring version. Continuing with the installed module. $detail"
         return
     }
 

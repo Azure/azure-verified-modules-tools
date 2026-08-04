@@ -17,6 +17,23 @@ Describe 'Get-AvmVersion' {
         @($result).Count | Should -Be 1
     }
 
+    It 'does not query or warn about PowerShell Gallery in ordinary public tests' {
+        { [guid]$env:AVM_TEST_RUN_ID } | Should -Not -Throw
+        $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK | Should -BeExactly $env:AVM_TEST_RUN_ID
+
+        InModuleScope 'Avm.Authoring' {
+            Mock Find-PSResource {
+                throw [System.InvalidOperationException]::new('must not query')
+            }
+
+            $result = Get-AvmVersion -WarningVariable versionWarnings 3>$null
+
+            $result | Should -Not -BeNullOrEmpty
+            @($versionWarnings).Count | Should -Be 0
+            Should -Invoke Find-PSResource -Times 0 -Exactly
+        }
+    }
+
     It 'reports Module=Avm.Authoring (exact casing)' {
         (Get-AvmVersion).Module | Should -BeExactly 'Avm.Authoring'
     }

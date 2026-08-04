@@ -82,6 +82,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Latest-version discovery now uses `Find-PSResource` and validates empty or
+  malformed results without leaking internal PowerShell runtime errors into
+  warnings. Repository tests suppress the public version gate centrally, while
+  focused unit and integration coverage still exercises the live lookup.
 - `avm pr-check` now fails before its tool chain when `git status
   --porcelain` reports tracked or untracked changes, restoring the legacy
   clean-worktree preflight.

@@ -4,11 +4,19 @@ Describe 'Test-AvmModuleVersion' {
     BeforeAll {
         $script:repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')
         $script:moduleRoot = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
+        $script:originalTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+        $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
         Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
     }
 
     AfterAll {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
+        if ($null -eq $script:originalTestSkip) {
+            Remove-Item Env:AVM_TEST_SKIP_MODULE_VERSION_CHECK -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $script:originalTestSkip
+        }
     }
 
     BeforeEach {
@@ -22,24 +30,30 @@ Describe 'Test-AvmModuleVersion' {
     It 'queries PowerShell Gallery and caches the latest version' {
         InModuleScope 'Avm.Authoring' {
             $current = (Get-Module -Name 'Avm.Authoring').Version
-            Mock Invoke-RestMethod {
+            Mock Find-PSResource {
                 [pscustomobject]@{
-                    value = @([pscustomobject]@{ Version = $current.ToString() })
+                    Name    = 'Avm.Authoring'
+                    Version = $current.ToString()
                 }
             }
 
             Test-AvmModuleVersion
             Test-AvmModuleVersion
 
-            Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+            Should -Invoke Find-PSResource -Times 1 -Exactly -ParameterFilter {
+                $Name -eq 'Avm.Authoring' -and
+                $Repository -eq 'PSGallery' -and
+                $ErrorAction -eq 'Stop'
+            }
         }
     }
 
     It 'throws the dedicated exception and exit code when the module is outdated' {
         InModuleScope 'Avm.Authoring' {
-            Mock Invoke-RestMethod {
+            Mock Find-PSResource {
                 [pscustomobject]@{
-                    value = @([pscustomobject]@{ Version = '99.0.0' })
+                    Name    = 'Avm.Authoring'
+                    Version = '99.0.0'
                 }
             }
 
@@ -60,23 +74,102 @@ Describe 'Test-AvmModuleVersion' {
 
     It 'warns and continues when the PowerShell Gallery query fails' {
         InModuleScope 'Avm.Authoring' {
-            Mock Invoke-RestMethod { throw [System.Net.Http.HttpRequestException]::new('offline') }
+            Mock Find-PSResource { throw [System.Net.Http.HttpRequestException]::new('offline') }
 
             $warnings = Test-AvmModuleVersion -WarningVariable galleryWarnings 3>&1
 
             @($warnings).Count | Should -Be 1
             [string]$galleryWarnings | Should -Match 'Unable to check PowerShell Gallery'
+            [string]$galleryWarnings | Should -Match 'The Gallery request failed'
+            [string]$galleryWarnings | Should -Not -Match 'offline'
+        }
+    }
+
+    It 'reports a <Kind> Gallery result descriptively without runtime indexing errors' -TestCases @(
+        @{
+            Kind     = 'empty'
+            Expected = 'returned no Avm.Authoring package'
+        }
+        @{
+            Kind     = 'wrong package'
+            Expected = 'did not return the requested Avm.Authoring package'
+        }
+        @{
+            Kind     = 'missing version'
+            Expected = 'did not contain a version'
+        }
+        @{
+            Kind     = 'invalid version'
+            Expected = 'Find-PSResource returned an invalid Avm.Authoring version'
+        }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            ResultKind     = $Kind
+            ExpectedDetail = $Expected
+        } {
+            $script:GalleryResultUnderTest = switch ($ResultKind) {
+                'empty' { $null }
+                'wrong package' {
+                    [pscustomobject]@{ Name = 'Another.Module'; Version = '1.0.0' }
+                }
+                'missing version' {
+                    [pscustomobject]@{ Name = 'Avm.Authoring' }
+                }
+                'invalid version' {
+                    [pscustomobject]@{ Name = 'Avm.Authoring'; Version = 'not-a-version' }
+                }
+            }
+            Mock Find-PSResource { $script:GalleryResultUnderTest }
+
+            Test-AvmModuleVersion -WarningVariable galleryWarnings 3>$null
+
+            [string]$galleryWarnings | Should -Match $ExpectedDetail
+            [string]$galleryWarnings | Should -Not -Match 'Cannot index into a null array'
+        }
+    }
+
+    It 'does not leak details from a <Kind> lookup failure into the warning' -TestCases @(
+        @{ Kind = 'runtime'; Expected = 'lookup failed unexpectedly' }
+        @{ Kind = 'http'; Expected = 'request failed' }
+        @{ Kind = 'invalid data'; Expected = 'lookup failed unexpectedly' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            FailureKind   = $Kind
+            ExpectedDetail = $Expected
+        } {
+            Mock Find-PSResource {
+                $failure = switch ($FailureKind) {
+                    'runtime' {
+                        [System.Management.Automation.RuntimeException]::new(
+                            'Cannot index into a null array.')
+                    }
+                    'http' {
+                        [System.Net.Http.HttpRequestException]::new(
+                            'Cannot index into a null array.')
+                    }
+                    'invalid data' {
+                        [System.IO.InvalidDataException]::new(
+                            'Cannot index into a null array.')
+                    }
+                }
+                throw $failure
+            }
+
+            Test-AvmModuleVersion -WarningVariable galleryWarnings 3>$null
+
+            [string]$galleryWarnings | Should -Match $ExpectedDetail
+            [string]$galleryWarnings | Should -Not -Match 'Cannot index into a null array'
         }
     }
 
     It 'warns and does not query when the check is skipped' {
         InModuleScope 'Avm.Authoring' {
-            Mock Invoke-RestMethod
+            Mock Find-PSResource
 
             Test-AvmModuleVersion -SkipModuleVersionCheck -WarningVariable skipWarnings 3>$null
 
             [string]$skipWarnings | Should -Match 'version check was skipped'
-            Should -Invoke Invoke-RestMethod -Times 0 -Exactly
+            Should -Invoke Find-PSResource -Times 0 -Exactly
         }
     }
 }

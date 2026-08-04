@@ -129,3 +129,8 @@ class AvmModuleVersionException : AvmException {
         $this.ExitCode = 10
     }
 }
+
+class AvmGalleryLookupException : System.Exception {
+    AvmGalleryLookupException([string] $message) : base($message) {}
+    AvmGalleryLookupException([string] $message, [Exception] $innerException) : base($message, $innerException) {}
+}
