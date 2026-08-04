@@ -41,7 +41,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -65,7 +65,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -74,7 +74,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         }
         $result.Status         | Should -Be 'pass'
         $result.Engine         | Should -Be 'terraform'
-        $result.Tool           | Should -Be 'terraform/1.15.3'
+        $result.Tool           | Should -Be 'terraform/1.15.8'
         $result.ToolPath       | Should -Be '/fake/terraform'
         $result.ToolSource     | Should -Be 'cache'
         $result.FilesProcessed | Should -Be 1
@@ -109,7 +109,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -133,7 +133,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -163,7 +163,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -192,7 +192,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -221,7 +221,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -247,7 +247,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -279,7 +279,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -313,7 +313,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -347,7 +347,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -373,7 +373,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -394,7 +394,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -418,7 +418,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -459,7 +459,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C, $S)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -497,7 +497,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -529,7 +529,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -561,7 +561,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -593,7 +593,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -677,7 +677,7 @@ Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
             }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTestE2e -Context $C
@@ -691,7 +691,7 @@ Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
             }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTestE2e -Context $C -Example 'example-b'
@@ -705,7 +705,7 @@ Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
+                [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'; Source = 'cache'; Path = '/fake/terraform' }
             }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTestE2e -Context $C -Example 'examples/example-a'

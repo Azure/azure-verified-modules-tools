@@ -47,7 +47,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -56,7 +56,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             Invoke-AvmTerraformTransform -Context $C
         }
         $result.Engine         | Should -Be 'terraform'
-        $result.Tool           | Should -Be 'mapotf/0.1.4'
+        $result.Tool           | Should -Be 'mapotf/0.1.5'
         $result.ToolPath       | Should -Be '/fake/mapotf'
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
@@ -101,13 +101,13 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Mock Resolve-AvmTool {
                     if ($Name -eq 'terraform') {
                         [pscustomobject]@{
-                            Name = 'terraform'; Version = '1.15.3'; Platform = 'test'
+                            Name = 'terraform'; Version = '1.15.8'; Platform = 'test'
                             Source = 'cache'; Path = $P
                         }
                     }
                     else {
                         [pscustomobject]@{
-                            Name = 'mapotf'; Version = '0.1.4'; Platform = 'test'
+                            Name = 'mapotf'; Version = '0.1.5'; Platform = 'test'
                             Source = 'cache'; Path = (Join-Path $TestDrive 'mapotf')
                         }
                     }
@@ -141,7 +141,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -168,7 +168,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -197,7 +197,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -218,7 +218,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -246,7 +246,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -275,7 +275,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -305,7 +305,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -332,7 +332,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -357,7 +357,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -404,7 +404,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -425,7 +425,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.4'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }

@@ -115,7 +115,7 @@
     },
     {
       "name": "mapotf",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "urlTemplate": "https://github.com/Azure/mapotf/releases/download/v{version}/mapotf_{version}_{os}_{arch}{ext}",
       "archive": "tar.gz",
       "entrypoint": "mapotf",
@@ -128,27 +128,27 @@
         "darwin-arm64": "tar.gz"
       },
       "sha256": {
-        "windows-amd64": "9bf52956808a221423384e4a31eb665ddce24e6e6c06ffcf4d5a518f083491e4",
-        "windows-arm64": "40c810461af889ca5919b72d7c7ba5cb77887548cb9b95b7940bf3b24b5c4a79",
-        "linux-amd64": "3e7bc818c8b08e55f571f5b3561e40fa42807498f4f657fe38a5a4ceeda242cf",
-        "linux-arm64": "a87462a7f9261bd9d10906bff543560ad58eff379f392958a0aa931933e4beca",
-        "darwin-amd64": "43b580b480e6e86e54b0811f08c06a02fbcd0053c522b20548b352f82050df6d",
-        "darwin-arm64": "4b639d07d5d7cea5934104f2f7c1885d1f32011f5530b2e184b3ac91002e22a5"
+        "windows-amd64": "7d5ffc8ad5d1086c03d2c2c3c508e6cd45475883b31c54888eafa60fb1b1964c",
+        "windows-arm64": "b4429a7a2085518e759f8224531578249968fd1632e7e7814d84ecb10f70f204",
+        "linux-amd64": "b9b4908c84ac6e719f030b60bc008a56feae4e6f7b0da72139bb235933313a6c",
+        "linux-arm64": "79a78e351a21ec724c4611e1d2cb9b5398a9d8de2272ba3732f08c8c14c02fb5",
+        "darwin-amd64": "8b3d911f5a687d81353cf5be9f71dd5a14b6a6d2adee14e160fd2e4fd479beb6",
+        "darwin-arm64": "6088463def6fb71c79c393493775cc213a424b3327504f89884b318d7e0c598d"
       }
     },
     {
       "name": "terraform",
-      "version": "1.15.3",
+      "version": "1.15.8",
       "urlTemplate": "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_{os}_{arch}.zip",
       "archive": "zip",
       "entrypoint": "terraform",
       "sha256": {
-        "windows-amd64": "b9da8df3d92402551c86b8956be30fb87f600245321d2b31751afcf37218018c",
-        "windows-arm64": "e4deb6e0aa7739ed8e45032a450731cc4dd7fc09bcdf61f977c881919f7cb3c3",
-        "linux-amd64": "c3d4b579064745a5f7e918125db23b12ba52a8a7287adb9f32c49d637e02e3bf",
-        "linux-arm64": "9824eb010b835b2c872440a337a69acfa1782d36c24d3c09fe5defe75defc511",
-        "darwin-amd64": "448e89a455e854941bd7e1396ba6ca46e92dd7e0ed1cc11d4da4cab637606d8a",
-        "darwin-arm64": "b97101c62c11eebd176e83cd42a313336200d54fdd18ce7770f65a5bfb0ab098"
+        "windows-amd64": "2ff41d2129afb1982733c132c61a8d6ef038f879f3aeede7fc28b8b8b24acf02",
+        "windows-arm64": "ffd9399a37ee8123263d84ec5c00d09d7704f9997cb345d7c9cac56c3fc1348e",
+        "linux-amd64": "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d",
+        "linux-arm64": "8891e9dcedc9e3b8950bc6af9d4d8af1f4cfade3062f53b9dc403a89f6ce8c9c",
+        "darwin-amd64": "e2e812e783771159bf758fd4e55d6dc9bb08f63e2af2c63d212721807a02c5dc",
+        "darwin-arm64": "f210110c5698b94d803a7a63cdb0251b5455c150841478808e2bbb343f95ed68"
       }
     },
     {
