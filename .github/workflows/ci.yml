@@ -52,19 +52,7 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
-          foreach ($pkg in @(
-              @{ Name = 'InvokeBuild';        Version = '[5.11.0,)' },
-              @{ Name = 'Pester';             Version = '[5.5.0,)'  },
-              @{ Name = 'PSScriptAnalyzer';   Version = '[1.21.0,)' }
-          )) {
-              Install-PSResource @pkg -Scope CurrentUser -TrustRepository
-          }
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
 
       - name: PowerShell environment
         shell: pwsh
@@ -175,18 +163,7 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
-          foreach ($pkg in @(
-              @{ Name = 'InvokeBuild'; Version = '[5.11.0,)' },
-              @{ Name = 'Pester';      Version = '[5.5.0,)'  }
-          )) {
-              Install-PSResource @pkg -Scope CurrentUser -TrustRepository
-          }
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
 
       - name: Run integration task
         shell: pwsh
