@@ -86,6 +86,35 @@ function script:Assert-Module {
     Import-Module @importArgs
 }
 
+function script:Invoke-AvmPester {
+    param(
+        [Parameter(Mandatory)] [object] $Configuration
+    )
+
+    $previousTestRunId = $env:AVM_TEST_RUN_ID
+    $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+    $testRunId = [guid]::NewGuid().ToString()
+    try {
+        $env:AVM_TEST_RUN_ID = $testRunId
+        $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $testRunId
+        Invoke-Pester -Configuration $Configuration
+    }
+    finally {
+        if ($null -eq $previousTestRunId) {
+            Remove-Item Env:AVM_TEST_RUN_ID -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AVM_TEST_RUN_ID = $previousTestRunId
+        }
+        if ($null -eq $previousTestSkip) {
+            Remove-Item Env:AVM_TEST_SKIP_MODULE_VERSION_CHECK -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
+        }
+    }
+}
+
 # PSScriptAnalyzer occasionally throws NullReferenceException from inside its
 # own rule pipeline (no file/line in our code is named). Across runners we
 # have seen the same NRE on both windows-latest and ubuntu-latest on the same
@@ -283,7 +312,7 @@ task test {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'unit'
     $config.Filter.ExcludeTag       = @('Integration', 'Component')
 
-    $result = Invoke-Pester -Configuration $config
+    $result = script:Invoke-AvmPester -Configuration $config
     if ($result.FailedCount -gt 0) {
         throw "$($result.FailedCount) Pester test(s) failed."
     }
@@ -324,7 +353,7 @@ task coverage {
     # hard gate below is what actually fails the build.
     $config.CodeCoverage.CoveragePercentTarget = $script:coverageFloor
 
-    $result = Invoke-Pester -Configuration $config
+    $result = script:Invoke-AvmPester -Configuration $config
     if ($result.FailedCount -gt 0) {
         throw "$($result.FailedCount) Pester test(s) failed."
     }
@@ -446,7 +475,7 @@ task component {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
     $config.Filter.Tag              = @('Component')
 
-    $result = Invoke-Pester -Configuration $config
+    $result = script:Invoke-AvmPester -Configuration $config
     if ($result.TotalCount -eq 0) {
         throw "No Component-tagged tests ran from $componentPath. Tag your It / Describe with -Tag 'Component'."
     }
@@ -481,7 +510,7 @@ task integration {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'integration'
     $config.Filter.Tag              = @('Integration')
 
-    $result = Invoke-Pester -Configuration $config
+    $result = script:Invoke-AvmPester -Configuration $config
     if ($result.TotalCount -eq 0) {
         throw "No Integration-tagged tests ran from $integrationPath. Tag your It / Describe with -Tag 'Integration'."
     }

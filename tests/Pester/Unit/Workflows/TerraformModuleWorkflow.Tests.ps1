@@ -83,4 +83,23 @@ Describe 'CI workflow' {
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
         $script:ci | Should -Match 'GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}'
     }
+
+    It 'uses the retrying prerequisite installer in both CI job types' {
+        ([regex]::Matches(
+                $script:ci,
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 2
+        $script:ci | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+    }
+}
+
+Describe 'Release workflow' {
+    BeforeAll {
+        $script:releasePath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'release.yml'
+        $script:release = Get-Content -LiteralPath $script:releasePath -Raw
+    }
+
+    It 'uses the retrying prerequisite installer for the release gate' {
+        $script:release |
+            Should -Match '\./scripts/Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+    }
 }

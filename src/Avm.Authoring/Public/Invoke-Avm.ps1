@@ -34,13 +34,9 @@ function Invoke-Avm {
     $ErrorActionPreference = 'Stop'
 
     $rawArguments = @($args)
-    $isUpdateCommand = $rawArguments.Count -gt 0 -and
-        [string]$rawArguments[0] -ceq 'update'
+    $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
     if (-not $isUpdateCommand) {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-    }
-
-    if ($SkipModuleVersionCheck) {
         $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
             $PSDefaultParameterValues.Clone()
         }
@@ -48,6 +44,7 @@ function Invoke-Avm {
             @{}
         }
         $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
+        $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
     }
 
     # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
