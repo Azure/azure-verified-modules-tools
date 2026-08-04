@@ -63,11 +63,15 @@ function Get-AvmModuleContext {
         [ValidateSet('auto', 'bicep', 'terraform')]
         [string] $Ecosystem = 'auto',
 
-        [switch] $Json
+        [switch] $Json,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     if (-not $Path) {
         $Path = (Get-Location).ProviderPath

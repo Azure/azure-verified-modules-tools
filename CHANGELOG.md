@@ -21,6 +21,7 @@ section when cutting a release.
 
 ### Added
 
+- Enforce the latest PowerShell Gallery release at every public command entry point. Confirmed stale versions fail with exit code 10 and an upgrade command; `-SkipModuleVersionCheck` warns and continues, as do Gallery lookup failures.
 - `avm check policy` for Terraform now evaluates each runnable `examples/*`
   directory against real `terraform show -json` output. The lifecycle honours
   `.e2eignore`, `pre.ps1`, `.env`, `post.ps1`, pinned

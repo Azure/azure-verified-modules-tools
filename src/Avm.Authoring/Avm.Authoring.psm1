@@ -3,6 +3,10 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+$script:AvmLatestModuleVersion = $null
+$script:AvmModuleVersionCheckCompleted = $false
+$script:AvmModuleVersionSkipWarningWritten = $false
+
 # Console encoding (spec open question 2): on Windows, the default console
 # code page is often legacy (1252, 437, ...) which mangles UTF-8 output from
 # child processes like terraform, bicep, and tflint. Force the console to

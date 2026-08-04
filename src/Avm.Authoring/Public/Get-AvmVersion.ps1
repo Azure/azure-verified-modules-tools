@@ -14,10 +14,14 @@ function Get-AvmVersion {
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
-    param()
+    param(
+        [switch] $SkipModuleVersionCheck
+    )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $module = Get-Module -Name 'Avm.Authoring'
     if (-not $module) {

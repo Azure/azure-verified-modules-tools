@@ -60,11 +60,15 @@ function Invoke-AvmTransform {
 
         [switch] $AllowPathFallback,
 
-        [switch] $CheckDrift
+        [switch] $CheckDrift,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 

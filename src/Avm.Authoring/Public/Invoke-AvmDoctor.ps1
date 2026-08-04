@@ -55,11 +55,15 @@ function Invoke-AvmDoctor {
         # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
-        [switch] $AllowFileUrls
+        [switch] $AllowFileUrls,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $checks = New-Object System.Collections.Generic.List[pscustomobject]
 

@@ -56,11 +56,15 @@ function Invoke-AvmCheckConvention {
 
         [switch] $AllowPathFallback,
 
-        [switch] $Fix
+        [switch] $Fix,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
 

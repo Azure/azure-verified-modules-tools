@@ -89,11 +89,15 @@ function Invoke-AvmPreCommit {
 
         [switch] $AllowPathFallback,
 
-        [switch] $StopOnFail
+        [switch] $StopOnFail,
+
+        [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

@@ -113,3 +113,19 @@ class AvmCommandException : AvmException {
         $this.Result = $result
     }
 }
+
+class AvmModuleVersionException : AvmException {
+    [version] $CurrentVersion
+    [version] $LatestVersion
+    [int] $ExitCode
+
+    AvmModuleVersionException(
+        [version] $currentVersion,
+        [version] $latestVersion,
+        [string] $message
+    ) : base($message, 'AVM1050') {
+        $this.CurrentVersion = $currentVersion
+        $this.LatestVersion = $latestVersion
+        $this.ExitCode = 10
+    }
+}
