@@ -3,9 +3,9 @@
 Single source of truth for what's done, what's in flight, and what's next on the `Avm.Authoring` module. Read this first when picking up the work. Update it the moment you complete a meaningful slice — protocol in [AGENTS.md](../AGENTS.md).
 
 **Previously**: 2026-07-31 — **The 0.1.7 release failed at the publish step and is fixed on `fix/psgallery-release-notes-limit`.** The tag pushed, the workflow built and tested cleanly, the GitHub Release was created — and then `Publish-PSResource` was rejected with `400 (The package is invalid)`: the PowerShell Gallery caps a manifest's `ReleaseNotes` at 10600 characters and the `build` task stamps the tag's entire CHANGELOG section into that field, which for 0.1.7 is 23987. The limit is enforced server-side at the last step of the pipeline, so it costs a whole release to discover and leaves a tag and a Release pointing at a version that was never published. `Get-AvmReleaseNotes.ps1` gained `-MaxLength`, which truncates on a line boundary from the *bottom* — a section leads with `### Breaking`, so the tail is the safe end to lose — and appends a link to the GitHub Release, which has no such limit and still carries the full notes. Newlines are measured at their CRLF worst case because the packer may rewrite them on the way into the nuspec. The important half is the second guard: the `build` task re-reads the stamped manifest with `Import-PowerShellDataFile` and fails if the value is still over, so the cap is verified against what actually ships rather than trusted from the generator — which is the same principle as F48's `namespaces seen` and is what caught a mutation that disabled the cap silently. A repo-wide test also asserts every released CHANGELOG section fits, so a future section that outgrows the limit fails in `pre-commit` rather than after the tag. Tracked as **F49**.
-**Last updated**: 2026-08-04 — **F79 removes Gallery lookup noise from repository test runs.**
-**Active branch**: `jaredfholgate-fix-gallery-test-noise` (off `main` tip `1c88488`; F79)
-**Working commit**: pending — F79 Gallery warning and test isolation
+**Last updated**: 2026-08-04 — **F80 fixes released `avm version` metadata handling and duplicate version checks.**
+**Active branch**: `jaredfholgate-fix-gallery-test-noise` (off `main` tip `1c88488`; F79–F80)
+**Working commit**: PR #23 — F79 Gallery lookup hardening and F80 `avm version` production regression
 
 ## Snapshot
 
@@ -24,6 +24,7 @@ Single source of truth for what's done, what's in flight, and what's next on the
 - [x] **F77 — require the latest PowerShell Gallery module version at every public entry point.** Queries PSGallery once per module session, fails confirmed stale versions with `AvmModuleVersionException` / exit code `10` and an actionable `Update-PSResource` command, warns and continues when the lookup fails, and exposes `-SkipModuleVersionCheck` for advanced use with a warning instead of failure.
 - [x] **F78 — add `avm update` as the safe stale-version escape path.** Reuses the cached PSGallery lookup, skips the normal stale gate only for this route, avoids update invocation when already current or under `-WhatIf`, and invokes `Update-PSResource -Name Avm.Authoring -Scope CurrentUser` with reload guidance after success.
 - [x] **F79 — isolate module-version lookup from unrelated repository tests.** Validate empty/malformed `Find-PSResource` results descriptively without leaking internal runtime errors, disable the public-entry version gate centrally for unit/component/integration runs (including child PowerShell processes), keep the focused version/update suites exercising lookup behavior, and smoke-test representative `avm` routes with zero unexpected warnings in integration.
+- [x] **F80 — fix released `avm version` metadata handling and duplicate version checks.** Read prerelease metadata safely from installed `PSModuleInfo` and manifest dictionary/PSObject shapes, cascade a dispatcher-scoped version-check bypass to nested public cmdlets after the outer gate succeeds, and cover the released 0.2.0 failure shape through focused and dispatcher tests.
 
 ## PR-check parity remediation (in flight)
 

@@ -172,4 +172,19 @@ Describe 'Test-AvmModuleVersion' {
             Should -Invoke Find-PSResource -Times 0 -Exactly
         }
     }
+
+    It 'silently bypasses a nested check already performed by the dispatcher' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Find-PSResource
+
+            Test-AvmModuleVersion `
+                -SkipModuleVersionCheck `
+                -SuppressSkipWarning `
+                -WarningVariable skipWarnings `
+                3>$null
+
+            @($skipWarnings).Count | Should -Be 0
+            Should -Invoke Find-PSResource -Times 0 -Exactly
+        }
+    }
 }

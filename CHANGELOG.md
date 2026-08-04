@@ -86,6 +86,9 @@ section when cutting a release.
   malformed results without leaking internal PowerShell runtime errors into
   warnings. Repository tests suppress the public version gate centrally, while
   focused unit and integration coverage still exercises the live lookup.
+- `avm version` reads prerelease metadata from dictionary-backed and
+  property-backed module data without positional string indexing, and dispatcher
+  routes perform the Gallery version check only once.
 - `avm pr-check` now fails before its tool chain when `git status
   --porcelain` reports tracked or untracked changes, restoring the legacy
   clean-worktree preflight.

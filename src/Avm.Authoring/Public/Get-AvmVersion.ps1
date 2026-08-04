@@ -23,26 +23,28 @@ function Get-AvmVersion {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $module = Get-Module -Name 'Avm.Authoring'
+    $module = Get-Module -Name 'Avm.Authoring' |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
     if (-not $module) {
         $module = Get-Module -Name 'Avm.Authoring' -ListAvailable |
             Sort-Object Version -Descending |
             Select-Object -First 1
     }
 
-    $prerelease = $null
-    if ($module -and $module.PrivateData -and
-        $module.PrivateData.ContainsKey('PSData') -and
-        $module.PrivateData['PSData'].ContainsKey('Prerelease')) {
-        $prerelease = [string]$module.PrivateData['PSData']['Prerelease']
-        if ([string]::IsNullOrWhiteSpace($prerelease)) { $prerelease = $null }
+    $privateData = Get-AvmPropertyValue -InputObject $module -Name 'PrivateData'
+    $psData = Get-AvmPropertyValue -InputObject $privateData -Name 'PSData'
+    $prerelease = [string](Get-AvmPropertyValue -InputObject $psData -Name 'Prerelease')
+    if ([string]::IsNullOrWhiteSpace($prerelease)) {
+        $prerelease = $null
     }
 
     $os = if ($IsWindows) { 'windows' } elseif ($IsLinux) { 'linux' } elseif ($IsMacOS) { 'macos' } else { 'unknown' }
+    $moduleVersion = Get-AvmPropertyValue -InputObject $module -Name 'Version'
 
     [pscustomobject][ordered]@{
         Module       = 'Avm.Authoring'
-        Version      = if ($module) { $module.Version.ToString() } else { 'unknown' }
+        Version      = if ($null -ne $moduleVersion) { $moduleVersion.ToString() } else { 'unknown' }
         Prerelease   = $prerelease
         PSVersion    = $PSVersionTable.PSVersion.ToString()
         PSEdition    = [string]$PSVersionTable.PSEdition

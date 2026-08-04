@@ -1,7 +1,9 @@
 function Test-AvmModuleVersion {
     [CmdletBinding()]
     param(
-        [switch] $SkipModuleVersionCheck
+        [switch] $SkipModuleVersionCheck,
+
+        [switch] $SuppressSkipWarning
     )
 
     Set-StrictMode -Version 3.0
@@ -17,7 +19,7 @@ function Test-AvmModuleVersion {
     }
 
     if ($SkipModuleVersionCheck) {
-        if (-not $script:AvmModuleVersionSkipWarningWritten) {
+        if (-not $SuppressSkipWarning -and -not $script:AvmModuleVersionSkipWarningWritten) {
             Write-Warning 'The Avm.Authoring PowerShell Gallery version check was skipped. The current command may run with an outdated module.'
             $script:AvmModuleVersionSkipWarningWritten = $true
         }
