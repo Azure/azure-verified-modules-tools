@@ -253,7 +253,7 @@ The 2026-05 publishing incident is the canonical case-sensitivity lesson. **NTFS
 - Resolves the module folder via `Split-Path -Leaf` and asserts `-ceq` against the expected name.
 - Lists the folder via `Get-ChildItem` and asserts the `.psd1` and `.psm1` files are present **with the exact expected casing** via `Where-Object { $_.Name -ceq $expected }`.
 - Parses the manifest and asserts `Name -ceq $expected` and `RootModule -ceq "$expected.psm1"`.
-- Runs before every `Publish-PSResource` call in `scripts/Publish-AvmAuthoring.ps1`.
+- Runs while staging in the `build` task, and before every `Publish-PSResource` call in the pipeline-owned `.pipelines/scripts/Publish-AvmAuthoring.ps1` (ADO repo).
 - Surfaces as the `layout` Invoke-Build task so `./build.ps1 pre-commit` exercises it on every contributor run.
 - Has its own Pester test that builds a fake module folder with a deliberately mis-cased file and asserts the guard throws.
 

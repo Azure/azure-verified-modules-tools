@@ -104,7 +104,10 @@ azure-verified-modules-tools/
       Integration/                # network-dependent + real binaries, gated by -Tag Integration
     fixtures/                     # static test inputs
   scripts/
-    Publish-AvmAuthoring.ps1      # the only path to PSGallery
+    Install-AvmBuildPrerequisites.ps1
+    Update-AvmMapotfConfig.ps1
+    Update-AvmPins.ps1
+    # release scripts are pipeline-owned; see .pipelines/scripts/ in the ADO repo
   docs/
     avm-consolidation-plan.md
     avm-implementation-spec.md    # this file
@@ -467,7 +470,7 @@ The mandatory pre-publish check `Test-AvmModuleLayout`:
 - Resolves the module folder via `Split-Path -Leaf` and asserts `-ceq` against the expected name.
 - Lists the folder via `Get-ChildItem` and asserts the `.psd1` and `.psm1` files are present **with the exact expected casing** via `Where-Object { $_.Name -ceq $expected }`.
 - Parses the manifest and asserts `Name -ceq $expected` and `RootModule -ceq "$expected.psm1"`.
-- Runs before every `Publish-PSResource` call in `scripts/Publish-AvmAuthoring.ps1`.
+- Runs while staging in the `build` task, and before every `Publish-PSResource` call in the pipeline-owned `.pipelines/scripts/Publish-AvmAuthoring.ps1`.
 - Has its own Pester test that builds a fake module folder with a deliberately mis-cased file and asserts the check throws.
 
 ---
@@ -561,7 +564,7 @@ This section is the implementation-level expression of the **Security stance** p
 
 - No secret ever appears in source, in default config, in test fixtures, in error messages, or in telemetry.
 - API keys, tokens, and similar are accepted via `[SecureString]` parameters or read with `Read-Host -AsSecureString`. Plain-text parameter form is documented as insecure and labelled `[Obsolete]` once a `SecureString` overload exists.
-- The publish script (`scripts/Publish-AvmAuthoring.ps1`) accepts the API key as `[SecureString]` only; the plain-text wrapper exists for `--what-if` dry runs only and warns on use.
+- The publish script (`.pipelines/scripts/Publish-AvmAuthoring.ps1`, owned by the ADO release pipeline) accepts the API key as `[SecureString]` only; the plain-text wrapper exists for `--what-if` dry runs only and warns on use.
 - Long-lived secrets (e.g. `POWERSHELL_GALLERY_API_KEY`) live in a protected GitHub Environment with required reviewers (or a repository secret consumed by an environment-gated job), never in repo / org variables, never echoed by any `run:` step (no `echo`, no `Write-Host`, no `Write-Output`). Workflows that consume them must declare `environment: <name>` so the approval gate fires before the job touches the secret.
 
 ### Subprocess invocation
@@ -647,7 +650,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.
 - Release artefacts:
-  - PSGallery via `Publish-PSResource` (the only path to PSGallery is `scripts/Publish-AvmAuthoring.ps1`).
+  - PSGallery via `Publish-PSResource` (the only path to PSGallery is `.pipelines/scripts/Publish-AvmAuthoring.ps1`, which lives in the ADO repo so a git tag can never influence the code that receives the API key).
   - GitHub Release with the zipped module folder and a `SHA256SUMS` file.
 - Releases are cut from the **Azure DevOps** pipeline `.pipelines/release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions. Every shipped `.ps1`, `.psm1` and `.psd1` is Authenticode-signed by ESRP before packaging, and a verification step fails the build if any file is unsigned. The gallery push lives in the same pipeline because it must happen after signing and PSGallery accepts a version exactly once.
 - The release pipeline is **idempotent / re-runnable**:
