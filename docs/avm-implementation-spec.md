@@ -112,7 +112,6 @@ azure-verified-modules-tools/
   .github/
     workflows/
       ci.yml
-      release.yml
   .gitattributes
   .gitignore
   LICENSE                         # MIT, referenced by manifest LicenseUri
@@ -650,9 +649,10 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - Release artefacts:
   - PSGallery via `Publish-PSResource` (the only path to PSGallery is `scripts/Publish-AvmAuthoring.ps1`).
   - GitHub Release with the zipped module folder and a `SHA256SUMS` file.
-- The release workflow (`.github/workflows/release.yml`) is **idempotent / re-runnable**:
+- Releases are cut from the **Azure DevOps** pipeline `.pipelines/release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions. Every shipped `.ps1`, `.psm1` and `.psd1` is Authenticode-signed by ESRP before packaging, and a verification step fails the build if any file is unsigned. The gallery push lives in the same pipeline because it must happen after signing and PSGallery accepts a version exactly once.
+- The release pipeline is **idempotent / re-runnable**:
   - The PSGallery publish step passes `-SkipIfAlreadyPublished`, so re-running a tag whose version is already on the Gallery warns and exits 0 instead of failing. Local maintainers omit the switch and still get the loud "bump ModuleVersion" error.
-  - The GitHub Release step is create-or-update: it only *creates* the release (seeding the body from the CHANGELOG) when the tag has no release yet; if a release already exists, it leaves any human-authored notes untouched and just re-uploads the artefacts with `--clobber`.
+  - The GitHub Release step is create-or-update: it only *creates* the release (seeding the body from the CHANGELOG) when the tag has no release yet; if a release already exists, it leaves any human-authored notes untouched and just re-uploads the artefacts.
 - `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); release script verifies an entry exists for the new version before publishing.
 - Manifest `Prerelease` field is set by the release script from the git tag; never edited by hand.
 

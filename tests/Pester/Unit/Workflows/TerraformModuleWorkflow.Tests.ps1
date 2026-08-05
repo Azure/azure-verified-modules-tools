@@ -93,13 +93,10 @@ Describe 'CI workflow' {
 }
 
 Describe 'Release workflow' {
-    BeforeAll {
-        $script:releasePath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'release.yml'
-        $script:release = Get-Content -LiteralPath $script:releasePath -Raw
-    }
-
-    It 'uses the retrying prerequisite installer for the release gate' {
-        $script:release |
-            Should -Match '\./scripts/Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+    It 'is absent, because releases are signed and published from Azure DevOps' {
+        # ESRP signing has no GitHub Actions equivalent, and PSGallery accepts a
+        # version exactly once — a GitHub-side publish could beat the signed build.
+        $releasePath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'release.yml'
+        Test-Path -LiteralPath $releasePath | Should -BeFalse
     }
 }

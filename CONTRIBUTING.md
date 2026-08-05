@@ -192,13 +192,26 @@ Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 
 ## 8. Cut a release (maintainers only)
 
-Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: `.github/workflows/release.yml` stamps the tag version into the staged manifest under `out/` at build time.
+Releases are cut from the **Azure DevOps** pipeline `release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions.
 
-1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes both the GitHub Release body and the PSGallery release notes. When absent the release falls back to GitHub's auto-generated notes.
-2. Publish a GitHub Release from the UI with a new tag `vX.Y.Z` (stable semver only — the workflow rejects prerelease tags such as `v0.1.0-preview.1`). Creating the release creates the tag, which triggers the workflow.
-3. Approve the `psgallery` environment when prompted. The workflow then runs the `ci` gate, builds and stamps the staged module, publishes to PSGallery, and attaches `Avm.Authoring-X.Y.Z.zip` plus `SHA256SUMS` to the release.
+Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. The gallery push has to happen *after* signing, and PSGallery accepts a given version exactly once, so the publish moved with it — otherwise an unsigned build could win the race.
 
-The workflow is idempotent, so re-running it against an existing tag re-uploads the artefacts (with `--clobber`) and leaves the release body alone. To release a tag that already exists, run the workflow manually from the **Actions** tab and pass the tag as the `tag` input.
+Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: the pipeline stamps the tag version into the staged manifest at build time.
+
+1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes both the GitHub Release body and the PSGallery release notes.
+2. Push a stable semver tag `vX.Y.Z` (prerelease tags such as `v0.1.0-preview.1` are not supported yet). Do **not** publish a GitHub Release from the UI — the pipeline creates it.
+3. Queue **Release Avm.Authoring** in ADO with that tag as the `version` parameter and pick a `releaseAction`:
+
+   | `releaseAction` | Effect |
+   | --- | --- |
+   | `none` | Build, sign, verify and package only. Nothing is published. |
+   | `gallery` | Also publish to PSGallery. |
+   | `draft` | Also create a **draft** GitHub Release. *(default)* |
+   | `publish` | Create a published GitHub Release. |
+
+4. Review the draft release, then publish it.
+
+The pipeline is idempotent — `Publish-AvmAuthoring.ps1 -SkipIfAlreadyPublished` warns and succeeds if the version is already on the gallery — so re-running after a partial release is safe.
 
 To preview locally what the pipeline will publish:
 
@@ -207,11 +220,13 @@ To preview locally what the pipeline will publish:
 Test-ModuleManifest ./out/Avm.Authoring/Avm.Authoring.psd1
 ```
 
+Note that `build` produces an **unsigned** staged module. Only the ADO pipeline can sign, so a locally built module is for inspection and break-glass publishing, never for a normal release.
+
 ---
 
 ## 9. Publish to PSGallery by hand (break-glass only)
 
-Don't run this unless the release workflow is broken, you're a PSGallery owner of the `Avm.Authoring` package, and you intend to ship.
+Don't run this unless the ADO pipeline is broken, you're a PSGallery owner of the `Avm.Authoring` package, and you intend to ship. **This publishes an unsigned module** — it fails the signing requirement the pipeline exists to satisfy, so treat it as an incident-recovery path and re-publish a signed build as soon as the pipeline is working.
 
 ```pwsh
 ./build.ps1 build -ReleaseVersion 0.2.0
