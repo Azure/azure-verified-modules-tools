@@ -1,5 +1,5 @@
 # AVM test-only stub for `terraform`. Pinned to the version recorded in
-# src/Avm.Authoring/Resources/avm.pins.jsonc (terraform 1.15.3) so
+# src/Avm.Authoring/Resources/avm.pins.jsonc (terraform 1.15.8) so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
 # This stub handles only the verbs the Terraform engine wrappers invoke.
@@ -12,7 +12,7 @@ if ($args.Count -eq 0) {
 
 switch ($args[0]) {
     '--version' {
-        Write-Output 'Terraform v1.15.3'
+        Write-Output 'Terraform v1.15.8'
         Write-Output 'on linux_amd64'
         exit 0
     }
@@ -54,7 +54,7 @@ switch ($args[0]) {
         exit 0
     }
     'show' {
-        Write-Output '{"format_version":"1.2","terraform_version":"1.15.3","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'
+        Write-Output '{"format_version":"1.2","terraform_version":"1.15.8","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'
         exit 0
     }
     'destroy' {

@@ -124,13 +124,13 @@ Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The scr
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.3 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
 
 # Refresh just one
 ./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0
 
 # Preview without writing
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.3 -WhatIf
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -WhatIf
 ```
 
 The lock schema accepts an optional `platformAliases` map for tools whose release assets don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches. Finally, an optional `archives` map allows tools that ship different archive types per OS (terraform-docs, for example, uses `tar.gz` on darwin/linux and `zip` on windows) — when present, every supported platform must be listed and `urlTemplate` may reference the `{ext}` placeholder which expands to `.zip` / `.tar.gz` / `''` per the resolved archive type. don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches.

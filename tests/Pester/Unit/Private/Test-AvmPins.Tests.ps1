@@ -367,5 +367,29 @@ Describe 'Test-AvmPins' {
                 }
             }
         }
+
+        It 'agrees with the version every test stub binary self-reports' {
+            # Component tests put these stubs on PATH, where Find-AvmToolOnPath
+            # accepts them only on an exact version match against the pins. A
+            # stale stub therefore fails far from its cause; assert here instead.
+            $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
+            $stubDir = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'fixtures' 'bin')
+
+            $stubs = Get-ChildItem -LiteralPath $stubDir -Filter '*.ps1' -File
+            @($stubs).Count | Should -BeGreaterThan 0
+
+            foreach ($stub in $stubs) {
+                $pin = $pins.tools | Where-Object { $_.name -eq $stub.BaseName } | Select-Object -First 1
+                if (-not $pin) { continue }
+
+                $reported = & $stub.FullName '--version' 2>&1 |
+                    ForEach-Object { [regex]::Match([string]$_, '\d+\.\d+\.\d+') } |
+                    Where-Object { $_.Success } |
+                    Select-Object -First 1
+
+                $reported | Should -Not -BeNullOrEmpty -Because "$($stub.Name) --version must emit a semver"
+                $reported.Value | Should -Be $pin.version -Because "$($stub.Name) must report the version pinned in avm.pins.jsonc"
+            }
+        }
     }
 }

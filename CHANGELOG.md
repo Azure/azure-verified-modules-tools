@@ -21,6 +21,9 @@ section when cutting a release.
 
 ### Added
 
+- Pin manifest tests now assert that every `tests/fixtures/bin/*.ps1` stub
+  self-reports the version pinned in `avm.pins.jsonc`, so a stale stub fails at
+  its cause instead of surfacing as an unrelated Component-tier PATH miss.
 - `avm update` safely upgrades Avm.Authoring in the CurrentUser scope. It reuses
   the cached PowerShell Gallery version lookup, reports when already current,
   supports `-WhatIf`, and remains available when the running module is stale.
@@ -46,6 +49,8 @@ section when cutting a release.
 
 ### Changed
 
+- Pinned `terraform` bumped to 1.15.8 and `mapotf` to 0.1.5 in
+  `Resources/avm.pins.jsonc`, with refreshed per-platform SHA256 hashes.
 - `avm lint` now copies the Terraform module to a cleaned temporary tree and
   runs `terraform init -input=false` in every root, module, and example scope.
   Example `tflint-pre.ps1` hooks run after Terraform initialization and before

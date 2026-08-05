@@ -34,11 +34,11 @@ Shipped. Four Terraform-ecosystem stubs landed 2026-05-27 alongside
 
 | Stub                  | Argv accepted                                              | Lock version |
 | --------------------- | ---------------------------------------------------------- | ------------ |
-| `terraform.ps1`       | `--version`, `fmt …`, `init …`, `validate …`               | `1.15.3`     |
+| `terraform.ps1`       | `--version`, `fmt …`, `init …`, `validate …`               | `1.15.8`     |
 | `tflint.ps1`          | `--version`, `--recursive --format=json`                   | `0.55.1`     |
 | `terraform-docs.ps1`  | `--version`, `markdown table …`                            | `0.20.0`     |
 | `conftest.ps1`        | `--version`, `test …` (emits `[]` for pass)                | `0.68.2`     |
-| `mapotf.ps1`          | `--version`, `transform …`, `clean-backup …` (no-op)       | `0.1.4`      |
+| `mapotf.ps1`          | `--version`, `transform …`, `clean-backup …` (no-op)       | `0.1.5`      |
 
 The argv-log file (`$env:AVM_STUB_LOG_DIR`) hinted at above is not yet
 emitted — the current consumer only needs the engine wrappers to succeed

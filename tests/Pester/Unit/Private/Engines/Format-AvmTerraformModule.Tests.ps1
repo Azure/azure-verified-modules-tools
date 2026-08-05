@@ -48,7 +48,7 @@ Describe 'Format-AvmTerraformModule' {
             $captured = [pscustomobject]@{ Args = $null; FilePath = $null }
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -77,7 +77,7 @@ Describe 'Format-AvmTerraformModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -91,7 +91,7 @@ Describe 'Format-AvmTerraformModule' {
             Format-AvmTerraformModule -Context $C
         }
         $result.Engine     | Should -Be 'terraform'
-        $result.Tool       | Should -Be 'terraform/1.15.3'
+        $result.Tool       | Should -Be 'terraform/1.15.8'
         $result.ToolSource | Should -Be 'cache'
         $result.Changed.Count | Should -Be 2
         $result.Changed     | Should -Contain 'main.tf'
@@ -104,7 +104,7 @@ Describe 'Format-AvmTerraformModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -121,7 +121,7 @@ Describe 'Format-AvmTerraformModule' {
             $captured = [pscustomobject]@{ Args = $null }
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -144,7 +144,7 @@ Describe 'Format-AvmTerraformModule' {
             $captured = [pscustomobject]@{ Args = $null }
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -166,7 +166,7 @@ Describe 'Format-AvmTerraformModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }
@@ -189,7 +189,7 @@ Describe 'Format-AvmTerraformModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.3'; Platform = 'linux-amd64'
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform'
                 }
             }

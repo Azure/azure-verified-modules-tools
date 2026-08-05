@@ -69,7 +69,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                     [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Source = 'cache'; Path = '/fake/conftest' }
                 }
                 else {
-                    [pscustomobject]@{ Name = 'terraform'; Version = '1.15.3'; Source = 'cache'; Path = '/fake/terraform' }
+                    [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Source = 'cache'; Path = '/fake/terraform' }
                 }
             }
             Mock Resolve-AvmPolicyBundle {
