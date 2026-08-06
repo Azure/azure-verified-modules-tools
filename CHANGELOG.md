@@ -5,13 +5,13 @@ All notable changes to `Avm.Authoring` will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-The release workflow (`.github/workflows/release.yml`) takes the git tag as the
-single source of truth for the version: it stamps the tag version into the
-staged manifest at build time, so `ModuleVersion` in the repo never has to be
+The release pipeline (`release-avm-authoring.yml`, in Azure DevOps) takes the git
+tag as the single source of truth for the version: it stamps the tag version into
+the staged manifest at build time, so `ModuleVersion` in the repo never has to be
 bumped before tagging. If a section matching the tag exists (e.g. tag `v0.1.0`
-→ section `## [0.1.0]`) it seeds the GitHub Release body and the gallery
-release notes; otherwise the release falls back to GitHub's auto-generated
-notes. A missing section no longer fails the release.
+→ section `## [0.1.0]`) it seeds the gallery release notes; otherwise the manifest
+keeps its standing CHANGELOG pointer. A missing section does not fail the release.
+The GitHub Release body is written by hand — see `CONTRIBUTING.md` §8.
 
 ## [Unreleased]
 
@@ -49,6 +49,11 @@ section when cutting a release.
 
 ### Changed
 
+- Pinned `mapotf` bumped to 0.1.7, with refreshed per-platform SHA256 hashes.
+  Neither 0.1.6 nor 0.1.7 carries a functional change — both move mapotf's own
+  release signing to ESRP — but its Windows binaries are now
+  Authenticode-signed, so `mapotf.exe` should stop tripping Defender's ML
+  heuristics.
 - Pinned `terraform` bumped to 1.15.8 and `mapotf` to 0.1.5 in
   `Resources/avm.pins.jsonc`, with refreshed per-platform SHA256 hashes.
 - `avm lint` now copies the Terraform module to a cleaned temporary tree and

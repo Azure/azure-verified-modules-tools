@@ -153,4 +153,4 @@ The full contributor workflow (`./build.ps1 pre-commit`, individual Pester runs,
 
 ## Publish to PSGallery
 
-See [`scripts/Publish-AvmAuthoring.ps1`](../../scripts/Publish-AvmAuthoring.ps1) for the end-to-end publish flow. It re-runs the same case-sensitive layout checks that the `layout` build task uses, so the local `./build.ps1 pre-commit` gate and the publish gate stay aligned.
+The publish flow is owned by the Azure DevOps release pipeline (`.pipelines/scripts/Publish-AvmAuthoring.ps1` in `github-private/azure/Azure-Verified-Modules`), not by this repo. It re-runs the same case-sensitive layout checks that the `layout` build task uses, so the local `./build.ps1 pre-commit` gate and the publish gate stay aligned.

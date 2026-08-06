@@ -314,7 +314,6 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   .github/
     workflows/
       ci.yml                   # runs build/avm.build.ps1 tasks
-      release.yml              # PSGallery + GH Release publishing
   ```
 
 - Invoke-Build task graph with placeholders for every Phase 1 verb.

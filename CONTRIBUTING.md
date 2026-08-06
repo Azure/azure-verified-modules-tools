@@ -128,11 +128,7 @@ Expected output:
   layout OK: Avm.Authoring <version> (PS >= 7.4)
 ```
 
-The publish script (`scripts/Publish-AvmAuthoring.ps1`) applies the same hard casing guards inline; run it in `-WhatIf` mode for a publish-path dry run:
-
-```pwsh
-./scripts/Publish-AvmAuthoring.ps1 -WhatIf
-```
+`./build.ps1 build` applies the same hard casing guards while staging, so a green `build` is also a publish-path dry run. The release scripts themselves live in the ADO pipeline (see [§8](#8-cut-a-release-maintainers-only)), not in this repo.
 
 If either throws a casing error, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/avm-implementation-spec.md#case-sensitivity)) before retrying.
 
@@ -154,7 +150,6 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
-./build.ps1 build -ReleaseVersion 0.2.0   # same, but stamp 0.2.0 into the staged manifest
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
 ```
@@ -163,7 +158,7 @@ Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
 - `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
-- `-ReleaseVersion` only affects the staged copy under `./out`. The in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
+- `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
 ---
@@ -192,36 +187,52 @@ Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 
 ## 8. Cut a release (maintainers only)
 
-Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: `.github/workflows/release.yml` stamps the tag version into the staged manifest under `out/` at build time.
+Releases are cut from the **Azure DevOps** pipeline `release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions.
 
-1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes both the GitHub Release body and the PSGallery release notes. When absent the release falls back to GitHub's auto-generated notes.
-2. Publish a GitHub Release from the UI with a new tag `vX.Y.Z` (stable semver only — the workflow rejects prerelease tags such as `v0.1.0-preview.1`). Creating the release creates the tag, which triggers the workflow.
-3. Approve the `psgallery` environment when prompted. The workflow then runs the `ci` gate, builds and stamps the staged module, publishes to PSGallery, and attaches `Avm.Authoring-X.Y.Z.zip` plus `SHA256SUMS` to the release.
+Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. The gallery push has to happen *after* signing, and PSGallery accepts a given version exactly once, so the publish moved with it — otherwise an unsigned build could win the race.
 
-The workflow is idempotent, so re-running it against an existing tag re-uploads the artefacts (with `--clobber`) and leaves the release body alone. To release a tag that already exists, run the workflow manually from the **Actions** tab and pass the tag as the `tag` input.
+Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: the pipeline stamps the tag version into the staged manifest at build time.
 
-To preview locally what the pipeline will publish:
+1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes the PSGallery release notes stamped into the manifest.
+2. Create a GitHub Release in this repo against the tag `vX.Y.Z`, with the title and release notes you want. Tick *Set as a pre-release* and **publish** it. Attach nothing — the pipeline uploads the assets.
+3. Queue **Release Avm.Authoring** in ADO with that tag as the `version` parameter. Leave `dryRun` unticked for a real release; tick it to build, sign, verify and package without writing anything to GitHub or PSGallery.
+
+Publish the release rather than saving it as a draft: **a draft release does not create its tag**, and the pipeline checks the tag out. Publishing it as a pre-release creates the tag as a side effect, so there is no separate tag push. Prerelease *versions* such as `v0.1.0-preview.1` are still unsupported — the tag has to match `vMAJOR.MINOR.PATCH`.
+
+The pipeline never creates a release and never writes a release body, so a missing release fails the run. It edits the existing one in two steps: the first forces it back to a pre-release and uploads the assets, the last promotes it to a full release once the module is on the gallery. Forcing the pre-release flag back on is what demotes an accidentally promoted release rather than leaving it half-built. Every write is an edit, so re-queuing the same tag replaces the assets in place instead of duplicating anything.
+
+The pipeline owns the release scripts. `Get-AvmReleaseNotes.ps1`, `Set-AvmModuleVersion.ps1` and `Publish-AvmAuthoring.ps1` live under `.pipelines/scripts/` in the ADO repo, not in this one, so the PSGallery API key is never handed to code that a git tag controls. The pipeline is idempotent — `Publish-AvmAuthoring.ps1 -SkipIfAlreadyPublished` warns and succeeds if the version is already on the gallery — so re-running after a partial release is safe.
+
+To preview locally what the pipeline will stage:
 
 ```pwsh
-./build.ps1 build -ReleaseVersion 0.2.0
+./build.ps1 build
 Test-ModuleManifest ./out/Avm.Authoring/Avm.Authoring.psd1
 ```
+
+Version stamping and release-note extraction happen in the pipeline, so the staged manifest here carries the committed `ModuleVersion` rather than the tag's.
+
+Note that `build` produces an **unsigned** staged module. Only the ADO pipeline can sign, so a locally built module is for inspection and break-glass publishing, never for a normal release.
 
 ---
 
 ## 9. Publish to PSGallery by hand (break-glass only)
 
-Don't run this unless the release workflow is broken, you're a PSGallery owner of the `Avm.Authoring` package, and you intend to ship.
+Don't run this unless the ADO pipeline is broken, you're a PSGallery owner of the `Avm.Authoring` package, and you intend to ship. **This publishes an unsigned module** — it fails the signing requirement the pipeline exists to satisfy, so treat it as an incident-recovery path and re-publish a signed build as soon as the pipeline is working.
 
 ```pwsh
-./build.ps1 build -ReleaseVersion 0.2.0
+# Temporarily set ModuleVersion in src/Avm.Authoring/Avm.Authoring.psd1 to the version you intend
+# to ship, then stage it. Revert that edit afterwards — the repo manifest is not the source of truth.
+./build.ps1 build
+Test-ModuleManifest ./out/Avm.Authoring/Avm.Authoring.psd1
+
 $key = Read-Host -AsSecureString -Prompt 'Paste your PSGallery API key (input is hidden)'
-./scripts/Publish-AvmAuthoring.ps1 -ApiKey $key -ModulePath ./out/Avm.Authoring
+Publish-PSResource -Path ./out/Avm.Authoring -ApiKey (ConvertFrom-SecureString $key -AsPlainText) -Repository PSGallery
 Remove-Variable key
 Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
 ```
 
-**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. The version of the script above is the only sanctioned publish path; it asserts the on-disk casing matches the manifest before calling `Publish-PSResource` ([spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)).
+**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. `./build.ps1 build` asserts the on-disk casing matches the manifest while staging ([spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)), so publishing the staged tree keeps that guard — but it is still the pipeline, not this path, that is the sanctioned way to ship.
 
 ---
 

@@ -25,6 +25,25 @@ avm version
 
 > **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. Track the slice-level status in [docs/progress.md](docs/progress.md). To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Verify the signature
+
+Every `.ps1`, `.psm1` and `.psd1` in a released build is Authenticode-signed by Microsoft. To check what you installed:
+
+```pwsh
+Get-ChildItem (Get-Module Avm.Authoring -ListAvailable).ModuleBase -Recurse -Include *.ps1, *.psm1, *.psd1 |
+    Get-AuthenticodeSignature |
+    Group-Object Status, { $_.SignerCertificate.Subject }
+```
+
+Expect a single group with status `Valid` and a `Microsoft Corporation` subject. Anything reporting `NotSigned`, `HashMismatch` or `UnknownError` means the file has been modified or came from somewhere other than the gallery.
+
+The release `.zip` attached to each [GitHub Release](https://github.com/Azure/azure-verified-modules-tools/releases) ships alongside a `SHA256SUMS` file:
+
+```pwsh
+(Get-FileHash ./Avm.Authoring-0.2.0.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+Get-Content ./SHA256SUMS
+```
+
 ## Learn more
 
 - [docs/progress.md](docs/progress.md) — live status checklist and single source of truth; read this first.

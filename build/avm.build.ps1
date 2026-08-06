@@ -14,9 +14,9 @@
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
       integration - Run Pester tests under tests/Pester/Integration/ (real FS + REAL NETWORK + real binaries). Not part of ci/pre-commit; PR/on-demand only.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
-                    Pass -ReleaseVersion X.Y.Z to stamp that version (and the
-                    matching CHANGELOG section, if any) into the staged
-                    manifest. The in-repo manifest is never modified.
+                    Version stamping and release notes are applied by the ADO
+                    release pipeline, not here; the in-repo manifest is never
+                    modified.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test. The recommended local gate.
       ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
@@ -34,13 +34,7 @@
 
 [CmdletBinding()]
 param(
-    [string] $Configuration = 'Debug',
-
-    # Release version for the `build` task. When supplied, the staged manifest
-    # under out/ is stamped with this version so the git tag -- not the in-repo
-    # manifest -- is the single source of truth for what gets published.
-    [ValidatePattern('^$|^\d+\.\d+\.\d+$')]
-    [string] $ReleaseVersion
+    [string] $Configuration = 'Debug'
 )
 
 Set-StrictMode -Version 3.0
@@ -52,19 +46,11 @@ $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
-$script:scriptsRoot  = Join-Path $script:repoRoot 'scripts'
 
 # Single source of truth for the spec section 18 line-coverage floor. The CI
 # job (`ci` task) runs `coverage` and fails below this number. Adjust here
 # when the per-file ratchet lands; the spec lets us start at 70 and tighten.
 $script:coverageFloor = 70
-
-# The PowerShell Gallery rejects a package whose manifest ReleaseNotes exceeds
-# this many characters. It enforces it at publish time -- after the tag and the
-# GitHub Release exist -- so the `build` task caps the notes and then verifies
-# the stamped value rather than discovering the limit mid-release. v0.1.7 was
-# rejected here at 23987 characters.
-$script:galleryNotesLimit = 10600
 
 # --- helpers ----------------------------------------------------------------
 
@@ -397,38 +383,6 @@ task build layout, {
     Copy-Item -Path (Join-Path $script:moduleRoot '*') -Destination $stage -Recurse -Force
 
     $stagedManifest = Join-Path $stage 'Avm.Authoring.psd1'
-
-    # Stamp the release version into the staged copy only. The git tag is the
-    # source of truth at release time, so nobody has to remember to bump the
-    # in-repo manifest before tagging.
-    if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
-        $notes = & (Join-Path $script:scriptsRoot 'Get-AvmReleaseNotes.ps1') `
-            -Version $ReleaseVersion `
-            -ChangelogPath (Join-Path $script:repoRoot 'CHANGELOG.md') `
-            -MaxLength $script:galleryNotesLimit `
-            -AllowMissing
-        $notesText = ($notes | Out-String).Trim()
-
-        $stampArgs = @{ ManifestPath = $stagedManifest; Version = $ReleaseVersion }
-        if ($notesText) { $stampArgs['ReleaseNotes'] = $notesText }
-        & (Join-Path $script:scriptsRoot 'Set-AvmModuleVersion.ps1') @stampArgs -Confirm:$false
-
-        # Measure what actually landed in the manifest, not what we asked for.
-        # The gallery enforces this at publish time, after the tag and the
-        # GitHub Release exist, so a rejection there costs a whole release.
-        $stamped = (Import-PowerShellDataFile -LiteralPath $stagedManifest).PrivateData.PSData.ReleaseNotes
-        $stampedLength = $stamped.Length + ([regex]::Matches($stamped, "`n")).Count
-        if ($stampedLength -gt $script:galleryNotesLimit) {
-            throw ("Staged manifest ReleaseNotes is $stampedLength characters, over the PowerShell Gallery " +
-                   "limit of $($script:galleryNotesLimit). Get-AvmReleaseNotes.ps1 -MaxLength did not take effect.")
-        }
-
-        $notesState = if ($notesText) {
-            "CHANGELOG notes applied, $stampedLength/$($script:galleryNotesLimit) chars"
-        }
-        else { 'no CHANGELOG section (notes left as-is)' }
-        Write-Build Green "  stamped staged manifest: $ReleaseVersion ($notesState)"
-    }
 
     # Verify the staged manifest still loads cleanly.
     $null = Test-ModuleManifest -Path $stagedManifest

@@ -1,4 +1,4 @@
-# AVM test-only stub for `mapotf`. Pinned to avm.pins version 0.1.5 so
+# AVM test-only stub for `mapotf`. Pinned to avm.pins version 0.1.7 so
 # Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
 #
 # Handles only the verbs Invoke-AvmTerraformTransform actually invokes:
@@ -17,7 +17,7 @@ if ($args.Count -eq 0) {
 
 switch ($args[0]) {
     '--version' {
-        Write-Output 'Version: 0.1.5'
+        Write-Output 'Version: 0.1.7'
         exit 0
     }
     'transform' {
