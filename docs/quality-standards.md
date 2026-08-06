@@ -676,11 +676,11 @@ Spec §17 (Secrets) already locks in the in-memory contract for any secret the m
 
 Grep of `src/Avm.Authoring/` for `secret|credential|token|password|api[_-]?key` (case-insensitive) returns **zero hits** outside of CLI argv parsing tokens and one doc comment about `terraform test` not needing real backend credentials. **The module persists no secrets at all today.** Every wired engine is offline-friendly: `format`, `lint`, `test`, `docs`, `check policy` (against pinned-asset bundles, no remote OPA), and the `transform` / `check convention` stubs all run without auth.
 
-The only secret the codebase touches in any form is the PowerShell Gallery API key consumed by `scripts/Publish-AvmAuthoring.ps1`, and that script has been engineered (per spec §17 line 549) to accept the key from the caller's environment + run inside a protected GitHub Environment with required reviewers, so even in CI nothing lands on disk.
+The only secret the codebase touches in any form is the PowerShell Gallery API key, and it is no longer consumed from this repo at all. _(Updated 2026-08-06, F84/F85)_ Publishing moved to the Azure DevOps release pipeline, so the key now lives in the `Azure-Verified-Modules-Tools` variable group (ADO id 35) and is read by `.pipelines/scripts/Publish-AvmAuthoring.ps1` in `github-private/azure/Azure-Verified-Modules`. Nothing lands on disk, and the script that receives the key is no longer fetched from a release tag in this repo — which was the point of the move.
 
-### Spec deviation surfaced by this audit
+### Spec deviation surfaced by this audit — **closed**
 
-`scripts/Publish-AvmAuthoring.ps1` line 4 declares `[string] $ApiKey`. Spec §17 line 548 mandates `[SecureString]` only ("The publish script (`scripts/Publish-AvmAuthoring.ps1`) accepts the API key as `[SecureString]` only"). Same shape as the §6-line-220 finding that Appendix D surfaced and Slice K closed: a 4-line parameter-type swap + an `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource -ApiKey ...` call site (line 86) to satisfy PSResourceGet's plain-`[string]` `-ApiKey` parameter at the boundary. Tracked as **Slice M** (follow-up to this audit, not part of the audit deliverable).
+The publish script declared `[string] $ApiKey` where spec §17 mandates `[SecureString]` only. Same shape as the §6-line-220 finding that Appendix D surfaced and Slice K closed: a parameter-type swap plus a `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource -ApiKey ...` call site, to satisfy PSResourceGet's plain-`[string]` `-ApiKey` parameter at the boundary. Tracked as **Slice M**, which landed 2026-06-22 with an AST regression test asserting the parameter type. The script itself has since moved to `.pipelines/scripts/Publish-AvmAuthoring.ps1` in the ADO repo (F85).
 
 ### Plausible future secrets we might need to persist
 
@@ -743,7 +743,7 @@ Rationale:
 
 ### Open follow-ups
 
-- **Slice M** — convert `scripts/Publish-AvmAuthoring.ps1 $ApiKey` parameter from `[string]` to `[SecureString]` per spec §17 line 548. Mirror of Slice K's pattern: small surface, regression test the parameter type, document the in-memory `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource` boundary (the gallery API requires plain-`[string]`). **Autopilot-safe — tracked separately from this audit.**
+- ~~**Slice M** — convert the publish script's `$ApiKey` parameter from `[string]` to `[SecureString]`.~~ **Closed 2026-06-22.** Landed with an AST regression test on the parameter type; the in-memory `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource` boundary is documented in the script (the gallery API requires plain-`[string]`).
 - When telemetry endpoint design lands, confirm whether the endpoint needs auth at all. If anonymous, this audit's recommendation stays (c) indefinitely.
 - When Bicep ACR support is unblocked (defocused per 2026-05-26), audit whether MSAL/ManagedIdentity flows cover the auth without needing a persisted secret.
 
@@ -787,7 +787,7 @@ To package the current PowerShell module as a `dotnet tool` we would have to:
 1. **Build a .NET host shim** — a small C# console project that boots a `PowerShell` runspace (via `Microsoft.PowerShell.SDK` NuGet package), imports the embedded `Avm.Authoring` module, parses argv, and dispatches to `Invoke-Avm`. This is ~200–500 LOC of C# plus a `.csproj` plus a build target that embeds the `src/Avm.Authoring/**` content as a NuGet content folder.
 2. **Decide the runtime story** — `Microsoft.PowerShell.SDK` pulls in **the entire PowerShell 7 runtime** as a dependency (~80 MB unpacked). A `dotnet tool` package shipping the SDK is fat (~50–100 MB compressed) vs. the current `Avm.Authoring.psd1` PSGallery payload (~250 KB). The alternative is documenting `pwsh 7.4+` as a prerequisite and shelling out to it, which is uglier UX than just installing the PSGallery module directly.
 3. **Cross-publish per RID** — `dotnet tool` packages are technically platform-agnostic by default (`tfm=net8.0`, `runtime=any`), but if we embed any platform-specific helper (e.g., the cancellation-on-Windows code from spec §23 OQ 3 once it lands) we'd have to ship per-RID variants. That's a separate complication that PSGallery doesn't have.
-4. **Mirror every release to NuGet.org** — `dotnet tool install -g <id>` resolves from NuGet.org by default. We'd need a NuGet.org account in the `Azure` org, an API key, a publish step in `.github/workflows/release.yml`, and signed packages (NuGet.org requires `--api-key` + recommends Authenticode-signed NuGet packages for verified-publisher status).
+4. **Mirror every release to NuGet.org** — `dotnet tool install -g <id>` resolves from NuGet.org by default. We'd need a NuGet.org account in the `Azure` org, an API key, and a publish step in the ADO release pipeline (`.pipelines/release-avm-authoring.yml`, since F84 moved releases off GitHub Actions). Signing is the one part that got cheaper: NuGet.org recommends Authenticode-signed packages for verified-publisher status, and the pipeline now has an ESRP signing step it could extend.
 5. **Write per-channel install docs** — README would need separate sections for "Install via PSGallery" (already there), "Install via `dotnet tool`" (new), and the divergence in command surface (none — both should invoke the same `avm` verbs).
 
 ### Per-trigger evaluation

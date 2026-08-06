@@ -4,7 +4,7 @@ This repo is being delivered phase by phase against the plan in [`docs/avm-conso
 
 ## Read first, in this order
 
-1. **[`docs/progress.md`](docs/progress.md)** — the living checklist. Tells you what's done, what's in flight (`[~]`), what's blocked, and what to pick up next. **Always start here.**
+1. **[`docs/progress.md`](docs/progress.md)** — the living checklist. Tells you what's done, what's in flight (`[~]`), what's blocked, and what to pick up next. **Always start here.** Closed work is archived in [`docs/progress-archive.md`](docs/progress-archive.md) — read that only when you need the history behind a decision.
 2. **[`docs/avm-implementation-spec.md`](docs/avm-implementation-spec.md)** — wins on implementation details (file layout, encoding, cross-OS rules, error handling, testing layers).
 3. **[`docs/avm-consolidation-plan.md`](docs/avm-consolidation-plan.md)** — wins on scope and sequencing (verb table, phase exit criteria, architecture options).
 4. **[`docs/quality-standards.md`](docs/quality-standards.md)** — cross-cutting standards and gotchas (encoding, cross-OS, subprocess, PSScriptAnalyzer + Pester traps, networking, test layers, manifest casing, error handling, commit + push protocol).
@@ -18,7 +18,7 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 - **When you discover a new must-do**, add it under the right phase. Don't reshape historical items — they're the audit trail.
 - **When you hit a blocker** you can't unstick this turn, capture it under **Known issues** at the top of `docs/progress.md` with a one-line diagnosis and a candidate fix. Leave the original checkbox in `[~]`.
 - **Always** bump the `Last updated` line at the top of `docs/progress.md` when you change the file.
-- **Never delete completed items.**
+- **Never delete completed items.** When a phase or workstream closes, move its items *verbatim* into [`docs/progress-archive.md`](docs/progress-archive.md) and leave a one-line summary under **Closed workstreams** in `progress.md`. Relocating preserves the audit trail; deleting destroys it.
 - **Commit and push after every meaningful change.** As soon as `./build.ps1 pre-commit` is green for a slice (or for a focused doc-only edit that doesn't need it), stage the change, write a Conventional-Commits message, commit, and `git push` to the active feature branch. The user explicitly opted in to this on 2026-05-18 — they want each slice landed on `origin` as it completes so a lost session never costs more than the last unpushed slice. See **Commit & push protocol** below for the exact rules.
 
 ## Commit & push protocol
