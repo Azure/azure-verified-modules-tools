@@ -49,6 +49,8 @@ section when cutting a release.
 
 ### Changed
 
+- Result summaries now use grammatically consistent singular and plural nouns,
+  such as `1 run` and `2 runs`.
 - PSGallery publication now runs in GitHub Actions after ADO uploads and
   promotes the ESRP-signed release. The workflow publishes the signed release
   archive without rebuilding it and validates its checksum, archive layout,
