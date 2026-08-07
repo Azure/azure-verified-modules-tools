@@ -87,6 +87,27 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
             Should -Not -Be 0
     }
 
+    It 'exits non-zero when the dispatcher rejects an outdated module' {
+        $invocation = @'
+$module = Get-Module Avm.Authoring
+& $module {
+    function script:Test-AvmModuleVersion {
+        throw [AvmModuleVersionException]::new(
+            [version]'0.2.3',
+            [version]'0.3.0',
+            'Avm.Authoring 0.2.3 is outdated.')
+    }
+}
+avm spec-verb | Out-Null
+'@
+        $result = Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'pass' }" -Invocation $invocation
+
+        $result.ExitCode | Should -Not -Be 0
+        $result.Output | Should -Match 'avm spec-verb failed: Avm\.Authoring 0\.2\.3 is outdated'
+        $result.Output | Should -Not -Match '~~~~'
+        $result.Output | Should -Not -Match '\.ps1:\d+'
+    }
+
     It 'exits zero when a verb reports pass' {
         (Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'pass' }").ExitCode |
             Should -Be 0
