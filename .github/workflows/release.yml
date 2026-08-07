@@ -3,20 +3,28 @@ name: Publish signed release
 on:
   release:
     types: [released]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published full release tag to publish (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: psgallery-${{ github.event.release.tag_name }}
+  group: psgallery-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    name: Publish ${{ github.event.release.tag_name }} to PSGallery
+    name: Publish ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }} to PSGallery
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: psgallery
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
 
     steps:
       # The release tag controls the artifact, never the code that receives the Gallery key.
@@ -30,7 +38,6 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -41,13 +48,18 @@ jobs:
 
           $releaseJson = gh release view $env:RELEASE_TAG `
               --repo $env:GITHUB_REPOSITORY `
-              --json tagName,isDraft,isPrerelease
+              --json tagName,isDraft,isPrerelease,publishedAt
           if ($LASTEXITCODE -ne 0) {
               throw "Unable to read release '$env:RELEASE_TAG'."
           }
 
           $release = $releaseJson | ConvertFrom-Json
-          if ($release.isDraft -or $release.isPrerelease) {
+          if ($release.tagName -cne $env:RELEASE_TAG) {
+              throw "Release tag '$($release.tagName)' does not exactly match '$env:RELEASE_TAG'."
+          }
+          if ($release.isDraft -or
+              $release.isPrerelease -or
+              [string]::IsNullOrWhiteSpace([string] $release.publishedAt)) {
               throw "Release '$env:RELEASE_TAG' must be a published full release."
           }
 
@@ -67,7 +79,6 @@ jobs:
         shell: pwsh
         env:
           POWERSHELL_GALLERY_API_KEY: ${{ secrets.POWERSHELL_GALLERY_API_KEY }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrWhiteSpace($env:POWERSHELL_GALLERY_API_KEY)) {

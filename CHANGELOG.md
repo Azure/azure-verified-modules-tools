@@ -52,7 +52,9 @@ section when cutting a release.
 - PSGallery publication now runs in GitHub Actions after ADO uploads and
   promotes the ESRP-signed release. The workflow publishes the signed release
   archive without rebuilding it and validates its checksum, archive layout,
-  module version, casing, and signature blocks first.
+  module version, casing, and signature blocks first. A guarded manual retry
+  accepts only the exact tag of an existing published full release and uses
+  the same validation and publication path.
 - Pinned `mapotf` bumped to 0.1.7, with refreshed per-platform SHA256 hashes.
   Neither 0.1.6 nor 0.1.7 carries a functional change — both move mapotf's own
   release signing to ESRP — but its Windows binaries are now
