@@ -107,7 +107,7 @@ azure-verified-modules-tools/
     Install-AvmBuildPrerequisites.ps1
     Update-AvmMapotfConfig.ps1
     Update-AvmPins.ps1
-    # release scripts are pipeline-owned; see .pipelines/scripts/ in the ADO repo
+    Publish-AvmAuthoring.ps1      # validates and publishes ADO-signed release assets
   docs/
     avm-consolidation-plan.md
     avm-implementation-spec.md    # this file
@@ -470,7 +470,7 @@ The mandatory pre-publish check `Test-AvmModuleLayout`:
 - Resolves the module folder via `Split-Path -Leaf` and asserts `-ceq` against the expected name.
 - Lists the folder via `Get-ChildItem` and asserts the `.psd1` and `.psm1` files are present **with the exact expected casing** via `Where-Object { $_.Name -ceq $expected }`.
 - Parses the manifest and asserts `Name -ceq $expected` and `RootModule -ceq "$expected.psm1"`.
-- Runs while staging in the `build` task, and before every `Publish-PSResource` call in the pipeline-owned `.pipelines/scripts/Publish-AvmAuthoring.ps1`.
+- Runs while staging in the `build` task. The GitHub-owned `scripts/Publish-AvmAuthoring.ps1` repeats the equivalent exact-casing checks against the extracted signed release asset before `Publish-PSResource`.
 - Has its own Pester test that builds a fake module folder with a deliberately mis-cased file and asserts the check throws.
 
 ---
@@ -564,7 +564,7 @@ This section is the implementation-level expression of the **Security stance** p
 
 - No secret ever appears in source, in default config, in test fixtures, in error messages, or in telemetry.
 - API keys, tokens, and similar are accepted via `[SecureString]` parameters or read with `Read-Host -AsSecureString`. Plain-text parameter form is documented as insecure and labelled `[Obsolete]` once a `SecureString` overload exists.
-- The publish script (`.pipelines/scripts/Publish-AvmAuthoring.ps1`, owned by the ADO release pipeline) accepts the API key as `[SecureString]` only; the plain-text wrapper exists for `--what-if` dry runs only and warns on use.
+- The publish script (`scripts/Publish-AvmAuthoring.ps1`, owned by the GitHub release workflow) accepts the API key as `[SecureString]` only and converts it to plain text only at the `Publish-PSResource` boundary.
 - Long-lived secrets (e.g. `POWERSHELL_GALLERY_API_KEY`) live in a protected GitHub Environment with required reviewers (or a repository secret consumed by an environment-gated job), never in repo / org variables, never echoed by any `run:` step (no `echo`, no `Write-Host`, no `Write-Output`). Workflows that consume them must declare `environment: <name>` so the approval gate fires before the job touches the secret.
 
 ### Subprocess invocation
@@ -588,7 +588,7 @@ This section is the implementation-level expression of the **Security stance** p
 ### Module manifest and release pipeline
 
 - `LICENSE` at the repo root is referenced from the manifest's `LicenseUri`. The manifest fails its own self-check if the file isn't reachable.
-- The release pipeline runs the same `./build.ps1 ci` gate as PR CI, then publishes from a staged module tree under `out/`. There is no path by which a workflow can publish a build artifact that PR CI hasn't verified bit-for-bit.
+- The ADO release pipeline stages, verifies, ESRP-signs and packages the module. GitHub Actions checksum-verifies and publishes that exact release asset without rebuilding or modifying it.
 
 ---
 
@@ -650,12 +650,12 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.
 - Release artefacts:
-  - PSGallery via `Publish-PSResource` (the only path to PSGallery is `.pipelines/scripts/Publish-AvmAuthoring.ps1`, which lives in the ADO repo so a git tag can never influence the code that receives the API key).
+  - PSGallery via `Publish-PSResource` in `scripts/Publish-AvmAuthoring.ps1`. The workflow checks publisher code out from the default branch, so a release tag cannot influence code that receives the API key.
   - GitHub Release with the zipped module folder and a `SHA256SUMS` file.
-- Releases are cut from the **Azure DevOps** pipeline `.pipelines/release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions. Every shipped `.ps1`, `.psm1` and `.psd1` is Authenticode-signed by ESRP before packaging, and a verification step fails the build if any file is unsigned. The gallery push lives in the same pipeline because it must happen after signing and PSGallery accepts a version exactly once.
+- Releases are split across ADO and GitHub. `.pipelines/release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules` stages, ESRP-signs, verifies, packages and uploads the release assets, then promotes the prerelease. The `release.released` GitHub Actions workflow downloads the signed zip and `SHA256SUMS`, validates checksum, layout, version and signature blocks, and publishes the extracted module to PSGallery without rebuilding it.
 - The release pipeline is **idempotent / re-runnable**:
-  - The PSGallery publish step passes `-SkipIfAlreadyPublished`, so re-running a tag whose version is already on the Gallery warns and exits 0 instead of failing. Local maintainers omit the switch and still get the loud "bump ModuleVersion" error.
-  - The GitHub Release step is create-or-update: it only *creates* the release (seeding the body from the CHANGELOG) when the tag has no release yet; if a release already exists, it leaves any human-authored notes untouched and just re-uploads the artefacts.
+  - The GitHub PSGallery publish step passes `-SkipIfAlreadyPublished`, so re-running a tag whose version is already on the Gallery warns and exits 0 instead of failing.
+  - ADO edits the existing prerelease and replaces its assets; it never creates the release or rewrites its human-authored notes.
 - `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); release script verifies an entry exists for the new version before publishing.
 - Manifest `Prerelease` field is set by the release script from the git tag; never edited by hand.
 

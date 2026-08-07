@@ -187,21 +187,21 @@ Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 
 ## 8. Cut a release (maintainers only)
 
-Releases are cut from the **Azure DevOps** pipeline `release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`, not from GitHub Actions.
+Release signing and GitHub publication run from the **Azure DevOps** pipeline `release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`. PSGallery publication runs from this repository's GitHub Actions release workflow after ADO promotes the release.
 
-Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. The gallery push has to happen *after* signing, and PSGallery accepts a given version exactly once, so the publish moved with it — otherwise an unsigned build could win the race.
+Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. ADO builds and signs the module, packages `Avm.Authoring-X.Y.Z.zip` with `SHA256SUMS`, uploads both assets, then promotes the release. Promotion triggers GitHub Actions to validate and publish that exact signed archive without rebuilding or stamping it.
 
 Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: the pipeline stamps the tag version into the staged manifest at build time.
 
 1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes the PSGallery release notes stamped into the manifest.
 2. Create a GitHub Release in this repo against the tag `vX.Y.Z`, with the title and release notes you want. Tick *Set as a pre-release* and **publish** it. Attach nothing — the pipeline uploads the assets.
-3. Queue **Release Avm.Authoring** in ADO with that tag as the `version` parameter. Leave `dryRun` unticked for a real release; tick it to build, sign, verify and package without writing anything to GitHub or PSGallery.
+3. Queue **Release Avm.Authoring** in ADO with that tag as the `version` parameter. Leave `dryRun` unticked for a real release; tick it to build, sign, verify and package without writing anything to GitHub.
 
 Publish the release rather than saving it as a draft: **a draft release does not create its tag**, and the pipeline checks the tag out. Publishing it as a pre-release creates the tag as a side effect, so there is no separate tag push. Prerelease *versions* such as `v0.1.0-preview.1` are still unsupported — the tag has to match `vMAJOR.MINOR.PATCH`.
 
-The pipeline never creates a release and never writes a release body, so a missing release fails the run. It edits the existing one in two steps: the first forces it back to a pre-release and uploads the assets, the last promotes it to a full release once the module is on the gallery. Forcing the pre-release flag back on is what demotes an accidentally promoted release rather than leaving it half-built. Every write is an edit, so re-queuing the same tag replaces the assets in place instead of duplicating anything.
+The ADO pipeline never creates a release and never writes a release body, so a missing release fails the run. It forces the existing release back to a pre-release, replaces the signed assets, then promotes it to a full release. That promotion triggers `.github/workflows/release.yml`.
 
-The pipeline owns the release scripts. `Get-AvmReleaseNotes.ps1`, `Set-AvmModuleVersion.ps1` and `Publish-AvmAuthoring.ps1` live under `.pipelines/scripts/` in the ADO repo, not in this one, so the PSGallery API key is never handed to code that a git tag controls. The pipeline is idempotent — `Publish-AvmAuthoring.ps1 -SkipIfAlreadyPublished` warns and succeeds if the version is already on the gallery — so re-running after a partial release is safe.
+ADO owns staging, release-note stamping, signing, signature verification and packaging scripts. This repo owns only `scripts/Publish-AvmAuthoring.ps1`: GitHub checks it out from the default branch rather than the release tag before exposing `POWERSHELL_GALLERY_API_KEY`. The script verifies the checksum, archive shape, exact module casing, manifest version and signature blocks, and `-SkipIfAlreadyPublished` makes a re-run safe.
 
 To preview locally what the pipeline will stage:
 

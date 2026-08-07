@@ -1,0 +1,86 @@
+name: Publish signed release
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psgallery-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ github.event.release.tag_name }} to PSGallery
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: psgallery
+
+    steps:
+      # The release tag controls the artifact, never the code that receives the Gallery key.
+      - name: Checkout trusted publisher
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download signed release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Release tag '$env:RELEASE_TAG' must match vMAJOR.MINOR.PATCH."
+          }
+
+          $releaseJson = gh release view $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --json tagName,isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) {
+              throw "Unable to read release '$env:RELEASE_TAG'."
+          }
+
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.isDraft -or $release.isPrerelease) {
+              throw "Release '$env:RELEASE_TAG' must be a published full release."
+          }
+
+          $version = $env:RELEASE_TAG.Substring(1)
+          New-Item -ItemType Directory -Path ./out/release -Force | Out-Null
+          gh release download $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --pattern "Avm.Authoring-$version.zip" `
+              --pattern SHA256SUMS `
+              --dir ./out/release `
+              --clobber
+          if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download the signed release assets for '$env:RELEASE_TAG'."
+          }
+
+      - name: Validate and publish signed module
+        shell: pwsh
+        env:
+          POWERSHELL_GALLERY_API_KEY: ${{ secrets.POWERSHELL_GALLERY_API_KEY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:POWERSHELL_GALLERY_API_KEY)) {
+              throw 'POWERSHELL_GALLERY_API_KEY is not configured.'
+          }
+
+          $apiKey = ConvertTo-SecureString `
+              -String $env:POWERSHELL_GALLERY_API_KEY `
+              -AsPlainText `
+              -Force
+          ./scripts/Publish-AvmAuthoring.ps1 `
+              -ReleaseTag $env:RELEASE_TAG `
+              -ArtifactPath ./out/release `
+              -ApiKey $apiKey `
+              -SkipIfAlreadyPublished `
+              -Confirm:$false

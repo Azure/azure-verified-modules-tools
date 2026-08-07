@@ -93,10 +93,28 @@ Describe 'CI workflow' {
 }
 
 Describe 'Release workflow' {
-    It 'is absent, because releases are signed and published from Azure DevOps' {
-        # ESRP signing has no GitHub Actions equivalent, and PSGallery accepts a
-        # version exactly once — a GitHub-side publish could beat the signed build.
+    BeforeAll {
         $releasePath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'release.yml'
-        Test-Path -LiteralPath $releasePath | Should -BeFalse
+        $script:release = Get-Content -LiteralPath $releasePath -Raw
+    }
+
+    It 'runs when ADO promotes a prerelease to a full release' {
+        $script:release | Should -Match '(?m)^\s+types: \[released\]\r?$'
+        $script:release | Should -Not -Match 'workflow_dispatch'
+    }
+
+    It 'checks out trusted default-branch publisher code' {
+        $script:release | Should -Match 'ref: \$\{\{ github\.event\.repository\.default_branch \}\}'
+    }
+
+    It 'downloads release assets and delegates publication to the validated script' {
+        $script:release | Should -Match 'gh release download'
+        $script:release | Should -Match '\./scripts/Publish-AvmAuthoring\.ps1'
+    }
+
+    It 'does not rebuild, upload, create, edit, or promote the release' {
+        $script:release | Should -Not -Match '\./build\.ps1'
+        $script:release | Should -Not -Match 'gh release (create|upload|edit)'
+        $script:release | Should -Not -Match 'contents: write'
     }
 }

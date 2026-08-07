@@ -153,4 +153,4 @@ The full contributor workflow (`./build.ps1 pre-commit`, individual Pester runs,
 
 ## Publish to PSGallery
 
-The publish flow is owned by the Azure DevOps release pipeline (`.pipelines/scripts/Publish-AvmAuthoring.ps1` in `github-private/azure/Azure-Verified-Modules`), not by this repo. It re-runs the same case-sensitive layout checks that the `layout` build task uses, so the local `./build.ps1 pre-commit` gate and the publish gate stay aligned.
+The Azure DevOps release pipeline stages, ESRP-signs, verifies, and uploads the module archive. After ADO promotes the release, GitHub Actions uses the trusted default-branch `scripts/Publish-AvmAuthoring.ps1` to validate the signed archive and publish it to PSGallery. The publisher repeats the case-sensitive layout checks that the `layout` build task uses.
