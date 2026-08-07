@@ -84,6 +84,54 @@ $invoke
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
     }
+
+    function script:Invoke-AvmStdinVersionFailure {
+        param(
+            [Parameter(Mandatory)]
+            [string] $Invocation
+        )
+
+        $manifest = $script:manifestPath
+        $scriptText = @(
+            "`$ErrorActionPreference = 'Stop'"
+            "`$PSStyle.OutputRendering = 'PlainText'"
+            "Import-Module '$manifest' -Force"
+            "`$module = Get-Module Avm.Authoring"
+            "& `$module { function script:Get-AvmVerbRegistry { [pscustomobject]@{ Path = [string[]]@('spec-verb'); Cmdlet = 'Invoke-AvmSpecVerb'; Summary = 'test verb' } }; function script:Invoke-AvmSpecVerb { [pscustomobject]@{ Status = 'pass' } }; function script:Test-AvmModuleVersion { throw [AvmModuleVersionException]::new([version]'0.2.3', [version]'0.3.0', 'Avm.Authoring 0.2.3 is outdated.') } }"
+            $Invocation
+        ) -join '; '
+
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = (Get-Command -Name pwsh -CommandType Application).Source
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        [void] $startInfo.ArgumentList.Add('-NoProfile')
+        [void] $startInfo.ArgumentList.Add('-Command')
+        [void] $startInfo.ArgumentList.Add('-')
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        try {
+            [void] $process.Start()
+            $process.StandardInput.Write($scriptText)
+            $process.StandardInput.Close()
+            $stdOut = $process.StandardOutput.ReadToEnd()
+            $stdErr = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+
+            $output = @($stdOut.Trim(), $stdErr.Trim()) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            [pscustomobject]@{
+                ExitCode = $process.ExitCode
+                Output   = (($output -join "`n").Replace("`r", ''))
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
 }
 
 AfterAll {
@@ -213,6 +261,22 @@ avm spec-verb | Out-Null
         $result.Output | Should -BeExactly 'InvalidOperation: avm spec-verb failed: Avm.Authoring 0.2.3 is outdated.'
         $result.Output | Should -Not -Match '~~~~'
         $result.Output | Should -Not -Match '\.ps1:\d+'
+    }
+
+    It 'reaches the catch and following statement when invoked through pwsh -Command - stdin' {
+        $invocation = "try { avm spec-verb | Out-Null; Write-Output 'RETURNED' } catch { Write-Output ('CAUGHT=' + `$_.Exception.GetType().Name + '|ID=' + `$_.FullyQualifiedErrorId) }; Write-Output 'AFTER'"
+        $result = Invoke-AvmStdinVersionFailure -Invocation $invocation
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -BeExactly "CAUGHT=AvmModuleVersionException|ID=AVM1050`nAFTER"
+    }
+
+    It 'exits non-zero with one source-free error when uncaught through pwsh -Command - stdin' {
+        $result = Invoke-AvmStdinVersionFailure -Invocation 'avm spec-verb | Out-Null'
+
+        $result.ExitCode | Should -Not -Be 0
+        @($result.Output -split "`n").Count | Should -Be 1
+        $result.Output | Should -BeExactly 'InvalidOperation: avm spec-verb failed: Avm.Authoring 0.2.3 is outdated.'
     }
 }
 
