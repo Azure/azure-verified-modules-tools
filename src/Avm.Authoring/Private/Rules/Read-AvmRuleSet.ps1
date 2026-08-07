@@ -51,11 +51,16 @@ function Read-AvmRuleSet {
 
     $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $builtinDir = Join-Path (Join-Path $moduleRoot 'Resources') 'Rules'
+    $builtinCount = 0
     if (Test-Path -LiteralPath $builtinDir -PathType Container) {
         foreach ($file in Get-AvmRuleFilesOrdinal -Directory $builtinDir) {
             $rule = Read-AvmRuleFile -ConfigPath $file.FullName
             $rulesById[$rule.Id] = $rule
+            $builtinCount++
         }
+    }
+    else {
+        Write-AvmLog ("rules: built-in directory not found at {0}" -f $builtinDir) -Level Verbose | Out-Null
     }
 
     $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
@@ -64,14 +69,21 @@ function Read-AvmRuleSet {
         $dir = Split-Path -Parent $dir
     }
     $repoDir = Join-Path (Join-Path $dir '.avm') 'rules'
+    $repoCount = 0
     if (Test-Path -LiteralPath $repoDir -PathType Container) {
+        Write-AvmLog ("rules: loading repository rules from {0}" -f $repoDir) -Level Verbose | Out-Null
         foreach ($file in Get-AvmRuleFilesOrdinal -Directory $repoDir) {
             $rule = Read-AvmRuleFile -ConfigPath $file.FullName
             $rulesById[$rule.Id] = $rule
+            $repoCount++
         }
+    }
+    else {
+        Write-AvmLog ("rules: no repository rules directory at {0}" -f $repoDir) -Level Verbose | Out-Null
     }
 
     if ($rulesById.Count -eq 0) {
+        Write-AvmLog 'rules: no rules loaded' -Level Verbose | Out-Null
         return @()
     }
 
@@ -81,6 +93,7 @@ function Read-AvmRuleSet {
     foreach ($id in $ids) {
         $result.Add($rulesById[$id])
     }
+    Write-AvmLog ("rules: loaded {0} effective rule(s); built-in={1}; repository={2}" -f $result.Count, $builtinCount, $repoCount) -Level Verbose | Out-Null
     return $result.ToArray()
 }
 

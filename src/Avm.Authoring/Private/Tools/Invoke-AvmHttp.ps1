@@ -54,6 +54,7 @@ function Invoke-AvmHttp {
 
     $offline = if (Test-Path Env:\AVM_OFFLINE) { $env:AVM_OFFLINE -eq '1' } else { $false }
     if ($offline -and $effectiveUrl.StartsWith('https://')) {
+        Write-AvmLog ("http: offline mode blocked download from {0}" -f $effectiveUrl) -Level Verbose | Out-Null
         throw [AvmConfigurationException]::new(
             "AVM_OFFLINE=1: refusing to download $effectiveUrl")
     }
@@ -70,6 +71,7 @@ function Invoke-AvmHttp {
 
     if ($effectiveUrl.StartsWith('file://')) {
         $localSource = [Uri]::new($effectiveUrl).LocalPath
+        Write-AvmLog ("http: copying fixture {0} to {1}" -f $localSource, $partial) -Level Verbose | Out-Null
         Copy-Item -LiteralPath $localSource -Destination $partial -Force
     }
     else {
@@ -83,6 +85,7 @@ function Invoke-AvmHttp {
         }
         [System.Net.ServicePointManager]::SecurityProtocol = $protocols
 
+        Write-AvmLog ("http: downloading {0} to {1}; timeout={2}s" -f $effectiveUrl, $partial, $TimeoutSec) -Level Verbose | Out-Null
         Invoke-WebRequest -Uri $effectiveUrl -OutFile $partial -TimeoutSec $TimeoutSec -UseBasicParsing | Out-Null
     }
 
@@ -99,5 +102,6 @@ function Invoke-AvmHttp {
         Remove-Item -LiteralPath $Destination -Force
     }
     Move-Item -LiteralPath $partial -Destination $Destination -Force
+    Write-AvmLog ("http: sha256 verified; promoted download to {0}" -f $Destination) -Level Verbose | Out-Null
     return $Destination
 }

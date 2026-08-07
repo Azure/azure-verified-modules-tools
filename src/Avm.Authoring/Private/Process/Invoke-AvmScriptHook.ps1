@@ -16,6 +16,7 @@ function Invoke-AvmScriptHook {
     $ErrorActionPreference = 'Stop'
 
     if (-not (Test-Path -LiteralPath $HookPath -PathType Leaf)) {
+        Write-AvmLog ("script-hook: not found; skipping {0}" -f $HookPath) -Level Verbose | Out-Null
         return
     }
 
@@ -28,6 +29,7 @@ function Invoke-AvmScriptHook {
         throw [AvmConfigurationException]::new("Unsupported script hook extension: '$HookPath'.")
     }
 
+    Write-AvmLog ("script-hook: running {0} in {1}" -f $HookPath, $WorkingDirectory) -Level Verbose | Out-Null
     $null = Invoke-AvmProcess `
         -FilePath ([System.Environment]::ProcessPath) `
         -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $HookPath) `

@@ -54,6 +54,7 @@ function Install-AvmToolFromPins {
     Write-AvmLog ("install: target directory = {0}" -f $versionDir) -Level Verbose | Out-Null
 
     if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
+        Write-AvmLog ("install: cache hit for {0}/{1}" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
         return [pscustomobject]@{
             Name     = $Tool.name
             Version  = $Tool.version
@@ -64,6 +65,7 @@ function Install-AvmToolFromPins {
     }
 
     if ($Force -and (Test-Path -LiteralPath $versionDir)) {
+        Write-AvmLog ("install: force removing {0}" -f $versionDir) -Level Verbose | Out-Null
         Remove-Item -LiteralPath $versionDir -Recurse -Force
     }
 
@@ -76,6 +78,7 @@ function Install-AvmToolFromPins {
     $lock = Lock-AvmToolCache -LockFile $lockFile
     try {
         if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
+            Write-AvmLog ("install: post-lock cache hit for {0}/{1}" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
             return [pscustomobject]@{
                 Name     = $Tool.name
                 Version  = $Tool.version
@@ -148,6 +151,7 @@ function Install-AvmToolFromPins {
             }
             catch [System.IO.IOException] {
                 if (Test-Path -LiteralPath $verified) {
+                    Write-AvmLog ("install: rename race lost for {0}/{1}; using completed cache entry" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
                     Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
                     return [pscustomobject]@{
                         Name     = $Tool.name

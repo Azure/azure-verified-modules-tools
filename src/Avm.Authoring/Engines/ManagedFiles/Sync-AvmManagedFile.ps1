@@ -158,6 +158,7 @@ function Sync-AvmManagedFile {
             Select-Object -First 1).Source
 
     $source = Resolve-AvmManagedFilesSource -Settings $settings -GitPath $gitPath
+    Write-AvmLog ("sync: source kind={0}; managed-files={1}; config={2}" -f $source.SourceKind, $source.ManagedBaseDir, $source.ConfigDir) -Level Verbose | Out-Null
 
     $overlays = @()
     $excluded = @()
@@ -186,6 +187,7 @@ function Sync-AvmManagedFile {
         $overlays = $resolved.ManagedFilesAdditional
         $excluded = $resolved.ExcludedManagedFiles
     }
+    Write-AvmLog ("sync: repo-id={0}; overlays={1}; exclusions={2}; deprecated-candidates={3}" -f $repoId, $overlays.Count, $excluded.Count, $deprecated.Count) -Level Verbose | Out-Null
 
     $map = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
@@ -203,6 +205,7 @@ function Sync-AvmManagedFile {
     foreach ($p in @($desired.Keys)) {
         if ($deprecatedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
     }
+    Write-AvmLog ("sync: desired files={0}; matched deprecated files={1}" -f $desired.Count, $matchedDeprecated.Count) -Level Verbose | Out-Null
 
     # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
     # overwritten wholesale, so the consumer keeps its own additions. The spec
@@ -254,9 +257,11 @@ function Sync-AvmManagedFile {
 
     $lineAdded = @($changedLinePlans | Where-Object { -not $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
     $lineUpdated = @($changedLinePlans | Where-Object { $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
+    Write-AvmLog ("sync: plan add={0}; update={1}; remove={2}; line-merge={3}" -f $toAdd.Count, $toUpdate.Count, $toRemove.Count, $changedLinePlans.Count) -Level Verbose | Out-Null
 
     $issues = @()
     if ($CheckDrift) {
+        Write-AvmLog 'sync: check-drift mode; reporting planned changes without writing' -Level Verbose | Out-Null
         $issueList = New-Object System.Collections.Generic.List[object]
         foreach ($p in $toRemove) {
             $issueList.Add((New-AvmSyncIssue -File $p -Message 'deprecated file present in the repository; it should be removed.'))
@@ -279,11 +284,13 @@ function Sync-AvmManagedFile {
         if ($hasChanges) {
             $applyDesc = ('sync managed files (add {0}, update {1}, remove {2}, merge-lines {3})' -f $toAdd.Count, $toUpdate.Count, $toRemove.Count, $changedLinePlans.Count)
             if ($PSCmdlet.ShouldProcess($root, $applyDesc)) {
+                Write-AvmLog ("sync: applying managed-file plan to {0}" -f $root) -Level Verbose | Out-Null
                 foreach ($p in $toRemove) {
                     $full = Join-Path $root ($p.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
                     if (Test-Path -LiteralPath $full) {
                         Remove-Item -LiteralPath $full -Recurse -Force
                     }
+                    Write-AvmLog 'sync: managed-file plan applied' -Level Verbose | Out-Null
                 }
                 foreach ($p in @($toAdd + $toUpdate)) {
                     $full = Join-Path $root ($p.Replace('/', [System.IO.Path]::DirectorySeparatorChar))

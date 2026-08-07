@@ -241,7 +241,10 @@ function Invoke-Avm {
         Write-AvmLog ('dispatch: positional arguments = {0}' -f ($positional -join ' | ')) -Level Verbose
         Write-AvmLog ('dispatch: bound parameters = {0}' -f (($bound.GetEnumerator() | Sort-Object Key | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }) -join '; ')) -Level Verbose
 
+        $dispatchSw = [System.Diagnostics.Stopwatch]::StartNew()
         $result = & $cmd @bound @positional
+        $dispatchSw.Stop()
+        Write-AvmLog ('dispatch: completed {0} in {1}' -f $match.Cmdlet, (Format-AvmDuration -Duration $dispatchSw.Elapsed)) -Level Verbose
     }
     catch [AvmException] {
         Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
@@ -250,6 +253,7 @@ function Invoke-Avm {
     $items = @($result | Where-Object { $null -ne $_ })
     $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
     $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })
+    Write-AvmLog ('dispatch: result objects={0}; rendered={1}; passthrough={2}' -f $items.Count, $rendered.Count, $passThrough.Count) -Level Verbose
 
     # F25: render once per invocation, not once per emitted object.
     if ($rendered.Count -gt 0) {
