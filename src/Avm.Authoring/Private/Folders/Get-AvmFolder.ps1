@@ -56,7 +56,9 @@ function Get-AvmFolder {
     $ErrorActionPreference = 'Stop'
 
     if ($Kind -eq 'Temp') {
-        return [System.IO.Path]::GetTempPath()
+        $tempPath = [System.IO.Path]::GetTempPath()
+        Write-AvmLog ("folder: Temp -> {0}" -f $tempPath) -Level Verbose | Out-Null
+        return $tempPath
     }
 
     $avmHome = $env:AVM_HOME
@@ -130,6 +132,7 @@ function Get-AvmFolder {
             'Unable to determine the current OS: $IsWindows, $IsLinux and $IsMacOS are all false.')
     }
 
+    Write-AvmLog ("folder: {0} -> {1}; create={2}" -f $Kind, $path, (-not $NoCreate)) -Level Verbose | Out-Null
     if (-not $NoCreate -and -not (Test-Path -LiteralPath $path)) {
         $null = New-Item -ItemType Directory -Path $path -Force
         if (-not $IsWindows) {

@@ -187,6 +187,7 @@ function Invoke-AvmTerraformDocs {
                 })
         }
     }
+    Write-AvmLog ("docs: discovered {0} documentation target(s)" -f $targets.Count) -Level Verbose | Out-Null
 
     $changed = [System.Collections.Generic.List[string]]::new()
 
@@ -196,6 +197,7 @@ function Invoke-AvmTerraformDocs {
     # drift) while the tree is left byte-identical even if the tool throws.
     $snapshot = $null
     if ($CheckDrift) {
+        Write-AvmLog ("docs: check-drift mode; snapshotting {0} output file(s)" -f $targets.Count) -Level Verbose | Out-Null
         $snapshot = Get-AvmFileSnapshot -Path @($targets | ForEach-Object { Join-Path $_.Dir $OutputFile })
     }
 
@@ -214,9 +216,11 @@ function Invoke-AvmTerraformDocs {
             if ($target.Config) {
                 $configArg = [System.IO.Path]::GetRelativePath($root, $target.Config)
                 $argumentList = @('--config', $configArg, $positional)
+                Write-AvmLog ("docs: target {0} uses config {1}" -f $positional, $configArg) -Level Verbose | Out-Null
             }
             else {
                 $argumentList = @('markdown', 'table', '--output-file', $OutputFile, '--output-mode', 'inject', $positional)
+                Write-AvmLog ("docs: target {0} uses legacy table fallback" -f $positional) -Level Verbose | Out-Null
             }
 
             $result = Invoke-AvmProcess `
@@ -242,11 +246,16 @@ function Invoke-AvmTerraformDocs {
             if ($beforeHash -ne $afterHash) {
                 $relative = [System.IO.Path]::GetRelativePath($root, $readmePath).Replace('\', '/')
                 $changed.Add($relative)
+                Write-AvmLog ("docs: changed {0}" -f $relative) -Level Verbose | Out-Null
+            }
+            else {
+                Write-AvmLog ("docs: unchanged {0}" -f ([System.IO.Path]::GetRelativePath($root, $readmePath).Replace('\', '/'))) -Level Verbose | Out-Null
             }
         }
     }
     finally {
         if ($null -ne $snapshot) {
+            Write-AvmLog 'docs: restoring output snapshot after drift check' -Level Verbose | Out-Null
             Restore-AvmFileSnapshot -Snapshot $snapshot
         }
     }
@@ -265,6 +274,7 @@ function Invoke-AvmTerraformDocs {
                     Message  = ("'{0}' is out of date; run 'avm docs' and commit the result." -f $rel)
                 })
         }
+        Write-AvmLog ("docs: completed; targets={0}; changed={1}; status={2}" -f $targets.Count, $changed.Count, $status) -Level Verbose | Out-Null
     }
 
     return [pscustomobject][ordered]@{

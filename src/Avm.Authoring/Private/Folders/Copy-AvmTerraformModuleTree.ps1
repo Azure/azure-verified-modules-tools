@@ -13,6 +13,8 @@ function Copy-AvmTerraformModuleTree {
 
     $null = New-Item -ItemType Directory -Path $DestinationRoot -Force -ErrorAction Stop
     $files = @(Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -Force -ErrorAction Stop)
+    Write-AvmLog ("module-tree: discovered {0} file(s) under {1}" -f $files.Count, $SourceRoot) -Level Verbose | Out-Null
+    $copied = 0
     foreach ($file in $files) {
         $relative = [System.IO.Path]::GetRelativePath($SourceRoot, $file.FullName)
         $segments = $relative -split '[\\/]'
@@ -26,5 +28,7 @@ function Copy-AvmTerraformModuleTree {
             $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop
         }
         Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop
+        $copied++
     }
+    Write-AvmLog ("module-tree: copied {0} file(s) to {1}" -f $copied, $DestinationRoot) -Level Verbose | Out-Null
 }

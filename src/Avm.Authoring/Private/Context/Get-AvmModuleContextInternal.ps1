@@ -51,6 +51,7 @@ function Get-AvmModuleContextInternal {
     # 1. Committed override file. Highest precedence.
     $override = Read-AvmContextOverride -Path $start
     if ($override) {
+        Write-AvmLog ("context: override resolved kind={0}; ecosystem={1}; root={2}" -f $override.Kind, $override.Ecosystem, $override.Root) -Level Verbose | Out-Null
         if ($Ecosystem -ne 'auto' -and $override.Ecosystem -ne $Ecosystem) {
             throw [AvmContextException]::new(
                 "Ecosystem '$Ecosystem' conflicts with .avm/context.psd1 at $($override.Root) which declares '$($override.Ecosystem)'.")
@@ -78,6 +79,7 @@ function Get-AvmModuleContextInternal {
                             Scope     = $null
                             Owner     = $null
                         }
+                        Write-AvmLog ("context: root rule matched kind={0}; root={1}" -f $rootHit.Kind, $rootHit.Root) -Level Verbose | Out-Null
                         break
                     }
                 }
@@ -95,6 +97,7 @@ function Get-AvmModuleContextInternal {
                     Scope     = $null
                     Owner     = $null
                 }
+                Write-AvmLog ("context: root rule matched kind={0}; root={1}" -f $rootHit.Kind, $rootHit.Root) -Level Verbose | Out-Null
             }
         }
         if ($rootHit) { break }
@@ -118,6 +121,7 @@ function Get-AvmModuleContextInternal {
                     Scope     = $null
                     Owner     = $null
                 }
+                Write-AvmLog ("context: path rule matched kind={0}; root={1}" -f $pathHit.Kind, $pathHit.Root) -Level Verbose | Out-Null
                 break
             }
         }
@@ -133,6 +137,7 @@ function Get-AvmModuleContextInternal {
                         Scope     = $null
                         Owner     = $null
                     }
+                    Write-AvmLog ("context: path rule matched kind={0}; root={1}" -f $pathHit.Kind, $pathHit.Root) -Level Verbose | Out-Null
                     break
                 }
             }
@@ -148,6 +153,7 @@ function Get-AvmModuleContextInternal {
         $parts = $rel -split '[\\/]'
         if ($parts.Count -ge 3 -and $parts[0] -ceq 'avm' -and $parts[1] -in @('res', 'ptn', 'utl')) {
             $pathHit.Scope = $parts[1]
+            Write-AvmLog ("context: bicep module scope={0}" -f $pathHit.Scope) -Level Verbose | Out-Null
         }
     }
 
@@ -156,10 +162,17 @@ function Get-AvmModuleContextInternal {
     # classification is more specific (e.g. a Terraform module repo is also
     # technically a terraform-module-path, but the repo signature dominates).
     if ($pathHit -and $rootHit -and $pathHit.Root -eq $rootHit.Root) {
+        Write-AvmLog ("context: same-root tie resolved to root kind={0} over path kind={1}" -f $rootHit.Kind, $pathHit.Kind) -Level Verbose | Out-Null
         return $rootHit
     }
-    if ($pathHit) { return $pathHit }
-    if ($rootHit) { return $rootHit }
+    if ($pathHit) {
+        Write-AvmLog ("context: selected path kind={0}; root={1}" -f $pathHit.Kind, $pathHit.Root) -Level Verbose | Out-Null
+        return $pathHit
+    }
+    if ($rootHit) {
+        Write-AvmLog ("context: selected root kind={0}; root={1}" -f $rootHit.Kind, $rootHit.Root) -Level Verbose | Out-Null
+        return $rootHit
+    }
 
     $hint = if ($Ecosystem -ne 'auto') { " (Ecosystem='$Ecosystem' filter applied)" } else { '' }
     throw [AvmContextException]::new(

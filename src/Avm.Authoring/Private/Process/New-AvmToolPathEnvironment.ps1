@@ -34,11 +34,13 @@ function New-AvmToolPathEnvironment {
 
     $separator = [System.IO.Path]::PathSeparator
     $safeEntries = [System.Collections.Generic.List[string]]::new()
+    $removed = 0
     foreach ($entry in @($Path -split [regex]::Escape([string]$separator))) {
         if ([string]::IsNullOrWhiteSpace($entry)) {
             continue
         }
         if (Test-Path -LiteralPath (Join-Path $entry $entrypoint) -PathType Leaf -ErrorAction SilentlyContinue) {
+            $removed++
             continue
         }
         $safeEntries.Add($entry)
@@ -48,6 +50,7 @@ function New-AvmToolPathEnvironment {
     $entries.Add($toolDirectory)
     $entries.AddRange($safeEntries)
 
+    Write-AvmLog ("path-env: prepended {0} for {1}; removed {2} conflicting path entry/entries" -f $toolDirectory, $ToolName, $removed) -Level Verbose | Out-Null
     return @{
         PATH = $entries -join $separator
     }

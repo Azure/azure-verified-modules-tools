@@ -118,6 +118,7 @@ function Resolve-AvmTool {
     }
 
     if (Test-AvmAutoInstallDisabled -Explicit:$NoAutoInstall) {
+        Write-AvmLog ("tool: automatic install disabled for {0}" -f $tool.name) -Level Verbose | Out-Null
         throw [AvmToolException]::new(
             ("Tool '{0}' (version {1}) is not installed and automatic installation is disabled (AVM_NO_AUTO_INSTALL). Run: avm tool install {0}" -f $tool.name, $tool.version),
             'AVM1014')
@@ -125,6 +126,7 @@ function Resolve-AvmTool {
 
     Write-AvmLog ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -Level Install | Out-Null
     $installed = Install-AvmToolFromPins -Tool $tool -Platform $platform
+    Write-AvmLog ("tool: install action for {0} = {1}" -f $tool.name, $installed.Action) -Level Verbose | Out-Null
 
     if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {
         throw [AvmToolException]::new(

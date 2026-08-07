@@ -37,17 +37,20 @@ function Lock-AvmToolCache {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ($true) {
         try {
-            return [System.IO.File]::Open(
+            $stream = [System.IO.File]::Open(
                 $LockFile,
                 [System.IO.FileMode]::OpenOrCreate,
                 [System.IO.FileAccess]::Write,
                 [System.IO.FileShare]::None)
+            Write-AvmLog ("lock: acquired {0}" -f $LockFile) -Level Verbose | Out-Null
+            return $stream
         }
         catch [System.IO.IOException] {
             if ((Get-Date) -ge $deadline) {
                 throw [System.TimeoutException]::new(
                     "Could not acquire lock '$LockFile' within $TimeoutSec seconds.")
             }
+            Write-AvmLog ("lock: waiting for {0}" -f $LockFile) -Level Verbose | Out-Null
             Start-Sleep -Milliseconds 250
         }
     }
