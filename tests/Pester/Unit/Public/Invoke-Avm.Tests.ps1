@@ -173,7 +173,7 @@ $invoke
         ) -join '; '
 
         $startInfo = New-AvmChildProcessStartInfo `
-            -ArgumentList @('-NoProfile', '-Command', '-') `
+            -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', '-') `
             -RedirectStandardInput
         Invoke-AvmChildProcess -StartInfo $startInfo -StandardInput $scriptText
     }
