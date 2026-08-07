@@ -4,8 +4,8 @@ Single source of truth for what's in flight and what's next on the `Avm.Authorin
 
 Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md), so this file stays short enough to read in one sitting.
 
-**Last updated**: 2026-08-07 — **F90 complete: stale-module subprocess tests are host-independent.**
-**Active branch**: `jaredfholgate-fix-version-enforcement` (off `main`)
+**Last updated**: 2026-08-07 — **F91 complete: result summaries use consistent singular and plural nouns.**
+**Active branch**: `jaredfholgate-improve-output-consistency` (off `main`)
 
 ## Snapshot
 
@@ -21,6 +21,7 @@ Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md)
 
 ## In flight
 
+- [x] **F91 — make result summary pluralization consistent.** Shared result rendering no longer emits grammatically incorrect summaries such as `1 runs`; it uses singular nouns for a count of one while preserving the existing plural output for all other counts.
 - [x] **F90 — isolate stale-module subprocess tests from CI host state.** The F89 child-process probes inherited `GITHUB_ACTIONS=true` on hosted runners, which correctly enabled workflow annotations but contaminated assertions intended to pin interactive error semantics. Their stdin launcher also accepted every `pwsh` application path returned on Unix as one literal filename. Both launch paths now share an environment-isolated `ProcessStartInfo` helper that selects one executable deterministically; regression coverage deliberately contaminates the parent with GitHub Actions state and proves the interactive child remains clean. Replacement CI then exposed a second Unix-host artifact: `pwsh -Command -` emits `ESC[?1h` / `ESC[?1l` console-host toggles around redirected stdin even with `-NonInteractive`. The stdin capture now normalizes exactly those host sequences and removes the empty output record before assertions.
 - [x] **F87 — improve CLI logging and composite tool preflight.** Commands now report immediate progress, `-Verbose` exposes context/tool/process diagnostics, pass/warning/error/install output uses semantic colour with `NO_COLOR` / `CLICOLOR_FORCE` support, and `pre-commit` / `pr-check` resolve all ecosystem-specific tools before their step chains begin.
 - [x] **F88 — make stale module enforcement terminate `avm` commands.** The dispatcher performed `Test-AvmModuleVersion` before its typed-exception boundary, so a confirmed stale module bypassed the same clean, process-terminating failure path used by dispatched verb errors. Dispatcher setup now runs inside that boundary, preserving the typed `AvmModuleVersionException`, producing a concise failure, and making child PowerShell processes exit non-zero. Regression coverage exercises the stale `avm pre-commit` shape.

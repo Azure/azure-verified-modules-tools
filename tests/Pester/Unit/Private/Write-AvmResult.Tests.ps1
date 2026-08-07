@@ -41,6 +41,19 @@ Describe 'Write-AvmResult GitHub summary' {
     }
 }
 
+Describe 'ConvertTo-AvmResultLine' {
+    It 'uses the plural result noun for multiple results' {
+        InModuleScope 'Avm.Authoring' {
+            $results = @(
+                [pscustomobject]@{ Status = 'pass'; Name = 'first' }
+                [pscustomobject]@{ Status = 'pass'; Name = 'second' }
+            )
+            $lines = @(ConvertTo-AvmResultLine -Result $results -Verb 'lint')
+            $lines[0] | Should -Be 'avm lint: 2 results'
+        }
+    }
+}
+
 Describe 'ConvertTo-AvmRunSummaryLine' {
     It 'F33: renders the run tally when the result carries run counts' {
         InModuleScope 'Avm.Authoring' {
@@ -50,6 +63,16 @@ Describe 'ConvertTo-AvmRunSummaryLine' {
             }
             $lines = @(ConvertTo-AvmResultDetailLine -Result $result)
             $lines | Should -Contain '  14 runs, 14 passed, 0 failed'
+        }
+    }
+
+    It 'uses a singular run noun for a single run' {
+        InModuleScope 'Avm.Authoring' {
+            $result = [pscustomobject]@{
+                Status = 'pass'; RunsTotal = 1; RunsPassed = 1; RunsFailed = 0
+            }
+            $lines = @(ConvertTo-AvmResultDetailLine -Result $result)
+            $lines | Should -Contain '  1 run, 1 passed, 0 failed'
         }
     }
 
