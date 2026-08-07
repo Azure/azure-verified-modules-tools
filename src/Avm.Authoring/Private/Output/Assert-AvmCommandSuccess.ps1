@@ -84,10 +84,16 @@ function Assert-AvmCleanFailure {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $isModuleVersionFailure = $Exception -is [AvmModuleVersionException]
     $detail = $Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
-    $summary = 'avm {0} failed: {1}' -f $Verb, $detail
+    $summary = if ($isModuleVersionFailure) {
+        "AVM upgrade required.`n$($Exception.Message)"
+    }
+    else {
+        'avm {0} failed: {1}' -f $Verb, $detail
+    }
     if (Test-AvmGitHubActionsContext) {
-        Write-AvmLog $summary -Level Error
+        Write-AvmLog $summary.Replace("`r", ' ').Replace("`n", ' ') -Level Error
     }
 
     $errorId = if ($Exception -is [AvmException]) {
@@ -99,7 +105,12 @@ function Assert-AvmCleanFailure {
     $errorRecord = [System.Management.Automation.ErrorRecord]::new(
         $Exception,
         $errorId,
-        [System.Management.Automation.ErrorCategory]::InvalidOperation,
+        $(if ($isModuleVersionFailure) {
+                [System.Management.Automation.ErrorCategory]::NotInstalled
+            }
+            else {
+                [System.Management.Automation.ErrorCategory]::InvalidOperation
+            }),
         $null)
     $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($summary)
 

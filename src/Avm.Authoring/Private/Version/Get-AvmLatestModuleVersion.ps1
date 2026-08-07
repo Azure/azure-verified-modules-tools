@@ -1,15 +1,29 @@
 function Get-AvmLatestModuleVersion {
     [CmdletBinding()]
     [OutputType([version])]
-    param()
+    param(
+        [switch] $Refresh
+    )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    if ($Refresh -and $script:AvmModuleVersionCheckCompleted) {
+        Write-AvmLog (
+            'module version lookup: refresh requested; discarding cached latest version {0}' -f
+            $script:AvmLatestModuleVersion) -Level Verbose
+        $script:AvmLatestModuleVersion = $null
+        $script:AvmModuleVersionCheckCompleted = $false
+    }
+
     if ($script:AvmModuleVersionCheckCompleted) {
+        Write-AvmLog (
+            'module version lookup: reusing cached latest version {0}' -f
+            $script:AvmLatestModuleVersion) -Level Verbose
         return $script:AvmLatestModuleVersion
     }
 
+    Write-AvmLog 'module version lookup: querying PowerShell Gallery for Avm.Authoring' -Level Verbose
     $resources = @(
         Find-PSResource `
             -Name 'Avm.Authoring' `
@@ -55,5 +69,8 @@ function Get-AvmLatestModuleVersion {
     }
 
     $script:AvmModuleVersionCheckCompleted = $true
+    Write-AvmLog (
+        'module version lookup: discovered latest PowerShell Gallery version {0}' -f
+        $script:AvmLatestModuleVersion) -Level Verbose
     return $script:AvmLatestModuleVersion
 }
