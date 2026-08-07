@@ -186,6 +186,49 @@ $invoke
             -StandardInput $scriptText `
             -StripStdinHostControlSequences
     }
+
+    function script:Invoke-AvmSequentialVersionRefresh {
+        $manifest = $script:manifestPath
+        $scriptText = @"
+`$ErrorActionPreference = 'Stop'
+`$PSStyle.OutputRendering = 'PlainText'
+Import-Module '$manifest' -Force
+`$module = Get-Module Avm.Authoring
+& `$module {
+    `$script:SequentialGalleryLookupCount = 0
+    function script:Find-PSResource {
+        `$script:SequentialGalleryLookupCount++
+        `$version = if (`$script:SequentialGalleryLookupCount -eq 1) {
+            (Get-Module Avm.Authoring).Version.ToString()
+        }
+        else {
+            '99.0.0'
+        }
+        [pscustomobject]@{ Name = 'Avm.Authoring'; Version = `$version }
+    }
+    function script:Get-AvmVerbRegistry {
+        [pscustomobject]@{ Path = [string[]]@('spec-verb'); Cmdlet = 'Invoke-AvmSpecVerb'; Summary = 'test verb' }
+    }
+    function script:Invoke-AvmSpecVerb {}
+}
+avm spec-verb | Out-Null
+Write-Output 'FIRST=PASS'
+try {
+    avm spec-verb | Out-Null
+    Write-Output 'SECOND=RETURNED'
+}
+catch {
+    Write-Output ('SECOND={0}|{1}|{2}|{3}' -f `$_.Exception.GetType().Name, `$_.FullyQualifiedErrorId, `$_.Exception.CurrentVersion, `$_.Exception.LatestVersion)
+}
+& `$module { Write-Output ('LOOKUPS={0}' -f `$script:SequentialGalleryLookupCount) }
+"@
+
+        $startInfo = New-AvmChildProcessStartInfo `
+            -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $scriptText)
+        [void] $startInfo.Environment.Remove('AVM_TEST_RUN_ID')
+        [void] $startInfo.Environment.Remove('AVM_TEST_SKIP_MODULE_VERSION_CHECK')
+        Invoke-AvmChildProcess -StartInfo $startInfo
+    }
 }
 
 AfterAll {
@@ -341,6 +384,21 @@ avm spec-verb | Out-Null
         $result.ExitCode | Should -Not -Be 0
         @($result.Output -split "`n").Count | Should -Be 1
         $result.Output | Should -BeExactly 'InvalidOperation: avm spec-verb failed: Avm.Authoring 0.2.3 is outdated.'
+    }
+}
+
+Describe 'Invoke-Avm sequential version refresh (F92)' {
+    It 'queries again and terminates the second command when a newer version appears' {
+        $result = Invoke-AvmSequentialVersionRefresh
+        $currentVersion = (Test-ModuleManifest -Path $script:manifestPath).Version
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match '(?m)^FIRST=PASS$'
+        $result.Output | Should -Match (
+            '(?m)^SECOND=AvmModuleVersionException\|AVM1050\|{0}\|99\.0\.0$' -f
+            [regex]::Escape($currentVersion.ToString()))
+        $result.Output | Should -Match '(?m)^LOOKUPS=2$'
+        $result.Output | Should -Not -Match 'SECOND=RETURNED'
     }
 }
 

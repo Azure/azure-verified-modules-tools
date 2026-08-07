@@ -42,23 +42,16 @@ function Invoke-Avm {
     }
 
     try {
-        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
-        if (-not $isUpdateCommand) {
-            Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-            $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
-                $PSDefaultParameterValues.Clone()
-            }
-            else {
-                @{}
-            }
-            $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
-            $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
+        $verboseRequested = Test-AvmDebugMode
+        if (-not $verboseRequested) {
+            $verboseRequested = @(
+                $rawArguments |
+                    Where-Object {
+                        ([string]$_).ToLowerInvariant() -in @('-verbose', '--verbose')
+                    }
+            ).Count -gt 0
         }
-
-        # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
-        # logging. Turn verbose on and cascade it to every nested cmdlet through a
-        # cloned default-parameter table so the inherited/global one is untouched.
-        if (Test-AvmDebugMode) {
+        if ($verboseRequested) {
             $VerbosePreference = 'Continue'
             $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
                 $PSDefaultParameterValues.Clone()
@@ -67,6 +60,21 @@ function Invoke-Avm {
                 @{}
             }
             $PSDefaultParameterValues['*:Verbose'] = $true
+        }
+
+        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        if (-not $isUpdateCommand) {
+            Test-AvmModuleVersion `
+                -SkipModuleVersionCheck:$SkipModuleVersionCheck `
+                -RefreshLatestVersion
+            $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+                $PSDefaultParameterValues.Clone()
+            }
+            else {
+                @{}
+            }
+            $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
+            $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
         }
 
         # Honour .avm/.disable sentinel anywhere up the path: spec section 8.

@@ -3,7 +3,9 @@ function Test-AvmModuleVersion {
     param(
         [switch] $SkipModuleVersionCheck,
 
-        [switch] $SuppressSkipWarning
+        [switch] $SuppressSkipWarning,
+
+        [switch] $RefreshLatestVersion
     )
 
     Set-StrictMode -Version 3.0
@@ -27,7 +29,7 @@ function Test-AvmModuleVersion {
     }
 
     try {
-        $latestVersion = Get-AvmLatestModuleVersion
+        $latestVersion = Get-AvmLatestModuleVersion -Refresh:$RefreshLatestVersion
     }
     catch {
         $failure = $_.Exception
@@ -55,6 +57,11 @@ function Test-AvmModuleVersion {
         Write-Warning 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the PowerShell Gallery version.'
         return
     }
+
+    Write-AvmLog (
+        'module version check: comparing running version {0} with latest PowerShell Gallery version {1}' -f
+        $currentModule.Version,
+        $latestVersion) -Level Verbose
 
     if ($currentModule.Version -lt $latestVersion) {
         $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
