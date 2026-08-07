@@ -64,6 +64,41 @@ function Invoke-AvmPreCommit {
         When set, abort the chain on the first step whose Status is 'fail'.
         A throwing step is always fatal regardless of this flag.
 
+    .PARAMETER ManagedFilesRepo
+        owner/name of the git repo holding the managed files. Forwarded only to
+        the Terraform sync step.
+
+    .PARAMETER ManagedFilesRef
+        Git ref to fetch for the managed files. Forwarded only to the Terraform
+        sync step.
+
+    .PARAMETER ManagedFilesPath
+        Path within the source repo to the managed-files base folder. Forwarded
+        only to the Terraform sync step.
+
+    .PARAMETER ManagedFilesLocalPath
+        Direct local path to the managed-files base folder. Skips the managed
+        files git fetch and is forwarded only to the Terraform sync step.
+
+    .PARAMETER ConfigRepo
+        owner/name of the git repo holding the managed-files config folder.
+        Forwarded only to the Terraform sync step.
+
+    .PARAMETER ConfigRef
+        Git ref for the config repo. Forwarded only to the Terraform sync step.
+
+    .PARAMETER ConfigPath
+        Path within the config repo to the folder holding 'config.json' and
+        'deprecated-files.json'. Forwarded only to the Terraform sync step.
+
+    .PARAMETER ConfigLocalPath
+        Direct local path to the managed-files config folder. Skips the config
+        repo fetch and is forwarded only to the Terraform sync step.
+
+    .PARAMETER RepoId
+        Repository id used to look up overlays/exclusions in config.json.
+        Forwarded only to the Terraform sync step.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -77,6 +112,12 @@ function Invoke-AvmPreCommit {
 
     .EXAMPLE
         Invoke-AvmPreCommit -Path C:\repos\my-module -StopOnFail
+
+    .EXAMPLE
+        avm pre-commit -Ecosystem terraform -ManagedFilesRepo Contoso/governance -ManagedFilesRef v1.2.3 -ConfigRepo Contoso/governance -ConfigRef v1.2.3 -RepoId avm-res-foo
+
+    .EXAMPLE
+        avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\gov\managed-files -ConfigLocalPath D:\gov\repository-config -RepoId avm-res-foo
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -90,6 +131,18 @@ function Invoke-AvmPreCommit {
         [switch] $AllowPathFallback,
 
         [switch] $StopOnFail,
+
+        [string] $ManagedFilesRepo,
+        [string] $ManagedFilesRef,
+        [string] $ManagedFilesPath,
+        [string] $ManagedFilesLocalPath,
+
+        [string] $ConfigRepo,
+        [string] $ConfigRef,
+        [string] $ConfigPath,
+        [string] $ConfigLocalPath,
+
+        [string] $RepoId,
 
         [switch] $SkipModuleVersionCheck
     )
@@ -127,6 +180,17 @@ function Invoke-AvmPreCommit {
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
     $stepIndex = 0
+    $syncParameterNames = @(
+        'ManagedFilesRepo'
+        'ManagedFilesRef'
+        'ManagedFilesPath'
+        'ManagedFilesLocalPath'
+        'ConfigRepo'
+        'ConfigRef'
+        'ConfigPath'
+        'ConfigLocalPath'
+        'RepoId'
+    )
 
     foreach ($def in $stepDefs) {
         $stepStatus = 'pass'
@@ -139,10 +203,20 @@ function Invoke-AvmPreCommit {
         Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info | Out-Null
 
         try {
-            $stepResult = & $def.Cmdlet `
-                -Path $context.Root `
-                -Ecosystem $context.Ecosystem `
-                -AllowPathFallback:$AllowPathFallback
+            $stepParameters = @{
+                Path              = $context.Root
+                Ecosystem         = $context.Ecosystem
+                AllowPathFallback = $AllowPathFallback
+            }
+            if ($def.Name -eq 'sync') {
+                foreach ($parameterName in $syncParameterNames) {
+                    if ($PSBoundParameters.ContainsKey($parameterName)) {
+                        $stepParameters[$parameterName] = $PSBoundParameters[$parameterName]
+                    }
+                }
+            }
+
+            $stepResult = & $def.Cmdlet @stepParameters
 
             # Engine result objects carry their own Status; format does not
             # (it has no concept of failure unless something throws).

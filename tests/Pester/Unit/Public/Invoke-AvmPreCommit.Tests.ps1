@@ -29,6 +29,24 @@ Describe 'Invoke-AvmPreCommit' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPreCommit'
     }
 
+    It 'accepts every managed-files sync option on the CLI surface' {
+        $command = Get-Command Invoke-AvmPreCommit -Module Avm.Authoring
+        foreach ($parameterName in @(
+                'ManagedFilesRepo'
+                'ManagedFilesRef'
+                'ManagedFilesPath'
+                'ManagedFilesLocalPath'
+                'ConfigRepo'
+                'ConfigRef'
+                'ConfigPath'
+                'ConfigLocalPath'
+                'RepoId'
+            )) {
+            $command.Parameters.ContainsKey($parameterName) | Should -BeTrue
+            $command.Parameters[$parameterName].ParameterType | Should -Be ([string])
+        }
+    }
+
     It 'composes all four steps in the expected order on a passing chain (bicep)' {
         $dir = Join-Path $TestDrive ("precommit-bicep-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -142,6 +160,59 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[3].Step             | Should -Be 'format'
         $result.Steps[4].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+    }
+
+    It 'forwards explicitly supplied managed-files options only to the terraform sync step' {
+        $dir = Join-Path $TestDrive ("precommit-tf-sync-options-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+            $r = Invoke-AvmPreCommit `
+                -Path $D `
+                -Ecosystem terraform `
+                -ManagedFilesRepo 'Contoso/managed-files' `
+                -ManagedFilesRef 'refs/tags/v1.2.3' `
+                -ManagedFilesPath 'distribution/managed-files' `
+                -ManagedFilesLocalPath 'D:\managed-files' `
+                -ConfigRepo 'Contoso/config' `
+                -ConfigRef 'refs/tags/v4.5.6' `
+                -ConfigPath 'config/repository' `
+                -ConfigLocalPath 'D:\repository-config' `
+                -RepoId 'avm-res-foo'
+
+            Should -Invoke Invoke-AvmSync -Exactly 1 -ParameterFilter {
+                $ManagedFilesRepo -eq 'Contoso/managed-files' -and
+                $ManagedFilesRef -eq 'refs/tags/v1.2.3' -and
+                $ManagedFilesPath -eq 'distribution/managed-files' -and
+                $ManagedFilesLocalPath -eq 'D:\managed-files' -and
+                $ConfigRepo -eq 'Contoso/config' -and
+                $ConfigRef -eq 'refs/tags/v4.5.6' -and
+                $ConfigPath -eq 'config/repository' -and
+                $ConfigLocalPath -eq 'D:\repository-config' -and
+                $RepoId -eq 'avm-res-foo'
+            }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1
+            Should -Invoke Invoke-AvmTransform -Exactly 1
+            Should -Invoke Invoke-AvmFormat -Exactly 1
+            Should -Invoke Invoke-AvmDocs -Exactly 1
+
+            $r
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Steps.Step | Should -Be @('sync', 'check convention', 'transform', 'format', 'docs')
     }
 
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
