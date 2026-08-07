@@ -71,7 +71,7 @@ BeforeAll {
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             $outputText = (($output -join "`n").Replace("`r", ''))
             if ($StripStdinHostControlSequences) {
-                $outputText = $outputText -replace "$([char]27)\[\?1[hl]", ''
+                $outputText = ($outputText -replace "$([char]27)\[\?1[hl]", '').Trim()
             }
             return [pscustomobject]@{
                 ExitCode = $process.ExitCode
