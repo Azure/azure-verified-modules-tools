@@ -58,6 +58,26 @@ Describe 'Write-AvmLog' {
             $observed.Plain | Should -Be 'passed'
         }
 
+        It 'forces semantic colours for any non-zero CLICOLOR_FORCE value' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $escape = [char]27
+                $env:CLICOLOR_FORCE = '2'
+                Format-AvmLogText -Text 'passed' -Level Pass
+            }
+            $escape = [char]27
+            $observed | Should -Be "$escape[32mpassed$escape[0m"
+        }
+
+        It 'does not force semantic colours for CLICOLOR_FORCE=0' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $env:CLICOLOR_FORCE = '0'
+                Test-AvmColorEnabled
+            }
+            if ([Console]::IsOutputRedirected -or [Console]::IsErrorRedirected) {
+                $observed | Should -BeFalse
+            }
+        }
+
         It 'writes Warning to the warning stream, not the information stream' {
             $observed = InModuleScope 'Avm.Authoring' {
                 $info = @()

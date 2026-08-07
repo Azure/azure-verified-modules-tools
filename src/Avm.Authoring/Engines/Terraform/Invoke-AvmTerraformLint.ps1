@@ -224,10 +224,8 @@ function Invoke-AvmTerraformLint {
             ("The terraform lint engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shellHooks -join ', ')))
     }
 
-    $tool = @(Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback |
-            Where-Object { $null -ne $_.PSObject.Properties['Source'] })[-1]
-    $terraform = @(Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback |
-            Where-Object { $null -ne $_.PSObject.Properties['Source'] })[-1]
+    $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
+    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
     $configSet = New-AvmTflintConfigSet -Root $Context.Root -BaseConfigDir $baseConfigDir
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'

@@ -59,7 +59,8 @@ function Test-AvmColorEnabled {
     if ($null -ne [System.Environment]::GetEnvironmentVariable('NO_COLOR')) {
         return $false
     }
-    if ((Test-AvmEnvironmentFlag -Name 'CLICOLOR_FORCE')) {
+    $colorForce = [System.Environment]::GetEnvironmentVariable('CLICOLOR_FORCE')
+    if (-not [string]::IsNullOrWhiteSpace($colorForce) -and $colorForce.Trim() -ne '0') {
         return $true
     }
 
