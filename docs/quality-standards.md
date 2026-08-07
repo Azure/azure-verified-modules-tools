@@ -253,7 +253,7 @@ The 2026-05 publishing incident is the canonical case-sensitivity lesson. **NTFS
 - Resolves the module folder via `Split-Path -Leaf` and asserts `-ceq` against the expected name.
 - Lists the folder via `Get-ChildItem` and asserts the `.psd1` and `.psm1` files are present **with the exact expected casing** via `Where-Object { $_.Name -ceq $expected }`.
 - Parses the manifest and asserts `Name -ceq $expected` and `RootModule -ceq "$expected.psm1"`.
-- Runs while staging in the `build` task, and before every `Publish-PSResource` call in the pipeline-owned `.pipelines/scripts/Publish-AvmAuthoring.ps1` (ADO repo).
+- Runs while staging in the `build` task. The GitHub-owned `scripts/Publish-AvmAuthoring.ps1` repeats the exact-casing checks against the extracted ADO-signed release asset before every `Publish-PSResource` call.
 - Surfaces as the `layout` Invoke-Build task so `./build.ps1 pre-commit` exercises it on every contributor run.
 - Has its own Pester test that builds a fake module folder with a deliberately mis-cased file and asserts the guard throws.
 
@@ -676,11 +676,11 @@ Spec §17 (Secrets) already locks in the in-memory contract for any secret the m
 
 Grep of `src/Avm.Authoring/` for `secret|credential|token|password|api[_-]?key` (case-insensitive) returns **zero hits** outside of CLI argv parsing tokens and one doc comment about `terraform test` not needing real backend credentials. **The module persists no secrets at all today.** Every wired engine is offline-friendly: `format`, `lint`, `test`, `docs`, `check policy` (against pinned-asset bundles, no remote OPA), and the `transform` / `check convention` stubs all run without auth.
 
-The only secret the codebase touches in any form is the PowerShell Gallery API key, and it is no longer consumed from this repo at all. _(Updated 2026-08-06, F84/F85)_ Publishing moved to the Azure DevOps release pipeline, so the key now lives in the `Azure-Verified-Modules-Tools` variable group (ADO id 35) and is read by `.pipelines/scripts/Publish-AvmAuthoring.ps1` in `github-private/azure/Azure-Verified-Modules`. Nothing lands on disk, and the script that receives the key is no longer fetched from a release tag in this repo — which was the point of the move.
+The only secret the codebase touches in any form is the PowerShell Gallery API key. _(Updated 2026-08-07, F86)_ It is exposed only to the `psgallery` GitHub Actions environment and passed as a `[SecureString]` to `scripts/Publish-AvmAuthoring.ps1`. The workflow checks that script out from the trusted default branch, not the release tag; nothing secret lands on disk, and tag-controlled code never receives the key.
 
 ### Spec deviation surfaced by this audit — **closed**
 
-The publish script declared `[string] $ApiKey` where spec §17 mandates `[SecureString]` only. Same shape as the §6-line-220 finding that Appendix D surfaced and Slice K closed: a parameter-type swap plus a `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource -ApiKey ...` call site, to satisfy PSResourceGet's plain-`[string]` `-ApiKey` parameter at the boundary. Tracked as **Slice M**, which landed 2026-06-22 with an AST regression test asserting the parameter type. The script itself has since moved to `.pipelines/scripts/Publish-AvmAuthoring.ps1` in the ADO repo (F85).
+The publish script declared `[string] $ApiKey` where spec §17 mandates `[SecureString]` only. Same shape as the §6-line-220 finding that Appendix D surfaced and Slice K closed: a parameter-type swap plus a `ConvertFrom-SecureString -AsPlainText` at the `Publish-PSResource -ApiKey ...` call site, to satisfy PSResourceGet's plain-`[string]` `-ApiKey` parameter at the boundary. tracked as **Slice M**, which landed 2026-06-22 with an AST regression test asserting the parameter type. The publisher is now `scripts/Publish-AvmAuthoring.ps1` in this repo and is checked out from the trusted default branch rather than the release tag before GitHub exposes the Gallery key (F86).
 
 ### Plausible future secrets we might need to persist
 
