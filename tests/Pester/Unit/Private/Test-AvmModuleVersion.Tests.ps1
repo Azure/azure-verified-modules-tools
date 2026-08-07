@@ -129,6 +129,10 @@ Describe 'Test-AvmModuleVersion' {
             $caught.Code | Should -Be 'AVM1050'
             $caught.ExitCode | Should -Be 10
             $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
+            $caught.Message | Should -Match 'Import-Module Avm\.Authoring -Force'
+            $caught.Message | Should -Match (
+                'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser\r?\n' +
+                'Import-Module Avm\.Authoring -Force')
         }
     }
 

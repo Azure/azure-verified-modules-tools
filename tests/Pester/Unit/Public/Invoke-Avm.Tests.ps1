@@ -219,6 +219,9 @@ try {
 }
 catch {
     Write-Output ('SECOND={0}|{1}|{2}|{3}' -f `$_.Exception.GetType().Name, `$_.FullyQualifiedErrorId, `$_.Exception.CurrentVersion, `$_.Exception.LatestVersion)
+    Write-Output 'GUIDANCE-BEGIN'
+    Write-Output `$_.Exception.Message
+    Write-Output 'GUIDANCE-END'
 }
 & `$module { Write-Output ('LOOKUPS={0}' -f `$script:SequentialGalleryLookupCount) }
 "@
@@ -397,6 +400,10 @@ Describe 'Invoke-Avm sequential version refresh (F92)' {
         $result.Output | Should -Match (
             '(?m)^SECOND=AvmModuleVersionException\|AVM1050\|{0}\|99\.0\.0$' -f
             [regex]::Escape($currentVersion.ToString()))
+        $result.Output | Should -Match (
+            '(?ms)^GUIDANCE-BEGIN$\n.*\n' +
+            'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser\n' +
+            'Import-Module Avm\.Authoring -Force\nGUIDANCE-END$')
         $result.Output | Should -Match '(?m)^LOOKUPS=2$'
         $result.Output | Should -Not -Match 'SECOND=RETURNED'
     }

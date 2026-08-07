@@ -65,9 +65,10 @@ function Test-AvmModuleVersion {
 
     if ($currentModule.Version -lt $latestVersion) {
         $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
+        $reloadScript = 'Import-Module Avm.Authoring -Force'
         throw [AvmModuleVersionException]::new(
             $currentModule.Version,
             $latestVersion,
-            "Avm.Authoring $($currentModule.Version) is outdated. The latest PowerShell Gallery version is $latestVersion. Running the latest version ensures current fixes and behavior. Upgrade with:`n$upgradeScript")
+            "Avm.Authoring $($currentModule.Version) is outdated; the latest PowerShell Gallery version is $latestVersion. Upgrade and reload the module in this PowerShell process:`n$upgradeScript`n$reloadScript")
     }
 }
