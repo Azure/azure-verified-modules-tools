@@ -51,6 +51,7 @@ function Install-AvmToolFromPins {
     $verified = Join-Path $versionDir '.verified'
     $entrypointName = if ($IsWindows) { "$($Tool.entrypoint).exe" } else { $Tool.entrypoint }
     $entrypointPath = Join-Path $versionDir $entrypointName
+    Write-AvmLog ("install: target directory = {0}" -f $versionDir) -Level Verbose | Out-Null
 
     if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
         return [pscustomobject]@{
@@ -71,6 +72,7 @@ function Install-AvmToolFromPins {
     }
 
     $lockFile = Join-Path $toolDir '.lock'
+    Write-AvmLog ("install: acquiring cache lock {0}" -f $lockFile) -Level Verbose | Out-Null
     $lock = Lock-AvmToolCache -LockFile $lockFile
     try {
         if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
@@ -103,6 +105,8 @@ function Install-AvmToolFromPins {
             'raw' { '' }
         }
         $url = $url.Replace('{ext}', $extToken)
+        Write-AvmLog ("install: source = {0}" -f $url) -Level Verbose | Out-Null
+        Write-AvmLog ("install: archive = {0}; expected sha256 = {1}" -f $resolvedArchive, $Tool.sha256[$Platform]) -Level Verbose | Out-Null
 
         $stagingRoot = Join-Path $toolDir '.staging'
         if (-not (Test-Path -LiteralPath $stagingRoot)) {
@@ -115,7 +119,9 @@ function Install-AvmToolFromPins {
             $archiveSuffix = $extToken
             $archivePath = Join-Path $stagingDir ("download" + $archiveSuffix)
 
+            Write-AvmLog ("install: downloading to {0}" -f $archivePath) -Level Verbose | Out-Null
             Invoke-AvmHttp -Url $url -Destination $archivePath -ExpectedSha256 $Tool.sha256[$Platform] | Out-Null
+            Write-AvmLog ("install: expanding {0}" -f $resolvedArchive) -Level Verbose | Out-Null
             Expand-AvmToolArchive -ArchivePath $archivePath -Archive $resolvedArchive -TargetDir $stagingDir -EntrypointBasename $Tool.entrypoint
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
 
@@ -155,6 +161,7 @@ function Install-AvmToolFromPins {
             }
 
             New-Item -ItemType File -Path $verified -Force | Out-Null
+            Write-AvmLog ("install: verified marker written to {0}" -f $verified) -Level Verbose | Out-Null
 
             return [pscustomobject]@{
                 Name     = $Tool.name

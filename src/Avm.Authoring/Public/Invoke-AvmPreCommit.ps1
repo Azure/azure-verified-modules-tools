@@ -103,6 +103,8 @@ function Invoke-AvmPreCommit {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
+    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
@@ -134,7 +136,7 @@ function Invoke-AvmPreCommit {
         $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
 
-        Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info
+        Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info | Out-Null
 
         try {
             $stepResult = & $def.Cmdlet `
@@ -168,12 +170,13 @@ function Invoke-AvmPreCommit {
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 
-        Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level Info
+        $completionLevel = if ($stepStatus -eq 'pass') { 'Pass' } else { 'Info' }
+        Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level $completionLevel | Out-Null
 
         if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
             # F41: narration only. Assert-AvmCommandSuccess promotes the same
             # text to the single GitHub Actions annotation for the run.
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info | Out-Null
         }
 
         $steps.Add([pscustomobject][ordered]@{

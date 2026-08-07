@@ -11,6 +11,12 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmPreCommit' {
+    BeforeEach {
+        InModuleScope 'Avm.Authoring' {
+            Mock Resolve-AvmCommandTool { @() }
+        }
+    }
+
     It 'is exported by the manifest' {
         (Get-Command Invoke-AvmPreCommit -Module Avm.Authoring -ErrorAction Stop) |
             Should -Not -BeNullOrEmpty
@@ -49,6 +55,11 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps[2].Step             | Should -Be 'validate'
         $result.Steps[3].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
+                $Command -eq 'pre-commit' -and $Ecosystem -eq 'bicep'
+            }
+        }
     }
 
     It 'stamps StartTime, EndTime and DurationMs on the envelope and every step' {

@@ -13,8 +13,14 @@ function Write-AvmResult {
     $ErrorActionPreference = 'Stop'
 
     $lines = @(ConvertTo-AvmResultLine -Result $Result -Verb $Verb)
-    foreach ($line in $lines) {
-        Write-AvmLog $line -Level Info
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $level = if ($index -eq 0 -and @($Result).Count -eq 1 -and [string]$Result[0].Status -eq 'pass') {
+            'Pass'
+        }
+        else {
+            'Info'
+        }
+        Write-AvmLog $lines[$index] -Level $level
     }
 
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {

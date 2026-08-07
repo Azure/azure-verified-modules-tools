@@ -51,6 +51,60 @@ function Test-AvmVerboseEnabled {
     return $false
 }
 
+function Test-AvmColorEnabled {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    if ($null -ne [System.Environment]::GetEnvironmentVariable('NO_COLOR')) {
+        return $false
+    }
+    if ((Test-AvmEnvironmentFlag -Name 'CLICOLOR_FORCE')) {
+        return $true
+    }
+
+    try {
+        return -not [Console]::IsOutputRedirected -and -not [Console]::IsErrorRedirected
+    }
+    catch {
+        return $false
+    }
+}
+
+function Format-AvmLogText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Text,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Install', 'Warning', 'Error')]
+        [string] $Level
+    )
+
+    if (-not (Test-AvmColorEnabled)) {
+        return $Text
+    }
+
+    $code = switch ($Level) {
+        'Pass' { '32' }
+        'Install' { '36' }
+        'Warning' { '33' }
+        'Error' { '31' }
+        'Verbose' { '90' }
+        'Debug' { '90' }
+        default { '' }
+    }
+    if (-not $code) {
+        return $Text
+    }
+
+    $escape = [char]27
+    return "$escape[$($code)m$Text$escape[0m"
+}
+
 function Format-AvmDuration {
     [CmdletBinding()]
     [OutputType([string])]
@@ -120,7 +174,7 @@ function Write-AvmLog {
         [AllowEmptyString()]
         [string] $Message,
 
-        [ValidateSet('Debug', 'Verbose', 'Info', 'Warning', 'Error')]
+        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Install', 'Warning', 'Error')]
         [string] $Level = 'Info',
 
         [AllowEmptyString()]
@@ -140,6 +194,7 @@ function Write-AvmLog {
     process {
         $text = if ($null -eq $Message) { '' } else { $Message }
         $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
+        $displayText = if ($actions) { $text } else { Format-AvmLogText -Text $text -Level $Level }
 
         switch ($Level) {
             'Debug' {
@@ -147,7 +202,7 @@ function Write-AvmLog {
                     Write-Information ('::debug::{0}' -f (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
-                    Write-Debug $text
+                    Write-Debug $displayText
                 }
             }
             'Verbose' {
@@ -155,7 +210,7 @@ function Write-AvmLog {
                     Write-Information ('::debug::{0}' -f (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
-                    Write-Verbose $text -Verbose:(Test-AvmVerboseEnabled)
+                    Write-Verbose $displayText -Verbose:(Test-AvmVerboseEnabled)
                 }
             }
             'Warning' {
@@ -163,7 +218,7 @@ function Write-AvmLog {
                     Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
-                    Write-Warning $text
+                    Write-Warning $displayText
                 }
             }
             'Error' {
@@ -171,11 +226,17 @@ function Write-AvmLog {
                     Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
                 else {
-                    Write-Information $text -InformationAction Continue
+                    Write-Information $displayText -InformationAction Continue
                 }
             }
+            'Pass' {
+                Write-Information $displayText -InformationAction Continue
+            }
+            'Install' {
+                Write-Information $displayText -InformationAction Continue
+            }
             default {
-                Write-Information $text -InformationAction Continue
+                Write-Information $displayText -InformationAction Continue
             }
         }
     }

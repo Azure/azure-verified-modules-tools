@@ -14,6 +14,7 @@ Describe 'Invoke-AvmPrCheck' {
     BeforeEach {
         InModuleScope 'Avm.Authoring' {
             Mock Assert-AvmGitWorkingTreeClean {}
+            Mock Resolve-AvmCommandTool { @() }
         }
     }
 
