@@ -17,6 +17,7 @@ BeforeAll {
             [Parameter(Mandatory)][string] $Body,
             [ValidateSet('File', 'Command')][string] $Mode = 'File',
             [switch] $CaptureTypedError,
+            [switch] $RejectOutdatedModule,
             [string] $Invocation
         )
 
@@ -38,8 +39,26 @@ try {
             $invoke = 'avm spec-verb | Out-Null'
         }
 
+        $versionOverride = if ($RejectOutdatedModule) {
+            @'
+$module = Get-Module Avm.Authoring
+& $module {
+    function script:Test-AvmModuleVersion {
+        throw [AvmModuleVersionException]::new(
+            [version]'0.2.3',
+            [version]'0.3.0',
+            'Avm.Authoring 0.2.3 is outdated.')
+    }
+}
+'@
+        }
+        else {
+            ''
+        }
+
         $scriptText = @"
 `$ErrorActionPreference = 'Stop'
+`$PSStyle.OutputRendering = 'PlainText'
 Import-Module '$manifest' -Force
 `$module = Get-Module Avm.Authoring
 & `$module {
@@ -48,6 +67,7 @@ Import-Module '$manifest' -Force
     }
     function script:Invoke-AvmSpecVerb { $Body }
 }
+$versionOverride
 $invoke
 "@
 
@@ -88,19 +108,10 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
     }
 
     It 'exits non-zero when the dispatcher rejects an outdated module' {
-        $invocation = @'
-$module = Get-Module Avm.Authoring
-& $module {
-    function script:Test-AvmModuleVersion {
-        throw [AvmModuleVersionException]::new(
-            [version]'0.2.3',
-            [version]'0.3.0',
-            'Avm.Authoring 0.2.3 is outdated.')
-    }
-}
-avm spec-verb | Out-Null
-'@
-        $result = Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'pass' }" -Invocation $invocation
+        $result = Invoke-AvmChildVerb `
+            -Mode File `
+            -Body "[pscustomobject]@{ Status = 'pass' }" `
+            -RejectOutdatedModule
 
         $result.ExitCode | Should -Not -Be 0
         $result.Output | Should -Match 'avm spec-verb failed: Avm\.Authoring 0\.2\.3 is outdated'
@@ -145,6 +156,63 @@ Describe 'Invoke-Avm typed failure (F02)' {
 "@
         $result = Invoke-AvmChildVerb -Mode File -CaptureTypedError -Body $body
         $result.Output | Should -Match 'diagnostic detail'
+    }
+}
+
+Describe 'Invoke-Avm stale module failure semantics (F89)' {
+    It 'lets an interactive caller catch the typed version exception without writing an uncaught error' {
+        $invocation = @'
+try {
+    avm spec-verb | Out-Null
+    'NO-THROW'
+}
+catch {
+    '{0}|{1}|{2}|{3}' -f $_.Exception.GetType().Name, $_.FullyQualifiedErrorId, $_.Exception.CurrentVersion, $_.Exception.LatestVersion
+}
+'@
+        $result = Invoke-AvmChildVerb `
+            -Mode File `
+            -Body "[pscustomobject]@{ Status = 'pass' }" `
+            -RejectOutdatedModule `
+            -Invocation $invocation
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -BeExactly 'AvmModuleVersionException|AVM1050|0.2.3|0.3.0'
+    }
+
+    It 'sets command status false and records the typed AVM error when execution continues through a trap' {
+        $invocation = @'
+trap {
+    $script:versionFailure = $_
+    continue
+}
+avm spec-verb | Out-Null
+'{0}|{1}|{2}' -f $?, $script:versionFailure.Exception.GetType().Name, $script:versionFailure.FullyQualifiedErrorId
+'@
+        $result = Invoke-AvmChildVerb `
+            -Mode File `
+            -Body "[pscustomobject]@{ Status = 'pass' }" `
+            -RejectOutdatedModule `
+            -Invocation $invocation
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -BeExactly 'False|AvmModuleVersionException|AVM1050'
+    }
+
+    It 'exits non-zero with one source-free error via pwsh -<Mode>' -TestCases @(
+        @{ Mode = 'File' }
+        @{ Mode = 'Command' }
+    ) {
+        $result = Invoke-AvmChildVerb `
+            -Mode $Mode `
+            -Body "[pscustomobject]@{ Status = 'pass' }" `
+            -RejectOutdatedModule
+
+        $result.ExitCode | Should -Not -Be 0
+        @($result.Output -split "`n").Count | Should -Be 1
+        $result.Output | Should -BeExactly 'InvalidOperation: avm spec-verb failed: Avm.Authoring 0.2.3 is outdated.'
+        $result.Output | Should -Not -Match '~~~~'
+        $result.Output | Should -Not -Match '\.ps1:\d+'
     }
 }
 
