@@ -8,6 +8,75 @@ BeforeAll {
     $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
     Import-Module $script:manifestPath -Force
 
+    function script:New-AvmChildProcessStartInfo {
+        param(
+            [Parameter(Mandatory)]
+            [string[]] $ArgumentList,
+
+            [switch] $RedirectStandardInput
+        )
+
+        $pwsh = Get-Command -Name pwsh -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $pwsh.Source
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $RedirectStandardInput
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        foreach ($argument in $ArgumentList) {
+            [void] $startInfo.ArgumentList.Add($argument)
+        }
+
+        foreach ($name in @(
+                'CI',
+                'GITHUB_ACTIONS',
+                'GITHUB_ENV',
+                'GITHUB_OUTPUT',
+                'GITHUB_STEP_SUMMARY',
+                'GITHUB_WORKSPACE',
+                'RUNNER_DEBUG'
+            )) {
+            [void] $startInfo.Environment.Remove($name)
+        }
+
+        return $startInfo
+    }
+
+    function script:Invoke-AvmChildProcess {
+        param(
+            [Parameter(Mandatory)]
+            [System.Diagnostics.ProcessStartInfo] $StartInfo,
+
+            [string] $StandardInput
+        )
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $StartInfo
+        try {
+            [void] $process.Start()
+            if ($StartInfo.RedirectStandardInput) {
+                $process.StandardInput.Write($StandardInput)
+                $process.StandardInput.Close()
+            }
+
+            $stdOut = $process.StandardOutput.ReadToEnd()
+            $stdErr = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+
+            $output = @($stdOut.Trim(), $stdErr.Trim()) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            return [pscustomobject]@{
+                ExitCode = $process.ExitCode
+                Output   = (($output -join "`n").Replace("`r", ''))
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+
     # Runs a fresh child pwsh that imports the module, replaces the verb registry
     # with a single fake verb whose cmdlet returns the supplied result object, then
     # invokes 'avm spec-verb'. Each child is isolated, so the observed process exit
@@ -74,12 +143,14 @@ $invoke
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-f02-' + [guid]::NewGuid().ToString('N') + '.ps1')
         Set-Content -LiteralPath $tmp -Value $scriptText -Encoding utf8
         try {
-            if ($Mode -eq 'File') {
-                $out = & pwsh -NoProfile -File $tmp 2>&1
-            } else {
-                $out = & pwsh -NoProfile -Command ". '$tmp'" 2>&1
+            $arguments = if ($Mode -eq 'File') {
+                @('-NoProfile', '-File', $tmp)
             }
-            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ((($out | ForEach-Object { [string]$_ }) -join "`n").Trim()) }
+            else {
+                @('-NoProfile', '-Command', ". '$tmp'")
+            }
+            $startInfo = New-AvmChildProcessStartInfo -ArgumentList $arguments
+            Invoke-AvmChildProcess -StartInfo $startInfo
         } finally {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
@@ -101,36 +172,10 @@ $invoke
             $Invocation
         ) -join '; '
 
-        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = (Get-Command -Name pwsh -CommandType Application).Source
-        $startInfo.UseShellExecute = $false
-        $startInfo.RedirectStandardInput = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        [void] $startInfo.ArgumentList.Add('-NoProfile')
-        [void] $startInfo.ArgumentList.Add('-Command')
-        [void] $startInfo.ArgumentList.Add('-')
-
-        $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = $startInfo
-        try {
-            [void] $process.Start()
-            $process.StandardInput.Write($scriptText)
-            $process.StandardInput.Close()
-            $stdOut = $process.StandardOutput.ReadToEnd()
-            $stdErr = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-
-            $output = @($stdOut.Trim(), $stdErr.Trim()) |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-            [pscustomobject]@{
-                ExitCode = $process.ExitCode
-                Output   = (($output -join "`n").Replace("`r", ''))
-            }
-        }
-        finally {
-            $process.Dispose()
-        }
+        $startInfo = New-AvmChildProcessStartInfo `
+            -ArgumentList @('-NoProfile', '-Command', '-') `
+            -RedirectStandardInput
+        Invoke-AvmChildProcess -StartInfo $startInfo -StandardInput $scriptText
     }
 }
 
@@ -218,11 +263,21 @@ catch {
     '{0}|{1}|{2}|{3}' -f $_.Exception.GetType().Name, $_.FullyQualifiedErrorId, $_.Exception.CurrentVersion, $_.Exception.LatestVersion
 }
 '@
-        $result = Invoke-AvmChildVerb `
-            -Mode File `
-            -Body "[pscustomobject]@{ Status = 'pass' }" `
-            -RejectOutdatedModule `
-            -Invocation $invocation
+        $savedActions = $env:GITHUB_ACTIONS
+        $savedSummary = $env:GITHUB_STEP_SUMMARY
+        try {
+            $env:GITHUB_ACTIONS = 'true'
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'summary.md'
+            $result = Invoke-AvmChildVerb `
+                -Mode File `
+                -Body "[pscustomobject]@{ Status = 'pass' }" `
+                -RejectOutdatedModule `
+                -Invocation $invocation
+        }
+        finally {
+            $env:GITHUB_ACTIONS = $savedActions
+            $env:GITHUB_STEP_SUMMARY = $savedSummary
+        }
 
         $result.ExitCode | Should -Be 0
         $result.Output | Should -BeExactly 'AvmModuleVersionException|AVM1050|0.2.3|0.3.0'
