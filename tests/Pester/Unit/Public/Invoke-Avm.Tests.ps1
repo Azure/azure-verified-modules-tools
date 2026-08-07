@@ -49,7 +49,9 @@ BeforeAll {
             [Parameter(Mandatory)]
             [System.Diagnostics.ProcessStartInfo] $StartInfo,
 
-            [string] $StandardInput
+            [string] $StandardInput,
+
+            [switch] $StripStdinHostControlSequences
         )
 
         $process = [System.Diagnostics.Process]::new()
@@ -67,9 +69,13 @@ BeforeAll {
 
             $output = @($stdOut.Trim(), $stdErr.Trim()) |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            $outputText = (($output -join "`n").Replace("`r", ''))
+            if ($StripStdinHostControlSequences) {
+                $outputText = $outputText -replace "$([char]27)\[\?1[hl]", ''
+            }
             return [pscustomobject]@{
                 ExitCode = $process.ExitCode
-                Output   = (($output -join "`n").Replace("`r", ''))
+                Output   = $outputText
             }
         }
         finally {
@@ -175,7 +181,10 @@ $invoke
         $startInfo = New-AvmChildProcessStartInfo `
             -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', '-') `
             -RedirectStandardInput
-        Invoke-AvmChildProcess -StartInfo $startInfo -StandardInput $scriptText
+        Invoke-AvmChildProcess `
+            -StartInfo $startInfo `
+            -StandardInput $scriptText `
+            -StripStdinHostControlSequences
     }
 }
 
