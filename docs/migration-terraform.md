@@ -135,6 +135,31 @@ paths per step under `.Steps.Result.Changed`, so a caller can detect
 "docs were regenerated" from the result object instead of from an exit
 code or a `git status --porcelain` probe.
 
+Managed-files source overrides accepted by `avm sync` can also be supplied
+to `avm pre-commit`; they are forwarded only to its initial `sync` step.
+Use the remote-source form:
+
+```pwsh
+avm pre-commit -Ecosystem terraform `
+  -ManagedFilesRepo <owner/name> `
+  -ManagedFilesRef <git-ref> `
+  -ManagedFilesPath <repo-relative-path> `
+  -ConfigRepo <owner/name> `
+  -ConfigRef <git-ref> `
+  -ConfigPath <repo-relative-path> `
+  -RepoId <repository-id>
+```
+
+Or replace the remote managed-files and config source arguments with local
+folders:
+
+```pwsh
+avm pre-commit -Ecosystem terraform `
+  -ManagedFilesLocalPath <managed-files-folder> `
+  -ConfigLocalPath <repository-config-folder> `
+  -RepoId <repository-id>
+```
+
 The container mount, `CONTAINER_RUNTIME`, `CONTAINER_IMAGE`,
 `CONTAINER_PULL_POLICY`, and the SSL-cert / `mkcert` plumbing the shim
 provides are not needed — the cmdlets call the host's own
@@ -146,7 +171,7 @@ through the host's own TLS trust store.
 The composition cmdlets and the exact order of engines they call:
 
 - **`avm pre-commit`** →
-  - **Terraform**: `check convention` → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which runs only transform + docs in pre-commit and keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
+  - **Terraform**: `sync` → `check convention` → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
   - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 
