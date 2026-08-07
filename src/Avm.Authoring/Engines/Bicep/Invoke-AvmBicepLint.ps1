@@ -53,13 +53,19 @@ function Invoke-AvmBicepLint {
         Where-Object { $_.FullName -notmatch '[\\/]\.[^\\/]+[\\/]' } |
         Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' }
     $files = @($discovered)
+    Write-AvmLog ("lint: discovered {0} bicep file(s)" -f $files.Count) -Level Verbose | Out-Null
 
     $issues = New-Object System.Collections.Generic.List[object]
+    $fileIndex = 0
     foreach ($file in $files) {
+        $fileIndex++
+        Write-AvmLog ("lint: file {0}/{1} = {2}" -f $fileIndex, $files.Count, $file.FullName) -Level Info | Out-Null
         $r = Invoke-AvmProcess `
             -FilePath $tool.Path `
             -ArgumentList @('lint', $file.FullName, '--diagnostics-format', 'defaultV2') `
-            -IgnoreExitCode
+            -IgnoreExitCode `
+            -StreamOutput `
+            -Label ("bicep lint {0}" -f $file.Name)
 
         $stream = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
         foreach ($line in ($stream -split "`r?`n")) {
@@ -79,6 +85,7 @@ function Invoke-AvmBicepLint {
     }
 
     $status = if ($issues | Where-Object { $_.Severity -eq 'error' }) { 'fail' } else { 'pass' }
+    Write-AvmLog ("lint: bicep completed with {0} issue(s)" -f $issues.Count) -Level Verbose | Out-Null
 
     return [pscustomobject][ordered]@{
         Engine         = 'bicep'

@@ -77,6 +77,7 @@ function Resolve-AvmTool {
     }
 
     $platform = Get-AvmToolPlatform
+    Write-AvmLog ("tool: resolving {0}/{1} for {2}" -f $tool.name, $tool.version, $platform) -Level Verbose | Out-Null
 
     if ($tool.ContainsKey('unsupportedPlatforms') -and (@($tool.unsupportedPlatforms) -ccontains $platform)) {
         throw [AvmToolException]::new(
@@ -91,6 +92,7 @@ function Resolve-AvmTool {
     $verified = Join-Path $versionDir '.verified'
 
     if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint)) {
+        Write-AvmLog ("tool: cache hit for {0} at {1}" -f $tool.name, $entrypoint) -Level Verbose | Out-Null
         return [pscustomobject][ordered]@{
             Name     = $tool.name
             Version  = $tool.version
@@ -101,8 +103,10 @@ function Resolve-AvmTool {
     }
 
     if ($AllowPathFallback) {
+        Write-AvmLog ("tool: checking PATH fallback for {0}" -f $tool.name) -Level Verbose | Out-Null
         $hit = Find-AvmToolOnPath -Entrypoint $tool.entrypoint -ExpectedVersion $tool.version
         if ($hit -and $hit.Matches) {
+            Write-AvmLog ("tool: using PATH fallback for {0} at {1}" -f $tool.name, $hit.Path) -Level Verbose | Out-Null
             return [pscustomobject][ordered]@{
                 Name     = $tool.name
                 Version  = $tool.version
@@ -119,7 +123,7 @@ function Resolve-AvmTool {
             'AVM1014')
     }
 
-    Write-AvmLog ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -Level Info
+    Write-AvmLog ("Installing {0} {1} ({2})..." -f $tool.name, $tool.version, $platform) -Level Install | Out-Null
     $installed = Install-AvmToolFromPins -Tool $tool -Platform $platform
 
     if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {
@@ -129,6 +133,7 @@ function Resolve-AvmTool {
     }
 
     $source = if ($installed -and $installed.Action -eq 'installed') { 'installed' } else { 'cache' }
+    Write-AvmLog ("Installed {0} {1} at {2}" -f $tool.name, $tool.version, $entrypoint) -Level Install | Out-Null
     return [pscustomobject][ordered]@{
         Name     = $tool.name
         Version  = $tool.version

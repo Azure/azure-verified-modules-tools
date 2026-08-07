@@ -228,6 +228,10 @@ function Invoke-Avm {
     }
 
         $verbPath = ($match.Path -join ' ')
+        Write-AvmLog ('Starting avm {0}' -f $verbPath) -Level Info
+        Write-AvmLog ('dispatch: cmdlet = {0}' -f $match.Cmdlet) -Level Verbose
+        Write-AvmLog ('dispatch: positional arguments = {0}' -f ($positional -join ' | ')) -Level Verbose
+        Write-AvmLog ('dispatch: bound parameters = {0}' -f (($bound.GetEnumerator() | Sort-Object Key | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }) -join '; ')) -Level Verbose
 
         $result = & $cmd @bound @positional
     }
