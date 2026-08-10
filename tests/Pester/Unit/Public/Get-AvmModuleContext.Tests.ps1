@@ -194,13 +194,16 @@ Describe 'Get-AvmModuleContext' {
             Should -Throw -ExpectedMessage '*no direct *.bicep*'
     }
 
-    It 'rejects a structural folder or its immediate child: <RelativePath>' -ForEach @(
+    It 'rejects any depth below a structural folder: <RelativePath>' -ForEach @(
         @{ RelativePath = 'examples' }
         @{ RelativePath = 'examples/default' }
+        @{ RelativePath = 'examples/default/nested/deep/module' }
         @{ RelativePath = 'modules' }
         @{ RelativePath = 'modules/foo' }
+        @{ RelativePath = 'modules/foo/nested/deep/module' }
         @{ RelativePath = 'tests' }
         @{ RelativePath = 'tests/unit' }
+        @{ RelativePath = 'tests/unit/fixtures/nested/deep' }
     ) {
         Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
         $nested = Join-Path $script:testRoot $RelativePath
@@ -211,19 +214,25 @@ Describe 'Get-AvmModuleContext' {
             Should -Throw -ExpectedMessage '*reserved*module root*'
     }
 
-    It 'rejects an administrative folder or its immediate child: <RelativePath>' -ForEach @(
+    It 'rejects any depth below an administrative folder: <RelativePath>' -ForEach @(
         @{ RelativePath = '.agents' }
         @{ RelativePath = '.agents/skills' }
+        @{ RelativePath = '.agents/skills/context/deep' }
         @{ RelativePath = '.avm' }
         @{ RelativePath = '.avm/cache' }
+        @{ RelativePath = '.avm/cache/context/deep' }
         @{ RelativePath = '.git' }
         @{ RelativePath = '.git/hooks' }
+        @{ RelativePath = '.git/modules/foo/objects/deep' }
         @{ RelativePath = '.github' }
         @{ RelativePath = '.github/workflows' }
+        @{ RelativePath = '.github/actions/context/deep' }
         @{ RelativePath = '.terraform' }
         @{ RelativePath = '.terraform/providers' }
+        @{ RelativePath = '.terraform/providers/registry/example/deep' }
         @{ RelativePath = '.vscode' }
         @{ RelativePath = '.vscode/settings' }
+        @{ RelativePath = '.vscode/settings/context/deep' }
     ) {
         Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
         $nested = Join-Path $script:testRoot $RelativePath
@@ -234,16 +243,14 @@ Describe 'Get-AvmModuleContext' {
             Should -Throw -ExpectedMessage '*reserved*module root*'
     }
 
-    It 'does not reject a standalone module because a higher ancestor has a reserved name' {
+    It 'rejects a standalone module when a higher ancestor has a reserved name' {
         $genericAncestor = Join-Path $script:testRoot 'examples'
-        $moduleRoot = Join-Path $genericAncestor 'standalone-module'
+        $moduleRoot = Join-Path $genericAncestor 'checkout' 'standalone-module'
         New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $moduleRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
 
-        $context = Get-AvmModuleContext -Path $moduleRoot
-
-        $context.Kind | Should -Be 'terraform-module-path'
-        $context.Root | Should -Be $moduleRoot
+        { Get-AvmModuleContext -Path $moduleRoot } |
+            Should -Throw -ExpectedMessage '*reserved context folder*full path*'
     }
 
     It 'throws a typed context exception when no same-root source or override exists' {

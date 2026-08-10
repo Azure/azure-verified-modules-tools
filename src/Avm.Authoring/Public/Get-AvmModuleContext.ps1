@@ -20,10 +20,12 @@ function Get-AvmModuleContext {
         Convention folders such as tests, examples and modules do not
         participate in detection.
 
-        Known nested and administrative folders are rejected so source files
-        inside them cannot become an accidental module root. When both direct
-        ecosystems are present, automatic detection throws and an explicit
-        -Ecosystem selection is required.
+        The authoritative path and its full ancestor chain are rejected when
+        any segment is a known nested or administrative folder, so source files
+        inside them cannot become an accidental module root. This deliberately
+        also rejects checkout paths whose higher ancestors use a reserved name.
+        When both direct ecosystems are present, automatic detection throws and
+        an explicit -Ecosystem selection is required.
 
         Throws AvmContextException when nothing matches, or when an
         explicit -Ecosystem value conflicts with what was detected.

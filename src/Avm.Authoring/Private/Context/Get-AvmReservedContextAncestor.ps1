@@ -1,7 +1,7 @@
 function Get-AvmReservedContextAncestor {
     <#
     .SYNOPSIS
-        Identify a requested path that is inside a reserved module folder.
+        Identify a reserved directory segment in a requested path chain.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -24,29 +24,16 @@ function Get-AvmReservedContextAncestor {
         '.vscode'
     )
 
-    $requested = [System.IO.DirectoryInfo]::new($Path)
-    foreach ($depth in 0..1) {
-        $reservedDirectory = if ($depth -eq 0) { $requested } else { $requested.Parent }
-        if ($null -eq $reservedDirectory -or $reservedNames -notcontains $reservedDirectory.Name) {
-            continue
-        }
-
-        $candidateRoot = $reservedDirectory.Parent
-        if ($null -eq $candidateRoot) {
-            continue
-        }
-
-        $signature = Get-AvmContextRootSignature -Path $candidateRoot.FullName
-        if (
-            $signature.HasTerraformSource -or
-            $signature.HasBicepSource -or
-            $signature.HasBicepMonorepo
-        ) {
+    $directory = [System.IO.DirectoryInfo]::new($Path)
+    while ($null -ne $directory) {
+        if ($reservedNames -contains $directory.Name) {
             return [pscustomobject]@{
-                ReservedName = $reservedDirectory.Name
-                ModuleRoot   = $candidateRoot.FullName
+                ReservedName = $directory.Name
+                ReservedPath = $directory.FullName
             }
         }
+
+        $directory = $directory.Parent
     }
 
     return $null

@@ -142,11 +142,12 @@ Rules:
   because a supported Bicep monorepo root has no direct module source.
 - Automatic resolution throws when both ecosystems match. Explicit
   `-Ecosystem` succeeds only when matching source exists.
-- Before source detection, reject authoritative paths that are a reserved
-  module/admin folder or its immediate child below a recognized module root:
-  `tests`, `examples`, `modules`, `.agents`, `.avm`, `.git`, `.github`,
-  `.terraform`, and `.vscode`. This check is only a rejection guard; it must
-  never return the ancestor as context.
+- Before override or source detection, scan every directory segment from the
+  authoritative path through the filesystem root. Reject the path if any
+  segment is `tests`, `examples`, `modules`, `.agents`, `.avm`, `.git`,
+  `.github`, `.terraform`, or `.vscode`. This is only a rejection guard; it
+  must never return an ancestor as context. It deliberately can false-positive
+  when a higher checkout path happens to use a reserved name.
 
 ---
 

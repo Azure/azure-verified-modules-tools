@@ -206,11 +206,12 @@ Resolution order:
    because supported Bicep monorepo roots do not contain direct module source.
 
 Convention folders such as `tests/`, `examples/`, and `modules/` never
-participate in detection. Paths in those folders, or in `.agents/`, `.avm/`,
-`.git/`, `.github/`, `.terraform/`, and `.vscode/`, are rejected when they are
-clearly nested below a module root. This prevents nested source files from
-becoming accidental module roots while allowing unrelated repositories whose
-higher filesystem ancestors happen to use a generic reserved name.
+participate in detection. Before override or source detection, the resolver
+scans the authoritative path and every ancestor segment for those names and
+for `.agents/`, `.avm/`, `.git/`, `.github/`, `.terraform/`, and `.vscode/`.
+Any match is rejected. This prevents arbitrarily deep nested source files from
+becoming accidental module roots. The deliberately strict scan can also reject
+an otherwise valid checkout whose higher filesystem path uses a reserved name.
 
 Automatic detection throws when both ecosystems have matching source
 signatures. Explicit `--ecosystem bicep|terraform` selects only an ecosystem

@@ -88,9 +88,11 @@ An earlier name-reservation placeholder release exported a single function, `Get
    `avm/{res,ptn,utl}/` folder.
 
 PWD, or explicit `-Path <dir>`, is the authoritative root. Parent directories
-are never searched. Convention folders do not participate in detection, and
-known nested/admin paths are rejected with guidance to run from the module
-root. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
+are never searched for context. Convention folders do not participate in
+detection. The full authoritative path is rejected if any directory segment is
+a known nested/admin name, with guidance to run from the module root. This can
+also reject a checkout whose higher parent directory happens to use a reserved
+name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
 
 ## Local smoke test
 

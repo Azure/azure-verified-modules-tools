@@ -147,7 +147,10 @@ Run commands from the Terraform module root, or pass that root explicitly with
 Terraform context, so `avm pre-commit -Ecosystem terraform` can create
 `tests/.gitkeep` before `tests/` exists. Context resolution does not walk parent
 directories, and `tests/`, `examples/`, and `modules/` do not participate in
-detection. Invoking from those nested folders produces a module-root error.
+detection. Invoking at any depth below those folders produces a module-root
+error. The same full-path guard applies to administrative folder names, so a
+checkout under a higher `tests`, `examples`, or other reserved ancestor is also
+rejected until the checkout is moved.
 
 Managed-files source overrides accepted by `avm sync` can also be supplied
 to `avm pre-commit`; they are forwarded only to its initial `sync` step.

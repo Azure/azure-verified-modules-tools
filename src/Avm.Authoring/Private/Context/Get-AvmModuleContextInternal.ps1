@@ -30,6 +30,13 @@ function Get-AvmModuleContextInternal {
     $item = Get-Item -LiteralPath $resolved.ProviderPath -Force
     $root = if ($item.PSIsContainer) { $item.FullName } else { $item.Directory.FullName }
 
+    $reservedAncestor = Get-AvmReservedContextAncestor -Path $root
+    if ($reservedAncestor) {
+        throw [AvmContextException]::new(
+            "Path '$root' contains the reserved context folder '$($reservedAncestor.ReservedName)' at '$($reservedAncestor.ReservedPath)'. " +
+            'AVM commands must run from the module root, and its full path must not contain reserved context folder names.')
+    }
+
     $override = Read-AvmContextOverride -Path $root
     if ($override) {
         Write-AvmLog ("context: override resolved kind={0}; ecosystem={1}; root={2}" -f $override.Kind, $override.Ecosystem, $override.Root) -Level Verbose | Out-Null
@@ -38,13 +45,6 @@ function Get-AvmModuleContextInternal {
                 "Ecosystem '$Ecosystem' conflicts with .avm/context.psd1 at $($override.Root) which declares '$($override.Ecosystem)'.")
         }
         return $override
-    }
-
-    $reservedAncestor = Get-AvmReservedContextAncestor -Path $root
-    if ($reservedAncestor) {
-        throw [AvmContextException]::new(
-            "Path '$root' is inside the reserved '$($reservedAncestor.ReservedName)' folder of module root '$($reservedAncestor.ModuleRoot)'. " +
-            'AVM commands must run from the module root.')
     }
 
     $signature = Get-AvmContextRootSignature -Path $root
