@@ -4,14 +4,21 @@
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+
+    $script:savedRunnerDebug = $env:RUNNER_DEBUG
+    $script:savedAvmVerbose = $env:AVM_VERBOSE
 }
 
 AfterAll {
+    $env:RUNNER_DEBUG = $script:savedRunnerDebug
+    $env:AVM_VERBOSE = $script:savedAvmVerbose
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
 Describe 'Invoke-AvmTerraformTest' {
     BeforeEach {
+        $env:RUNNER_DEBUG = ''
+        $env:AVM_VERBOSE = ''
         $script:moduleDir = Join-Path $TestDrive ("tf-mod-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $script:moduleDir -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value 'variable "x" {}' -Encoding utf8
@@ -70,10 +77,48 @@ Describe 'Invoke-AvmTerraformTest' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'init' -and $ArgumentList -contains '-backend=false'
+                $ArgumentList[0] -eq 'init' -and
+                $ArgumentList -contains '-backend=false' -and
+                -not [bool]$StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'validate' -and $ArgumentList -contains '-json'
+            }
+        }
+    }
+
+    It 'streams init output when <Mode> enables verbose logging' -TestCases @(
+        @{ Mode = '-Verbose'; RunnerDebug = ''; UseVerbose = $true }
+        @{ Mode = 'GitHub Actions debug mode'; RunnerDebug = '1'; UseVerbose = $false }
+    ) {
+        $ctx = $script:context
+        $okJson = '{ "format_version": "1.0", "valid": true, "error_count": 0, "warning_count": 0, "diagnostics": [] }'
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $ctx; J = $okJson; DebugValue = $RunnerDebug; EnableVerbose = $UseVerbose
+        } {
+            param($C, $J, $DebugValue, $EnableVerbose)
+            $env:RUNNER_DEBUG = $DebugValue
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'init') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+            }
+
+            $invokeParams = @{ Context = $C }
+            if ($EnableVerbose) {
+                $invokeParams.Verbose = $true
+            }
+            $null = Invoke-AvmTerraformTest @invokeParams
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'init' -and [bool]$StreamOutput
             }
         }
     }

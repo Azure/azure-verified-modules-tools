@@ -93,6 +93,7 @@ BeforeAll {
             [ValidateSet('File', 'Command')][string] $Mode = 'File',
             [switch] $CaptureTypedError,
             [switch] $RejectOutdatedModule,
+            [switch] $RunnerDebug,
             [string] $Invocation
         )
 
@@ -156,6 +157,9 @@ $invoke
                 @('-NoProfile', '-Command', ". '$tmp'")
             }
             $startInfo = New-AvmChildProcessStartInfo -ArgumentList $arguments
+            if ($RunnerDebug) {
+                $startInfo.Environment['RUNNER_DEBUG'] = '1'
+            }
             Invoke-AvmChildProcess -StartInfo $startInfo
         } finally {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
@@ -248,6 +252,18 @@ $secondInvocation
 
 AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Invoke-Avm verbose dispatch' {
+    It 'enables verbose output when GitHub Actions debug logging is active' {
+        $body = "Write-Verbose 'runner-debug-marker'; [pscustomobject]@{ Status = 'pass' }"
+
+        $quiet = Invoke-AvmChildVerb -Mode File -Body $body
+        $debug = Invoke-AvmChildVerb -Mode File -Body $body -RunnerDebug
+
+        $quiet.Output | Should -Not -Match 'runner-debug-marker'
+        $debug.Output | Should -Match 'runner-debug-marker'
+    }
 }
 
 Describe 'Invoke-Avm dispatch failure semantics (F02)' {
