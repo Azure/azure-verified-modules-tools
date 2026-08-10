@@ -98,6 +98,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Managed-file sync now applies the shared `managed-files/root` set when an
+  inferred repository id belongs to no configured group. Group membership only
+  selects additional overlays and exclusions; resolution fails only when no
+  repository id can be determined.
 - Module context now treats PWD or explicit `-Path` as the authoritative root,
   detects direct Terraform/Bicep source without convention folders, and rejects
   any reserved nested/admin segment across the full path instead of walking to
