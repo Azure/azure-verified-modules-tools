@@ -55,11 +55,10 @@ section when cutting a release.
   promotes the ESRP-signed release. The workflow publishes the signed release
   archive without rebuilding it and validates its checksum, archive layout,
   module version, casing, and signature blocks first.
-- Pinned `mapotf` bumped to 0.1.7, with refreshed per-platform SHA256 hashes.
-  Neither 0.1.6 nor 0.1.7 carries a functional change — both move mapotf's own
-  release signing to ESRP — but its Windows binaries are now
-  Authenticode-signed, so `mapotf.exe` should stop tripping Defender's ML
-  heuristics.
+- Pinned `mapotf` bumped to 0.1.8, with refreshed per-platform SHA256 hashes.
+  This release fixes `panic: AttributeTypes on non-object Type` when transforms
+  inspect heterogeneous repeated nested blocks. Its Windows binaries remain
+  Authenticode-signed through ESRP.
 - Pinned `terraform` bumped to 1.15.8 and `mapotf` to 0.1.5 in
   `Resources/avm.pins.jsonc`, with refreshed per-platform SHA256 hashes.
 - `avm lint` now copies the Terraform module to a cleaned temporary tree and

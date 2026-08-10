@@ -542,7 +542,7 @@ function Test-AvmManagedFilesInteractive {
 function Resolve-AvmManagedFilesRepoId {
     <#
     .SYNOPSIS
-        Resolve the managed-files repository id using the F11/F99 resolution
+        Resolve the managed-files repository id using the F11/F100 resolution
         order: explicit value, matching git-origin candidate, matching folder-leaf
         candidate, unmatched git-origin fallback, unmatched folder-leaf fallback,
         interactive prompt, then a hard failure.

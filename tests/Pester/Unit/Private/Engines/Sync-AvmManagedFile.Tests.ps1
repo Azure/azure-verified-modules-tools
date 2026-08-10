@@ -527,7 +527,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'returns an unmatched origin candidate for root-only sync (F99)' {
+    It 'returns an unmatched origin candidate for root-only sync (F100)' {
         $root = Join-Path $TestDrive 'some-worktree'
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
@@ -537,7 +537,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'returns an unmatched folder candidate for root-only sync (F99)' {
+    It 'returns an unmatched folder candidate for root-only sync (F100)' {
         $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-anything'
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
@@ -547,7 +547,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'prompts interactively and accepts an id when automatic inference fails (F99)' {
+    It 'prompts interactively and accepts an id when automatic inference fails (F100)' {
         $root = [System.IO.Path]::GetPathRoot($TestDrive)
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
@@ -559,7 +559,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'normalises an interactive answer before returning it (F99)' {
+    It 'normalises an interactive answer before returning it (F100)' {
         $root = [System.IO.Path]::GetPathRoot($TestDrive)
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
@@ -570,7 +570,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'throws a configuration error when no repository id can be found (F99)' {
+    It 'throws a configuration error when no repository id can be found (F100)' {
         $root = [System.IO.Path]::GetPathRoot($TestDrive)
         $err = {
             InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
@@ -583,7 +583,7 @@ Describe 'Managed-file repository id resolution (helpers)' {
         $err.Exception.Message | Should -Match 'Could not resolve a managed-files repository id'
     }
 
-    It 'throws when interactive resolution returns no repository id (F99)' {
+    It 'throws when interactive resolution returns no repository id (F100)' {
         $root = [System.IO.Path]::GetPathRoot($TestDrive)
         $err = {
             InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
@@ -672,7 +672,7 @@ Describe 'Sync-AvmManagedFile repository identity (git origin)' {
         (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
     }
 
-    It 'syncs root files when the inferred origin id belongs to no group (F99)' {
+    It 'syncs root files when the inferred origin id belongs to no group (F100)' {
         $target = script:New-AvmTargetRepo `
             -Dir (Join-Path $TestDrive ("eventgrid-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
             -OriginUrl 'https://github.com/Azure/terraform-azurerm-avm-res-eventgrid-namespace.git'
@@ -705,7 +705,7 @@ Describe 'Sync-AvmManagedFile repository identity (git origin)' {
         (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
     }
 
-    It 'syncs root files using the folder id when the origin is unavailable (F99)' {
+    It 'syncs root files using the folder id when the origin is unavailable (F100)' {
         $target = script:New-AvmTargetRepo `
             -Dir (Join-Path $TestDrive 'terraform-azurerm-avm-res-ungrouped') `
             -OriginUrl ''
