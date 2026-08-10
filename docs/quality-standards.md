@@ -10,7 +10,7 @@ Read this file:
 - Before you add a new linter exclusion, change `.gitattributes`, or touch the build pipeline.
 - Whenever PSScriptAnalyzer or Pester behaves in a way that surprises you — the answer is probably already below.
 
-> See also: [`avm-implementation-spec.md`](avm-implementation-spec.md) for engineering rules; [`avm-consolidation-plan.md`](avm-consolidation-plan.md) for scope and sequencing; [`progress.md`](progress.md) for the live status checklist.
+> See also: [`avm-implementation-spec.md`](avm-implementation-spec.md) for engineering rules; [`avm-consolidation-plan.md`](avm-consolidation-plan.md) for scope and sequencing; [`progress.md`](progress.md) for the progress protocol and active-slice discovery.
 
 ---
 
@@ -301,7 +301,7 @@ Move-Item _tmp Avm.Authoring
 
 ## 11. Commit + push protocol
 
-One commit per slice. A "slice" is the unit you just flipped from `[~]` to `[x]` in `docs/progress.md`, or a self-contained doc / refactor that doesn't have its own checkbox.
+One commit per slice. A slice is the unit recorded in one `docs/progress/` file, or a self-contained doc / refactor that does not need a tracking file.
 
 **Gate.** `./build.ps1 pre-commit` must be green before you commit code changes. Doc-only commits skip the gate.
 
@@ -575,7 +575,7 @@ Concrete reasoning:
 
 ### Open follow-ups before Slice G can land
 
-1. **Confirm `mapotf` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 row in `docs/progress.md`) noted mapotf does not ship releases today. Owner: investigate `lonegunmanb/mapotf` (canonical home; `Azure/mapotf` is a hard fork not actively releasing). If still absent → resolve next item.
+1. **Confirm `mapotf` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 in `docs/progress/legacy-checklist-through-2026-08-10.md`) noted mapotf does not ship releases today. Owner: investigate `lonegunmanb/mapotf` (canonical home; `Azure/mapotf` is a hard fork not actively releasing). If still absent → resolve next item.
 2. **Pick a hosting strategy for mapotf release artefacts.** Three options: (i) PR a release workflow into upstream `lonegunmanb/mapotf`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — same A/B/C question already open from the 2026-05-27 audit.
 3. **Confirm config pinning approach.** Pinned-asset bundle ships as (i) tarball of upstream `mapotf-configs/pre-commit/` at a specific SHA, or (ii) re-bundled tagged release on our side. (i) keeps drift visible to consumers; (ii) gives us editorial control. **User decision; default = (i).**
 4. **Settle the pinned-asset descriptor name.** Proposed: `avm-mapotf-configs-pre-commit`. Aligns with `avm-policy-aprl` / `avm-policy-avmsec` already in use.
@@ -650,7 +650,7 @@ Concrete reasoning:
 
 ### Open follow-ups before Slice H can land
 
-1. **Confirm `avmfix` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 row in `docs/progress.md`) noted avmfix does not ship releases today. Owner: investigate `lonegunmanb/avmfix` (canonical home; no `Azure/avmfix` fork exists, unlike mapotf). If still absent → resolve next item.
+1. **Confirm `avmfix` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 in `docs/progress/legacy-checklist-through-2026-08-10.md`) noted avmfix does not ship releases today. Owner: investigate `lonegunmanb/avmfix` (canonical home; no `Azure/avmfix` fork exists, unlike mapotf). If still absent → resolve next item.
 2. **Pick a hosting strategy for avmfix release artefacts.** Same A/B/C as mapotf: (i) PR a release workflow into upstream `lonegunmanb/avmfix`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — resolve once for both mapotf + avmfix.
 3. **Settle the `avm.pins.jsonc` entry shape.** Same shape as `conftest` / `terraform-docs` (binary archive per platform, SHA256-verified). Six platforms: windows/linux/darwin × amd64/arm64. avmfix uses `go-releaser`-style naming if a release workflow is added.
 4. **Decide whether to bundle behaviour #2's `terraform-config-inspect` dependency separately.** avmfix vendors it; if we ever rip the schema-free behaviours into PowerShell as an offline fallback, we'd need an equivalent. Defer until follow-up #2 lands.

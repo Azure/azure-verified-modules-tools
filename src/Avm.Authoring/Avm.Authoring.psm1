@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $script:AvmLatestModuleVersion = $null
 $script:AvmModuleVersionCheckCompleted = $false
 $script:AvmModuleVersionSkipWarningWritten = $false
+$script:AvmNestedCommandDepth = 0
 
 # Console encoding (spec open question 2): on Windows, the default console
 # code page is often legacy (1252, 437, ...) which mangles UTF-8 output from

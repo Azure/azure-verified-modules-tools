@@ -28,13 +28,14 @@ function Sync-AvmManagedFile {
         The managed-file map is built from '<base>/root' plus zero or more
         overlays ('<base>/<overlay>') stacked in declaration order, where later
         sources win, minus any excluded paths. A source subtree at
-        'modules/_all/' or 'examples/_all/' is broadcast into every existing
-        immediate child of the matching target folder; the reserved '_all'
-        segment is never copied literally. Overlays and exclusions are resolved
-        from the config folder's 'config.json' by matching the repository id
-        against 'repositoryGroups'. 'deprecated-files.json' lists paths that
-        must be removed from every target repo; deprecated removals win over
-        managed adds when both name the same path.
+        '<parent>/_all/' is broadcast into every existing immediate child of
+        the matching target parent; reserved '_all' segments are never copied
+        literally. A root-level '_all/' remains a literal path. Overlays and
+        exclusions are resolved from the config folder's 'config.json' by
+        matching the repository id against 'repositoryGroups'.
+        'deprecated-files.json' lists paths that must be removed from every
+        target repo; deprecated removals win over managed adds when both name
+        the same path.
 
         For each desired managed file the engine computes git's blob SHA-1 over
         the source bytes and compares it (plus the git index mode) with the
@@ -832,9 +833,10 @@ function Resolve-AvmManagedFileTargetPath {
         Resolve a managed source path to its concrete repository target paths.
 
     .DESCRIPTION
-        Paths below the reserved 'modules/_all/' and 'examples/_all/' source
-        subtrees are broadcast into each existing immediate child directory of
-        the corresponding target folder. All other paths are returned unchanged.
+        Paths below a reserved '<parent>/_all/' source subtree are broadcast
+        into each existing immediate child directory of the corresponding
+        target parent. Multiple reserved segments are expanded from left to
+        right. A root-level '_all/' and all other paths are returned unchanged.
     #>
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -848,23 +850,26 @@ function Resolve-AvmManagedFileTargetPath {
 
     $broadcast = [System.Text.RegularExpressions.Regex]::Match(
         $RelativePath,
-        '^(modules|examples)/_all/(.+)$',
+        '^(.+?)/_all/(.+)$',
         [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
     if (-not $broadcast.Success) {
         return $RelativePath
     }
 
-    $groupName = $broadcast.Groups[1].Value
+    $parentPath = $broadcast.Groups[1].Value
     $suffix = $broadcast.Groups[2].Value
-    $groupRoot = Join-Path $TargetRoot $groupName
-    if (-not (Test-Path -LiteralPath $groupRoot -PathType Container)) {
+    $parentRoot = Join-Path $TargetRoot ($parentPath.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+    if (-not (Test-Path -LiteralPath $parentRoot -PathType Container)) {
         return
     }
 
-    Get-ChildItem -LiteralPath $groupRoot -Directory -Force |
-        Where-Object { $_.Name -cne '_all' } |
+    Get-ChildItem -LiteralPath $parentRoot -Directory -Force |
+        Where-Object { $_.Name -ne '_all' } |
         Sort-Object -Property Name |
-        ForEach-Object { "$groupName/$($_.Name)/$suffix" }
+        ForEach-Object {
+            $expandedPath = "$parentPath/$($_.Name)/$suffix"
+            Resolve-AvmManagedFileTargetPath -RelativePath $expandedPath -TargetRoot $TargetRoot
+        }
 }
 
 function Add-AvmManagedFilesFromDir {
@@ -922,7 +927,7 @@ function Add-AvmManagedFilesFromDir {
                 RelativePath = $relativePath
                 Source       = $_.FullName -replace '\\', '/'
                 Mode         = $mode
-                IsBroadcast  = $relativePath -cmatch '^(modules|examples)/_all/.+'
+                IsBroadcast  = $relativePath -cmatch '^.+?/_all/.+'
             }
         }
     )

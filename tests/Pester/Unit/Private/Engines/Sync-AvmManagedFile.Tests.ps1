@@ -99,13 +99,76 @@ Describe 'Sync-AvmManagedFile' {
         Test-Path (Join-Path $script:moduleDir 'examples/_all') | Should -BeFalse
     }
 
+    It 'broadcasts under arbitrary named parents and supports chained scopes' {
+        $contentAll = Join-Path (Join-Path $script:root 'content') '_all'
+        $contentConfig = Join-Path $contentAll 'config'
+        $regionAll = Join-Path (Join-Path $script:root 'regions') '_all'
+        $packageAll = Join-Path (Join-Path $regionAll 'packages') '_all'
+        $missingAll = Join-Path (Join-Path $script:root 'missing') '_all'
+        New-Item -ItemType Directory -Path $contentConfig -Force | Out-Null
+        New-Item -ItemType Directory -Path $packageAll -Force | Out-Null
+        New-Item -ItemType Directory -Path $missingAll -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $contentConfig 'settings.json') -Value "{}`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $packageAll 'settings.json') -Value "{}`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $missingAll 'ignored.txt') -Value "ignored`n" -NoNewline
+
+        foreach ($relativeDir in @(
+                'content/alpha',
+                'content/beta',
+                'regions/east/packages/one',
+                'regions/east/packages/two',
+                'regions/west/packages/three'
+            )) {
+            New-Item -ItemType Directory -Path (Join-Path $script:moduleDir $relativeDir) -Force | Out-Null
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 5
+        $result.Added          | Should -Be @(
+            'content/alpha/config/settings.json',
+            'content/beta/config/settings.json',
+            'regions/east/packages/one/settings.json',
+            'regions/east/packages/two/settings.json',
+            'regions/west/packages/three/settings.json'
+        )
+        Test-Path (Join-Path $script:moduleDir 'content/alpha/config/settings.json') | Should -BeTrue
+        Test-Path (Join-Path $script:moduleDir 'regions/east/packages/one/settings.json') | Should -BeTrue
+        Test-Path (Join-Path $script:moduleDir 'content/_all') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'regions/east/packages/_all') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'missing') | Should -BeFalse
+    }
+
+    It 'keeps a root-level _all directory literal' {
+        $rootAll = Join-Path $script:root '_all'
+        New-Item -ItemType Directory -Path $rootAll -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $rootAll 'literal.txt') -Value "literal`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+        $result.Added          | Should -Be @('_all/literal.txt')
+        Test-Path (Join-Path $script:moduleDir '_all/literal.txt') | Should -BeTrue
+    }
+
     It 'preserves overlay, concrete-path, and exclusion precedence after _all expansion' {
         $rootModuleAll = Join-Path (Join-Path $script:root 'modules') '_all'
         $rootAlpha = Join-Path (Join-Path $script:root 'modules') 'alpha'
+        $rootPolicyAll = Join-Path (Join-Path $script:root 'policies') '_all'
         New-Item -ItemType Directory -Path $rootModuleAll -Force | Out-Null
         New-Item -ItemType Directory -Path $rootAlpha -Force | Out-Null
+        New-Item -ItemType Directory -Path $rootPolicyAll -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $rootModuleAll '_footer.md') -Value "root broadcast`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $rootAlpha '_footer.md') -Value "root alpha`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $rootPolicyAll 'rule.json') -Value "{}`n" -NoNewline
 
         $canary = Join-Path $script:base 'canary'
         $canaryModuleAll = Join-Path (Join-Path $canary 'modules') '_all'
@@ -115,7 +178,7 @@ Describe 'Sync-AvmManagedFile' {
         Set-Content -LiteralPath (Join-Path $canaryModuleAll '_footer.md') -Value "canary broadcast`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $canaryBeta '_footer.md') -Value "canary beta`n" -NoNewline
 
-        foreach ($relativeDir in @('modules/alpha', 'modules/beta', 'modules/gamma')) {
+        foreach ($relativeDir in @('modules/alpha', 'modules/beta', 'modules/gamma', 'policies/alpha', 'policies/beta')) {
             New-Item -ItemType Directory -Path (Join-Path $script:moduleDir $relativeDir) -Force | Out-Null
         }
 
@@ -126,7 +189,7 @@ Describe 'Sync-AvmManagedFile' {
                     name                 = 'canary'
                     managedFilesAdditional = 'canary'
                     repositories         = @('avm-res-foo')
-                    excludedManagedFiles = @('modules/gamma/_footer.md')
+                    excludedManagedFiles = @('modules/gamma/_footer.md', 'policies/_all/rule.json')
                 }
             ) } | ConvertTo-Json -Depth 6
         Set-Content -LiteralPath (Join-Path $cfg 'config.json') -Value $config -NoNewline
@@ -142,6 +205,8 @@ Describe 'Sync-AvmManagedFile' {
         (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/alpha/_footer.md')).Trim() | Should -Be 'canary broadcast'
         (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/beta/_footer.md')).Trim() | Should -Be 'canary beta'
         Test-Path (Join-Path $script:moduleDir 'modules/gamma/_footer.md') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'policies/alpha/rule.json') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'policies/beta/rule.json') | Should -BeFalse
     }
 
     It 'is a no-op on a second run with no changes' {

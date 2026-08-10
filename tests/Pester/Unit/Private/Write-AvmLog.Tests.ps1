@@ -28,6 +28,9 @@ Describe 'Write-AvmLog' {
         $env:AVM_VERBOSE = ''
         Remove-Item Env:\NO_COLOR -ErrorAction SilentlyContinue
         Remove-Item Env:\CLICOLOR_FORCE -ErrorAction SilentlyContinue
+        InModuleScope 'Avm.Authoring' {
+            $script:AvmNestedCommandDepth = 0
+        }
     }
 
     Context 'outside GitHub Actions' {
@@ -138,6 +141,26 @@ Describe 'Write-AvmLog' {
             @($messages) | Should -Contain '::error::it broke'
         }
 
+        It 'uses semantic colours for ordinary log lines' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'passed' -Level Pass -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            $escape = [char]27
+            @($messages) | Should -Contain "$escape[32mpassed$escape[0m"
+        }
+
+        It 'honours NO_COLOR for ordinary log lines' {
+            $env:NO_COLOR = '1'
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'passed' -Level Pass -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            @($messages) | Should -Contain 'passed'
+        }
+
         It 'downgrades Verbose to ::debug:: when verbose is off' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()
@@ -238,6 +261,56 @@ Describe 'Write-AvmLog' {
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
             @($messages).Count | Should -Be 0
+        }
+    }
+
+    Context 'inside a nested aggregate command' {
+        It 'suppresses routine narration while preserving warnings' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                @(
+                    Invoke-AvmNestedCommand {
+                        Write-AvmLog 'nested info' -Level Info
+                        Write-AvmLog 'nested pass' -Level Pass
+                        Write-AvmLog 'nested warning' -Level Warning
+                    } 3>&1 6>&1 | ForEach-Object { [string]$_ }
+                )
+            }
+
+            @($messages) | Should -Contain 'nested warning'
+            @($messages) | Should -Not -Contain 'nested info'
+            @($messages) | Should -Not -Contain 'nested pass'
+        }
+
+        It 'restores routine narration in verbose mode' {
+            $env:AVM_VERBOSE = '1'
+            $messages = InModuleScope 'Avm.Authoring' {
+                @(
+                    Invoke-AvmNestedCommand {
+                        Write-AvmLog 'nested info' -Level Info
+                        Write-AvmLog 'nested pass' -Level Pass
+                    } 6>&1 | ForEach-Object { [string]$_ }
+                )
+            }
+
+            @($messages) | Should -Contain 'nested info'
+            @($messages) | Should -Contain 'nested pass'
+        }
+
+        It 'restores the context after a nested command throws' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                try {
+                    Invoke-AvmNestedCommand {
+                        throw 'nested failure'
+                    }
+                }
+                catch {
+                    $null = $_
+                }
+
+                @(Write-AvmLog 'after failure' -Level Info 6>&1 | ForEach-Object { [string]$_ })
+            }
+
+            @($messages) | Should -Contain 'after failure'
         }
     }
 }
