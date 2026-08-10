@@ -626,6 +626,7 @@ Describe 'Test-AvmTerraformTransientError' {
             Test-AvmTerraformTransientError -Output 'Allocation Failed'                                   | Should -BeTrue
             Test-AvmTerraformTransientError -Output 'results in exceeding approved quota'                 | Should -BeTrue
             Test-AvmTerraformTransientError -Output 'ERROR: skunotavailable'                              | Should -BeTrue
+            Test-AvmTerraformTransientError -Output "Error: creating Resource Group failed with LocationNotAvailableForResourceGroup: The provided location 'eastus2euap' is not available for resource group." | Should -BeTrue
         }
     }
 
