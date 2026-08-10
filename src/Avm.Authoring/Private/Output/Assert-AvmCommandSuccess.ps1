@@ -6,8 +6,8 @@ function Assert-AvmCommandSuccess {
     .DESCRIPTION
         F24: a detected failure is not a tooling crash, so it must not surface
         as a PowerShell source-position stack trace. The clean summary is
-        written first, then the terminating error is raised from a dynamically
-        created script block. A script block built with
+        written first, then the terminating error is raised in the current scope
+        from a dynamically created script block. A script block built with
         [scriptblock]::Create has no backing script file, so the default
         ConciseView renders only 'OperationStopped: <message>' instead of the
         module's own source line.
@@ -57,7 +57,7 @@ function Assert-AvmCommandSuccess {
         Write-AvmLog ('  {0}' -f $detail) -Level Error @anchor
     }
 
-    & ([scriptblock]::Create('param($e) throw $e')) $exception
+    . ([scriptblock]::Create('param($e) throw $e')) $exception
 }
 
 function Assert-AvmCleanFailure {
@@ -66,11 +66,11 @@ function Assert-AvmCleanFailure {
         Re-raise a typed AVM exception without a source-position stack trace.
 
     .DESCRIPTION
-        F24: every AvmException subclass carries an actionable message, so the
-        dispatcher reports it as a one-line failure rather than letting the
-        default ConciseView print the module file, line number and the throw
-        source line. The error stays script-terminating so the hosting process
-        exits non-zero.
+        F24/F89: every AvmException subclass carries an actionable message. The
+        dispatcher attaches that message to an ErrorRecord whose exception stays
+        typed for callers, then raises it from a source-free script block in the
+        current scope. Uncaught errors therefore render once without a module
+        source line and terminate the hosting process; caught errors emit nothing.
     #>
     [CmdletBinding()]
     param(
@@ -78,13 +78,41 @@ function Assert-AvmCleanFailure {
         [string] $Verb,
 
         [Parameter(Mandatory)]
-        [object] $Exception
+        [System.Exception] $Exception
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    Write-AvmLog ('avm {0} failed: {1}' -f $Verb, $Exception.Message) -Level Error
+    $isModuleVersionFailure = $Exception -is [AvmModuleVersionException]
+    $detail = $Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
+    $summary = if ($isModuleVersionFailure) {
+        "AVM upgrade required.`n$($Exception.Message)"
+    }
+    else {
+        'avm {0} failed: {1}' -f $Verb, $detail
+    }
+    if (Test-AvmGitHubActionsContext) {
+        Write-AvmLog $summary.Replace("`r", ' ').Replace("`n", ' ') -Level Error
+    }
 
-    & ([scriptblock]::Create('param($e) throw $e')) $Exception
+    $errorId = if ($Exception -is [AvmException]) {
+        $Exception.Code
+    }
+    else {
+        $Exception.GetType().Name
+    }
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        $Exception,
+        $errorId,
+        $(if ($isModuleVersionFailure) {
+                [System.Management.Automation.ErrorCategory]::NotInstalled
+            }
+            else {
+                [System.Management.Automation.ErrorCategory]::InvalidOperation
+            }),
+        $null)
+    $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($summary)
+
+    . ([scriptblock]::Create('param($e) throw $e')) $errorRecord
 }

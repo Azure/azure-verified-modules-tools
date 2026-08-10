@@ -69,7 +69,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 `bicep-monorepo`, `bicep-module`, `terraform-module-repo` or
 `terraform-module-path`. Resolution order, highest precedence first:
 
-1. **Committed `.avm/context.psd1` override** anywhere up the tree. Schema:
+1. **Committed `.avm/context.psd1` override** at the authoritative root. Schema:
    ```powershell
    @{
        Ecosystem = 'bicep'         # bicep | terraform   (required)
@@ -79,18 +79,20 @@ An earlier name-reservation placeholder release exported a single function, `Get
        Owner     = '@Azure/avm-core'  # optional, free-form
    }
    ```
-   The file's directory becomes `Root`. Use this when a repo's layout does
-   not match the default heuristics, or to make classification audit-friendly.
-2. **`-Ecosystem bicep|terraform|auto`** parameter (default `auto`). Forces
-   the heuristic phase to only consider rules in that ecosystem. A conflict
-   between `-Ecosystem` and a `.avm/context.psd1` file throws so contributors
-   notice the disagreement instead of silently picking one.
-3. **Heuristics**: walks upward looking for the four signatures listed above
-   (Plan section 5). Module-path matches win over repo-root matches because
-   they are more specific; if both fire at the same directory, repo-root wins.
+   Use this when a repo's layout needs an explicit, audit-friendly
+   classification. A conflicting `-Ecosystem` value throws.
+2. **Direct source at the root**: `*.bicep` selects `bicep-module`; `*.tf`
+   selects Terraform. `terraform.tf` selects `terraform-module-repo`, otherwise
+   the kind is `terraform-module-path`.
+3. **Bicep monorepo signature**: `bicepconfig.json` plus at least one
+   `avm/{res,ptn,utl}/` folder.
 
-`-Path <dir>` lets the caller pin the starting directory (equivalent to the
-plan's `--module <path>` global flag).
+PWD, or explicit `-Path <dir>`, is the authoritative root. Parent directories
+are never searched for context. Convention folders do not participate in
+detection. The full authoritative path is rejected if any directory segment is
+a known nested/admin name, with guidance to run from the module root. This can
+also reject a checkout whose higher parent directory happens to use a reserved
+name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
 
 ## Local smoke test
 
@@ -111,7 +113,8 @@ avm lint            # Invoke-AvmLint   (bicep lint; tflint --recursive for terra
 avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json)
 avm test --no-init  # Skip the implicit 'terraform init -backend=false' (it otherwise always runs)
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
-avm pre-commit      # Invoke-AvmPreCommit (format -> lint -> test)
+avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
+avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\gov\managed-files -ConfigLocalPath D:\gov\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring
 ```

@@ -7,14 +7,10 @@ function Test-AvmRuleFileMustExist {
         Used by AVM convention rules that require a specific file (e.g.
         'terraform.tf' or '_header.md').
 
-        Slice B cross-cutting decision #3: this primitive deliberately has
-        NO fix path. An auto-created empty file would just trade one
-        violation for another (an empty file would itself fail downstream
-        formatting or content checks). The author is the only sensible
-        source of the file's content.
-
         Parameters honoured on the rule:
           - Path (required, string) : path relative to TargetRoot.
+          - FixContentTemplate (optional, string) : content used to create a
+            missing file. Supports {DirectoryName} and {DirectoryTitle}.
 
     .PARAMETER Rule
         AvmRule pscustomobject (typically produced by New-AvmRule).
@@ -23,13 +19,12 @@ function Test-AvmRuleFileMustExist {
         Absolute path to the directory the rule applies to.
 
     .PARAMETER Fix
-        Accepted but ignored. Present so the engine's per-primitive
-        dispatcher has a uniform signature; documented as report-only here.
+        When set and FixContentTemplate is declared, creates the missing file.
 
     .OUTPUTS
         [pscustomobject] with Status, Issues, FilesChanged.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] $Rule,
@@ -39,8 +34,6 @@ function Test-AvmRuleFileMustExist {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-
-    $null = $Fix
 
     $path = [string]$Rule.Parameters.Path
     $full = Join-Path $TargetRoot $path
@@ -53,6 +46,50 @@ function Test-AvmRuleFileMustExist {
         }
     }
 
+    $fixContentTemplate = if ($Rule.Parameters.ContainsKey('FixContentTemplate')) {
+        [string]$Rule.Parameters.FixContentTemplate
+    }
+    else {
+        $null
+    }
+
+    if ($Fix -and $fixContentTemplate -and -not (Test-Path -LiteralPath $full)) {
+        $directoryName = [System.IO.DirectoryInfo]::new($TargetRoot).Name
+        $textInfo = [System.Globalization.CultureInfo]::InvariantCulture.TextInfo
+        $directoryTitle = (($directoryName -split '[-_ ]+' | ForEach-Object {
+                    $textInfo.ToTitleCase($_.ToLowerInvariant())
+                }) -join ' ')
+        $content = $fixContentTemplate.
+            Replace('{DirectoryName}', $directoryName).
+            Replace('{DirectoryTitle}', $directoryTitle).
+            Replace("`r`n", "`n").
+            Replace("`r", "`n")
+        if (-not $content.EndsWith("`n")) {
+            $content += "`n"
+        }
+
+        if ($PSCmdlet.ShouldProcess($full, 'Create required file')) {
+            $parent = Split-Path -Parent $full
+            $null = [System.IO.Directory]::CreateDirectory($parent)
+            [System.IO.File]::WriteAllText(
+                $full,
+                $content,
+                [System.Text.UTF8Encoding]::new($false))
+        }
+
+        return [pscustomobject][ordered]@{
+            Status       = 'fixed'
+            Issues       = @()
+            FilesChanged = 1
+        }
+    }
+
+    $message = if ($fixContentTemplate) {
+        "Required file '$path' does not exist (run with -Fix to create it)."
+    }
+    else {
+        "Required file '$path' does not exist."
+    }
     $issues = @(
         [pscustomobject][ordered]@{
             File     = $path
@@ -60,7 +97,7 @@ function Test-AvmRuleFileMustExist {
             Column   = 0
             Severity = $Rule.Severity
             Code     = $Rule.Id
-            Message  = "Required file '$path' does not exist."
+            Message  = $message
         }
     )
 

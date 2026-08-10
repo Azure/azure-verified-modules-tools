@@ -51,6 +51,7 @@ function ConvertFrom-AvmDotEnv {
 
     $result = @{}
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Write-AvmLog ("dotenv: not found; no overrides from {0}" -f $Path) -Level Verbose | Out-Null
         return $result
     }
 
@@ -87,5 +88,6 @@ function ConvertFrom-AvmDotEnv {
         $result[$key] = $value
     }
 
+    Write-AvmLog ("dotenv: loaded {0} key(s) from {1}" -f $result.Count, $Path) -Level Verbose | Out-Null
     return $result
 }

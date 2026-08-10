@@ -14,6 +14,7 @@ function Assert-AvmGitWorkingTreeClean {
         throw [AvmConfigurationException]::new(
             'Pr-check requires git to verify that the working tree is clean, but git was not found on PATH.')
     }
+    Write-AvmLog ("git-clean: using git at {0}" -f $git.Source) -Level Verbose | Out-Null
 
     $result = Invoke-AvmProcess `
         -FilePath $git.Source `
@@ -25,4 +26,5 @@ function Assert-AvmGitWorkingTreeClean {
         throw [AvmConfigurationException]::new(
             "Pr-check requires a clean working tree. Commit, stash, or remove these changes before retrying:`n$($result.StdOut.TrimEnd())")
     }
+    Write-AvmLog ("git-clean: working tree is clean at {0}" -f $Path) -Level Verbose | Out-Null
 }

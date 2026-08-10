@@ -3,7 +3,9 @@ function Test-AvmModuleVersion {
     param(
         [switch] $SkipModuleVersionCheck,
 
-        [switch] $SuppressSkipWarning
+        [switch] $SuppressSkipWarning,
+
+        [switch] $RefreshLatestVersion
     )
 
     Set-StrictMode -Version 3.0
@@ -27,7 +29,7 @@ function Test-AvmModuleVersion {
     }
 
     try {
-        $latestVersion = Get-AvmLatestModuleVersion
+        $latestVersion = Get-AvmLatestModuleVersion -Refresh:$RefreshLatestVersion
     }
     catch {
         $failure = $_.Exception
@@ -56,11 +58,28 @@ function Test-AvmModuleVersion {
         return
     }
 
+    Write-AvmLog (
+        'module version check: comparing running version {0} with latest PowerShell Gallery version {1}' -f
+        $currentModule.Version,
+        $latestVersion) -Level Verbose
+
     if ($currentModule.Version -lt $latestVersion) {
         $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
+        $reloadScript = 'Import-Module Avm.Authoring -Force'
+        $message = @(
+            'A newer version of Avm.Authoring is required.'
+            "Installed version: $($currentModule.Version)"
+            "Latest version: $latestVersion"
+            ''
+            'Upgrade and reload the module:'
+            "  $upgradeScript"
+            "  $reloadScript"
+            ''
+            'You can restart PowerShell instead of reloading it.'
+        ) -join "`n"
         throw [AvmModuleVersionException]::new(
             $currentModule.Version,
             $latestVersion,
-            "Avm.Authoring $($currentModule.Version) is outdated. The latest PowerShell Gallery version is $latestVersion. Running the latest version ensures current fixes and behavior. Upgrade with:`n$upgradeScript")
+            $message)
     }
 }

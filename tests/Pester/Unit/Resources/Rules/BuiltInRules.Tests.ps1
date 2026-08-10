@@ -103,24 +103,27 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $r.Severity | Should -Be 'error'
             @($r.AppliesTo) | Should -Be @('root', 'examples', 'modules')
             [string]$r.Parameters.Path | Should -Be '_header.md'
+            [string]$r.Parameters.FixContentTemplate | Should -Be '# {DirectoryTitle}'
         }
 
-        It 'ships avm.tf.examples-dir-must-exist (root only)' {
+        It 'ships avm.tf.examples-dir-must-exist with at least one example required' {
             $r = $script:rulesById['avm.tf.examples-dir-must-exist']
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'DirectoryMustExist'
             $r.Severity | Should -Be 'error'
             $r.AppliesTo | Should -Be 'root'
             [string]$r.Parameters.Path | Should -Be 'examples'
+            [int]$r.Parameters.MinimumChildDirectories | Should -Be 1
         }
 
-        It 'ships avm.tf.tests-dir-must-exist (root only)' {
+        It 'ships avm.tf.tests-dir-must-exist with a placeholder fix' {
             $r = $script:rulesById['avm.tf.tests-dir-must-exist']
             $r | Should -Not -BeNullOrEmpty
             $r.Kind | Should -Be 'DirectoryMustExist'
             $r.Severity | Should -Be 'error'
             $r.AppliesTo | Should -Be 'root'
             [string]$r.Parameters.Path | Should -Be 'tests'
+            [string]$r.Parameters.FixCreateFile | Should -Be '.gitkeep'
         }
 
         It 'ships avm.tf.gitignore-essentials with the upstream glob set, minus .avm' {

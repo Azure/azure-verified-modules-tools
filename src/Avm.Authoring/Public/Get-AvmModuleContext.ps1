@@ -4,40 +4,42 @@ function Get-AvmModuleContext {
         Classify a directory as a Bicep or Terraform module/monorepo context.
 
     .DESCRIPTION
-        Walks the filesystem upward from -Path (default $PWD) looking for the
-        nearest signature of a known AVM-style repo or module layout, and
-        returns a context object the rest of the CLI consumes.
+        Treats -Path (default $PWD) as the authoritative module root and
+        returns a context object the rest of the CLI consumes. Parent
+        directories are never searched for module context.
 
         Resolution order (highest precedence first):
-          1. A committed .avm/context.psd1 override file anywhere up the
-             tree. The file is a PowerShell data file with Ecosystem and
-             Kind keys; the file's directory becomes Root. Use this when a
-             repo's on-disk layout does not match the default heuristics or
-             when contributors need a stable, audit-friendly classification.
-          2. Heuristic detection (from the consolidation plan section 5):
-               - bicep-monorepo:        bicepconfig.json + avm/{res,ptn,utl}/ dirs.
-               - bicep-module:          main.bicep + version.json.
-               - terraform-module-repo: terraform.tf + examples/ + tests/.
-               - terraform-module-path: any *.tf file + tests/ directory.
+          1. A committed .avm/context.psd1 override at the authoritative root.
+          2. Direct *.tf or *.bicep source files at that root.
+          3. A Bicep monorepo root signature: bicepconfig.json plus at least
+             one avm/{res,ptn,utl}/ directory.
 
-        Module-path matches take priority over repo-root matches because they
-        are more specific. When a bicep module sits inside a monorepo, the
-        'Scope' field is populated with 'res', 'ptn' or 'utl' parsed from the
-        path under avm/.
+        Terraform roots containing terraform.tf are classified as
+        terraform-module-repo; other direct Terraform source roots are
+        terraform-module-path. Direct Bicep source roots are bicep-module.
+        Convention folders such as tests, examples and modules do not
+        participate in detection.
+
+        The authoritative path and its full ancestor chain are rejected when
+        any segment is a known nested or administrative folder, so source files
+        inside them cannot become an accidental module root. This deliberately
+        also rejects checkout paths whose higher ancestors use a reserved name.
+        When both direct ecosystems are present, automatic detection throws and
+        an explicit -Ecosystem selection is required.
 
         Throws AvmContextException when nothing matches, or when an
         explicit -Ecosystem value conflicts with what was detected.
 
     .PARAMETER Path
-        Directory to start the walk from. Defaults to the current location.
-        This is the canonical --module override.
+        Authoritative module root. Defaults to the current location. This is
+        the canonical --module override.
 
     .PARAMETER Ecosystem
         Force the ecosystem instead of auto-detecting. One of 'auto',
-        'bicep' or 'terraform'. Defaults to 'auto'. Overrides the heuristic
-        but cannot override a committed .avm/context.psd1; a conflict
-        between -Ecosystem and the file throws AvmContextException so
-        contributors notice the disagreement instead of silently picking one.
+        'bicep' or 'terraform'. Defaults to 'auto'. Explicit selection resolves
+        mixed-source roots only when matching source exists. This cannot
+        override a committed same-root .avm/context.psd1; a conflict between
+        -Ecosystem and the file throws AvmContextException.
 
     .PARAMETER Json
         Emit the result as a JSON document instead of a pscustomobject.

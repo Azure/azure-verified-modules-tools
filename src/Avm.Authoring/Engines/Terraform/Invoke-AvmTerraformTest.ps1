@@ -74,7 +74,7 @@ function Invoke-AvmTerraformTest {
             -FilePath $tool.Path `
             -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
             -WorkingDirectory $Context.Root `
-            -StreamOutput `
+            -StreamOutput:(Test-AvmVerboseEnabled) `
             -Label ('terraform init {0}' -f $Context.Root) `
             -IgnoreExitCode
 

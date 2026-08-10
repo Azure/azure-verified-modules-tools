@@ -5,6 +5,7 @@
     Severity    = 'error'
     AppliesTo   = 'root'
     Parameters  = @{
-        Path = 'tests'
+        Path          = 'tests'
+        FixCreateFile = '.gitkeep'
     }
 }

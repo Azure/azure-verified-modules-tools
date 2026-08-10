@@ -417,6 +417,14 @@ Describe 'Resolve-AvmManagedFilesRepositorySetting overlay ordering' {
         script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -Be @('beta')
     }
 
+    It 'returns no overlays when the repository belongs to no group' {
+        $config = script:New-TestConfig -Groups @(
+            @{ name = 'other'; managedFilesAdditional = 'alpha'; repositories = @('repo-y') }
+        )
+
+        script:Resolve-Overlays -Config $config -RepoId 'repo-x' | Should -HaveCount 0
+    }
+
     It 'counts declaration index across groups that declare no overlay' {
         # The middle group contributes no overlay but must still advance the
         # tie-break index, so 'alpha' and 'beta' stay in declaration order.
@@ -519,49 +527,51 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
-    It 'returns an inferred origin candidate unvalidated when no governance config is supplied (F11)' {
+    It 'returns an unmatched origin candidate for root-only sync (F100)' {
         $root = Join-Path $TestDrive 'some-worktree'
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
             Mock Get-AvmManagedFilesOriginRepoId { 'avm-res-fromorigin' }
-            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @() | Should -Be 'avm-res-fromorigin'
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-res-other') |
+                Should -Be 'avm-res-fromorigin'
         }
     }
 
-    It 'returns the folder leaf unvalidated when no governance config and no origin (F11)' {
+    It 'returns an unmatched folder candidate for root-only sync (F100)' {
         $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-anything'
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
             Mock Get-AvmManagedFilesOriginRepoId { '' }
-            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @() | Should -Be 'avm-res-anything'
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-res-other') |
+                Should -Be 'avm-res-anything'
         }
     }
 
-    It 'prompts interactively and accepts a valid answer when inference fails (F11)' {
-        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+    It 'prompts interactively and accepts an id when automatic inference fails (F100)' {
+        $root = [System.IO.Path]::GetPathRoot($TestDrive)
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
             Mock Get-AvmManagedFilesOriginRepoId { '' }
-            Mock Read-Host { 'avm-ptn-example-repo' }
-            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true |
-                Should -Be 'avm-ptn-example-repo'
+            Mock Read-Host { 'avm-res-ungrouped' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-res-other') -Interactive $true |
+                Should -Be 'avm-res-ungrouped'
             Should -Invoke Read-Host -Times 1 -Exactly
         }
     }
 
-    It 'normalises an interactive answer before validating it (F11)' {
-        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+    It 'normalises an interactive answer before returning it (F100)' {
+        $root = [System.IO.Path]::GetPathRoot($TestDrive)
         InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
             param($Root)
             Mock Get-AvmManagedFilesOriginRepoId { '' }
-            Mock Read-Host { 'terraform-azurerm-avm-ptn-example-repo' }
-            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true |
-                Should -Be 'avm-ptn-example-repo'
+            Mock Read-Host { 'terraform-azurerm-avm-res-ungrouped' }
+            Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-res-other') -Interactive $true |
+                Should -Be 'avm-res-ungrouped'
         }
     }
 
-    It 'throws a configuration error on a non-interactive host when inference fails (F11)' {
-        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+    It 'throws a configuration error when no repository id can be found (F100)' {
+        $root = [System.IO.Path]::GetPathRoot($TestDrive)
         $err = {
             InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
                 param($Root)
@@ -573,13 +583,13 @@ Describe 'Managed-file repository id resolution (helpers)' {
         $err.Exception.Message | Should -Match 'Could not resolve a managed-files repository id'
     }
 
-    It 'throws when an interactive answer still does not match a known id (F11)' {
-        $root = Join-Path $TestDrive 'terraform-azurerm-avm-res-nope'
+    It 'throws when interactive resolution returns no repository id (F100)' {
+        $root = [System.IO.Path]::GetPathRoot($TestDrive)
         $err = {
             InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
                 param($Root)
                 Mock Get-AvmManagedFilesOriginRepoId { '' }
-                Mock Read-Host { 'still-wrong' }
+                Mock Read-Host { ' ' }
                 Resolve-AvmManagedFilesRepoId -Root $Root -KnownRepoIds @('avm-ptn-example-repo') -Interactive $true
             }
         } | Should -Throw -PassThru
@@ -662,6 +672,23 @@ Describe 'Sync-AvmManagedFile repository identity (git origin)' {
         (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
     }
 
+    It 'syncs root files when the inferred origin id belongs to no group (F100)' {
+        $target = script:New-AvmTargetRepo `
+            -Dir (Join-Path $TestDrive ("eventgrid-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -OriginUrl 'https://github.com/Azure/terraform-azurerm-avm-res-eventgrid-namespace.git'
+        $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'root-version'
+        Test-Path (Join-Path $target 'common.tf') | Should -BeTrue
+        Test-Path (Join-Path $target 'pr-check.yml') | Should -BeFalse
+    }
+
     It 'lets an explicit -RepoId short-circuit git-origin inference (F11)' {
         # Origin would normalise to avm-res-bar (absent from config); the explicit id must still win.
         $target = script:New-AvmTargetRepo `
@@ -678,23 +705,20 @@ Describe 'Sync-AvmManagedFile repository identity (git origin)' {
         (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'tooling-version'
     }
 
-    It 'fails loudly rather than syncing zero overlays when the id cannot be resolved (F11/F01)' {
+    It 'syncs root files using the folder id when the origin is unavailable (F100)' {
         $target = script:New-AvmTargetRepo `
-            -Dir (Join-Path $TestDrive ("orphan-" + [Guid]::NewGuid().ToString('N').Substring(0, 6))) `
+            -Dir (Join-Path $TestDrive 'terraform-azurerm-avm-res-ungrouped') `
             -OriginUrl ''
         $ctx = [pscustomobject][ordered]@{ Kind = 'terraform-module-repo'; Root = $target; Ecosystem = 'terraform'; Source = 'path-heuristic' }
 
-        $err = {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
-                param($C, $B, $Cfg)
-                Mock Test-AvmManagedFilesInteractive { $false }
-                Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
-            }
-        } | Should -Throw -PassThru
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; B = $script:base; Cfg = $script:cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
 
-        $err.Exception.Code | Should -Be 'AVM1001'
-        # No silent zero-overlay sync: the root files were never written.
-        Test-Path (Join-Path $target '.gitignore') | Should -BeFalse
+        $result.Status | Should -Be 'pass'
+        (Get-Content -Raw -LiteralPath (Join-Path $target '.gitignore')).Trim() | Should -Be 'root-version'
+        Test-Path (Join-Path $target 'pr-check.yml') | Should -BeFalse
     }
 }
 

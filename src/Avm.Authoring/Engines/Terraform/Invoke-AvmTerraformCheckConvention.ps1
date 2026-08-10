@@ -32,6 +32,10 @@ function Invoke-AvmTerraformCheckConvention {
         engine simply forwards the switch. Fix-only outcomes contribute
         no Issues and so leave Status='pass'.
 
+        With -FixableOnly, rules without a declared fix are excluded. This is
+        used by pre-commit so it only performs deterministic repairs; strict
+        convention checks continue to evaluate the complete rule set.
+
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='terraform'.
@@ -42,6 +46,9 @@ function Invoke-AvmTerraformCheckConvention {
 
     .PARAMETER Fix
         When set, primitives that declare a fix path apply it.
+
+    .PARAMETER FixableOnly
+        Evaluate only rules for which Test-AvmRuleFixable returns true.
 
     .OUTPUTS
         pscustomobject with Engine='terraform', Tool='avm-rules/1',
@@ -55,7 +62,9 @@ function Invoke-AvmTerraformCheckConvention {
 
         [switch] $AllowPathFallback,
 
-        [switch] $Fix
+        [switch] $Fix,
+
+        [switch] $FixableOnly
     )
 
     Set-StrictMode -Version 3.0
@@ -69,6 +78,9 @@ function Invoke-AvmTerraformCheckConvention {
     $null = $AllowPathFallback
 
     $rules = @(Read-AvmRuleSet -Path $Context.Root)
+    if ($FixableOnly) {
+        $rules = @($rules | Where-Object { Test-AvmRuleFixable -Rule $_ })
+    }
 
     $issues = New-Object 'System.Collections.Generic.List[object]'
 

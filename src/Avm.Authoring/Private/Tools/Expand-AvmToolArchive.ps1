@@ -30,6 +30,7 @@ function Expand-AvmToolArchive {
             "Expand-AvmToolArchive: TargetDir does not exist: $TargetDir")
     }
 
+    Write-AvmLog ("archive: expanding {0} from {1} to {2}" -f $Archive, $ArchivePath, $TargetDir) -Level Verbose | Out-Null
     switch ($Archive) {
         'zip' {
             Expand-Archive -LiteralPath $ArchivePath -DestinationPath $TargetDir -Force
@@ -42,6 +43,7 @@ function Expand-AvmToolArchive {
             }
             & $tar.Source -xzf $ArchivePath -C $TargetDir
             if ($LASTEXITCODE -ne 0) {
+                Write-AvmLog ("archive: tar failed with exit code {0}" -f $LASTEXITCODE) -Level Verbose | Out-Null
                 throw [System.IO.IOException]::new(
                     "tar -xzf failed with exit code $LASTEXITCODE for $ArchivePath.")
             }
@@ -52,7 +54,9 @@ function Expand-AvmToolArchive {
             Copy-Item -LiteralPath $ArchivePath -Destination $dest -Force
             if (-not $IsWindows) {
                 & chmod 755 $dest 2>$null
+                Write-AvmLog ("archive: set executable mode on {0}" -f $dest) -Level Verbose | Out-Null
             }
         }
     }
+    Write-AvmLog ("archive: expansion completed for {0}" -f $ArchivePath) -Level Verbose | Out-Null
 }

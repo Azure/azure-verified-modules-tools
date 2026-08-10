@@ -48,6 +48,66 @@ Describe 'Test-AvmModuleVersion' {
         }
     }
 
+    It 'refreshes the Gallery result for sequential top-level avm invocations' {
+        InModuleScope 'Avm.Authoring' {
+            $current = (Get-Module -Name 'Avm.Authoring').Version
+            $script:GalleryLookupCount = 0
+            Mock Find-PSResource {
+                $script:GalleryLookupCount++
+                [pscustomobject]@{
+                    Name    = 'Avm.Authoring'
+                    Version = if ($script:GalleryLookupCount -eq 1) {
+                        $current.ToString()
+                    }
+                    else {
+                        '99.0.0'
+                    }
+                }
+            }
+
+            Invoke-Avm version | Out-Null
+
+            $caught = $null
+            try {
+                Invoke-Avm version | Out-Null
+            }
+            catch {
+                $caught = $_.Exception
+            }
+
+            Should -Invoke Find-PSResource -Times 2 -Exactly
+            $caught | Should -BeOfType ([AvmModuleVersionException])
+            $caught.Code | Should -Be 'AVM1050'
+            $caught.CurrentVersion | Should -Be $current
+            $caught.LatestVersion | Should -Be ([version]'99.0.0')
+        }
+    }
+
+    It 'reports lookup, discovery, refresh, cache reuse, and comparison through verbose output' {
+        InModuleScope 'Avm.Authoring' {
+            $current = (Get-Module -Name 'Avm.Authoring').Version
+            Mock Find-PSResource {
+                [pscustomobject]@{
+                    Name    = 'Avm.Authoring'
+                    Version = $current.ToString()
+                }
+            }
+
+            $first = Test-AvmModuleVersion -Verbose 4>&1
+            $second = Test-AvmModuleVersion -Verbose 4>&1
+            $dispatcher = Invoke-Avm version -Verbose 4>&1
+            $messages = @(@($first) + @($second) + @($dispatcher) |
+                    ForEach-Object { [string]$_ }) -join "`n"
+
+            $messages | Should -Match 'module version lookup: querying PowerShell Gallery'
+            $messages | Should -Match 'module version lookup: discovered latest PowerShell Gallery version'
+            $messages | Should -Match 'module version lookup: reusing cached latest version'
+            $messages | Should -Match 'module version lookup: refresh requested; discarding cached latest version'
+            $messages | Should -Match 'module version check: comparing running version'
+            Should -Invoke Find-PSResource -Times 2 -Exactly
+        }
+    }
+
     It 'throws the dedicated exception and exit code when the module is outdated' {
         InModuleScope 'Avm.Authoring' {
             Mock Find-PSResource {
@@ -68,7 +128,17 @@ Describe 'Test-AvmModuleVersion' {
             $caught | Should -BeOfType ([AvmModuleVersionException])
             $caught.Code | Should -Be 'AVM1050'
             $caught.ExitCode | Should -Be 10
-            $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
+            $caught.Message | Should -BeExactly @"
+A newer version of Avm.Authoring is required.
+Installed version: $((Get-Module Avm.Authoring).Version)
+Latest version: 99.0.0
+
+Upgrade and reload the module:
+  Update-PSResource -Name Avm.Authoring -Scope CurrentUser
+  Import-Module Avm.Authoring -Force
+
+You can restart PowerShell instead of reloading it.
+"@
         }
     }
 

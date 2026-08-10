@@ -272,6 +272,44 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['transform'].PSObject.Properties['Result'].Value.PSObject.Properties['Tool'].Value | Should -Match '^mapotf/'
     }
 
+    It 'pre-commit repairs fixable convention violations without enforcing strict-only rules' {
+        $nestedModule = Join-Path $script:fixtureRoot 'modules' 'azure-identity'
+        $null = New-Item -ItemType Directory -Path $nestedModule -Force
+        Set-Content -LiteralPath (Join-Path $nestedModule 'output.tf') -Value '# output' -Encoding utf8NoBOM
+
+        try {
+            $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+
+            $result.Status | Should -Be 'pass'
+            Join-Path $nestedModule 'output.tf' | Should -Not -Exist
+            Join-Path $nestedModule 'outputs.tf' | Should -Exist
+            $headerPath = Join-Path $nestedModule '_header.md'
+            $headerPath | Should -Exist
+            [System.IO.File]::ReadAllText($headerPath) | Should -Be "# Azure Identity`n"
+            Join-Path $nestedModule 'terraform.tf' | Should -Not -Exist
+        }
+        finally {
+            Remove-Item -LiteralPath (Join-Path $script:fixtureRoot 'modules') -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'pre-commit bootstraps tests/.gitkeep when explicit Terraform context has no tests directory' {
+        $bootstrapRoot = Join-Path $TestDrive 'module-without-tests'
+        $exampleDir = Join-Path $bootstrapRoot 'examples/default'
+        $null = New-Item -ItemType Directory -Path $exampleDir -Force
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value '# example' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'README.md') -Value $readme -Encoding utf8NoBOM
+
+        $result = Invoke-AvmPreCommit -Path $bootstrapRoot -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'pass'
+        $result.Path | Should -Be (Resolve-Path -LiteralPath $bootstrapRoot).ProviderPath
+        Join-Path $bootstrapRoot 'tests/.gitkeep' | Should -Exist
+        @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
+    }
+
     It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 

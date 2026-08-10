@@ -241,12 +241,19 @@ function Invoke-AvmTerraformLint {
 
     $issues = New-Object System.Collections.Generic.List[object]
     $filesProcessed = 0
+    $streamOutput = Test-AvmVerboseEnabled
 
     try {
+        Write-AvmLog ("lint: staging terraform module at {0}" -f $stageRoot) -Level Verbose | Out-Null
         Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
         $scopes = Get-AvmTflintScope -Root $stageRoot -ConfigDir $configSet.ConfigDir
+        Write-AvmLog ("lint: discovered {0} terraform scope(s); failure threshold = {1}" -f $scopes.Count, $MinimumFailureSeverity) -Level Info | Out-Null
 
+        $scopeIndex = 0
         foreach ($scope in $scopes) {
+            $scopeIndex++
+            Write-AvmLog ("lint: scope {0}/{1} = {2}" -f $scopeIndex, $scopes.Count, $scope.Label) -Level Info | Out-Null
+            Write-AvmLog ("lint: scope directory = {0}; config = {1}" -f $scope.Dir, $scope.Config) -Level Verbose | Out-Null
             # Count only the top-level '*.tf' in this scope - tflint is invoked
             # non-recursively per scope, and nested modules/examples are their own
             # scopes, so this does not double-count.
@@ -256,7 +263,8 @@ function Invoke-AvmTerraformLint {
                 -FilePath $terraform.Path `
                 -ArgumentList @('init', '-input=false') `
                 -WorkingDirectory $scope.Dir `
-                -Label ('{0}: terraform init' -f $scope.Label)
+                -Label ('{0}: terraform init' -f $scope.Label) `
+                -StreamOutput:$streamOutput
 
             if ($scope.Label -like 'examples/*') {
                 Invoke-AvmScriptHook `
@@ -272,7 +280,9 @@ function Invoke-AvmTerraformLint {
                 -FilePath $tool.Path `
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -StreamOutput:$streamOutput `
+                -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {
                 $stderr = if ($init.StdErr) { $init.StdErr.Trim() } else { '' }
                 $tail = if ($stderr) { ": $stderr" } else { '.' }
@@ -290,7 +300,9 @@ function Invoke-AvmTerraformLint {
                 -FilePath $tool.Path `
                 -ArgumentList $lintArgs `
                 -WorkingDirectory $scope.Dir `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -StreamOutput:$streamOutput `
+                -Label ('{0}: tflint' -f $scope.Label)
 
             # exit 0 = clean; 2 = issues found; anything else = tflint misbehaved.
             if ($run.ExitCode -ne 0 -and $run.ExitCode -ne 2) {
@@ -357,6 +369,7 @@ function Invoke-AvmTerraformLint {
     }
 
     $status = if ($issues | Where-Object { $failSeverities -contains $_.Severity }) { 'fail' } else { 'pass' }
+    Write-AvmLog ("lint: terraform completed with {0} issue(s) across {1} file(s)" -f $issues.Count, $filesProcessed) -Level Verbose | Out-Null
 
     return [pscustomobject][ordered]@{
         Engine         = 'terraform'

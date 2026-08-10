@@ -139,6 +139,7 @@ function Resolve-AvmPinnedAsset {
     $resolvedPath = if ([string]::IsNullOrWhiteSpace($subPath)) { $versionDir } else { Join-Path $versionDir $subPath }
 
     if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $resolvedPath) -and -not $Force) {
+        Write-AvmLog ("asset: cache hit for {0}; sha256-prefix={1}" -f $Name, $shaPrefix) -Level Verbose | Out-Null
         return [pscustomobject][ordered]@{
             Name   = $Name
             Sha256 = $sha
@@ -153,6 +154,7 @@ function Resolve-AvmPinnedAsset {
     }
 
     if ($Force -and (Test-Path -LiteralPath $versionDir)) {
+        Write-AvmLog ("asset: force removing {0}" -f $versionDir) -Level Verbose | Out-Null
         Remove-Item -LiteralPath $versionDir -Recurse -Force
     }
 
@@ -161,9 +163,11 @@ function Resolve-AvmPinnedAsset {
     }
 
     $lockFile = Join-Path $assetDir '.lock'
+    Write-AvmLog ("asset: acquiring cache lock {0}" -f $lockFile) -Level Verbose | Out-Null
     $lock = Lock-AvmToolCache -LockFile $lockFile
     try {
         if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $resolvedPath) -and -not $Force) {
+            Write-AvmLog ("asset: post-lock cache hit for {0}; sha256-prefix={1}" -f $Name, $shaPrefix) -Level Verbose | Out-Null
             return [pscustomobject][ordered]@{
                 Name   = $Name
                 Sha256 = $sha
@@ -198,13 +202,16 @@ function Resolve-AvmPinnedAsset {
                     "Resolve-AvmPinnedAsset: asset '$Name' uses file:// source; pass -AllowFileUrls to permit it.",
                     'AVM1004')
             }
+            Write-AvmLog ("asset: downloading {0} from {1}" -f $Name, $source) -Level Verbose | Out-Null
             Invoke-AvmHttp @httpParams | Out-Null
 
+            Write-AvmLog ("asset: expanding {0} archive for {1}" -f $archiveKind, $Name) -Level Verbose | Out-Null
             Expand-AvmToolArchive -ArchivePath $archivePath -Archive $archiveKind -TargetDir $stagingDir -EntrypointBasename $Name
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
 
             if (-not [string]::IsNullOrWhiteSpace($subPath)) {
                 $stagedSub = Join-Path $stagingDir $subPath
+                Write-AvmLog ("asset: verifying declared subpath {0}" -f $subPath) -Level Verbose | Out-Null
                 if (-not (Test-Path -LiteralPath $stagedSub)) {
                     throw [AvmConfigurationException]::new(
                         "Resolve-AvmPinnedAsset: asset '$Name' declared Path '$subPath' but it does not exist after extraction.",
@@ -229,6 +236,7 @@ function Resolve-AvmPinnedAsset {
             }
             catch [System.IO.IOException] {
                 if (Test-Path -LiteralPath $verified) {
+                    Write-AvmLog ("asset: rename race lost for {0}; using completed cache entry" -f $Name) -Level Verbose | Out-Null
                     Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
                     return [pscustomobject][ordered]@{
                         Name   = $Name
@@ -242,6 +250,7 @@ function Resolve-AvmPinnedAsset {
             }
 
             New-Item -ItemType File -Path $verified -Force | Out-Null
+            Write-AvmLog ("asset: installed {0}; verified marker={1}" -f $Name, $verified) -Level Verbose | Out-Null
 
             return [pscustomobject][ordered]@{
                 Name   = $Name

@@ -105,6 +105,48 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 @($rule.AppliesTo) | Should -Be @('root')
             }
         }
+
+        It 'classifies only rules with an associated deterministic fix as fixable' {
+            InModuleScope 'Avm.Authoring' {
+                $definitions = @(
+                    @{
+                        Id = 'avm.test.rename'; Kind = 'FileMustNotExist'; Description = 'd'
+                        Parameters = @{ Path = 'output.tf'; FixRenameTo = 'outputs.tf' }; Expected = $true
+                    }
+                    @{
+                        Id = 'avm.test.no-rename'; Kind = 'FileMustNotExist'; Description = 'd'
+                        Parameters = @{ Path = 'legacy.tf' }; Expected = $false
+                    }
+                    @{
+                        Id = 'avm.test.create-file'; Kind = 'FileMustExist'; Description = 'd'
+                        Parameters = @{ Path = '_header.md'; FixContentTemplate = '# {DirectoryTitle}' }; Expected = $true
+                    }
+                    @{
+                        Id = 'avm.test.required-file'; Kind = 'FileMustExist'; Description = 'd'
+                        Parameters = @{ Path = 'terraform.tf' }; Expected = $false
+                    }
+                    @{
+                        Id = 'avm.test.create-directory'; Kind = 'DirectoryMustExist'; Description = 'd'
+                        Parameters = @{ Path = 'tests'; FixCreateFile = '.gitkeep' }; Expected = $true
+                    }
+                    @{
+                        Id = 'avm.test.required-directory'; Kind = 'DirectoryMustExist'; Description = 'd'
+                        Parameters = @{ Path = 'examples'; MinimumChildDirectories = 1 }; Expected = $false
+                    }
+                    @{
+                        Id = 'avm.test.gitignore'; Kind = 'GitignoreMustContain'; Description = 'd'
+                        Parameters = @{ RequiredGlobs = @('*.tfstate') }; Expected = $true
+                    }
+                )
+
+                foreach ($definition in $definitions) {
+                    $expected = $definition.Expected
+                    $definition.Remove('Expected')
+                    $rule = New-AvmRule -Definition $definition
+                    (Test-AvmRuleFixable -Rule $rule) | Should -Be $expected
+                }
+            }
+        }
     }
 
     Context 'schema violations' {
@@ -276,6 +318,66 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match 'FixRenameTo must not be empty'
+            }
+        }
+
+        It 'rejects FileMustExist with an empty FixContentTemplate' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.empty-content'
+                    Kind        = 'FileMustExist'
+                    Description = 'd'
+                    Parameters  = @{ Path = '_header.md'; FixContentTemplate = '   ' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err.Message | Should -Match 'FixContentTemplate must not be empty'
+            }
+        }
+
+        It 'rejects a non-positive DirectoryMustExist MinimumChildDirectories value' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.bad-minimum'
+                    Kind        = 'DirectoryMustExist'
+                    Description = 'd'
+                    Parameters  = @{ Path = 'examples'; MinimumChildDirectories = 0 }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err.Message | Should -Match 'MinimumChildDirectories must be a positive integer'
+            }
+        }
+
+        It 'rejects a DirectoryMustExist FixCreateFile that is not a leaf name' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.bad-placeholder'
+                    Kind        = 'DirectoryMustExist'
+                    Description = 'd'
+                    Parameters  = @{ Path = 'tests'; FixCreateFile = '../.gitkeep' }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err.Message | Should -Match 'FixCreateFile must be a leaf file name'
+            }
+        }
+
+        It 'rejects a DirectoryMustExist rule whose placeholder cannot satisfy its child-directory requirement' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.conflicting-directory-fix'
+                    Kind        = 'DirectoryMustExist'
+                    Description = 'd'
+                    Parameters  = @{
+                        Path                    = 'examples'
+                        MinimumChildDirectories = 1
+                        FixCreateFile           = '.gitkeep'
+                    }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err.Message | Should -Match 'cannot combine'
             }
         }
 

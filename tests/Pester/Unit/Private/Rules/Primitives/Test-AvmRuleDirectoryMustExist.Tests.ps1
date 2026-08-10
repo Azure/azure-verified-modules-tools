@@ -65,7 +65,7 @@ Describe 'Test-AvmRuleDirectoryMustExist primitive' {
         $result.Status | Should -Be 'fail'
     }
 
-    It 'never creates the directory even when -Fix is set (no silent .gitkeep materialisation)' {
+    It 'does not create the directory with -Fix when the rule declares no fix' {
         $rule = InModuleScope 'Avm.Authoring' {
             New-AvmRule -Definition @{
                 Id          = 'avm.test.examples-exists'
@@ -80,6 +80,68 @@ Describe 'Test-AvmRuleDirectoryMustExist primitive' {
         }
         $result.Status | Should -Be 'fail'
         Test-Path -LiteralPath (Join-Path $script:tmp 'examples') | Should -BeFalse
+    }
+
+    It 'creates the missing directory and declared placeholder with -Fix' {
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.tests-exists'
+                Kind        = 'DirectoryMustExist'
+                Description = 'tests/ must exist'
+                Parameters  = @{ Path = 'tests'; FixCreateFile = '.gitkeep' }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleDirectoryMustExist -Rule $R -TargetRoot $T -Fix
+        }
+
+        $result.Status | Should -Be 'fixed'
+        $result.FilesChanged | Should -Be 1
+        Join-Path $script:tmp 'tests' | Should -Exist
+        $placeholder = Join-Path $script:tmp 'tests' '.gitkeep'
+        $placeholder | Should -Exist
+        [System.IO.File]::ReadAllBytes($placeholder).Count | Should -Be 0
+    }
+
+    It 'fails when the directory does not contain the required number of child directories' {
+        $examples = Join-Path $script:tmp 'examples'
+        New-Item -ItemType Directory -Path $examples | Out-Null
+        Set-Content -LiteralPath (Join-Path $examples '.terraform-docs.yml') -Value '# config'
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.examples-contain-example'
+                Kind        = 'DirectoryMustExist'
+                Description = 'examples/ must contain an example'
+                Parameters  = @{ Path = 'examples'; MinimumChildDirectories = 1 }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleDirectoryMustExist -Rule $R -TargetRoot $T
+        }
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Message | Should -Match 'at least 1 immediate child directory; found 0'
+    }
+
+    It 'passes when at least one immediate child directory exists' {
+        New-Item -ItemType Directory -Path (Join-Path $script:tmp 'examples/default') -Force | Out-Null
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.examples-contain-example'
+                Kind        = 'DirectoryMustExist'
+                Description = 'examples/ must contain an example'
+                Parameters  = @{ Path = 'examples'; MinimumChildDirectories = 1 }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleDirectoryMustExist -Rule $R -TargetRoot $T
+        }
+
+        $result.Status | Should -Be 'pass'
+        @($result.Issues).Count | Should -Be 0
     }
 
     It 'propagates the rule Severity into the emitted Issue' {

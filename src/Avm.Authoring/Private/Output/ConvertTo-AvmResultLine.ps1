@@ -31,7 +31,8 @@ function ConvertTo-AvmResultLine {
         return $lines.ToArray()
     }
 
-    $lines.Add(('avm {0}: {1} results' -f $Verb, $items.Count))
+    $resultNoun = if ($items.Count -eq 1) { 'result' } else { 'results' }
+    $lines.Add(('avm {0}: {1} {2}' -f $Verb, $items.Count, $resultNoun))
     foreach ($item in $items) {
         $status = [string]$item.PSObject.Properties['Status'].Value
         $identity = Get-AvmResultIdentity -Result $item
@@ -138,7 +139,8 @@ function ConvertTo-AvmRunSummaryLine {
     $passed = if ($null -ne $passedProperty) { [int]$passedProperty.Value } else { 0 }
     $failed = if ($null -ne $failedProperty) { [int]$failedProperty.Value } else { 0 }
 
-    return @(('{0}{1} runs, {2} passed, {3} failed' -f $Indent, $total, $passed, $failed))
+    $runNoun = if ($total -eq 1) { 'run' } else { 'runs' }
+    return @(('{0}{1} {2}, {3} passed, {4} failed' -f $Indent, $total, $runNoun, $passed, $failed))
 }
 
 function ConvertTo-AvmIssueLine {

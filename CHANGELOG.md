@@ -49,17 +49,18 @@ section when cutting a release.
 
 ### Changed
 
+- Result summaries now use grammatically consistent singular and plural nouns,
+  such as `1 run` and `2 runs`.
 - PSGallery publication now runs in GitHub Actions after ADO uploads and
   promotes the ESRP-signed release. The workflow publishes the signed release
   archive without rebuilding it and validates its checksum, archive layout,
   module version, casing, and signature blocks first. A guarded manual retry
   accepts only the exact tag of an existing published full release and uses
   the same validation and publication path.
-- Pinned `mapotf` bumped to 0.1.7, with refreshed per-platform SHA256 hashes.
-  Neither 0.1.6 nor 0.1.7 carries a functional change — both move mapotf's own
-  release signing to ESRP — but its Windows binaries are now
-  Authenticode-signed, so `mapotf.exe` should stop tripping Defender's ML
-  heuristics.
+- Pinned `mapotf` bumped to 0.1.8, with refreshed per-platform SHA256 hashes.
+  This release fixes `panic: AttributeTypes on non-object Type` when transforms
+  inspect heterogeneous repeated nested blocks. Its Windows binaries remain
+  Authenticode-signed through ESRP.
 - Pinned `terraform` bumped to 1.15.8 and `mapotf` to 0.1.5 in
   `Resources/avm.pins.jsonc`, with refreshed per-platform SHA256 hashes.
 - `avm lint` now copies the Terraform module to a cleaned temporary tree and
@@ -97,6 +98,21 @@ section when cutting a release.
   for `pr-check`, with unit tests retained as a separate CI job).
 
 ### Fixed
+
+- Managed-file sync now applies the shared `managed-files/root` set when an
+  inferred repository id belongs to no configured group. Group membership only
+  selects additional overlays and exclusions; resolution fails only when no
+  repository id can be determined.
+- Module context now treats PWD or explicit `-Path` as the authoritative root,
+  detects direct Terraform/Bicep source without convention folders, and rejects
+  any reserved nested/admin segment across the full path instead of walking to
+  a parent module. This lets Terraform pre-commit create `tests/.gitkeep`
+  before `tests/` exists.
+- Terraform `avm pre-commit` now runs only convention rules with deterministic
+  fixes. It repairs singular Terraform filenames, `.gitignore`, missing
+  `_header.md` files, and a missing `tests/` directory; strict convention and
+  PR checks still enforce non-fixable requirements, including at least one
+  example subdirectory.
 
 - Real-binary Terraform integration tests keep their self-owned Windows home
   and fixture work tree under `%LOCALAPPDATA%\Avm\IntegrationTests` instead of

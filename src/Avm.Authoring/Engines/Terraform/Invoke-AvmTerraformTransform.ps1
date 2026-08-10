@@ -188,8 +188,10 @@ function Invoke-AvmTerraformTransform {
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
     $configDir = Resolve-AvmMapotfConfigDir -Root $Context.Root
+    Write-AvmLog ("transform: config directory={0}" -f $configDir) -Level Verbose | Out-Null
 
     $beforeFiles = Get-AvmTerraformFile -Root $Context.Root
+    Write-AvmLog ("transform: discovered {0} terraform file(s)" -f $beforeFiles.Count) -Level Verbose | Out-Null
 
     if (-not $PSCmdlet.ShouldProcess($Context.Root, ("mapotf transform --mptf-dir '{0}'" -f $configDir))) {
         return [pscustomobject][ordered]@{
@@ -215,6 +217,7 @@ function Invoke-AvmTerraformTransform {
     # byte-identical even if mapotf throws part-way through.
     $snapshot = $null
     if ($CheckDrift) {
+        Write-AvmLog ("transform: check-drift mode; snapshotting {0} file(s)" -f $beforeFiles.Count) -Level Verbose | Out-Null
         $snapshot = Get-AvmFileSnapshot -Path @($beforeFiles | ForEach-Object { $_.FullName })
     }
 
@@ -228,6 +231,7 @@ function Invoke-AvmTerraformTransform {
         # AvmToolException, which the chain surfaces as 'skipped' just like a
         # missing mapotf binary.
         $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+        Write-AvmLog ("transform: resolved terraform dependency at {0}" -f $terraform.Path) -Level Verbose | Out-Null
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
@@ -244,6 +248,7 @@ function Invoke-AvmTerraformTransform {
             throw [AvmProcessException]::new(
                 ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
         }
+        Write-AvmLog 'transform: mapotf transform completed' -Level Verbose | Out-Null
 
         $clean = Invoke-AvmProcess `
             -FilePath $tool.Path `
@@ -257,6 +262,7 @@ function Invoke-AvmTerraformTransform {
             throw [AvmProcessException]::new(
                 ('mapotf clean-backup exited with code {0}{1}' -f $clean.ExitCode, $tail))
         }
+        Write-AvmLog 'transform: mapotf clean-backup completed' -Level Verbose | Out-Null
 
         $afterFiles = Get-AvmTerraformFile -Root $Context.Root
         $seen = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -280,6 +286,7 @@ function Invoke-AvmTerraformTransform {
     }
     finally {
         if ($null -ne $snapshot) {
+            Write-AvmLog 'transform: restoring terraform snapshot after drift check' -Level Verbose | Out-Null
             $current = @(Get-AvmTerraformFile -Root $Context.Root | ForEach-Object { $_.FullName })
             Restore-AvmFileSnapshot -Snapshot $snapshot -CurrentPath $current
         }
@@ -299,6 +306,7 @@ function Invoke-AvmTerraformTransform {
                     Message  = ("mapotf transform modified '{0}'; run 'avm pre-commit -Ecosystem terraform' and commit the result." -f $rel)
                 })
         }
+        Write-AvmLog ("transform: completed; processed={0}; changed={1}; status={2}" -f $beforeFiles.Count, $changed.Count, $status) -Level Verbose | Out-Null
     }
 
     return [pscustomobject][ordered]@{

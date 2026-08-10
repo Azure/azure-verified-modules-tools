@@ -31,7 +31,8 @@ BeforeAll {
         $utf8 = [System.Text.UTF8Encoding]::new($false)
         [System.IO.File]::WriteAllText((Join-Path $root 'terraform.tf'), '# stub', $utf8)
         [System.IO.File]::WriteAllText((Join-Path $root '_header.md'), '# header', $utf8)
-        New-Item -ItemType Directory -Path (Join-Path $root 'examples') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'examples/default/_header.md'), '# header', $utf8)
         New-Item -ItemType Directory -Path (Join-Path $root 'tests/unit') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $root 'tests/unit/main.tftest.hcl'), '# test', $utf8)
         $globs = @(
@@ -343,6 +344,33 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         }
         Test-Path -LiteralPath (Join-Path $root 'output.tf')  | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $root 'outputs.tf') | Should -BeTrue
+    }
+
+    It 'fixes only rules with an associated fix when -FixableOnly is set' {
+        $root = script:NewRoot
+        Set-Content -LiteralPath (Join-Path $root 'output.tf') -Value '# stub' -NoNewline
+        $ctx = script:NewTerraformContext $root
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C) Invoke-AvmTerraformCheckConvention -Context $C -Fix -FixableOnly
+        }
+
+        $result.Status | Should -Be 'pass'
+        @($result.Issues).Count | Should -Be 0
+        Join-Path $root 'output.tf' | Should -Not -Exist
+        Join-Path $root 'outputs.tf' | Should -Exist
+        Join-Path $root '_header.md' | Should -Exist
+        Join-Path $root 'tests/.gitkeep' | Should -Exist
+        Join-Path $root '.gitignore' | Should -Exist
+        Join-Path $root 'terraform.tf' | Should -Not -Exist
+        Join-Path $root 'examples' | Should -Not -Exist
+
+        $strictResult = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C) Invoke-AvmTerraformCheckConvention -Context $C
+        }
+        $strictResult.Status | Should -Be 'fail'
+        $strictResult.Issues.Code | Should -Contain 'avm.tf.terraform-tf-must-exist'
+        $strictResult.Issues.Code | Should -Contain 'avm.tf.examples-dir-must-exist'
     }
 
     It 'emits forward-slash separators in Issue.File even on Windows-style joined paths' {

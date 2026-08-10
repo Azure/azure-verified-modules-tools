@@ -34,56 +34,72 @@ function Invoke-Avm {
     $ErrorActionPreference = 'Stop'
 
     $rawArguments = @($args)
-    $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
-    if (-not $isUpdateCommand) {
-        Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
-            $PSDefaultParameterValues.Clone()
-        }
-        else {
-            @{}
-        }
-        $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
-        $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
+    $verbPath = if ($rawArguments.Count -gt 0) {
+        ([string[]]$rawArguments -join ' ')
+    }
+    else {
+        'help'
     }
 
-    # F30: GitHub sets RUNNER_DEBUG=1 when a workflow is re-run with debug
-    # logging. Turn verbose on and cascade it to every nested cmdlet through a
-    # cloned default-parameter table so the inherited/global one is untouched.
-    if (Test-AvmDebugMode) {
-        $VerbosePreference = 'Continue'
-        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
-            $PSDefaultParameterValues.Clone()
+    try {
+        $verboseRequested = Test-AvmDebugMode
+        if (-not $verboseRequested) {
+            $verboseRequested = @(
+                $rawArguments |
+                    Where-Object {
+                        ([string]$_).ToLowerInvariant() -in @('-verbose', '--verbose')
+                    }
+            ).Count -gt 0
         }
-        else {
-            @{}
-        }
-        $PSDefaultParameterValues['*:Verbose'] = $true
-    }
-
-    # Honour .avm/.disable sentinel anywhere up the path: spec section 8.
-    # The opt-out lets a repo turn the dispatcher off without uninstalling
-    # the module. We honour it even for read-only verbs like 'avm version'
-    # so the user can't accidentally rely on output that the maintainer
-    # explicitly disabled.
-    $sentinel = Test-AvmDisableSentinel
-    if ($sentinel) {
-        throw [AvmConfigurationException]::new(
-            "avm is disabled in this repository (remove $sentinel to re-enable).")
-    }
-
-    $passThru = $false
-    $arguments = @(
-        foreach ($arg in $rawArguments) {
-            $token = [string]$arg
-            if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
-                $passThru = $true
-                continue
+        if ($verboseRequested) {
+            $VerbosePreference = 'Continue'
+            $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+                $PSDefaultParameterValues.Clone()
             }
-            $arg
+            else {
+                @{}
+            }
+            $PSDefaultParameterValues['*:Verbose'] = $true
         }
-    )
-    $registry = @(Get-AvmVerbRegistry)
+
+        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        if (-not $isUpdateCommand) {
+            Test-AvmModuleVersion `
+                -SkipModuleVersionCheck:$SkipModuleVersionCheck `
+                -RefreshLatestVersion
+            $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+                $PSDefaultParameterValues.Clone()
+            }
+            else {
+                @{}
+            }
+            $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
+            $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
+        }
+
+        # Honour .avm/.disable sentinel anywhere up the path: spec section 8.
+        # The opt-out lets a repo turn the dispatcher off without uninstalling
+        # the module. We honour it even for read-only verbs like 'avm version'
+        # so the user can't accidentally rely on output that the maintainer
+        # explicitly disabled.
+        $sentinel = Test-AvmDisableSentinel
+        if ($sentinel) {
+            throw [AvmConfigurationException]::new(
+                "avm is disabled in this repository (remove $sentinel to re-enable).")
+        }
+
+        $passThru = $false
+        $arguments = @(
+            foreach ($arg in $rawArguments) {
+                $token = [string]$arg
+                if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
+                    $passThru = $true
+                    continue
+                }
+                $arg
+            }
+        )
+        $registry = @(Get-AvmVerbRegistry)
 
     # F09: bare 'avm', 'avm --help', 'avm -h' and 'avm help' all print the same
     # verb listing. A help token is only honoured when it is the sole argument
@@ -219,10 +235,16 @@ function Invoke-Avm {
         }
     }
 
-    $verbPath = ($match.Path -join ' ')
+        $verbPath = ($match.Path -join ' ')
+        Write-AvmLog ('Starting avm {0}' -f $verbPath) -Level Info
+        Write-AvmLog ('dispatch: cmdlet = {0}' -f $match.Cmdlet) -Level Verbose
+        Write-AvmLog ('dispatch: positional arguments = {0}' -f ($positional -join ' | ')) -Level Verbose
+        Write-AvmLog ('dispatch: bound parameters = {0}' -f (($bound.GetEnumerator() | Sort-Object Key | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }) -join '; ')) -Level Verbose
 
-    try {
+        $dispatchSw = [System.Diagnostics.Stopwatch]::StartNew()
         $result = & $cmd @bound @positional
+        $dispatchSw.Stop()
+        Write-AvmLog ('dispatch: completed {0} in {1}' -f $match.Cmdlet, (Format-AvmDuration -Duration $dispatchSw.Elapsed)) -Level Verbose
     }
     catch [AvmException] {
         Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
@@ -231,6 +253,7 @@ function Invoke-Avm {
     $items = @($result | Where-Object { $null -ne $_ })
     $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
     $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })
+    Write-AvmLog ('dispatch: result objects={0}; rendered={1}; passthrough={2}' -f $items.Count, $rendered.Count, $passThrough.Count) -Level Verbose
 
     # F25: render once per invocation, not once per emitted object.
     if ($rendered.Count -gt 0) {

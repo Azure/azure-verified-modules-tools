@@ -81,6 +81,7 @@ function Resolve-AvmPolicyBundle {
         }
         $ref = $refOverride.Trim()
         $sha = $shaOverride.Trim().ToLowerInvariant()
+        Write-AvmLog ("policy-bundle: using AVM_POLICY_LIBRARY_REF override {0}" -f $ref) -Level Verbose | Out-Null
     }
     elseif (-not [string]::IsNullOrWhiteSpace($shaOverride)) {
         throw [AvmConfigurationException]::new(
@@ -101,6 +102,7 @@ function Resolve-AvmPolicyBundle {
 
     $bundlePath = [string]$library['bundles'][$Name]
     $subPath = if ([string]::IsNullOrWhiteSpace($archiveRoot)) { $bundlePath } else { "$archiveRoot/$bundlePath" }
+    Write-AvmLog ("policy-bundle: resolved {0}; ref={1}; source={2}; path={3}" -f $Name, $ref, $source, $subPath) -Level Verbose | Out-Null
 
     $descriptor = [pscustomobject]@{
         Source = $source

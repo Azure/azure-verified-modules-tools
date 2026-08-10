@@ -8,12 +8,16 @@ BeforeAll {
     $script:savedActions = $env:GITHUB_ACTIONS
     $script:savedRunner = $env:RUNNER_DEBUG
     $script:savedVerbose = $env:AVM_VERBOSE
+    $script:savedNoColor = $env:NO_COLOR
+    $script:savedColorForce = $env:CLICOLOR_FORCE
 }
 
 AfterAll {
     $env:GITHUB_ACTIONS = $script:savedActions
     $env:RUNNER_DEBUG = $script:savedRunner
     $env:AVM_VERBOSE = $script:savedVerbose
+    $env:NO_COLOR = $script:savedNoColor
+    $env:CLICOLOR_FORCE = $script:savedColorForce
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
@@ -22,6 +26,8 @@ Describe 'Write-AvmLog' {
         $env:GITHUB_ACTIONS = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
+        Remove-Item Env:\NO_COLOR -ErrorAction SilentlyContinue
+        Remove-Item Env:\CLICOLOR_FORCE -ErrorAction SilentlyContinue
     }
 
     Context 'outside GitHub Actions' {
@@ -31,7 +37,45 @@ Describe 'Write-AvmLog' {
                 Write-AvmLog 'plain info' -Level Info -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
+
             @($messages) | Should -Contain 'plain info'
+        }
+
+        It 'uses semantic colours when forced and honours NO_COLOR' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $escape = [char]27
+                $env:CLICOLOR_FORCE = '1'
+                $coloured = Format-AvmLogText -Text 'passed' -Level Pass
+                $env:NO_COLOR = '1'
+                $plain = Format-AvmLogText -Text 'passed' -Level Pass
+                [pscustomobject]@{
+                    Coloured = $coloured
+                    Plain    = $plain
+                    Escape   = [string]$escape
+                }
+            }
+            $observed.Coloured | Should -Be "$($observed.Escape)[32mpassed$($observed.Escape)[0m"
+            $observed.Plain | Should -Be 'passed'
+        }
+
+        It 'forces semantic colours for any non-zero CLICOLOR_FORCE value' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $escape = [char]27
+                $env:CLICOLOR_FORCE = '2'
+                Format-AvmLogText -Text 'passed' -Level Pass
+            }
+            $escape = [char]27
+            $observed | Should -Be "$escape[32mpassed$escape[0m"
+        }
+
+        It 'does not force semantic colours for CLICOLOR_FORCE=0' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $env:CLICOLOR_FORCE = '0'
+                Test-AvmColorEnabled
+            }
+            if ([Console]::IsOutputRedirected -or [Console]::IsErrorRedirected) {
+                $observed | Should -BeFalse
+            }
         }
 
         It 'writes Warning to the warning stream, not the information stream' {

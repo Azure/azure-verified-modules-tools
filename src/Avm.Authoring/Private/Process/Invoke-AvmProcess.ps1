@@ -98,6 +98,9 @@ function Invoke-AvmProcess {
         $joined = if ($ArgumentList.Count -gt 0) { '{0} {1}' -f $leaf, ($ArgumentList -join ' ') } else { $leaf }
         if ($joined.Length -gt 140) { $joined.Substring(0, 137) + '...' } else { $joined }
     }
+    Write-AvmLog ('process: executable = {0}' -f $FilePath) -Level Verbose | Out-Null
+    Write-AvmLog ('process: working directory = {0}' -f $WorkingDirectory) -Level Verbose | Out-Null
+    Write-AvmLog ('process: arguments = {0}' -f ($ArgumentList -join ' | ')) -Level Verbose | Out-Null
 
     $inActions = Test-AvmGitHubActionsContext
     $narrate = [bool]$StreamOutput
@@ -282,7 +285,7 @@ function Invoke-AvmProcess {
     if ($narrate) {
         $suffix = '(exit {0}, {1})' -f $exitCode, (Format-AvmDuration -Duration $stopwatch.Elapsed)
         if ($succeeded) {
-            Write-AvmLog ('  done: {0} {1}' -f $displayLabel, $suffix) -Level Info
+            Write-AvmLog ('  done: {0} {1}' -f $displayLabel, $suffix) -Level Pass
         }
         else {
             Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Info
