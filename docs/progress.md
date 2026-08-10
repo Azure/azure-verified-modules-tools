@@ -4,8 +4,8 @@ Single source of truth for what's in flight and what's next on the `Avm.Authorin
 
 Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md), so this file stays short enough to read in one sitting.
 
-**Last updated**: 2026-08-10 — **F100 complete: ungrouped repositories retain root managed files.**
-**Active branch**: `jaredfholgate-fix-managed-files-root-fallback` (off `main`)
+**Last updated**: 2026-08-10 — **F101 complete: pr-check subprocess logging now follows verbose mode.**
+**Active branch**: `jaredfholgate-fix-pr-check-verbose-logging` (off `main`)
 
 ## Snapshot
 
@@ -21,6 +21,7 @@ Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md)
 
 ## In flight
 
+- [x] **F101 — align `avm pr-check` logging with verbose mode.** Terraform lint initialization, plugin setup, lint execution, and the validate step's Terraform initialization now keep child output captured but quiet by default; `-Verbose` and GitHub Actions debug mode (`RUNNER_DEBUG=1`) enable live output through the same gate. Dispatcher coverage pins the automatic debug-to-verbose promotion. `./build.ps1 pre-commit` is green: 839 unit passed + 7 skipped, 25 component passed.
 - [x] **F100 — keep root managed files for repositories outside every configured group.** Repository-group membership now selects overlays and exclusions instead of acting as an allow-list for managed-file sync. Inferred origin and folder repository ids continue with the shared `managed-files/root` set when no group matches; resolution fails only when no repository id can be determined. The Event Grid namespace failure shape is covered end-to-end. `./build.ps1 pre-commit` is green: 834 unit passed + 7 skipped, 25 component passed.
 - [x] **F99 — update the managed mapotf pin to 0.1.8.** The six platform hashes come from the finalized signed release and the PATH test stub remains in lockstep. The managed Windows binary completed a transform of the previously failing `Azure/terraform-azurerm-avm-res-compute-diskencryptionset` module without the heterogeneous nested-block panic. `./build.ps1 pre-commit` is green: 832 unit passed + 7 skipped, 25 component passed.
 - [x] **F98 — scan the full authoritative path chain for reserved context folders.** The F97 source-root-anchored immediate-child guard is replaced by an unconditional segment scan from the authoritative path through every filesystem ancestor. Arbitrarily deep structural/admin paths now fail before override or source detection, and docs record the accepted false-positive limitation for checkout paths whose higher ancestors use a reserved name. `./build.ps1 pre-commit` is green: 832 unit passed + 7 skipped, 25 component passed.

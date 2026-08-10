@@ -241,6 +241,7 @@ function Invoke-AvmTerraformLint {
 
     $issues = New-Object System.Collections.Generic.List[object]
     $filesProcessed = 0
+    $streamOutput = Test-AvmVerboseEnabled
 
     try {
         Write-AvmLog ("lint: staging terraform module at {0}" -f $stageRoot) -Level Verbose | Out-Null
@@ -263,7 +264,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList @('init', '-input=false') `
                 -WorkingDirectory $scope.Dir `
                 -Label ('{0}: terraform init' -f $scope.Label) `
-                -StreamOutput
+                -StreamOutput:$streamOutput
 
             if ($scope.Label -like 'examples/*') {
                 Invoke-AvmScriptHook `
@@ -280,7 +281,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
                 -IgnoreExitCode `
-                -StreamOutput `
+                -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {
                 $stderr = if ($init.StdErr) { $init.StdErr.Trim() } else { '' }
@@ -300,7 +301,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList $lintArgs `
                 -WorkingDirectory $scope.Dir `
                 -IgnoreExitCode `
-                -StreamOutput `
+                -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint' -f $scope.Label)
 
             # exit 0 = clean; 2 = issues found; anything else = tflint misbehaved.

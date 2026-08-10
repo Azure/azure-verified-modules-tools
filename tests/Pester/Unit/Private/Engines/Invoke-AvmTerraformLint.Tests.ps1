@@ -4,9 +4,14 @@
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+
+    $script:savedRunnerDebug = $env:RUNNER_DEBUG
+    $script:savedAvmVerbose = $env:AVM_VERBOSE
 }
 
 AfterAll {
+    $env:RUNNER_DEBUG = $script:savedRunnerDebug
+    $env:AVM_VERBOSE = $script:savedAvmVerbose
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
@@ -219,6 +224,8 @@ Describe 'Get-AvmTflintScope' {
 
 Describe 'Invoke-AvmTerraformLint' {
     BeforeEach {
+        $env:RUNNER_DEBUG = ''
+        $env:AVM_VERBOSE = ''
         $script:moduleDir = Join-Path $TestDrive ("tf-mod-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $script:moduleDir -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value 'variable "x" {}' -Encoding utf8
@@ -283,18 +290,21 @@ Describe 'Invoke-AvmTerraformLint' {
                 $ArgumentList.Count -eq 2 -and
                 $ArgumentList[0] -eq 'init' -and
                 $ArgumentList[1] -eq '-input=false' -and
-                $WorkingDirectory -ne $C.Root
+                $WorkingDirectory -ne $C.Root -and
+                -not [bool]$StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/tflint' -and
                 ($ArgumentList -contains '--init') -and
-                (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
+                (($ArgumentList -join '|') -like '*avm.tflint.hcl*') -and
+                -not [bool]$StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/tflint' -and
                 ($ArgumentList -contains '--format=json') -and
                 ($ArgumentList -contains '--minimum-failure-severity=warning') -and
-                (($ArgumentList -join '|') -like '*avm.tflint.hcl*')
+                (($ArgumentList -join '|') -like '*avm.tflint.hcl*') -and
+                -not [bool]$StreamOutput
             }
             $r
         }
@@ -304,6 +314,39 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
         $result.FilesProcessed | Should -Be 2
+    }
+
+    It 'streams subprocess output when <Mode> enables verbose logging' -TestCases @(
+        @{ Mode = '-Verbose'; RunnerDebug = ''; UseVerbose = $true }
+        @{ Mode = 'GitHub Actions debug mode'; RunnerDebug = '1'; UseVerbose = $false }
+    ) {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $ctx; DebugValue = $RunnerDebug; EnableVerbose = $UseVerbose
+        } {
+            param($C, $DebugValue, $EnableVerbose)
+            $env:RUNNER_DEBUG = $DebugValue
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $invokeParams = @{ Context = $C }
+            if ($EnableVerbose) {
+                $invokeParams.Verbose = $true
+            }
+            $null = Invoke-AvmTerraformLint @invokeParams
+
+            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
+                [bool]$StreamOutput
+            }
+        }
     }
 
     It 'copies a clean tree and removes the temporary lint stage' {
