@@ -98,6 +98,12 @@ section when cutting a release.
 
 ### Fixed
 
+- Terraform `avm pre-commit` now runs only convention rules with deterministic
+  fixes. It repairs singular Terraform filenames, `.gitignore`, missing
+  `_header.md` files, and a missing `tests/` directory; strict convention and
+  PR checks still enforce non-fixable requirements, including at least one
+  example subdirectory.
+
 - Real-binary Terraform integration tests keep their self-owned Windows home
   and fixture work tree under `%LOCALAPPDATA%\Avm\IntegrationTests` instead of
   `%TEMP%`, reducing Defender ML false positives against unsigned `mapotf.exe`.

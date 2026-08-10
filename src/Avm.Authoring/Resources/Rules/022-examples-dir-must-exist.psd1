@@ -1,10 +1,11 @@
 @{
     Id          = 'avm.tf.examples-dir-must-exist'
     Kind        = 'DirectoryMustExist'
-    Description = 'AVM requires an examples/ directory at the module root for per-example pre-commit and terraform-docs.'
+    Description = 'AVM requires examples/ to contain at least one example directory.'
     Severity    = 'error'
     AppliesTo   = 'root'
     Parameters  = @{
-        Path = 'examples'
+        Path                    = 'examples'
+        MinimumChildDirectories = 1
     }
 }

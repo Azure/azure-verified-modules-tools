@@ -4,8 +4,8 @@ Single source of truth for what's in flight and what's next on the `Avm.Authorin
 
 Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md), so this file stays short enough to read in one sitting.
 
-**Last updated**: 2026-08-07 — **F94 complete: pre-commit forwards managed-files overrides only to sync.**
-**Active branch**: `jaredfholgate-forward-pre-commit-sync-options` (off `main`)
+**Last updated**: 2026-08-10 — **F95 complete: pre-commit fixes only deterministic convention violations.**
+**Active branch**: `jaredfholgate-fix-precommit-conventions` (off `main`)
 
 ## Snapshot
 
@@ -21,6 +21,7 @@ Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md)
 
 ## In flight
 
+- [x] **F95 — make Terraform `avm pre-commit` run only fixable convention rules.** The composition now invokes `Invoke-AvmCheckConvention -Fix -FixableOnly`; fixability is declared by rule metadata, missing `_header.md` and `tests/` are repaired deterministically, strict checks require at least one example subdirectory, and `avm pr-check` remains read-only and complete. Unit and component regressions cover both repository-sync failures.
 - [x] **F94 — forward managed-files sync options through `avm pre-commit`.** The nine source/config/repository overrides already exposed by `Invoke-AvmSync` are now accepted by the pre-commit surface and explicitly supplied values are forwarded only to its Terraform `sync` step. Focused unit coverage pins the public parameter contract and all forwarded values; comment help plus the Terraform migration guide document remote and local-source CLI syntax.
 - [x] **F93 — make verbose logging release-ready across significant actions.** Command dispatch, context resolution, tool and pinned-asset lifecycle, network downloads, archive/cache operations, managed-file reconciliation, drift-safe transforms/docs, rule loading, hooks, dotenv parsing, path isolation, git cleanliness and staging-copy actions now emit concise `-Verbose` breadcrumbs. Logs report decisions, counts, paths and completion state without exposing environment values or duplicating child-process output.
 - [x] **F92 — refresh stale-module enforcement for every top-level `avm` invocation.** The module-lifetime Gallery cache could retain a formerly-current version after a newer release was published, allowing later commands in the same PowerShell process to bypass `AVM1050`. Each dispatcher invocation now forces one fresh lookup while same-command nested checks remain suppressed; `-Verbose` reports lookup start, discovered/latest and cached/refresh behavior, and comparison. Unit and child-process regressions model two sequential commands in one imported-module process and prove the second lookup terminates with typed `AVM1050` when a newer version appears. The typed failure retains `AVM1050` for caught callers while uncaught commands render one source-free, deliberately multiline `NotInstalled` error with installed/latest versions, both update-and-reload commands, and the restart alternative.

@@ -135,6 +135,13 @@ paths per step under `.Steps.Result.Changed`, so a caller can detect
 "docs were regenerated" from the result object instead of from an exit
 code or a `git status --porcelain` probe.
 
+Its convention step evaluates only rules with deterministic fixes. It
+renames singular Terraform files, repairs `.gitignore`, creates a missing
+`_header.md` with a folder-derived heading, and creates `tests/.gitkeep`
+when `tests/` is absent. Non-fixable conventions, including a missing
+`terraform.tf` or an `examples/` folder without an example subdirectory,
+remain strict `avm check convention` / `avm pr-check` failures.
+
 Managed-files source overrides accepted by `avm sync` can also be supplied
 to `avm pre-commit`; they are forwarded only to its initial `sync` step.
 Use the remote-source form:
@@ -171,7 +178,7 @@ through the host's own TLS trust store.
 The composition cmdlets and the exact order of engines they call:
 
 - **`avm pre-commit`** →
-  - **Terraform**: `sync` → `check convention` → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
+  - **Terraform**: `sync` → fixable `check convention` rules → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
   - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 

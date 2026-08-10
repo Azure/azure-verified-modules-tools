@@ -162,7 +162,11 @@ function Invoke-AvmPreCommit {
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
             [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync' }
-            [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
+            [pscustomobject]@{
+                Name      = 'check convention'
+                Cmdlet    = 'Invoke-AvmCheckConvention'
+                ExtraArgs = @{ Fix = $true; FixableOnly = $true }
+            }
             [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
@@ -207,6 +211,11 @@ function Invoke-AvmPreCommit {
                 Path              = $context.Root
                 Ecosystem         = $context.Ecosystem
                 AllowPathFallback = $AllowPathFallback
+            }
+            if ($def.PSObject.Properties.Name -contains 'ExtraArgs') {
+                foreach ($parameterName in $def.ExtraArgs.Keys) {
+                    $stepParameters[$parameterName] = $def.ExtraArgs[$parameterName]
+                }
             }
             if ($def.Name -eq 'sync') {
                 foreach ($parameterName in $syncParameterNames) {

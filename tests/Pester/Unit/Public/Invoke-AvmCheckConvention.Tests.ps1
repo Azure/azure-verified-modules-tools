@@ -58,13 +58,16 @@ Describe 'Invoke-AvmCheckConvention' {
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
             }
+
             Mock Invoke-AvmTerraformCheckConvention {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() }
             }
             Mock Invoke-AvmBicepCheckConvention { throw 'wrong engine' }
-            $result = Invoke-AvmCheckConvention -Path $D
+            $result = Invoke-AvmCheckConvention -Path $D -Fix -FixableOnly
             $result.Engine | Should -Be 'terraform'
-            Should -Invoke Invoke-AvmTerraformCheckConvention -Exactly 1
+            Should -Invoke Invoke-AvmTerraformCheckConvention -Exactly 1 -ParameterFilter {
+                $Fix -eq $true -and $FixableOnly -eq $true
+            }
             Should -Invoke Invoke-AvmBicepCheckConvention -Times 0 -Exactly
         }
     }

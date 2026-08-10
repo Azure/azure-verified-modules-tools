@@ -5,6 +5,7 @@
     Severity    = 'error'
     AppliesTo   = 'all'
     Parameters  = @{
-        Path = '_header.md'
+        Path               = '_header.md'
+        FixContentTemplate = '# {DirectoryTitle}'
     }
 }

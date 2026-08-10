@@ -141,8 +141,9 @@ function Test-AvmRule {
                           be combined with other scopes.
           - Parameters  : required hashtable; per-kind required keys:
               FileMustNotExist     : Path (string). Optional: FixRenameTo (string).
-              FileMustExist        : Path (string).
-              DirectoryMustExist   : Path (string).
+              FileMustExist        : Path (string). Optional: FixContentTemplate (string).
+              DirectoryMustExist   : Path (string). Optional: MinimumChildDirectories
+                                     (positive integer), FixCreateFile (leaf file name).
               GitignoreMustContain : RequiredGlobs (string[]), at least one entry.
     #>
     [CmdletBinding()]
@@ -250,11 +251,37 @@ function Test-AvmRule {
                     throw [System.Data.DataException]::new(
                         "avm-rule '$id': FileMustExist requires Parameters.Path.")
                 }
+                if ($params.ContainsKey('FixContentTemplate') -and
+                    [string]::IsNullOrWhiteSpace([string]$params.FixContentTemplate)) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': FileMustExist FixContentTemplate must not be empty when provided.")
+                }
             }
             'DirectoryMustExist' {
                 if (-not $params.ContainsKey('Path') -or [string]::IsNullOrWhiteSpace([string]$params.Path)) {
                     throw [System.Data.DataException]::new(
                         "avm-rule '$id': DirectoryMustExist requires Parameters.Path.")
+                }
+                if ($params.ContainsKey('MinimumChildDirectories')) {
+                    if ($params.MinimumChildDirectories -isnot [int] -or
+                        [int]$params.MinimumChildDirectories -lt 1) {
+                        throw [System.Data.DataException]::new(
+                            "avm-rule '$id': DirectoryMustExist MinimumChildDirectories must be a positive integer.")
+                    }
+                }
+                if ($params.ContainsKey('FixCreateFile')) {
+                    $fixCreateFile = [string]$params.FixCreateFile
+                    if ([string]::IsNullOrWhiteSpace($fixCreateFile) -or
+                        [System.IO.Path]::IsPathRooted($fixCreateFile) -or
+                        $fixCreateFile -match '[/\\]' -or
+                        $fixCreateFile -in @('.', '..')) {
+                        throw [System.Data.DataException]::new(
+                            "avm-rule '$id': DirectoryMustExist FixCreateFile must be a leaf file name.")
+                    }
+                }
+                if ($params.ContainsKey('MinimumChildDirectories') -and $params.ContainsKey('FixCreateFile')) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': DirectoryMustExist cannot combine MinimumChildDirectories with FixCreateFile.")
                 }
             }
             'GitignoreMustContain' {
@@ -277,5 +304,39 @@ function Test-AvmRule {
         }
 
         return $true
+    }
+}
+
+function Test-AvmRuleFixable {
+    <#
+    .SYNOPSIS
+        Return whether a convention rule declares a deterministic fix.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        $Rule
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    switch ($Rule.Kind) {
+        'FileMustNotExist' {
+            return $Rule.Parameters.ContainsKey('FixRenameTo')
+        }
+        'FileMustExist' {
+            return $Rule.Parameters.ContainsKey('FixContentTemplate')
+        }
+        'DirectoryMustExist' {
+            return $Rule.Parameters.ContainsKey('FixCreateFile')
+        }
+        'GitignoreMustContain' {
+            return $true
+        }
+        default {
+            return $false
+        }
     }
 }
