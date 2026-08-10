@@ -4,7 +4,7 @@ This repo is being delivered phase by phase against the plan in [`docs/avm-conso
 
 ## Read first, in this order
 
-1. **[`docs/progress.md`](docs/progress.md)** — the living checklist. Tells you what's done, what's in flight (`[~]`), what's blocked, and what to pick up next. **Always start here.** Closed work is archived in [`docs/progress-archive.md`](docs/progress-archive.md) — read that only when you need the history behind a decision.
+1. **[`docs/progress.md`](docs/progress.md)** — the stable progress protocol. **Always start here**, then read active or blocked slice files under `docs/progress/`. Closed legacy work is in [`docs/progress-archive.md`](docs/progress-archive.md).
 2. **[`docs/avm-implementation-spec.md`](docs/avm-implementation-spec.md)** — wins on implementation details (file layout, encoding, cross-OS rules, error handling, testing layers).
 3. **[`docs/avm-consolidation-plan.md`](docs/avm-consolidation-plan.md)** — wins on scope and sequencing (verb table, phase exit criteria, architecture options).
 4. **[`docs/quality-standards.md`](docs/quality-standards.md)** — cross-cutting standards and gotchas (encoding, cross-OS, subprocess, PSScriptAnalyzer + Pester traps, networking, test layers, manifest casing, error handling, commit + push protocol).
@@ -13,17 +13,17 @@ This repo is being delivered phase by phase against the plan in [`docs/avm-conso
 
 The protocol exists so that "I lost my context window" never means "I lost my place."
 
-- **Before starting a slice**, flip its checkbox in `docs/progress.md` from `[ ]` to `[~]` so the next session knows it's in flight.
-- **When you finish a slice**, flip `[~]` to `[x]`. Add a one-line note only if there's something a future reader would otherwise be surprised by (a workaround, a deferred sub-task, the commit hash).
-- **When you discover a new must-do**, add it under the right phase. Don't reshape historical items — they're the audit trail.
-- **When you hit a blocker** you can't unstick this turn, capture it under **Known issues** at the top of `docs/progress.md` with a one-line diagnosis and a candidate fix. Leave the original checkbox in `[~]`.
-- **Always** bump the `Last updated` line at the top of `docs/progress.md` when you change the file.
-- **Never delete completed items.** When a phase or workstream closes, move its items *verbatim* into [`docs/progress-archive.md`](docs/progress-archive.md) and leave a one-line summary under **Closed workstreams** in `progress.md`. Relocating preserves the audit trail; deleting destroys it.
+- **Before starting a slice**, create `docs/progress/YYYY-MM-DD-<descriptive-slug>.md` with `Status: in-progress`. Do not allocate a sequential `F###` identifier.
+- **When you finish a slice**, set its status to `complete`, finish its checklist, and record the relevant validation. Keep the file in place.
+- **When you discover a new must-do**, add it to the current slice when it is required for that outcome; otherwise create a separate slice file.
+- **When you hit a blocker** you can't unstick this turn, set the slice status to `blocked` and record a one-line diagnosis and candidate fix in that file.
+- **Avoid shared indexes.** `docs/progress.md` is the stable protocol page, not a mutable status rollup. Update only the slice file owned by the current branch unless another branch explicitly hands it over.
+- **Never delete completed slice files.** They are the audit trail. Older work from the former global checklist remains in [`docs/progress-archive.md`](docs/progress-archive.md).
 - **Commit and push after every meaningful change.** As soon as `./build.ps1 pre-commit` is green for a slice (or for a focused doc-only edit that doesn't need it), stage the change, write a Conventional-Commits message, commit, and `git push` to the active feature branch. The user explicitly opted in to this on 2026-05-18 — they want each slice landed on `origin` as it completes so a lost session never costs more than the last unpushed slice. See **Commit & push protocol** below for the exact rules.
 
 ## Commit & push protocol
 
-- **Cadence**: one commit per slice. A "slice" is the unit you just flipped from `[~]` to `[x]` in `docs/progress.md` (or a self-contained doc/refactor that doesn't have its own checkbox).
+- **Cadence**: one commit per slice. A slice is the unit recorded in one `docs/progress/` file, or a self-contained doc/refactor that does not need a tracking file.
 - **Gate**: `./build.ps1 pre-commit` must be green before you commit code changes. Doc-only commits skip the gate.
 - **Message style**: Conventional Commits.
   - `feat(<area>): …` for new behaviour (`feat(http): honour AVM_MIRROR via Resolve-AvmMirrorUrl helper`).
@@ -47,7 +47,7 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 ./build.ps1 clean        # remove out/
 ```
 
-Run `./build.ps1 pre-commit` before handing work off. If lint ever crashes with `Object reference not set to an instance of an object.`, see `docs/progress.md` Known issues — the prior recurrence was transient and bisecting per file under `src/Avm.Authoring/` was the diagnostic path.
+Run `./build.ps1 pre-commit` before handing work off. If lint ever crashes with `Object reference not set to an instance of an object.`, see `docs/quality-standards.md` — the prior recurrence was transient and bisecting per file under `src/Avm.Authoring/` was the diagnostic path.
 
 ## Repo conventions that matter
 
@@ -71,6 +71,6 @@ Read [`/memories/repo/pester-and-lint-gotchas.md`](.) (in your assistant's memor
 
 ## Branch & PR posture
 
-- **Active branch**: `feat/avm-authoring-initial` (pushed to `origin`).
-- **Default branch**: `main`, which currently has only the initial commit.
+- Work on the current worktree feature branch; do not hard-code an active branch in repository documentation.
+- **Default branch**: `main`.
 - Commit-and-push to the active feature branch after every slice (see **Commit & push protocol**). Never push to `main`. Never force-push. Never open, merge, or close a PR without explicit user instruction.

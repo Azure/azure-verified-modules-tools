@@ -336,6 +336,21 @@ Rules:
 - The CLI never creates other dotfiles or dot-folders in user repos (no `.avm-cache`, no `.avmrc`, etc.). One folder, one namespace.
 - A `.avm/.disable` sentinel makes the CLI exit `2` with a clear message: `"avm is disabled in this repository (remove .avm/.disable to re-enable)"`. This gives a clean opt-out for repos that don't want the CLI to ever touch them, even by accident.
 
+### Managed-file source layout
+
+Managed-file sources stack `<base>/root/` followed by configured overlay
+directories. A subtree below any named `<parent>/_all/` path is broadcast into
+every existing immediate child of the corresponding target parent, preserving
+the remainder of the source path. Reserved `_all` segments are expanded from
+left to right, so they can be chained for explicitly nested broadcast scopes.
+They are never copied literally and do not create missing target parents or
+child directories. A root-level `_all/` has no named parent and remains a
+literal managed path.
+
+Each source layer applies broadcast templates before concrete paths, so an
+explicit path in that layer is more specific. Later overlays still win over
+earlier layers, and exclusions are evaluated against the expanded target paths.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

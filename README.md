@@ -23,7 +23,7 @@ Import-Module Avm.Authoring
 avm version
 ```
 
-> **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. Track the slice-level status in [docs/progress.md](docs/progress.md). To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
+> **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. Find active slice records through [docs/progress.md](docs/progress.md). To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Verify the signature
 
@@ -46,7 +46,7 @@ Get-Content ./SHA256SUMS
 
 ## Learn more
 
-- [docs/progress.md](docs/progress.md) — live status checklist and single source of truth; read this first.
+- [docs/progress.md](docs/progress.md) — progress protocol and active-slice discovery; read this first.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — run the module from source, plus the build / test / lint dev loop.
 - [docs/migration-terraform.md](docs/migration-terraform.md) — migrating off `make` / `./avm` / the `azterraform` container / `porch`.
 - [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md) and [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md) — the phased plan and the engineering spec.

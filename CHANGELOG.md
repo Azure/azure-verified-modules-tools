@@ -99,6 +99,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Managed-file sources can place a subtree under `<parent>/_all/` to copy it
+  into every existing immediate child directory of any named parent. Reserved
+  `_all` segments are not written to consumer repositories, so shared files
+  such as `_footer.md` reach every terraform-docs target.
 - Managed-file sync now applies the shared `managed-files/root` set when an
   inferred repository id belongs to no configured group. Group membership only
   selects additional overlays and exclusions; resolution fails only when no
