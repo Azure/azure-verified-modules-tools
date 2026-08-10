@@ -127,6 +127,27 @@ Rules:
 - `Avm.Authoring.psm1` discovers `Public/*.ps1` and `Private/*.ps1` via `Get-ChildItem`, dot-sources them, and exports only the public set explicitly via `Export-ModuleMember -Function …`.
 - Tests mirror the source tree: `Public/Invoke-AvmPreCommit.ps1` ↔ `tests/Pester/Unit/Public/Invoke-AvmPreCommit.Tests.ps1`.
 
+### Module context contract
+
+- PWD, or explicit `-Path`, is the authoritative module root. Context
+  resolution never walks parent directories.
+- A same-root `.avm/context.psd1` override has highest precedence. An explicit
+  ecosystem that conflicts with the override is an error.
+- Without an override, direct `*.tf` source selects Terraform and direct
+  `*.bicep` source selects Bicep. `terraform.tf` distinguishes
+  `terraform-module-repo` from `terraform-module-path`; convention folders and
+  version files do not participate in detection.
+- A root containing `bicepconfig.json` and at least one
+  `avm/{res,ptn,utl}/` folder is a `bicep-monorepo`. This exception is required
+  because a supported Bicep monorepo root has no direct module source.
+- Automatic resolution throws when both ecosystems match. Explicit
+  `-Ecosystem` succeeds only when matching source exists.
+- Before source detection, reject authoritative paths that are a reserved
+  module/admin folder or its immediate child below a recognized module root:
+  `tests`, `examples`, `modules`, `.agents`, `.avm`, `.git`, `.github`,
+  `.terraform`, and `.vscode`. This check is only a rejection guard; it must
+  never return the ancestor as context.
+
 ---
 
 ## 5. PowerShell coding standards

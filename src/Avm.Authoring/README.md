@@ -69,7 +69,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 `bicep-monorepo`, `bicep-module`, `terraform-module-repo` or
 `terraform-module-path`. Resolution order, highest precedence first:
 
-1. **Committed `.avm/context.psd1` override** anywhere up the tree. Schema:
+1. **Committed `.avm/context.psd1` override** at the authoritative root. Schema:
    ```powershell
    @{
        Ecosystem = 'bicep'         # bicep | terraform   (required)
@@ -79,21 +79,18 @@ An earlier name-reservation placeholder release exported a single function, `Get
        Owner     = '@Azure/avm-core'  # optional, free-form
    }
    ```
-   The file's directory becomes `Root`. Use this when a repo's layout does
-   not match the default heuristics, or to make classification audit-friendly.
-2. **`-Ecosystem bicep|terraform|auto`** parameter (default `auto`). Forces
-   the heuristic phase to only consider rules in that ecosystem. Explicit
-   `terraform` also accepts the nearest directory containing `*.tf` before
-   `tests/` exists; `terraform.tf` plus `examples/` wins as the repo kind at
-   the same root. `auto` keeps the complete Terraform signatures. A conflict
-   between `-Ecosystem` and a `.avm/context.psd1` file throws so contributors
-   notice the disagreement instead of silently picking one.
-3. **Heuristics**: walks upward looking for the four signatures listed above
-   (Plan section 5). Module-path matches win over repo-root matches because
-   they are more specific; if both fire at the same directory, repo-root wins.
+   Use this when a repo's layout needs an explicit, audit-friendly
+   classification. A conflicting `-Ecosystem` value throws.
+2. **Direct source at the root**: `*.bicep` selects `bicep-module`; `*.tf`
+   selects Terraform. `terraform.tf` selects `terraform-module-repo`, otherwise
+   the kind is `terraform-module-path`.
+3. **Bicep monorepo signature**: `bicepconfig.json` plus at least one
+   `avm/{res,ptn,utl}/` folder.
 
-`-Path <dir>` lets the caller pin the starting directory (equivalent to the
-plan's `--module <path>` global flag).
+PWD, or explicit `-Path <dir>`, is the authoritative root. Parent directories
+are never searched. Convention folders do not participate in detection, and
+known nested/admin paths are rejected with guidance to run from the module
+root. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
 
 ## Local smoke test
 

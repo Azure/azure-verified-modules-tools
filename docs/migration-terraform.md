@@ -142,12 +142,12 @@ when `tests/` is absent. Non-fixable conventions, including a missing
 `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
-Supply `-Ecosystem terraform` when bootstrapping a repository that does not yet
-contain `tests/`. Explicit Terraform selection resolves the nearest directory
-containing `*.tf` and treats `terraform.tf` plus `examples/` as the repository
-root, allowing pre-commit to create `tests/.gitkeep`. Automatic ecosystem
-detection intentionally still requires the complete Terraform signatures, so
-arbitrary Terraform directories are not classified as AVM modules.
+Run commands from the Terraform module root, or pass that root explicitly with
+`-Path`. Direct `*.tf` source is sufficient for both automatic and explicit
+Terraform context, so `avm pre-commit -Ecosystem terraform` can create
+`tests/.gitkeep` before `tests/` exists. Context resolution does not walk parent
+directories, and `tests/`, `examples/`, and `modules/` do not participate in
+detection. Invoking from those nested folders produces a module-root error.
 
 Managed-files source overrides accepted by `avm sync` can also be supplied
 to `avm pre-commit`; they are forwarded only to its initial `sync` step.
