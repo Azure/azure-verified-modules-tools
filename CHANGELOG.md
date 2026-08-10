@@ -98,6 +98,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Explicit Terraform context selection now resolves incomplete module shapes
+  before `tests/` exists, allowing `avm pre-commit -Ecosystem terraform` to
+  create `tests/.gitkeep`. Automatic ecosystem detection remains strict.
 - Terraform `avm pre-commit` now runs only convention rules with deterministic
   fixes. It repairs singular Terraform filenames, `.gitignore`, missing
   `_header.md` files, and a missing `tests/` directory; strict convention and

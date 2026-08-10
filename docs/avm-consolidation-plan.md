@@ -199,6 +199,14 @@ Detection rules:
 3. **Terraform module repo**: `terraform.tf` plus `examples/` and `tests/` folders.
 4. **Terraform module path**: any directory containing `*.tf` files and a matching `tests/` subtree.
 
+These complete signatures apply to automatic detection. When Terraform is
+explicitly selected, the resolver supports convention bootstrapping before
+`tests/` exists: it accepts the nearest directory containing `*.tf`, while
+`terraform.tf` plus `examples/` wins as `terraform-module-repo` when both
+signatures occur at the same root. This explicit fallback lets pre-commit create
+`tests/.gitkeep` without allowing automatic detection to classify arbitrary
+Terraform directories.
+
 The resolver returns a `ModuleContext` object (kind, root path, ecosystem, scope, owner). Every verb consumes this object so they all behave identically across explicit `--module` and auto-discovery.
 
 ---

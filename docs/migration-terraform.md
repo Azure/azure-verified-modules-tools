@@ -142,6 +142,13 @@ when `tests/` is absent. Non-fixable conventions, including a missing
 `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
+Supply `-Ecosystem terraform` when bootstrapping a repository that does not yet
+contain `tests/`. Explicit Terraform selection resolves the nearest directory
+containing `*.tf` and treats `terraform.tf` plus `examples/` as the repository
+root, allowing pre-commit to create `tests/.gitkeep`. Automatic ecosystem
+detection intentionally still requires the complete Terraform signatures, so
+arbitrary Terraform directories are not classified as AVM modules.
+
 Managed-files source overrides accepted by `avm sync` can also be supplied
 to `avm pre-commit`; they are forwarded only to its initial `sync` step.
 Use the remote-source form:

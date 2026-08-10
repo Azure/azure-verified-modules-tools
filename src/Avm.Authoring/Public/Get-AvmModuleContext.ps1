@@ -20,6 +20,12 @@ function Get-AvmModuleContext {
                - terraform-module-repo: terraform.tf + examples/ + tests/.
                - terraform-module-path: any *.tf file + tests/ directory.
 
+        When -Ecosystem terraform is explicit, Terraform detection also supports
+        incomplete modules before tests/ exists. The nearest directory containing
+        *.tf is accepted, with terraform.tf + examples/ classified as
+        terraform-module-repo when both signatures occur at the same root.
+        -Ecosystem auto keeps the complete signatures above.
+
         Module-path matches take priority over repo-root matches because they
         are more specific. When a bicep module sits inside a monorepo, the
         'Scope' field is populated with 'res', 'ptn' or 'utl' parsed from the
@@ -34,10 +40,11 @@ function Get-AvmModuleContext {
 
     .PARAMETER Ecosystem
         Force the ecosystem instead of auto-detecting. One of 'auto',
-        'bicep' or 'terraform'. Defaults to 'auto'. Overrides the heuristic
-        but cannot override a committed .avm/context.psd1; a conflict
-        between -Ecosystem and the file throws AvmContextException so
-        contributors notice the disagreement instead of silently picking one.
+        'bicep' or 'terraform'. Defaults to 'auto'. Explicit 'terraform'
+        permits bootstrap detection before tests/ exists. This cannot override
+        a committed .avm/context.psd1; a conflict between -Ecosystem and the file
+        throws AvmContextException so contributors notice the disagreement
+        instead of silently picking one.
 
     .PARAMETER Json
         Emit the result as a JSON document instead of a pscustomobject.

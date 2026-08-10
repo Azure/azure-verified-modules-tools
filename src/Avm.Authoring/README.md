@@ -82,7 +82,10 @@ An earlier name-reservation placeholder release exported a single function, `Get
    The file's directory becomes `Root`. Use this when a repo's layout does
    not match the default heuristics, or to make classification audit-friendly.
 2. **`-Ecosystem bicep|terraform|auto`** parameter (default `auto`). Forces
-   the heuristic phase to only consider rules in that ecosystem. A conflict
+   the heuristic phase to only consider rules in that ecosystem. Explicit
+   `terraform` also accepts the nearest directory containing `*.tf` before
+   `tests/` exists; `terraform.tf` plus `examples/` wins as the repo kind at
+   the same root. `auto` keeps the complete Terraform signatures. A conflict
    between `-Ecosystem` and a `.avm/context.psd1` file throws so contributors
    notice the disagreement instead of silently picking one.
 3. **Heuristics**: walks upward looking for the four signatures listed above

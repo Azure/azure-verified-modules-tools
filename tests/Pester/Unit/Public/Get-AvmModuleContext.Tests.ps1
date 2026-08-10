@@ -156,6 +156,42 @@ Describe 'Get-AvmModuleContext -Ecosystem override' {
         $ctx = Get-AvmModuleContext -Path $root
         $ctx.Ecosystem | Should -Be 'terraform'
     }
+
+    It 'finds the nearest Terraform source directory without tests when explicitly selected' {
+        $root = Join-Path $TestDrive 'eco-terraform-bootstrap'
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value '# stub' -NoNewline
+        $nested = Join-Path $root 'examples/deep'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+
+        $ctx = Get-AvmModuleContext -Path $nested -Ecosystem 'terraform'
+
+        $ctx.Kind | Should -Be 'terraform-module-path'
+        $ctx.Root | Should -Be (Resolve-Path -LiteralPath $root).ProviderPath
+    }
+
+    It 'keeps automatic Terraform detection strict when tests is missing' {
+        $root = Join-Path $TestDrive 'eco-auto-incomplete'
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Value '# stub' -NoNewline
+
+        $err = $null
+        try { Get-AvmModuleContext -Path $root -Ecosystem 'auto' } catch { $err = $_.Exception }
+
+        $err | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmContextException'
+    }
+
+    It 'prefers the incomplete Terraform repo kind when forced signatures share a root' {
+        $root = Join-Path $TestDrive 'eco-terraform-repo-bootstrap'
+        New-Item -ItemType Directory -Path (Join-Path $root 'examples') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Value '# stub' -NoNewline
+
+        $ctx = Get-AvmModuleContext -Path $root -Ecosystem 'terraform'
+
+        $ctx.Kind | Should -Be 'terraform-module-repo'
+        $ctx.Root | Should -Be (Resolve-Path -LiteralPath $root).ProviderPath
+    }
 }
 
 Describe 'Get-AvmModuleContext .avm/context.psd1 override' {

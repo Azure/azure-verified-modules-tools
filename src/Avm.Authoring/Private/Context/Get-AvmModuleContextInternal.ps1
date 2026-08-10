@@ -24,9 +24,13 @@ function Get-AvmModuleContextInternal {
         Scope field gets populated from 'avm/<scope>/<name>/'.
 
         $Ecosystem filters the heuristic phase: when set to 'bicep' or
-        'terraform' we only consider rules in that ecosystem. The override
-        file phase always runs regardless because the override is intended
-        to be the final word on classification.
+        'terraform' we only consider rules in that ecosystem. Explicit
+        'terraform' also permits bootstrap detection before tests/ exists:
+        terraform.tf + examples/ remains a repo root, while the nearest
+        directory containing *.tf is a module path. Auto detection keeps the
+        complete signatures above. The override file phase always runs
+        regardless because the override is intended to be the final word on
+        classification.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -61,6 +65,7 @@ function Get-AvmModuleContextInternal {
 
     $tryBicep = $Ecosystem -in @('auto', 'bicep')
     $tryTerraform = $Ecosystem -in @('auto', 'terraform')
+    $allowIncompleteTerraform = $Ecosystem -eq 'terraform'
 
     # 2a. Try repo-root rules walking up from start.
     $dir = $start
@@ -89,7 +94,10 @@ function Get-AvmModuleContextInternal {
             $tfRoot = Join-Path $dir 'terraform.tf'
             $exDir = Join-Path $dir 'examples'
             $teDir = Join-Path $dir 'tests'
-            if ((Test-Path -LiteralPath $tfRoot) -and (Test-Path -LiteralPath $exDir -PathType Container) -and (Test-Path -LiteralPath $teDir -PathType Container)) {
+            $hasCompleteTerraformRepo = Test-Path -LiteralPath $teDir -PathType Container
+            if ((Test-Path -LiteralPath $tfRoot) -and
+                (Test-Path -LiteralPath $exDir -PathType Container) -and
+                ($hasCompleteTerraformRepo -or $allowIncompleteTerraform)) {
                 $rootHit = [pscustomobject][ordered]@{
                     Kind      = 'terraform-module-repo'
                     Root      = $dir
@@ -127,7 +135,7 @@ function Get-AvmModuleContextInternal {
         }
         if ($tryTerraform) {
             $testsDir = Join-Path $dir 'tests'
-            if (Test-Path -LiteralPath $testsDir -PathType Container) {
+            if ($allowIncompleteTerraform -or (Test-Path -LiteralPath $testsDir -PathType Container)) {
                 $tfs = Get-ChildItem -LiteralPath $dir -Filter '*.tf' -File -ErrorAction SilentlyContinue
                 if ($tfs) {
                     $pathHit = [pscustomobject][ordered]@{
@@ -175,8 +183,14 @@ function Get-AvmModuleContextInternal {
     }
 
     $hint = if ($Ecosystem -ne 'auto') { " (Ecosystem='$Ecosystem' filter applied)" } else { '' }
+    $expected = if ($Ecosystem -eq 'terraform') {
+        'Expected terraform.tf+examples or a directory containing *.tf.'
+    }
+    else {
+        'Expected one of: bicepconfig.json+avm/, terraform.tf+examples+tests, main.bicep+version.json, or *.tf+tests.'
+    }
     throw [AvmContextException]::new(
         "No Bicep or Terraform module context found starting from '$start' upward$hint. " +
-        "Expected one of: bicepconfig.json+avm/, terraform.tf+examples+tests, main.bicep+version.json, or *.tf+tests. " +
+        "$expected " +
         "To override, place a .avm/context.psd1 file at the repo root.")
 }
