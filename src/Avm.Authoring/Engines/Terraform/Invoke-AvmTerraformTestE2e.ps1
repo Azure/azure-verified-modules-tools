@@ -383,15 +383,15 @@ function New-AvmE2eIssue {
 function Test-AvmTerraformTransientError {
     <#
     .SYNOPSIS
-        Decide whether terraform output describes a transient capacity failure
+        Decide whether terraform output describes a transient availability failure
         that is worth retrying.
 
     .DESCRIPTION
         e2e deploys real infrastructure, so an apply fails intermittently on
-        region and SKU capacity rather than on a module defect. The patterns
+        region and SKU availability rather than on a module defect. The patterns
         below are matched case-insensitively against terraform's combined
-        stdout+stderr and are deliberately anchored to capacity and quota
-        wording.
+        stdout+stderr and are deliberately anchored to availability, capacity,
+        and quota wording.
 
         Broad Azure codes are excluded on purpose. 'OperationNotAllowed', for
         example, covers both quota exhaustion and 'cannot delete resource while
@@ -428,6 +428,7 @@ function Test-AvmTerraformTransientError {
         'sku_selector found no deployable VM size'
         'Allocation ?Failed'
         'results in exceeding approved'
+        'LocationNotAvailableForResourceGroup'
     )
 
     if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
