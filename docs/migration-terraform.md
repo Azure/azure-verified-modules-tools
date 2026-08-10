@@ -356,6 +356,11 @@ different config files and write to different caches.
 
 ## 9. Troubleshooting
 
+- **"An aggregate step needs more detail."** Direct verbs show their routine
+  progress by default. `avm pre-commit` and `avm pr-check` show only composition
+  step progress unless `-Verbose`, `AVM_VERBOSE=1`, or GitHub Actions runner
+  debug mode is enabled. GitHub Actions renders semantic colours automatically;
+  set `NO_COLOR` to disable them.
 - **"Subprocess output looks like mojibake on Windows."** The module
   forces `[Console]::OutputEncoding` and `$OutputEncoding` to UTF-8 on
   import (Windows only) so subprocess stdout/stderr decode cleanly.

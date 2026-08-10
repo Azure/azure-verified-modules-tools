@@ -450,6 +450,11 @@ Schema enforced by `Test-AvmPins`:
 | Pipeline output    | Structured `pscustomobject`s; the **only** data contract       |
 
 `-Verbose`, `-Debug`, and `-InformationAction` work via standard `[CmdletBinding()]`.
+Direct verbs emit routine progress narration by default. Composition verbs such
+as `avm pre-commit` and `avm pr-check` emit their step start/result lines but
+suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
+GitHub Actions runner debug mode restore all nested narration. Warnings and
+errors are never suppressed.
 
 The `avm` dispatcher renders every result carrying `Status`, including each
 composition step and nested issue, before returning or throwing. When
@@ -469,7 +474,8 @@ When a public verb is invoked with `-Json` (or via the dispatcher with `--json`)
 
 - Honour [NO_COLOR](https://no-color.org): if `$env:NO_COLOR` is set (any value), no ANSI escapes.
 - Honour `$env:CLICOLOR_FORCE=1` to force colour even when stdout is not a TTY.
-- Default: colour on iff stdout is a TTY and `NO_COLOR` is unset.
+- Default: colour on in GitHub Actions and when stdout is a TTY, provided
+  `NO_COLOR` is unset. Workflow command annotations remain free of ANSI escapes.
 
 ### Time and locale
 

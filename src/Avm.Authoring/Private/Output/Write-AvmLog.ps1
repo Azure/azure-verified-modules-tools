@@ -51,6 +51,30 @@ function Test-AvmVerboseEnabled {
     return $false
 }
 
+function Test-AvmNestedCommandContext {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    return $script:AvmNestedCommandDepth -gt 0
+}
+
+function Invoke-AvmNestedCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock] $ScriptBlock
+    )
+
+    $script:AvmNestedCommandDepth++
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $script:AvmNestedCommandDepth--
+    }
+}
+
 function Test-AvmColorEnabled {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -61,6 +85,9 @@ function Test-AvmColorEnabled {
     }
     $colorForce = [System.Environment]::GetEnvironmentVariable('CLICOLOR_FORCE')
     if (-not [string]::IsNullOrWhiteSpace($colorForce) -and $colorForce.Trim() -ne '0') {
+        return $true
+    }
+    if (Test-AvmGitHubActionsContext) {
         return $true
     }
 
@@ -193,9 +220,17 @@ function Write-AvmLog {
     }
 
     process {
+        if (
+            (Test-AvmNestedCommandContext) -and
+            $Level -in @('Info', 'Pass') -and
+            -not (Test-AvmVerboseEnabled)
+        ) {
+            return
+        }
+
         $text = if ($null -eq $Message) { '' } else { $Message }
         $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
-        $displayText = if ($actions) { $text } else { Format-AvmLogText -Text $text -Level $Level }
+        $displayText = Format-AvmLogText -Text $text -Level $Level
 
         switch ($Level) {
             'Debug' {

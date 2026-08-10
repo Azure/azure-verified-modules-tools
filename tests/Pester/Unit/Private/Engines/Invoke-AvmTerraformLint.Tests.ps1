@@ -284,6 +284,7 @@ Describe 'Invoke-AvmTerraformLint' {
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
+            Mock Write-AvmLog
             $r = Invoke-AvmTerraformLint -Context $C
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -305,6 +306,14 @@ Describe 'Invoke-AvmTerraformLint' {
                 ($ArgumentList -contains '--minimum-failure-severity=warning') -and
                 (($ArgumentList -join '|') -like '*avm.tflint.hcl*') -and
                 -not [bool]$StreamOutput
+            }
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Message -like 'lint: discovered * terraform scope(s); failure threshold = warning' -and
+                $Level -eq 'Info'
+            }
+            Should -Invoke Write-AvmLog -ParameterFilter {
+                $Message -like 'lint: scope */* = *' -and
+                $Level -eq 'Info'
             }
             $r
         }

@@ -137,11 +137,13 @@ function Invoke-AvmPrCheck {
 
         try {
             $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
-            $stepResult = & $def.Cmdlet `
-                -Path $context.Root `
-                -Ecosystem $context.Ecosystem `
-                -AllowPathFallback:$AllowPathFallback `
-                @extraArgs
+            $stepResult = Invoke-AvmNestedCommand {
+                & $def.Cmdlet `
+                    -Path $context.Root `
+                    -Ecosystem $context.Ecosystem `
+                    -AllowPathFallback:$AllowPathFallback `
+                    @extraArgs
+            }
 
             if ($stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status') {
                 $stepStatus = $stepResult.Status

@@ -30,6 +30,87 @@ Describe 'Invoke-AvmPrCheck' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPrCheck'
     }
 
+    It 'suppresses nested routine narration unless verbose or runner debug is enabled' {
+        $dir = Join-Path $TestDrive ("prcheck-output-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $saved = @{
+                Actions = $env:GITHUB_ACTIONS
+                Runner  = $env:RUNNER_DEBUG
+                Verbose = $env:AVM_VERBOSE
+            }
+            $env:GITHUB_ACTIONS = ''
+            $env:RUNNER_DEBUG = ''
+            $env:AVM_VERBOSE = ''
+            try {
+                Mock Get-AvmModuleContext {
+                    [pscustomobject]@{
+                        Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                    }
+                }
+                Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('sync is terraform-only') }
+                Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmLint {
+                    Write-AvmLog 'nested lint info' -Level Info
+                    Write-AvmLog 'nested lint pass' -Level Pass
+                    Write-AvmLog 'nested lint warning' -Level Warning
+                    [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
+                }
+                Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+
+                $defaultOutput = @(Invoke-AvmPrCheck -Path $D 3>&1 6>&1)
+
+                $verboseOutput = @(Invoke-AvmPrCheck -Path $D -Verbose 4>$null 6>&1)
+
+                $env:RUNNER_DEBUG = '1'
+                $debugOutput = @(Invoke-AvmPrCheck -Path $D 4>$null 6>&1)
+
+                [pscustomobject]@{
+                    DefaultInfo = @(
+                        $defaultOutput |
+                            Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData }
+                    )
+                    DefaultWarnings = @(
+                        $defaultOutput |
+                            Where-Object { $_ -is [System.Management.Automation.WarningRecord] } |
+                            ForEach-Object { [string]$_ }
+                    )
+                    VerboseInfo = @(
+                        $verboseOutput |
+                            Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData }
+                    )
+                    DebugInfo = @(
+                        $debugOutput |
+                            Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData }
+                    )
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:RUNNER_DEBUG = $saved.Runner
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 4/8: lint'
+        @($observed.DefaultWarnings) | Should -Contain 'nested lint warning'
+        @($observed.DefaultInfo) | Should -Not -Contain 'nested lint info'
+        @($observed.DefaultInfo) | Should -Not -Contain 'nested lint pass'
+        @($observed.VerboseInfo) | Should -Contain 'nested lint info'
+        @($observed.VerboseInfo) | Should -Contain 'nested lint pass'
+        @($observed.DebugInfo) | Should -Contain 'nested lint info'
+        @($observed.DebugInfo) | Should -Contain 'nested lint pass'
+    }
+
     It 'rejects a dirty working tree before invoking any gauntlet step' {
         $dir = Join-Path $TestDrive ("prcheck-dirty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

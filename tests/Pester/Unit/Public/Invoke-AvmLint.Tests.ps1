@@ -62,12 +62,17 @@ Describe 'Invoke-AvmLint' {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() }
             }
             Mock Invoke-AvmBicepLint { throw 'wrong engine' }
+            Mock Write-AvmLog
             Invoke-AvmLint -Path $D
         }
         $result.Engine | Should -Be 'terraform'
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmTerraformLint -Exactly 1
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Message -eq 'lint: running terraform lint engine' -and
+                $Level -eq 'Info'
+            }
         }
     }
 
