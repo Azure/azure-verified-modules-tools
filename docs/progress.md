@@ -4,8 +4,8 @@ Single source of truth for what's in flight and what's next on the `Avm.Authorin
 
 Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md), so this file stays short enough to read in one sitting.
 
-**Last updated**: 2026-08-10 — **F102 complete: guarded manual fallback uses the signed-release publication path.**
-**Active branch**: `jaredfholgate-release-workflow-dispatch` (off `main`)
+**Last updated**: 2026-08-10 — **F103 complete: convention rename fixes now reconcile existing destination files safely.**
+**Active branch**: `jaredfholgate-fix-convention-file-collisions` (off `main`)
 
 ## Snapshot
 
@@ -21,6 +21,7 @@ Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md)
 
 ## In flight
 
+- [x] **F103 — make convention rename fixes reconcile an existing destination.** When a `FileMustNotExist` rule's `FixRenameTo` destination already exists, append meaningful source content to the destination with a safe line boundary, then delete the source; whitespace-only sources are deleted without changing the destination. The primitive-level behavior covers both built-in singular Terraform filename rules (`output.tf` → `outputs.tf` and `variable.tf` → `variables.tf`) plus repo-local rules that use the same fix. Same-path rename targets are rejected. The exact reported CRLF-only `modules/virtual-network-connection/output.tf` collision passes with the source removed and the existing destination unchanged; `./build.ps1 pre-commit` passes with zero errors.
 - [x] **F102 — add a guarded `workflow_dispatch` fallback for PSGallery publication.** The required `release_tag` input and `release.released` event select one job-level tag and converge on the same trusted default-branch validation and publication path. Manual runs require an exact `vMAJOR.MINOR.PATCH` match to an existing published, non-draft, non-prerelease release; the `psgallery` environment approval, per-release concurrency, signed-asset validation, idempotence, and prohibition on rebuilds or release writes are unchanged. `./build.ps1 pre-commit` is green: 842 unit passed + 7 skipped, 25 component passed.
 - [x] **F101 — align `avm pr-check` logging with verbose mode.** Terraform lint initialization, plugin setup, lint execution, and the validate step's Terraform initialization now keep child output captured but quiet by default; `-Verbose` and GitHub Actions debug mode (`RUNNER_DEBUG=1`) enable live output through the same gate. Dispatcher coverage pins the automatic debug-to-verbose promotion. `./build.ps1 pre-commit` is green: 839 unit passed + 7 skipped, 25 component passed.
 - [x] **F100 — keep root managed files for repositories outside every configured group.** Repository-group membership now selects overlays and exclusions instead of acting as an allow-list for managed-file sync. Inferred origin and folder repository ids continue with the shared `managed-files/root` set when no group matches; resolution fails only when no repository id can be determined. The Event Grid namespace failure shape is covered end-to-end. `./build.ps1 pre-commit` is green: 834 unit passed + 7 skipped, 25 component passed.

@@ -136,10 +136,12 @@ paths per step under `.Steps.Result.Changed`, so a caller can detect
 code or a `git status --porcelain` probe.
 
 Its convention step evaluates only rules with deterministic fixes. It
-renames singular Terraform files, repairs `.gitignore`, creates a missing
-`_header.md` with a folder-derived heading, and creates `tests/.gitkeep`
-when `tests/` is absent. Non-fixable conventions, including a missing
-`terraform.tf` or an `examples/` folder without an example subdirectory,
+renames singular Terraform files; when the plural destination already exists,
+non-whitespace source content is appended before the singular file is removed,
+while a whitespace-only source is simply removed. It also repairs `.gitignore`,
+creates a missing `_header.md` with a folder-derived heading, and creates
+`tests/.gitkeep` when `tests/` is absent. Non-fixable conventions, including a
+missing `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
 Run commands from the Terraform module root, or pass that root explicitly with
