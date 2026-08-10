@@ -138,6 +138,61 @@ Describe 'Invoke-AvmProcess' {
         @($messages) | Should -Contain 'grouped-out'
     }
 
+    It 'suppresses grouped output in an aggregate command unless runner debug is enabled' {
+        $exe = $script:pwsh
+        $script = "[Console]::Out.WriteLine('nested-out')"
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; S = $script } {
+            param($E, $S)
+            $saved = @{
+                Actions = $env:GITHUB_ACTIONS
+                Runner  = $env:RUNNER_DEBUG
+                Verbose = $env:AVM_VERBOSE
+            }
+            $env:GITHUB_ACTIONS = 'true'
+            $env:RUNNER_DEBUG = ''
+            $env:AVM_VERBOSE = ''
+            try {
+                $quietMessages = @()
+                $quietResult = Invoke-AvmNestedCommand {
+                    Invoke-AvmProcess `
+                        -FilePath $E `
+                        -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                        -Label 'nested fixture' `
+                        -StreamOutput
+                } -InformationVariable quietMessages
+
+                $env:RUNNER_DEBUG = '1'
+                $debugMessages = @()
+                $debugResult = Invoke-AvmNestedCommand {
+                    Invoke-AvmProcess `
+                        -FilePath $E `
+                        -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $S) `
+                        -Label 'nested fixture' `
+                        -StreamOutput
+                } -InformationVariable debugMessages
+
+                [pscustomobject]@{
+                    QuietResult   = $quietResult
+                    QuietMessages = @($quietMessages | ForEach-Object { [string]$_.MessageData })
+                    DebugResult   = $debugResult
+                    DebugMessages = @($debugMessages | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:RUNNER_DEBUG = $saved.Runner
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+
+        $observed.QuietResult.StdOut.TrimEnd() | Should -Be 'nested-out'
+        @($observed.QuietMessages).Count | Should -Be 0
+        $observed.DebugResult.StdOut.TrimEnd() | Should -Be 'nested-out'
+        @($observed.DebugMessages) | Should -Contain '::group::nested fixture'
+        @($observed.DebugMessages) | Should -Contain 'nested-out'
+        @($observed.DebugMessages) | Should -Contain '::endgroup::'
+    }
+
     It 'leaves caller-rendered progress ungrouped under GitHub Actions' {
         $exe = $script:pwsh
         $script = "[Console]::Out.WriteLine('raw-noise')"

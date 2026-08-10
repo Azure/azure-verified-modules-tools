@@ -41,9 +41,10 @@ function Invoke-AvmProcess {
     .PARAMETER StreamOutput
         Narrate the invocation. Child output is always captured; it is emitted
         live only when verbose/debug logging is on or when running under GitHub
-        Actions (where it is wrapped in a collapsed group). Otherwise the run is
-        quiet with a periodic heartbeat, and the full captured output is
-        replayed if the process fails.
+        Actions (where it is wrapped in a collapsed group). Aggregate command
+        steps remain quiet unless verbose/debug logging is enabled. Otherwise
+        the run is quiet with a periodic heartbeat, and the full captured output
+        is replayed if the process fails.
 
     .PARAMETER Label
         Friendly name for the invocation used in narration. Defaults to the
@@ -103,7 +104,8 @@ function Invoke-AvmProcess {
     Write-AvmLog ('process: arguments = {0}' -f ($ArgumentList -join ' | ')) -Level Verbose | Out-Null
 
     $inActions = Test-AvmGitHubActionsContext
-    $narrate = [bool]$StreamOutput
+    $detailedOutput = -not (Test-AvmNestedCommandContext) -or (Test-AvmVerboseEnabled)
+    $narrate = [bool]$StreamOutput -and $detailedOutput
     $hasLineHook = $null -ne $OnStdOutLine
     $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
     $grouped = $narrate -and $inActions -and -not $hasLineHook

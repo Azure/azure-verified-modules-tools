@@ -225,7 +225,9 @@ function Invoke-AvmPreCommit {
                 }
             }
 
-            $stepResult = & $def.Cmdlet @stepParameters
+            $stepResult = Invoke-AvmNestedCommand {
+                & $def.Cmdlet @stepParameters
+            }
 
             # Engine result objects carry their own Status; format does not
             # (it has no concept of failure unless something throws).
