@@ -336,6 +336,21 @@ Rules:
 - The CLI never creates other dotfiles or dot-folders in user repos (no `.avm-cache`, no `.avmrc`, etc.). One folder, one namespace.
 - A `.avm/.disable` sentinel makes the CLI exit `2` with a clear message: `"avm is disabled in this repository (remove .avm/.disable to re-enable)"`. This gives a clean opt-out for repos that don't want the CLI to ever touch them, even by accident.
 
+### Managed-file source layout
+
+Managed-file sources stack `<base>/root/` followed by configured overlay
+directories. A subtree below any named `<parent>/_all/` path is broadcast into
+every existing immediate child of the corresponding target parent, preserving
+the remainder of the source path. Reserved `_all` segments are expanded from
+left to right, so they can be chained for explicitly nested broadcast scopes.
+They are never copied literally and do not create missing target parents or
+child directories. A root-level `_all/` has no named parent and remains a
+literal managed path.
+
+Each source layer applies broadcast templates before concrete paths, so an
+explicit path in that layer is more specific. Later overlays still win over
+earlier layers, and exclusions are evaluated against the expanded target paths.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.
@@ -450,6 +465,11 @@ Schema enforced by `Test-AvmPins`:
 | Pipeline output    | Structured `pscustomobject`s; the **only** data contract       |
 
 `-Verbose`, `-Debug`, and `-InformationAction` work via standard `[CmdletBinding()]`.
+Direct verbs emit routine progress narration by default. Composition verbs such
+as `avm pre-commit` and `avm pr-check` emit their step start/result lines but
+suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
+GitHub Actions runner debug mode restore all nested narration. Warnings and
+errors are never suppressed.
 
 The `avm` dispatcher renders every result carrying `Status`, including each
 composition step and nested issue, before returning or throwing. When
@@ -469,7 +489,8 @@ When a public verb is invoked with `-Json` (or via the dispatcher with `--json`)
 
 - Honour [NO_COLOR](https://no-color.org): if `$env:NO_COLOR` is set (any value), no ANSI escapes.
 - Honour `$env:CLICOLOR_FORCE=1` to force colour even when stdout is not a TTY.
-- Default: colour on iff stdout is a TTY and `NO_COLOR` is unset.
+- Default: colour on in GitHub Actions and when stdout is a TTY, provided
+  `NO_COLOR` is unset. Workflow command annotations remain free of ANSI escapes.
 
 ### Time and locale
 

@@ -29,6 +29,66 @@ Describe 'Invoke-AvmPreCommit' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmPreCommit'
     }
 
+    It 'suppresses nested routine narration by default and restores it in verbose mode' {
+        $dir = Join-Path $TestDrive ("precommit-output-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $saved = @{
+                Actions = $env:GITHUB_ACTIONS
+                Runner  = $env:RUNNER_DEBUG
+                Verbose = $env:AVM_VERBOSE
+            }
+            $env:GITHUB_ACTIONS = ''
+            $env:RUNNER_DEBUG = ''
+            $env:AVM_VERBOSE = ''
+            try {
+                Mock Get-AvmModuleContext {
+                    [pscustomobject]@{
+                        Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
+                    }
+                }
+                Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmLint {
+                    Write-AvmLog 'nested pre-commit info' -Level Info
+                    Write-AvmLog 'nested pre-commit pass' -Level Pass
+                    [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
+                }
+                Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+
+                $defaultOutput = @(Invoke-AvmPreCommit -Path $D 6>&1)
+
+                $verboseOutput = @(Invoke-AvmPreCommit -Path $D -Verbose 4>$null 6>&1)
+
+                [pscustomobject]@{
+                    DefaultInfo = @(
+                        $defaultOutput |
+                            Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData }
+                    )
+                    VerboseInfo = @(
+                        $verboseOutput |
+                            Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData }
+                    )
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $saved.Actions
+                $env:RUNNER_DEBUG = $saved.Runner
+                $env:AVM_VERBOSE = $saved.Verbose
+            }
+        }
+
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 2/4: lint'
+        @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit info'
+        @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit pass'
+        @($observed.VerboseInfo) | Should -Contain 'nested pre-commit info'
+        @($observed.VerboseInfo) | Should -Contain 'nested pre-commit pass'
+    }
+
     It 'accepts every managed-files sync option on the CLI surface' {
         $command = Get-Command Invoke-AvmPreCommit -Module Avm.Authoring
         foreach ($parameterName in @(

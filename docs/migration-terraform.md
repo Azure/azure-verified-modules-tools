@@ -14,9 +14,9 @@ binaries. `check convention` uses the in-module rule framework that ships
 `<root>/.avm/rules/*.psd1` extensions. The full status matrix is in
 [§ 5 Engine status](#5-engine-status) below.
 
-For the live single-source-of-truth status of every phase and slice,
-see [`docs/progress.md`](progress.md). When this guide and `progress.md`
-disagree, `progress.md` wins.
+For active delivery slices, start at [`docs/progress.md`](progress.md) and
+inspect the independent records under `docs/progress/`. The implementation spec
+and consolidation plan remain authoritative for engineering rules and scope.
 
 ---
 
@@ -185,6 +185,14 @@ overlays and exclusions: repositories absent from every group still receive the
 shared `managed-files/root` set. Set `-RepoId` only when inference cannot identify
 the repository or when an explicit override is required.
 
+Within a managed-file source, `<parent>/_all/` is a reserved broadcast subtree
+under any named parent. Its files are copied into every existing immediate child
+of the matching target parent without creating a literal `_all` directory.
+Reserved segments can be chained for nested scopes. This lets a single
+`modules/_all/_footer.md` or `examples/_all/_footer.md` govern every
+terraform-docs target while allowing the same convention in other folder trees.
+A root-level `_all/` remains literal.
+
 The container mount, `CONTAINER_RUNTIME`, `CONTAINER_IMAGE`,
 `CONTAINER_PULL_POLICY`, and the SSL-cert / `mkcert` plumbing the shim
 provides are not needed — the cmdlets call the host's own
@@ -289,8 +297,9 @@ Bicep engine).
 
 ## 6. What's not migrated yet
 
-These items are tracked in [`docs/progress.md`](progress.md) and the
-status here will lag the canonical checklist by at most one slice.
+These items are sequenced in
+[`docs/avm-consolidation-plan.md`](avm-consolidation-plan.md); active work has
+an independent record under `docs/progress/`.
 
 - **`avm format` `avmfix` chaining** — the legacy chain is
   `terraform fmt` → `avmfix`. The `avmfix` follow-up step is the same
@@ -358,6 +367,11 @@ different config files and write to different caches.
 
 ## 9. Troubleshooting
 
+- **"An aggregate step needs more detail."** Direct verbs show their routine
+  progress by default. `avm pre-commit` and `avm pr-check` show only composition
+  step progress unless `-Verbose`, `AVM_VERBOSE=1`, or GitHub Actions runner
+  debug mode is enabled. GitHub Actions renders semantic colours automatically;
+  set `NO_COLOR` to disable them.
 - **"Subprocess output looks like mojibake on Windows."** The module
   forces `[Console]::OutputEncoding` and `$OutputEncoding` to UTF-8 on
   import (Windows only) so subprocess stdout/stderr decode cleanly.
@@ -371,13 +385,13 @@ different config files and write to different caches.
 - **"PSSA `NullReferenceException` during `./build.ps1 lint`."**
   Known transient; the build wrapper retries automatically. Set
   `$env:AVM_LINT_MAX_ATTEMPTS` higher if needed. See
-  [`docs/progress.md`](progress.md) § *Known issues*.
+  [`docs/quality-standards.md`](quality-standards.md).
 
 ---
 
 ## See also
 
-- [`docs/progress.md`](progress.md) — live checklist and known issues.
+- [`docs/progress.md`](progress.md) — progress protocol and active-slice discovery.
 - [`docs/avm-implementation-spec.md`](avm-implementation-spec.md) —
   engineering rules (file layout, encoding, cross-OS, error handling,
   test layers).
