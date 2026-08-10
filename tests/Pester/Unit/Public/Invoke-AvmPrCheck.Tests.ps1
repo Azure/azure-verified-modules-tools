@@ -129,6 +129,9 @@ Describe 'Invoke-AvmPrCheck' {
             Should -Invoke Invoke-AvmFormat -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
             Should -Invoke Invoke-AvmTransform -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
             Should -Invoke Invoke-AvmDocs -Exactly 1 -ParameterFilter { $CheckDrift -eq $true }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter {
+                -not $Fix -and -not $FixableOnly
+            }
         }
     }
 

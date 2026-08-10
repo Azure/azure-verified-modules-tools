@@ -134,7 +134,9 @@ Describe 'Invoke-AvmPreCommit' {
             $r = Invoke-AvmPreCommit -Path $D
 
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'terraform' -and $Fix -eq $true -and $FixableOnly -eq $true
+            }
             Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }

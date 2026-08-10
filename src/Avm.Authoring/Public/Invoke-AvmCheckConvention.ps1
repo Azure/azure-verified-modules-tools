@@ -35,6 +35,10 @@ function Invoke-AvmCheckConvention {
         renaming output.tf to outputs.tf, appending missing globs to
         .gitignore). Without -Fix the verb is check-only.
 
+    .PARAMETER FixableOnly
+        Evaluate only rules that declare a deterministic fix. Pre-commit uses
+        this with -Fix; standalone checks and pr-check evaluate every rule.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, Issues. (When implemented.)
@@ -58,6 +62,8 @@ function Invoke-AvmCheckConvention {
 
         [switch] $Fix,
 
+        [switch] $FixableOnly,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -73,7 +79,11 @@ function Invoke-AvmCheckConvention {
             Invoke-AvmBicepCheckConvention -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformCheckConvention -Context $context -AllowPathFallback:$AllowPathFallback -Fix:$Fix
+            Invoke-AvmTerraformCheckConvention `
+                -Context $context `
+                -AllowPathFallback:$AllowPathFallback `
+                -Fix:$Fix `
+                -FixableOnly:$FixableOnly
         }
         default {
             throw [AvmContextException]::new(

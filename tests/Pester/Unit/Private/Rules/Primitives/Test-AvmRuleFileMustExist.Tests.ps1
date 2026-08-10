@@ -49,7 +49,7 @@ Describe 'Test-AvmRuleFileMustExist primitive' {
         $result.Issues[0].Message | Should -Match "Required file 'terraform.tf'"
     }
 
-    It 'never creates the file even when -Fix is set (no silent stub materialisation)' {
+    It 'does not create the file with -Fix when the rule declares no fix' {
         $rule = InModuleScope 'Avm.Authoring' {
             New-AvmRule -Definition @{
                 Id          = 'avm.test.terraform-tf-exists'
@@ -64,6 +64,33 @@ Describe 'Test-AvmRuleFileMustExist primitive' {
         }
         $result.Status | Should -Be 'fail'
         Test-Path -LiteralPath (Join-Path $script:tmp 'terraform.tf') | Should -BeFalse
+    }
+
+    It 'creates a UTF-8 no-BOM file from the declared content template' {
+        $target = Join-Path $script:tmp 'azure-identity'
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.header-md'
+                Kind        = 'FileMustExist'
+                Description = '_header.md must exist'
+                Parameters  = @{
+                    Path               = '_header.md'
+                    FixContentTemplate = '# {DirectoryTitle}'
+                }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $target } {
+            param($R, $T)
+            Test-AvmRuleFileMustExist -Rule $R -TargetRoot $T -Fix
+        }
+
+        $headerPath = Join-Path $target '_header.md'
+        $result.Status | Should -Be 'fixed'
+        $result.FilesChanged | Should -Be 1
+        $headerPath | Should -Exist
+        [System.IO.File]::ReadAllText($headerPath) | Should -Be "# Azure Identity`n"
+        [System.IO.File]::ReadAllBytes($headerPath)[0] | Should -Not -Be 0xEF
     }
 
     It 'propagates the rule Severity into the emitted Issue' {
