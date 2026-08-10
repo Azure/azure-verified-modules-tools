@@ -98,9 +98,29 @@ Describe 'Release workflow' {
         $script:release = Get-Content -LiteralPath $releasePath -Raw
     }
 
-    It 'runs when ADO promotes a prerelease to a full release' {
+    It 'runs on ADO promotion and has a required manual release-tag fallback' {
         $script:release | Should -Match '(?m)^\s+types: \[released\]\r?$'
-        $script:release | Should -Not -Match 'workflow_dispatch'
+        $script:release | Should -Match '(?m)^  workflow_dispatch:\r?$'
+        $script:release | Should -Match '(?ms)^      release_tag:\r?\n' +
+            '        description: .+\r?\n' +
+            '        required: true\r?\n' +
+            '        type: string\r?$'
+    }
+
+    It 'converges both triggers on one selected release tag' {
+        $selector = [regex]::Escape(
+            '${{ github.event_name == ''release'' && github.event.release.tag_name || inputs.release_tag }}'
+        )
+        ([regex]::Matches($script:release, $selector)).Count | Should -Be 3
+        ([regex]::Matches($script:release, '(?m)^\s+RELEASE_TAG:')).Count | Should -Be 1
+    }
+
+    It 'accepts only an existing published full release with the exact selected tag' {
+        $script:release | Should -Match '--json tagName,isDraft,isPrerelease,publishedAt'
+        $script:release | Should -Match '\$release\.tagName -cne \$env:RELEASE_TAG'
+        $script:release | Should -Match '\$release\.isDraft -or'
+        $script:release | Should -Match '\$release\.isPrerelease -or'
+        $script:release | Should -Match '\$release\.publishedAt'
     }
 
     It 'checks out trusted default-branch publisher code' {
@@ -110,6 +130,12 @@ Describe 'Release workflow' {
     It 'downloads release assets and delegates publication to the validated script' {
         $script:release | Should -Match 'gh release download'
         $script:release | Should -Match '\./scripts/Publish-AvmAuthoring\.ps1'
+    }
+
+    It 'preserves environment approval and per-release concurrency' {
+        $script:release | Should -Match '(?m)^\s+environment: psgallery\r?$'
+        $script:release | Should -Match '(?m)^\s+group: psgallery-\$\{\{'
+        $script:release | Should -Match '(?m)^\s+cancel-in-progress: false\r?$'
     }
 
     It 'does not rebuild, upload, create, edit, or promote the release' {

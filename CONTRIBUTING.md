@@ -203,6 +203,8 @@ The ADO pipeline never creates a release and never writes a release body, so a m
 
 ADO owns staging, release-note stamping, signing, signature verification and packaging scripts. This repo owns only `scripts/Publish-AvmAuthoring.ps1`: GitHub checks it out from the default branch rather than the release tag before exposing `POWERSHELL_GALLERY_API_KEY`. The script verifies the checksum, archive shape, exact module casing, manifest version and signature blocks, and `-SkipIfAlreadyPublished` makes a re-run safe.
 
+If the promotion event is missed or the GitHub job needs a safe retry, manually run **Publish signed release** with the exact `vX.Y.Z` tag. The fallback accepts only an existing published, non-draft, non-prerelease release and then uses the same environment approval, signed-asset validation and publication path as the promotion event.
+
 To preview locally what the pipeline will stage:
 
 ```pwsh
