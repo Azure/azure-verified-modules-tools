@@ -74,6 +74,33 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
         Test-Path (Join-Path $fx.ModuleDir 'SECURITY.md') | Should -BeTrue
     }
 
+    It 'broadcasts _all templates through the public verb without creating a literal _all folder' {
+        $fx = script:New-SyncFixture -Name 'broadcast'
+        $moduleAll = Join-Path (Join-Path $fx.Root 'modules') '_all'
+        $exampleAll = Join-Path (Join-Path $fx.Root 'examples') '_all'
+        $null = New-Item -ItemType Directory -Path $moduleAll -Force
+        $null = New-Item -ItemType Directory -Path $exampleAll -Force
+        Set-Content -LiteralPath (Join-Path $moduleAll '_footer.md') -Value "module footer`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $exampleAll '_footer.md') -Value "example footer`n" -NoNewline
+
+        foreach ($relativeDir in @('modules/one', 'modules/two', 'examples/default')) {
+            $null = New-Item -ItemType Directory -Path (Join-Path $fx.ModuleDir $relativeDir) -Force
+        }
+
+        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base
+
+        $result.PSObject.Properties['Status'].Value         | Should -Be 'pass'
+        $result.PSObject.Properties['FilesProcessed'].Value | Should -Be 5
+        @($result.PSObject.Properties['Added'].Value)        | Should -Contain 'modules/one/_footer.md'
+        @($result.PSObject.Properties['Added'].Value)        | Should -Contain 'modules/two/_footer.md'
+        @($result.PSObject.Properties['Added'].Value)        | Should -Contain 'examples/default/_footer.md'
+        Test-Path (Join-Path $fx.ModuleDir 'modules/one/_footer.md')     | Should -BeTrue
+        Test-Path (Join-Path $fx.ModuleDir 'modules/two/_footer.md')     | Should -BeTrue
+        Test-Path (Join-Path $fx.ModuleDir 'examples/default/_footer.md') | Should -BeTrue
+        Test-Path (Join-Path $fx.ModuleDir 'modules/_all')               | Should -BeFalse
+        Test-Path (Join-Path $fx.ModuleDir 'examples/_all')              | Should -BeFalse
+    }
+
     It 'reports drift as a failing status without writing when -CheckDrift is set' {
         $fx = script:New-SyncFixture -Name 'drift'
 

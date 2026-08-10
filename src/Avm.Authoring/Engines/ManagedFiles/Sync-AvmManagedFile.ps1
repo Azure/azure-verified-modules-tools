@@ -27,12 +27,14 @@ function Sync-AvmManagedFile {
 
         The managed-file map is built from '<base>/root' plus zero or more
         overlays ('<base>/<overlay>') stacked in declaration order, where later
-        sources win, minus any excluded paths. Overlays and exclusions are
-        resolved from the config
-        folder's 'config.json' by matching the repository id against
-        'repositoryGroups'. 'deprecated-files.json' lists paths that must be
-        removed from every target repo; deprecated removals win over managed
-        adds when both name the same path.
+        sources win, minus any excluded paths. A source subtree at
+        'modules/_all/' or 'examples/_all/' is broadcast into every existing
+        immediate child of the matching target folder; the reserved '_all'
+        segment is never copied literally. Overlays and exclusions are resolved
+        from the config folder's 'config.json' by matching the repository id
+        against 'repositoryGroups'. 'deprecated-files.json' lists paths that
+        must be removed from every target repo; deprecated removals win over
+        managed adds when both name the same path.
 
         For each desired managed file the engine computes git's blob SHA-1 over
         the source bytes and compares it (plus the git index mode) with the
@@ -191,6 +193,7 @@ function Sync-AvmManagedFile {
 
     $map = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
+        -TargetRoot $root `
         -Overlays $overlays `
         -Excluded $excluded `
         -RepoId $repoId `
@@ -823,6 +826,47 @@ function Get-AvmGitIndexMode {
     return $modeMap
 }
 
+function Resolve-AvmManagedFileTargetPath {
+    <#
+    .SYNOPSIS
+        Resolve a managed source path to its concrete repository target paths.
+
+    .DESCRIPTION
+        Paths below the reserved 'modules/_all/' and 'examples/_all/' source
+        subtrees are broadcast into each existing immediate child directory of
+        the corresponding target folder. All other paths are returned unchanged.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RelativePath,
+
+        [Parameter(Mandatory)]
+        [string] $TargetRoot
+    )
+
+    $broadcast = [System.Text.RegularExpressions.Regex]::Match(
+        $RelativePath,
+        '^(modules|examples)/_all/(.+)$',
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $broadcast.Success) {
+        return $RelativePath
+    }
+
+    $groupName = $broadcast.Groups[1].Value
+    $suffix = $broadcast.Groups[2].Value
+    $groupRoot = Join-Path $TargetRoot $groupName
+    if (-not (Test-Path -LiteralPath $groupRoot -PathType Container)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $groupRoot -Directory -Force |
+        Where-Object { $_.Name -cne '_all' } |
+        Sort-Object -Property Name |
+        ForEach-Object { "$groupName/$($_.Name)/$suffix" }
+}
+
 function Add-AvmManagedFilesFromDir {
     <#
     .SYNOPSIS
@@ -839,6 +883,9 @@ function Add-AvmManagedFilesFromDir {
 
         [Parameter(Mandatory)]
         [hashtable] $Map,
+
+        [Parameter(Mandatory)]
+        [string] $TargetRoot,
 
         [string] $GitPath
     )
@@ -857,23 +904,40 @@ function Add-AvmManagedFilesFromDir {
     $lineSpecName = Get-AvmManagedLineSpecFileName
 
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
-    Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
-        # '.gitkeep' files exist only to keep otherwise-empty overlay
-        # directories tracked in git. They are placeholders, never real managed
-        # content, so they must not be synced into target repos. The upstream
-        # avm-terraform-governance sync applies the same filter; omitting it
-        # here would make every drift check demand a file the sync never writes.
-        # The line-managed-file spec is tooling metadata consumed separately, so
-        # it is filtered here for the same reason.
-        $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
-    } | ForEach-Object {
-        $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
-        $absoluteSource = $_.FullName -replace '\\', '/'
-        $mode = $modeMap[$relativePath]
-        if (-not $mode) { $mode = '100644' }
-        $Map[$relativePath] = @{
-            Source = $absoluteSource
-            Mode   = $mode
+    $sourceFiles = @(
+        Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
+            # '.gitkeep' files exist only to keep otherwise-empty overlay
+            # directories tracked in git. They are placeholders, never real managed
+            # content, so they must not be synced into target repos. The upstream
+            # avm-terraform-governance sync applies the same filter; omitting it
+            # here would make every drift check demand a file the sync never writes.
+            # The line-managed-file spec is tooling metadata consumed separately, so
+            # it is filtered here for the same reason.
+            $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
+        } | ForEach-Object {
+            $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
+            $mode = $modeMap[$relativePath]
+            if (-not $mode) { $mode = '100644' }
+            [pscustomobject]@{
+                RelativePath = $relativePath
+                Source       = $_.FullName -replace '\\', '/'
+                Mode         = $mode
+                IsBroadcast  = $relativePath -cmatch '^(modules|examples)/_all/.+'
+            }
+        }
+    )
+
+    # Broadcast templates are applied before literal paths from the same source,
+    # so a concrete path remains the more-specific override. Build calls this
+    # helper once per source in precedence order, preserving overlay wins.
+    $broadcastFiles = @($sourceFiles | Where-Object { $_.IsBroadcast } | Sort-Object -Property RelativePath)
+    $literalFiles = @($sourceFiles | Where-Object { -not $_.IsBroadcast } | Sort-Object -Property RelativePath)
+    foreach ($sourceFile in @($broadcastFiles + $literalFiles)) {
+        foreach ($targetPath in @(Resolve-AvmManagedFileTargetPath -RelativePath $sourceFile.RelativePath -TargetRoot $TargetRoot)) {
+            $Map[$targetPath] = @{
+                Source = $sourceFile.Source
+                Mode   = $sourceFile.Mode
+            }
         }
     }
 }
@@ -899,6 +963,9 @@ function Build-AvmManagedFilesMap {
         [Parameter(Mandatory)]
         [string] $BaseDir,
 
+        [Parameter(Mandatory)]
+        [string] $TargetRoot,
+
         [string[]] $Overlays = @(),
 
         [string[]] $Excluded = @(),
@@ -911,16 +978,18 @@ function Build-AvmManagedFilesMap {
     $rootDir = Join-Path $BaseDir 'root'
 
     $map = @{}
-    Add-AvmManagedFilesFromDir -BaseDir $rootDir -Map $map -GitPath $GitPath
+    Add-AvmManagedFilesFromDir -BaseDir $rootDir -Map $map -TargetRoot $TargetRoot -GitPath $GitPath
     foreach ($overlay in $Overlays) {
         if ([string]::IsNullOrWhiteSpace($overlay)) { continue }
-        Add-AvmManagedFilesFromDir -BaseDir (Join-Path $BaseDir $overlay) -Map $map -GitPath $GitPath
+        Add-AvmManagedFilesFromDir -BaseDir (Join-Path $BaseDir $overlay) -Map $map -TargetRoot $TargetRoot -GitPath $GitPath
     }
 
     foreach ($excludedPath in $Excluded) {
-        if ($map.ContainsKey($excludedPath)) {
-            $map.Remove($excludedPath) | Out-Null
-            Write-AvmLog "Excluded managed file from sync: $excludedPath" -Level Verbose
+        foreach ($resolvedExcludedPath in @(Resolve-AvmManagedFileTargetPath -RelativePath $excludedPath -TargetRoot $TargetRoot)) {
+            if ($map.ContainsKey($resolvedExcludedPath)) {
+                $map.Remove($resolvedExcludedPath) | Out-Null
+                Write-AvmLog "Excluded managed file from sync: $resolvedExcludedPath" -Level Verbose
+            }
         }
     }
 

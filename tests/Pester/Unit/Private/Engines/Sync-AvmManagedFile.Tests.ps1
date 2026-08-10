@@ -66,6 +66,84 @@ Describe 'Sync-AvmManagedFile' {
         Test-Path (Join-Path $script:moduleDir 'SECURITY.md') | Should -BeTrue
     }
 
+    It 'broadcasts reserved _all subtrees to immediate module and example children' {
+        $moduleAll = Join-Path (Join-Path $script:root 'modules') '_all'
+        $exampleAll = Join-Path (Join-Path $script:root 'examples') '_all'
+        New-Item -ItemType Directory -Path $moduleAll -Force | Out-Null
+        New-Item -ItemType Directory -Path $exampleAll -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleAll '_footer.md') -Value "module footer`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $exampleAll '_footer.md') -Value "example footer`n" -NoNewline
+
+        foreach ($relativeDir in @('modules/alpha', 'modules/beta', 'modules/alpha/nested', 'examples/default')) {
+            New-Item -ItemType Directory -Path (Join-Path $script:moduleDir $relativeDir) -Force | Out-Null
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+            param($C, $B)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B
+        }
+
+        $result.Status         | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 3
+        $result.Added          | Should -Be @(
+            'examples/default/_footer.md',
+            'modules/alpha/_footer.md',
+            'modules/beta/_footer.md'
+        )
+
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/alpha/_footer.md')).Trim() | Should -Be 'module footer'
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/beta/_footer.md')).Trim() | Should -Be 'module footer'
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'examples/default/_footer.md')).Trim() | Should -Be 'example footer'
+        Test-Path (Join-Path $script:moduleDir 'modules/alpha/nested/_footer.md') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'modules/_all') | Should -BeFalse
+        Test-Path (Join-Path $script:moduleDir 'examples/_all') | Should -BeFalse
+    }
+
+    It 'preserves overlay, concrete-path, and exclusion precedence after _all expansion' {
+        $rootModuleAll = Join-Path (Join-Path $script:root 'modules') '_all'
+        $rootAlpha = Join-Path (Join-Path $script:root 'modules') 'alpha'
+        New-Item -ItemType Directory -Path $rootModuleAll -Force | Out-Null
+        New-Item -ItemType Directory -Path $rootAlpha -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $rootModuleAll '_footer.md') -Value "root broadcast`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $rootAlpha '_footer.md') -Value "root alpha`n" -NoNewline
+
+        $canary = Join-Path $script:base 'canary'
+        $canaryModuleAll = Join-Path (Join-Path $canary 'modules') '_all'
+        $canaryBeta = Join-Path (Join-Path $canary 'modules') 'beta'
+        New-Item -ItemType Directory -Path $canaryModuleAll -Force | Out-Null
+        New-Item -ItemType Directory -Path $canaryBeta -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $canaryModuleAll '_footer.md') -Value "canary broadcast`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $canaryBeta '_footer.md') -Value "canary beta`n" -NoNewline
+
+        foreach ($relativeDir in @('modules/alpha', 'modules/beta', 'modules/gamma')) {
+            New-Item -ItemType Directory -Path (Join-Path $script:moduleDir $relativeDir) -Force | Out-Null
+        }
+
+        $cfg = Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $cfg -Force | Out-Null
+        $config = @{ repositoryGroups = @(
+                @{
+                    name                 = 'canary'
+                    managedFilesAdditional = 'canary'
+                    repositories         = @('avm-res-foo')
+                    excludedManagedFiles = @('modules/gamma/_footer.md')
+                }
+            ) } | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath (Join-Path $cfg 'config.json') -Value $config -NoNewline
+        Set-Content -LiteralPath (Join-Path $cfg 'deprecated-files.json') -Value '[]' -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Be @('modules/alpha/_footer.md', 'modules/beta/_footer.md')
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/alpha/_footer.md')).Trim() | Should -Be 'canary broadcast'
+        (Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir 'modules/beta/_footer.md')).Trim() | Should -Be 'canary beta'
+        Test-Path (Join-Path $script:moduleDir 'modules/gamma/_footer.md') | Should -BeFalse
+    }
+
     It 'is a no-op on a second run with no changes' {
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "*.tfstate`n" -NoNewline
 

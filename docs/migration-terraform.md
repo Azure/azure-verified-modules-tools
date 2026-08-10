@@ -183,6 +183,12 @@ overlays and exclusions: repositories absent from every group still receive the
 shared `managed-files/root` set. Set `-RepoId` only when inference cannot identify
 the repository or when an explicit override is required.
 
+Within a managed-file source, `modules/_all/` and `examples/_all/` are reserved
+broadcast subtrees. Their files are copied into every existing immediate child
+of the matching folder without creating a literal `_all` directory. This lets a
+single `modules/_all/_footer.md` or `examples/_all/_footer.md` govern every
+terraform-docs target.
+
 The container mount, `CONTAINER_RUNTIME`, `CONTAINER_IMAGE`,
 `CONTAINER_PULL_POLICY`, and the SSL-cert / `mkcert` plumbing the shim
 provides are not needed — the cmdlets call the host's own
