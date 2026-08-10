@@ -142,6 +142,16 @@ when `tests/` is absent. Non-fixable conventions, including a missing
 `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
+Run commands from the Terraform module root, or pass that root explicitly with
+`-Path`. Direct `*.tf` source is sufficient for both automatic and explicit
+Terraform context, so `avm pre-commit -Ecosystem terraform` can create
+`tests/.gitkeep` before `tests/` exists. Context resolution does not walk parent
+directories, and `tests/`, `examples/`, and `modules/` do not participate in
+detection. Invoking at any depth below those folders produces a module-root
+error. The same full-path guard applies to administrative folder names, so a
+checkout under a higher `tests`, `examples`, or other reserved ancestor is also
+rejected until the checkout is moved.
+
 Managed-files source overrides accepted by `avm sync` can also be supplied
 to `avm pre-commit`; they are forwarded only to its initial `sync` step.
 Use the remote-source form:

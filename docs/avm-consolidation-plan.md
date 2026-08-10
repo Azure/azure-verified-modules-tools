@@ -184,22 +184,43 @@ The `avm` command is an exported function of the module; PowerShell 7's module a
 
 Both surfaces call the same single implementation per verb. Cmdlets are auto-generated from the verb registry so they stay in lock-step with the dispatcher.
 
-The context resolver (§6) means commands work without explicit arguments when run from inside a module — `avm pre-commit` infers the module path, ecosystem, and scope from the current directory.
+The context resolver (§5) means commands work without explicit arguments when run from a module root — `avm pre-commit` infers the ecosystem and scope from the current directory.
 
 ---
 
 ## 5. Repo / context resolver
 
-A single discovery layer replaces both `Get-ModuleList.ps1` and Porch's example walker.
+A single context layer gives every verb the same authoritative module root:
+PWD by default, or explicit `--module` / `-Path`. It never walks parent
+directories to discover an enclosing module or override.
 
-Detection rules:
+Resolution order:
 
-1. **Bicep monorepo**: `bicepconfig.json` at root and `avm/{res,ptn,utl}/` folders present.
-2. **Bicep module path**: any directory containing `main.bicep` and `version.json`.
-3. **Terraform module repo**: `terraform.tf` plus `examples/` and `tests/` folders.
-4. **Terraform module path**: any directory containing `*.tf` files and a matching `tests/` subtree.
+1. **Same-root override**: `.avm/context.psd1` at the authoritative root.
+2. **Direct source**: any direct `*.bicep` file selects `bicep-module`; any
+   direct `*.tf` file selects Terraform. A direct `terraform.tf` classifies the
+   root as `terraform-module-repo`; other Terraform source roots are
+   `terraform-module-path`.
+3. **Bicep monorepo**: `bicepconfig.json` at the authoritative root plus at
+   least one `avm/{res,ptn,utl}/` folder. This is the only source-free shape
+   because supported Bicep monorepo roots do not contain direct module source.
 
-The resolver returns a `ModuleContext` object (kind, root path, ecosystem, scope, owner). Every verb consumes this object so they all behave identically across explicit `--module` and auto-discovery.
+Convention folders such as `tests/`, `examples/`, and `modules/` never
+participate in detection. Before override or source detection, the resolver
+scans the authoritative path and every ancestor segment for those names and
+for `.agents/`, `.avm/`, `.git/`, `.github/`, `.terraform/`, and `.vscode/`.
+Any match is rejected. This prevents arbitrarily deep nested source files from
+becoming accidental module roots. The deliberately strict scan can also reject
+an otherwise valid checkout whose higher filesystem path uses a reserved name.
+
+Automatic detection throws when both ecosystems have matching source
+signatures. Explicit `--ecosystem bicep|terraform` selects only an ecosystem
+with matching source; it cannot contradict a same-root override.
+
+The resolver returns a `ModuleContext` object (kind, root path, ecosystem,
+scope, owner). Every verb consumes this object so direct cmdlets and nested
+pre-commit steps resolve consistently before convention fixes create missing
+folders such as `tests/`.
 
 ---
 

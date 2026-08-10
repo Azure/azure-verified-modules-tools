@@ -1,215 +1,271 @@
-#Requires -Version 7.4
-#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
+Describe 'Get-AvmModuleContext' {
+    BeforeAll {
+        $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring')
+        Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    }
 
-BeforeAll {
-    $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring')
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    AfterAll {
+        Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+    }
 
-    function script:New-BicepMonorepo {
-        param([Parameter(Mandatory)] [string] $Root)
-        New-Item -ItemType Directory -Path $Root -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $Root 'bicepconfig.json') -Value '{}' -NoNewline
-        foreach ($scope in @('res', 'ptn', 'utl')) {
-            New-Item -ItemType Directory -Path (Join-Path (Join-Path $Root 'avm') $scope) -Force | Out-Null
+    BeforeEach {
+        $script:testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-context-' + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:testRoot -Force | Out-Null
+    }
+
+    AfterEach {
+        if (Test-Path -LiteralPath $script:testRoot) {
+            Remove-Item -LiteralPath $script:testRoot -Recurse -Force
         }
     }
 
-    function script:New-BicepModule {
-        param([Parameter(Mandatory)] [string] $Root)
-        New-Item -ItemType Directory -Path $Root -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $Root 'main.bicep') -Value '// stub' -NoNewline
-        Set-Content -LiteralPath (Join-Path $Root 'version.json') -Value '{"version":"0.1"}' -NoNewline
+    It 'detects a Bicep monorepo at the authoritative root' {
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot 'avm' 'res') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'bicepconfig.json') -Value '{}'
+
+        $context = Get-AvmModuleContext -Path $script:testRoot
+
+        $context.Kind | Should -Be 'bicep-monorepo'
+        $context.Root | Should -Be $script:testRoot
+        $context.Ecosystem | Should -Be 'bicep'
+        $context.Scope | Should -BeNullOrEmpty
     }
 
-    function script:New-TerraformRepo {
-        param([Parameter(Mandatory)] [string] $Root)
-        New-Item -ItemType Directory -Path $Root -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $Root 'terraform.tf') -Value '# stub' -NoNewline
-        New-Item -ItemType Directory -Path (Join-Path $Root 'examples') -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $Root 'tests') -Force | Out-Null
+    It 'detects direct Bicep source without version.json' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.bicep') -Value 'param name string'
+
+        $context = Get-AvmModuleContext -Path $script:testRoot
+
+        $context.Kind | Should -Be 'bicep-module'
+        $context.Root | Should -Be $script:testRoot
+        $context.Ecosystem | Should -Be 'bicep'
     }
 
-    function script:New-TerraformModulePath {
-        param([Parameter(Mandatory)] [string] $Root)
-        New-Item -ItemType Directory -Path $Root -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $Root 'main.tf') -Value '# stub' -NoNewline
-        New-Item -ItemType Directory -Path (Join-Path $Root 'tests') -Force | Out-Null
+    It 'derives Bicep scope without changing the authoritative root' {
+        $moduleRoot = Join-Path $script:testRoot 'avm' 'res' 'network' 'virtual-network'
+        New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleRoot 'main.bicep') -Value 'param name string'
+
+        $context = Get-AvmModuleContext -Path $moduleRoot
+
+        $context.Kind | Should -Be 'bicep-module'
+        $context.Root | Should -Be $moduleRoot
+        $context.Scope | Should -Be 'res'
     }
+
+    It 'detects a Terraform repository from terraform.tf without convention folders' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
+
+        $context = Get-AvmModuleContext -Path $script:testRoot
+
+        $context.Kind | Should -Be 'terraform-module-repo'
+        $context.Root | Should -Be $script:testRoot
+        $context.Ecosystem | Should -Be 'terraform'
+    }
+
+    It 'detects a Terraform module path from direct source without tests' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+
+        $context = Get-AvmModuleContext -Path $script:testRoot
+
+        $context.Kind | Should -Be 'terraform-module-path'
+        $context.Root | Should -Be $script:testRoot
+        $context.Ecosystem | Should -Be 'terraform'
+    }
+
+    It 'does not use convention folders to select the Terraform kind' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot 'examples') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot 'tests') -Force | Out-Null
+
+        (Get-AvmModuleContext -Path $script:testRoot).Kind | Should -Be 'terraform-module-path'
+    }
+
+    It 'uses the current directory as the authoritative root by default' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+        Push-Location $script:testRoot
+        try {
+            (Get-AvmModuleContext).Root | Should -Be $script:testRoot
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    It 'does not discover source from a parent directory' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
+        $child = Join-Path $script:testRoot 'src'
+        New-Item -ItemType Directory -Path $child | Out-Null
+
+        { Get-AvmModuleContext -Path $child } |
+            Should -Throw -ExpectedMessage '*authoritative module root*'
+    }
+
+    It 'does not allow a parent override to hijack a nested source root' {
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot '.avm') | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:testRoot '.avm' 'context.psd1') -Value @'
+@{
+    Ecosystem = 'bicep'
+    Kind = 'bicep-monorepo'
 }
+'@
+        $child = Join-Path $script:testRoot 'standalone'
+        New-Item -ItemType Directory -Path $child | Out-Null
+        Set-Content -LiteralPath (Join-Path $child 'main.tf') -Value 'resource "null_resource" "example" {}'
 
-AfterAll {
-    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+        $context = Get-AvmModuleContext -Path $child
+
+        $context.Ecosystem | Should -Be 'terraform'
+        $context.Root | Should -Be $child
+    }
+
+    It 'honours a same-root override before source detection' {
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot '.avm') | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:testRoot '.avm' 'context.psd1') -Value @'
+@{
+    Ecosystem = 'bicep'
+    Kind = 'bicep-monorepo'
+    Scope = 'res'
+    Owner = '@Azure/avm-core'
 }
+'@
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
 
-Describe 'Get-AvmModuleContext' {
-    It 'identifies a bicep monorepo at the root' {
-        $root = Join-Path $TestDrive 'bm-1'
-        script:New-BicepMonorepo -Root $root
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Kind | Should -Be 'bicep-monorepo'
-        $ctx.Ecosystem | Should -Be 'bicep'
-        $ctx.Scope | Should -BeNullOrEmpty
+        $context = Get-AvmModuleContext -Path $script:testRoot
+
+        $context.Kind | Should -Be 'bicep-monorepo'
+        $context.Root | Should -Be $script:testRoot
+        $context.Scope | Should -Be 'res'
+        $context.Owner | Should -Be '@Azure/avm-core'
     }
 
-    It 'identifies a bicep module path standalone' {
-        $root = Join-Path $TestDrive 'bm-2'
-        script:New-BicepModule -Root $root
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Kind | Should -Be 'bicep-module'
-        $ctx.Ecosystem | Should -Be 'bicep'
-        $ctx.Scope | Should -BeNullOrEmpty
-    }
-
-    It 'identifies a bicep module inside a monorepo and infers Scope from avm/res' {
-        $repo = Join-Path $TestDrive 'bm-3'
-        script:New-BicepMonorepo -Root $repo
-        $modPath = Join-Path (Join-Path (Join-Path $repo 'avm') 'res') 'storage-account'
-        script:New-BicepModule -Root $modPath
-        $ctx = Get-AvmModuleContext -Path $modPath
-        $ctx.Kind | Should -Be 'bicep-module'
-        $ctx.Scope | Should -Be 'res'
-    }
-
-    It 'identifies a terraform module repo at the root' {
-        $root = Join-Path $TestDrive 'tf-1'
-        script:New-TerraformRepo -Root $root
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Kind | Should -Be 'terraform-module-repo'
-        $ctx.Ecosystem | Should -Be 'terraform'
-    }
-
-    It 'identifies a terraform module path (any *.tf + tests/)' {
-        $root = Join-Path $TestDrive 'tf-2'
-        script:New-TerraformModulePath -Root $root
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Kind | Should -Be 'terraform-module-path'
-        $ctx.Ecosystem | Should -Be 'terraform'
-    }
-
-    It 'walks up from a nested subdirectory to find the module root' {
-        $root = Join-Path $TestDrive 'tf-3'
-        script:New-TerraformModulePath -Root $root
-        $sub = Join-Path (Join-Path $root 'examples') 'deep'
-        New-Item -ItemType Directory -Path $sub -Force | Out-Null
-        $ctx = Get-AvmModuleContext -Path $sub
-        $ctx.Root | Should -Be (Resolve-Path -LiteralPath $root).ProviderPath
-    }
-
-    It 'throws AvmContextException when no context can be found' {
-        $root = Join-Path $TestDrive 'empty'
-        New-Item -ItemType Directory -Path $root -Force | Out-Null
-        $err = $null
-        try { Get-AvmModuleContext -Path $root } catch { $err = $_.Exception }
-        $err | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmContextException'
-        $err.Code | Should -Be 'AVM1030'
-    }
-
-    It 'throws AvmContextException for a non-existent path' {
-        $err = $null
-        try { Get-AvmModuleContext -Path (Join-Path $TestDrive 'no-such-dir-12345') } catch { $err = $_.Exception }
-        $err | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmContextException'
-    }
-
-    It 'emits a JSON document with --json' {
-        $root = Join-Path $TestDrive 'bm-json'
-        script:New-BicepModule -Root $root
-        $json = Get-AvmModuleContext -Path $root -Json
-        $obj = $json | ConvertFrom-Json
-        $obj.Kind | Should -Be 'bicep-module'
-        $obj.Ecosystem | Should -Be 'bicep'
-    }
+    It 'throws when explicit ecosystem conflicts with the same-root override' {
+        New-Item -ItemType Directory -Path (Join-Path $script:testRoot '.avm') | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:testRoot '.avm' 'context.psd1') -Value @'
+@{
+    Ecosystem = 'bicep'
+    Kind = 'bicep-module'
 }
+'@
 
-Describe 'avm context dispatcher route' {
-    It 'routes "avm context PATH" to Get-AvmModuleContext' {
-        $root = Join-Path $TestDrive 'bm-route'
-        script:New-BicepModule -Root $root
-        $ctx = avm context $root
-        $ctx.Kind | Should -Be 'bicep-module'
-    }
-}
-
-Describe 'Get-AvmModuleContext -Ecosystem override' {
-    It 'honours -Ecosystem bicep when only bicep signatures exist' {
-        $root = Join-Path $TestDrive 'eco-bicep'
-        script:New-BicepModule -Root $root
-        $ctx = Get-AvmModuleContext -Path $root -Ecosystem 'bicep'
-        $ctx.Kind | Should -Be 'bicep-module'
+        { Get-AvmModuleContext -Path $script:testRoot -Ecosystem terraform } |
+            Should -Throw -ExpectedMessage '*conflicts*'
     }
 
-    It 'filters out the other ecosystem and throws when none remain' {
-        # Bicep module on disk but caller demands terraform - should fail.
-        $root = Join-Path $TestDrive 'eco-conflict'
-        script:New-BicepModule -Root $root
-        $err = $null
-        try { Get-AvmModuleContext -Path $root -Ecosystem 'terraform' } catch { $err = $_.Exception }
-        $err | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmContextException'
-        $err.Message | Should -Match "Ecosystem='terraform'"
+    It 'throws when automatic detection finds direct Terraform and Bicep source' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.bicep') -Value 'param name string'
+
+        { Get-AvmModuleContext -Path $script:testRoot } |
+            Should -Throw -ExpectedMessage '*Both Terraform and Bicep*'
     }
 
-    It 'auto is the default and discovers either ecosystem' {
-        $root = Join-Path $TestDrive 'eco-auto'
-        script:New-TerraformModulePath -Root $root
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Ecosystem | Should -Be 'terraform'
-    }
-}
+    It 'selects Terraform from a mixed-source root when explicitly requested' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.bicep') -Value 'param name string'
 
-Describe 'Get-AvmModuleContext .avm/context.psd1 override' {
-    It 'uses an explicit override file and ignores heuristics' {
-        # Place a Bicep module on disk but declare it as a terraform module
-        # via the override file. The override should win.
-        $root = Join-Path $TestDrive 'override-1'
-        script:New-BicepModule -Root $root
-        New-Item -ItemType Directory -Path (Join-Path $root '.avm') -Force | Out-Null
-        $payload = "@{ Ecosystem = 'terraform'; Kind = 'terraform-module-path'; Owner = '@Azure/avm-core' }"
-        Set-Content -LiteralPath (Join-Path (Join-Path $root '.avm') 'context.psd1') -Value $payload
+        $context = Get-AvmModuleContext -Path $script:testRoot -Ecosystem terraform
 
-        $ctx = Get-AvmModuleContext -Path $root
-        $ctx.Ecosystem | Should -Be 'terraform'
-        $ctx.Kind | Should -Be 'terraform-module-path'
-        $ctx.Owner | Should -Be '@Azure/avm-core'
+        $context.Kind | Should -Be 'terraform-module-repo'
+        $context.Ecosystem | Should -Be 'terraform'
     }
 
-    It 'walks up to find the override file from a nested subdirectory' {
-        $root = Join-Path $TestDrive 'override-2'
-        New-Item -ItemType Directory -Path $root -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $root '.avm') -Force | Out-Null
-        $payload = "@{ Ecosystem = 'bicep'; Kind = 'bicep-monorepo' }"
-        Set-Content -LiteralPath (Join-Path (Join-Path $root '.avm') 'context.psd1') -Value $payload
-        $sub = Join-Path (Join-Path $root 'avm') 'res'
-        New-Item -ItemType Directory -Path $sub -Force | Out-Null
+    It 'selects Bicep from a mixed-source root when explicitly requested' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.bicep') -Value 'param name string'
 
-        $ctx = Get-AvmModuleContext -Path $sub
-        $ctx.Kind | Should -Be 'bicep-monorepo'
-        $ctx.Root | Should -Be (Resolve-Path -LiteralPath $root).ProviderPath
+        $context = Get-AvmModuleContext -Path $script:testRoot -Ecosystem bicep
+
+        $context.Kind | Should -Be 'bicep-module'
+        $context.Ecosystem | Should -Be 'bicep'
     }
 
-    It 'throws AvmConfigurationException for an invalid Ecosystem value in the override' {
-        $root = Join-Path $TestDrive 'override-bad'
-        New-Item -ItemType Directory -Path (Join-Path $root '.avm') -Force | Out-Null
-        $payload = "@{ Ecosystem = 'pulumi'; Kind = 'bicep-module' }"
-        Set-Content -LiteralPath (Join-Path (Join-Path $root '.avm') 'context.psd1') -Value $payload
+    It 'requires matching direct Terraform source for an explicit selection' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.bicep') -Value 'param name string'
 
-        $err = $null
-        try { Get-AvmModuleContext -Path $root } catch { $err = $_.Exception }
-        $err | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmConfigurationException'
-        $err.Message | Should -Match "Ecosystem 'pulumi'"
+        { Get-AvmModuleContext -Path $script:testRoot -Ecosystem terraform } |
+            Should -Throw -ExpectedMessage '*no direct *.tf*'
     }
 
-    It 'throws AvmContextException when -Ecosystem disagrees with the override file' {
-        $root = Join-Path $TestDrive 'override-conflict'
-        New-Item -ItemType Directory -Path (Join-Path $root '.avm') -Force | Out-Null
-        $payload = "@{ Ecosystem = 'bicep'; Kind = 'bicep-module' }"
-        Set-Content -LiteralPath (Join-Path (Join-Path $root '.avm') 'context.psd1') -Value $payload
+    It 'requires matching Bicep source for an explicit selection' {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
 
-        $err = $null
-        try { Get-AvmModuleContext -Path $root -Ecosystem 'terraform' } catch { $err = $_.Exception }
-        $err | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmContextException'
+        { Get-AvmModuleContext -Path $script:testRoot -Ecosystem bicep } |
+            Should -Throw -ExpectedMessage '*no direct *.bicep*'
+    }
+
+    It 'rejects any depth below a structural folder: <RelativePath>' -ForEach @(
+        @{ RelativePath = 'examples' }
+        @{ RelativePath = 'examples/default' }
+        @{ RelativePath = 'examples/default/nested/deep/module' }
+        @{ RelativePath = 'modules' }
+        @{ RelativePath = 'modules/foo' }
+        @{ RelativePath = 'modules/foo/nested/deep/module' }
+        @{ RelativePath = 'tests' }
+        @{ RelativePath = 'tests/unit' }
+        @{ RelativePath = 'tests/unit/fixtures/nested/deep' }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
+        $nested = Join-Path $script:testRoot $RelativePath
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested 'main.tf') -Value 'resource "null_resource" "example" {}'
+
+        { Get-AvmModuleContext -Path $nested -Ecosystem terraform } |
+            Should -Throw -ExpectedMessage '*reserved*module root*'
+    }
+
+    It 'rejects any depth below an administrative folder: <RelativePath>' -ForEach @(
+        @{ RelativePath = '.agents' }
+        @{ RelativePath = '.agents/skills' }
+        @{ RelativePath = '.agents/skills/context/deep' }
+        @{ RelativePath = '.avm' }
+        @{ RelativePath = '.avm/cache' }
+        @{ RelativePath = '.avm/cache/context/deep' }
+        @{ RelativePath = '.git' }
+        @{ RelativePath = '.git/hooks' }
+        @{ RelativePath = '.git/modules/foo/objects/deep' }
+        @{ RelativePath = '.github' }
+        @{ RelativePath = '.github/workflows' }
+        @{ RelativePath = '.github/actions/context/deep' }
+        @{ RelativePath = '.terraform' }
+        @{ RelativePath = '.terraform/providers' }
+        @{ RelativePath = '.terraform/providers/registry/example/deep' }
+        @{ RelativePath = '.vscode' }
+        @{ RelativePath = '.vscode/settings' }
+        @{ RelativePath = '.vscode/settings/context/deep' }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:testRoot 'terraform.tf') -Value 'terraform {}'
+        $nested = Join-Path $script:testRoot $RelativePath
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested 'main.tf') -Value 'resource "null_resource" "example" {}'
+
+        { Get-AvmModuleContext -Path $nested -Ecosystem terraform } |
+            Should -Throw -ExpectedMessage '*reserved*module root*'
+    }
+
+    It 'rejects a standalone module when a higher ancestor has a reserved name' {
+        $genericAncestor = Join-Path $script:testRoot 'examples'
+        $moduleRoot = Join-Path $genericAncestor 'checkout' 'standalone-module'
+        New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleRoot 'main.tf') -Value 'resource "null_resource" "example" {}'
+
+        { Get-AvmModuleContext -Path $moduleRoot } |
+            Should -Throw -ExpectedMessage '*reserved context folder*full path*'
+    }
+
+    It 'throws a typed context exception when no same-root source or override exists' {
+        try {
+            Get-AvmModuleContext -Path $script:testRoot
+            throw 'Expected context resolution to fail.'
+        }
+        catch {
+            $_.Exception.GetType().Name | Should -Be 'AvmContextException'
+            $_.Exception.Message | Should -BeLike '*must run from the module root*'
+        }
+    }
+
+    It 'throws a context exception when the path does not exist' {
+        { Get-AvmModuleContext -Path (Join-Path $script:testRoot 'missing') } |
+            Should -Throw -ExpectedMessage '*Path does not exist*'
     }
 }

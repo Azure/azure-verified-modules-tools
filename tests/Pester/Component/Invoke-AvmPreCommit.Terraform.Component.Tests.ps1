@@ -293,6 +293,23 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
     }
 
+    It 'pre-commit bootstraps tests/.gitkeep when explicit Terraform context has no tests directory' {
+        $bootstrapRoot = Join-Path $TestDrive 'module-without-tests'
+        $exampleDir = Join-Path $bootstrapRoot 'examples/default'
+        $null = New-Item -ItemType Directory -Path $exampleDir -Force
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value '# example' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'README.md') -Value $readme -Encoding utf8NoBOM
+
+        $result = Invoke-AvmPreCommit -Path $bootstrapRoot -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'pass'
+        $result.Path | Should -Be (Resolve-Path -LiteralPath $bootstrapRoot).ProviderPath
+        Join-Path $bootstrapRoot 'tests/.gitkeep' | Should -Exist
+        @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
+    }
+
     It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 

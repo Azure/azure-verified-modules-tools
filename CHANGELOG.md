@@ -98,6 +98,11 @@ section when cutting a release.
 
 ### Fixed
 
+- Module context now treats PWD or explicit `-Path` as the authoritative root,
+  detects direct Terraform/Bicep source without convention folders, and rejects
+  any reserved nested/admin segment across the full path instead of walking to
+  a parent module. This lets Terraform pre-commit create `tests/.gitkeep`
+  before `tests/` exists.
 - Terraform `avm pre-commit` now runs only convention rules with deterministic
   fixes. It repairs singular Terraform filenames, `.gitignore`, missing
   `_header.md` files, and a missing `tests/` directory; strict convention and
