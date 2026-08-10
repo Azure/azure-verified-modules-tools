@@ -49,6 +49,10 @@ section when cutting a release.
 
 ### Changed
 
+- Convention rename fixes now reconcile an existing destination. Non-whitespace
+  content from singular Terraform files is appended to the plural file before
+  the singular file is removed; whitespace-only singular files are removed
+  without changing the destination.
 - Result summaries now use grammatically consistent singular and plural nouns,
   such as `1 run` and `2 runs`.
 - PSGallery publication now runs in GitHub Actions after ADO uploads and

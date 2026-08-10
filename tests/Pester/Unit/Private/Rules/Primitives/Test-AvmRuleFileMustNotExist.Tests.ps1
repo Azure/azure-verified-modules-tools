@@ -92,9 +92,85 @@ Describe 'Test-AvmRuleFileMustNotExist primitive' {
         Test-Path -LiteralPath (Join-Path $script:tmp 'Makefile') -PathType Leaf | Should -BeTrue
     }
 
-    It 'reports a collision when -Fix is set, FixRenameTo declared, and destination already exists' {
-        Set-Content -LiteralPath (Join-Path $script:tmp 'output.tf')  -Value '# a' -NoNewline
-        Set-Content -LiteralPath (Join-Path $script:tmp 'outputs.tf') -Value '# b' -NoNewline
+    It 'appends source content and removes the source when the rename destination already exists' {
+        $src = Join-Path $script:tmp 'output.tf'
+        $destination = Join-Path $script:tmp 'outputs.tf'
+        $sourceText = 'output "from_source" {}'
+        $destinationText = 'output "existing" {}'
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($src, $sourceText, $utf8NoBom)
+        [System.IO.File]::WriteAllText($destination, $destinationText, $utf8NoBom)
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.rename'
+                Kind        = 'FileMustNotExist'
+                Description = 'no output.tf'
+                Parameters  = @{ Path = 'output.tf'; FixRenameTo = 'outputs.tf' }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleFileMustNotExist -Rule $R -TargetRoot $T -Fix
+        }
+        $result.Status | Should -Be 'fixed'
+        @($result.Issues).Count | Should -Be 0
+        $result.FilesChanged | Should -Be 2
+        Test-Path -LiteralPath $src -PathType Leaf | Should -BeFalse
+        [System.IO.File]::ReadAllText($destination) | Should -Be "$destinationText`n$sourceText"
+    }
+
+    It 'removes a whitespace-only source without changing an existing destination' {
+        $src = Join-Path $script:tmp 'variable.tf'
+        $destination = Join-Path $script:tmp 'variables.tf'
+        $destinationText = 'variable "existing" {}'
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($src, "`r`n", $utf8NoBom)
+        [System.IO.File]::WriteAllText($destination, $destinationText, $utf8NoBom)
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.rename'
+                Kind        = 'FileMustNotExist'
+                Description = 'no variable.tf'
+                Parameters  = @{ Path = 'variable.tf'; FixRenameTo = 'variables.tf' }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleFileMustNotExist -Rule $R -TargetRoot $T -Fix
+        }
+        $result.Status | Should -Be 'fixed'
+        @($result.Issues).Count | Should -Be 0
+        $result.FilesChanged | Should -Be 1
+        Test-Path -LiteralPath $src -PathType Leaf | Should -BeFalse
+        [System.IO.File]::ReadAllText($destination) | Should -Be $destinationText
+    }
+
+    It 'rejects a rename target that resolves to the source file' {
+        $src = Join-Path $script:tmp 'output.tf'
+        $sourceText = 'output "existing" {}'
+        Set-Content -LiteralPath $src -Value $sourceText -NoNewline
+        $rule = InModuleScope 'Avm.Authoring' {
+            New-AvmRule -Definition @{
+                Id          = 'avm.test.rename'
+                Kind        = 'FileMustNotExist'
+                Description = 'no output.tf'
+                Parameters  = @{ Path = 'output.tf'; FixRenameTo = (Join-Path '.' 'output.tf') }
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $rule; T = $script:tmp } {
+            param($R, $T)
+            Test-AvmRuleFileMustNotExist -Rule $R -TargetRoot $T -Fix
+        }
+        $result.Status | Should -Be 'fail'
+        @($result.Issues).Count | Should -Be 1
+        $result.Issues[0].Message | Should -Match 'same file'
+        $result.FilesChanged | Should -Be 0
+        Get-Content -LiteralPath $src -Raw | Should -Be $sourceText
+    }
+
+    It 'reports a collision when the rename destination is not a file' {
+        Set-Content -LiteralPath (Join-Path $script:tmp 'output.tf') -Value '# source' -NoNewline
+        New-Item -ItemType Directory -Path (Join-Path $script:tmp 'outputs.tf') | Out-Null
         $rule = InModuleScope 'Avm.Authoring' {
             New-AvmRule -Definition @{
                 Id          = 'avm.test.rename'
@@ -111,9 +187,7 @@ Describe 'Test-AvmRuleFileMustNotExist primitive' {
         @($result.Issues).Count | Should -Be 1
         $result.Issues[0].Message | Should -Match 'destination already exists'
         $result.FilesChanged | Should -Be 0
-        # both files still present
         Test-Path -LiteralPath (Join-Path $script:tmp 'output.tf') -PathType Leaf | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $script:tmp 'outputs.tf') -PathType Leaf | Should -BeTrue
     }
 
     It 'propagates the rule Severity into the emitted Issue' {
