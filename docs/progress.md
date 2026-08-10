@@ -4,8 +4,8 @@ Single source of truth for what's in flight and what's next on the `Avm.Authorin
 
 Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md), so this file stays short enough to read in one sitting.
 
-**Last updated**: 2026-08-10 — **F99 complete: managed mapotf updated to 0.1.8.**
-**Active branch**: `jaredfholgate-support-mapotf-0-1-8` (off `main`)
+**Last updated**: 2026-08-10 — **F100 complete: ungrouped repositories retain root managed files.**
+**Active branch**: `jaredfholgate-fix-managed-files-root-fallback` (off `main`)
 
 ## Snapshot
 
@@ -21,6 +21,7 @@ Closed workstreams move verbatim to [`progress-archive.md`](progress-archive.md)
 
 ## In flight
 
+- [x] **F100 — keep root managed files for repositories outside every configured group.** Repository-group membership now selects overlays and exclusions instead of acting as an allow-list for managed-file sync. Inferred origin and folder repository ids continue with the shared `managed-files/root` set when no group matches; resolution fails only when no repository id can be determined. The Event Grid namespace failure shape is covered end-to-end. `./build.ps1 pre-commit` is green: 834 unit passed + 7 skipped, 25 component passed.
 - [x] **F99 — update the managed mapotf pin to 0.1.8.** The six platform hashes come from the finalized signed release and the PATH test stub remains in lockstep. The managed Windows binary completed a transform of the previously failing `Azure/terraform-azurerm-avm-res-compute-diskencryptionset` module without the heterogeneous nested-block panic. `./build.ps1 pre-commit` is green: 832 unit passed + 7 skipped, 25 component passed.
 - [x] **F98 — scan the full authoritative path chain for reserved context folders.** The F97 source-root-anchored immediate-child guard is replaced by an unconditional segment scan from the authoritative path through every filesystem ancestor. Arbitrarily deep structural/admin paths now fail before override or source detection, and docs record the accepted false-positive limitation for checkout paths whose higher ancestors use a reserved name. `./build.ps1 pre-commit` is green: 832 unit passed + 7 skipped, 25 component passed.
 - [x] **F97 — make PWD / explicit `-Path` the authoritative module root.** Parent discovery and convention-folder heuristics are replaced by direct Terraform/Bicep source detection at the requested root; only the necessary source-free Bicep monorepo signature remains. Same-root `.avm/context.psd1` overrides retain precedence/conflicts, known nested/admin paths fail with module-root guidance, and mixed direct sources require an explicit matching ecosystem. F98 strengthens the nested-path guard to scan all ancestors. The end-to-end missing-`tests/` pre-commit repair remains covered. `./build.ps1 pre-commit` is green: 823 unit passed + 7 skipped, 25 component passed.

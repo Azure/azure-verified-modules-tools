@@ -177,6 +177,12 @@ avm pre-commit -Ecosystem terraform `
   -RepoId <repository-id>
 ```
 
+When `-RepoId` is omitted, sync infers it from the git origin and then the
+repository folder name. Repository-group membership only selects additional
+overlays and exclusions: repositories absent from every group still receive the
+shared `managed-files/root` set. Set `-RepoId` only when inference cannot identify
+the repository or when an explicit override is required.
+
 The container mount, `CONTAINER_RUNTIME`, `CONTAINER_IMAGE`,
 `CONTAINER_PULL_POLICY`, and the SSL-cert / `mkcert` plumbing the shim
 provides are not needed — the cmdlets call the host's own
