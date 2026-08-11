@@ -35,6 +35,17 @@ not change it from `100755` to `100644` in
 - [x] Add a cross-platform index-mode regression.
 - [x] Re-run focused and pre-commit validation.
 - [x] Update and push the focused pull request.
+- [x] Record the verified source, target, and migrated launcher modes.
+
+## Executable-mode evidence
+
+- Pre-migration `Azure/avm-terraform-governance` `origin/main` tracked
+  `managed-files/root/avm` as `100755`.
+- `Azure/terraform-azurerm-avm-ptn-example-repo` tracks the identical
+  `c764a0078b64a564c0294b450646b49a75889849` blob as `100755`.
+- Migration retained that blob but accidentally stored
+  `repository-management/managed-files/files/root/avm` as `100644`.
+- The follow-up remote branch tracks the same blob as `100755`.
 
 ## Validation
 
