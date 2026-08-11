@@ -48,16 +48,19 @@ Describe 'Write-AvmLog' {
             $observed = InModuleScope 'Avm.Authoring' {
                 $escape = [char]27
                 $env:CLICOLOR_FORCE = '1'
-                $coloured = Format-AvmLogText -Text 'passed' -Level Pass
+                $passed = Format-AvmLogText -Text 'passed' -Level Pass
+                $failed = Format-AvmLogText -Text 'failed' -Level Fail
                 $env:NO_COLOR = '1'
                 $plain = Format-AvmLogText -Text 'passed' -Level Pass
                 [pscustomobject]@{
-                    Coloured = $coloured
-                    Plain    = $plain
-                    Escape   = [string]$escape
+                    Passed = $passed
+                    Failed = $failed
+                    Plain  = $plain
+                    Escape = [string]$escape
                 }
             }
-            $observed.Coloured | Should -Be "$($observed.Escape)[32mpassed$($observed.Escape)[0m"
+            $observed.Passed | Should -Be "$($observed.Escape)[32mpassed$($observed.Escape)[0m"
+            $observed.Failed | Should -Be "$($observed.Escape)[31mfailed$($observed.Escape)[0m"
             $observed.Plain | Should -Be 'passed'
         }
 
@@ -139,6 +142,17 @@ Describe 'Write-AvmLog' {
             }
             @($messages) | Should -Contain '::warning::be careful'
             @($messages) | Should -Contain '::error::it broke'
+        }
+
+        It 'renders Fail in red without creating an error annotation' {
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                Write-AvmLog 'check failed' -Level Fail -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+            $escape = [char]27
+            @($messages) | Should -Contain "$escape[31mcheck failed$escape[0m"
+            @($messages | Where-Object { $_ -like '::error*' }).Count | Should -Be 0
         }
 
         It 'uses semantic colours for ordinary log lines' {

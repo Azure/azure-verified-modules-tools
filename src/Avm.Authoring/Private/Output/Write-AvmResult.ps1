@@ -13,14 +13,30 @@ function Write-AvmResult {
     $ErrorActionPreference = 'Stop'
 
     $lines = @(ConvertTo-AvmResultLine -Result $Result -Verb $Verb)
+    $items = @($Result)
+    $singleStatus = if ($items.Count -eq 1) {
+        ([string]$items[0].Status).ToLowerInvariant()
+    }
+    else {
+        ''
+    }
+    $currentLevel = switch ($singleStatus) {
+        'pass' { 'Pass' }
+        'fail' { 'Fail' }
+        'error' { 'Fail' }
+        default { 'Info' }
+    }
+
     for ($index = 0; $index -lt $lines.Count; $index++) {
-        $level = if ($index -eq 0 -and @($Result).Count -eq 1 -and [string]$Result[0].Status -eq 'pass') {
-            'Pass'
+        if ($index -gt 0 -and $lines[$index] -match '^\s+\[(?<status>pass|fail|error|skipped)\]') {
+            $currentLevel = switch ($Matches.status) {
+                'pass' { 'Pass' }
+                'fail' { 'Fail' }
+                'error' { 'Fail' }
+                default { 'Info' }
+            }
         }
-        else {
-            'Info'
-        }
-        Write-AvmLog $lines[$index] -Level $level
+        Write-AvmLog $lines[$index] -Level $currentLevel
     }
 
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {

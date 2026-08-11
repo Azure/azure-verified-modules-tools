@@ -38,6 +38,37 @@ Describe 'Write-AvmResult GitHub summary' {
             $env:GITHUB_ACTIONS = $oldActions
             $env:GITHUB_STEP_SUMMARY = $oldSummary
         }
+
+        It 'colours failed steps red and passing steps green without annotations' {
+            $oldActions = $env:GITHUB_ACTIONS
+            $oldColorForce = $env:CLICOLOR_FORCE
+            try {
+                $env:GITHUB_ACTIONS = ''
+                $env:CLICOLOR_FORCE = '1'
+                $messages = InModuleScope 'Avm.Authoring' {
+                    $captured = @()
+                    $result = [pscustomobject]@{
+                        Status = 'fail'
+                        Steps = @(
+                            [pscustomobject]@{ Step = 'sync'; Status = 'fail'; Error = 'managed file is stale' }
+                            [pscustomobject]@{ Step = 'format'; Status = 'pass'; Error = $null }
+                        )
+                    }
+                    Write-AvmResult -Result $result -Verb 'pr-check' -InformationVariable captured
+                    @($captured | ForEach-Object { [string]$_.MessageData })
+                }
+
+                $escape = [char]27
+                @($messages) | Should -Contain "$escape[31m  [fail] sync$escape[0m"
+                @($messages) | Should -Contain "$escape[31m    managed file is stale$escape[0m"
+                @($messages) | Should -Contain "$escape[32m  [pass] format$escape[0m"
+                @($messages | Where-Object { $_ -like '::error*' }).Count | Should -Be 0
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $oldActions
+                $env:CLICOLOR_FORCE = $oldColorForce
+            }
+        }
     }
 }
 
