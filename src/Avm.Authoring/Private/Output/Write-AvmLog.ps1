@@ -108,7 +108,7 @@ function Format-AvmLogText {
         [string] $Text,
 
         [Parameter(Mandatory)]
-        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Install', 'Warning', 'Error')]
+        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Fail', 'Install', 'Warning', 'Error')]
         [string] $Level
     )
 
@@ -118,6 +118,7 @@ function Format-AvmLogText {
 
     $code = switch ($Level) {
         'Pass' { '32' }
+        'Fail' { '31' }
         'Install' { '36' }
         'Warning' { '33' }
         'Error' { '31' }
@@ -202,7 +203,7 @@ function Write-AvmLog {
         [AllowEmptyString()]
         [string] $Message,
 
-        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Install', 'Warning', 'Error')]
+        [ValidateSet('Debug', 'Verbose', 'Info', 'Pass', 'Fail', 'Install', 'Warning', 'Error')]
         [string] $Level = 'Info',
 
         [AllowEmptyString()]

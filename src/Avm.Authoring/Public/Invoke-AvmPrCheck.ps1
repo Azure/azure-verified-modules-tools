@@ -67,6 +67,10 @@ function Invoke-AvmPrCheck {
         When set, abort the chain on the first step whose Status is 'fail'.
         A throwing step is always fatal regardless of this flag.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent Terraform lint scopes or policy examples
+        to process at once. Defaults to four.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -94,6 +98,9 @@ function Invoke-AvmPrCheck {
 
         [switch] $StopOnFail,
 
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 4,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -114,8 +121,14 @@ function Invoke-AvmPrCheck {
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
-        [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-        [pscustomobject]@{ Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy' }
+        [pscustomobject]@{
+            Name = 'lint'; Cmdlet = 'Invoke-AvmLint'
+            ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }
+        }
+        [pscustomobject]@{
+            Name = 'check policy'; Cmdlet = 'Invoke-AvmCheckPolicy'
+            ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }
+        }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
@@ -169,13 +182,13 @@ function Invoke-AvmPrCheck {
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 
-        $completionLevel = if ($stepStatus -eq 'pass') { 'Pass' } else { 'Info' }
+        $completionLevel = if ($stepStatus -eq 'pass') { 'Pass' } elseif ($stepStatus -in @('fail', 'error')) { 'Fail' } else { 'Info' }
         Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level $completionLevel | Out-Null
 
         if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
             # F41: narration only. Assert-AvmCommandSuccess promotes the same
             # text to the single GitHub Actions annotation for the run.
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Info | Out-Null
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Fail | Out-Null
         }
 
         $steps.Add([pscustomobject][ordered]@{

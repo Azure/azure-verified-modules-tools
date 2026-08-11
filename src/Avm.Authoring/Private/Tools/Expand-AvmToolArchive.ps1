@@ -6,7 +6,7 @@ function Expand-AvmToolArchive {
     .DESCRIPTION
         Handles the three archive kinds supported by avm.pins.jsonc:
             - 'zip'     -> Expand-Archive
-            - 'tar.gz'  -> tar -xzf (requires GNU/BSD tar on PATH)
+            - 'tar.gz'  -> managed extraction on Windows, tar elsewhere
             - 'raw'     -> Copy-Item (single-binary archives)
 
         The target directory must already exist. On 'raw' the file is copied
@@ -36,16 +36,24 @@ function Expand-AvmToolArchive {
             Expand-Archive -LiteralPath $ArchivePath -DestinationPath $TargetDir -Force
         }
         'tar.gz' {
-            $tar = Get-Command -Name 'tar' -ErrorAction SilentlyContinue
-            if (-not $tar) {
-                throw [System.IO.FileNotFoundException]::new(
-                    "Expand-AvmToolArchive: 'tar' is not on PATH; required for tar.gz archives.")
+            if ($IsWindows) {
+                Expand-AvmWindowsTarArchive `
+                    -ArchivePath $ArchivePath `
+                    -TargetDir $TargetDir
             }
-            & $tar.Source -xzf $ArchivePath -C $TargetDir
-            if ($LASTEXITCODE -ne 0) {
-                Write-AvmLog ("archive: tar failed with exit code {0}" -f $LASTEXITCODE) -Level Verbose | Out-Null
-                throw [System.IO.IOException]::new(
-                    "tar -xzf failed with exit code $LASTEXITCODE for $ArchivePath.")
+            else {
+                $tar = Get-Command `
+                    -Name 'tar' `
+                    -CommandType Application `
+                    -ErrorAction SilentlyContinue
+                if (-not $tar) {
+                    throw [System.IO.FileNotFoundException]::new(
+                        "Expand-AvmToolArchive: 'tar' is not on PATH; required for tar.gz archives.")
+                }
+                Invoke-AvmProcess `
+                    -FilePath $tar.Source `
+                    -ArgumentList @('-xzf', $ArchivePath, '-C', $TargetDir) `
+                    -Label "Extract $EntrypointBasename archive" | Out-Null
             }
         }
         'raw' {

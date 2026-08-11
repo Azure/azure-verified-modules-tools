@@ -290,15 +290,15 @@ function Invoke-AvmProcess {
             Write-AvmLog ('  done: {0} {1}' -f $displayLabel, $suffix) -Level Pass
         }
         else {
-            Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Info
+            Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Fail
             if ($hasLineHook) {
                 foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
-                    Write-AvmLog $replayLine -Level Info
+                    Write-AvmLog $replayLine -Level Fail
                 }
             }
             elseif (-not $live) {
                 foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $stdErr)) {
-                    Write-AvmLog $replayLine -Level Info
+                    Write-AvmLog $replayLine -Level Fail
                 }
             }
         }

@@ -30,6 +30,10 @@ function Invoke-AvmCheckPolicy {
         When set, accept a PATH-resolved tool binary that self-reports the
         lock-pinned version.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent Terraform examples to evaluate at once.
+        Defaults to four. Bicep policy checks currently ignore this value.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, Issues. (When implemented.)
@@ -51,6 +55,9 @@ function Invoke-AvmCheckPolicy {
 
         [switch] $AllowPathFallback,
 
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 4,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -66,7 +73,10 @@ function Invoke-AvmCheckPolicy {
             Invoke-AvmBicepCheckPolicy -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformCheckPolicy -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmTerraformCheckPolicy `
+                -Context $context `
+                -AllowPathFallback:$AllowPathFallback `
+                -ThrottleLimit $ThrottleLimit
         }
         default {
             throw [AvmContextException]::new(

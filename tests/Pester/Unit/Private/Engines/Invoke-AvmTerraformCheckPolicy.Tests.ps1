@@ -64,6 +64,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         } {
             param($C, $Cache, $Aprl, $Avmsec)
             $calls = [System.Collections.Generic.List[object]]::new()
+            $script:providerCacheLock = $null
             Mock Resolve-AvmTool {
                 if ($Name -eq 'conftest') {
                     [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Source = 'cache'; Path = '/fake/conftest' }
@@ -81,6 +82,10 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 }
             }
             Mock Get-AvmFolder { $Cache }
+            Mock Lock-AvmTerraformPluginCache {
+                $script:providerCacheLock = [System.IO.MemoryStream]::new()
+                $script:providerCacheLock
+            }
             Mock Invoke-AvmProcess {
                 $calls.Add([pscustomobject]@{
                         FilePath         = $FilePath
@@ -88,6 +93,10 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                         WorkingDirectory = $WorkingDirectory
                         EnvVars          = @{} + $EnvVars
                         PlanJsonExists   = Test-Path -LiteralPath (Join-Path $WorkingDirectory 'tfplan.json')
+                        CacheLockHeld    = (
+                            $null -ne $script:providerCacheLock -and
+                            $script:providerCacheLock.CanRead
+                        )
                     })
                 if ($ArgumentList[-1] -like '*pre.ps1') {
                     Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_SUBSCRIPTION_ID=example-sub' -Encoding utf8
@@ -121,8 +130,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Calls[1].Arguments | Should -Be @('init', '-input=false', '-no-color')
         $probe.Calls[2].Arguments | Should -Be @('plan', '-out=tfplan', '-input=false', '-no-color')
         $probe.Calls[3].Arguments | Should -Be @('show', '-json', 'tfplan')
+        foreach ($terraformCall in @($probe.Calls[1], $probe.Calls[2], $probe.Calls[3])) {
+            $terraformCall.CacheLockHeld | Should -BeTrue
+        }
         $probe.Calls[4].FilePath | Should -Be '/fake/conftest'
         $probe.Calls[5].FilePath | Should -Be '/fake/conftest'
+        $probe.Calls[4].CacheLockHeld | Should -BeFalse
+        $probe.Calls[5].CacheLockHeld | Should -BeFalse
         $probe.Calls[6].Arguments[-1] | Should -BeLike '*post.ps1'
         foreach ($policyCall in @($probe.Calls[4], $probe.Calls[5])) {
             $policyCall.Arguments | Should -Contain '--all-namespaces'
