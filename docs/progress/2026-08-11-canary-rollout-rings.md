@@ -1,7 +1,8 @@
 # Staged managed-file rollout rings
 
-Status: in-progress
+Status: complete
 Started: 2026-08-11
+Completed: 2026-08-11
 Branch: `jaredfholgate-canary-rollout-rings`
 
 ## Outcome
@@ -58,13 +59,22 @@ share no repositories, so the tie is unreachable.
       `repository-management/README.md`.
 - [x] Invert the layout test that guarded the shim so it asserts the tree is
       gone.
-- [ ] `./build.ps1 pre-commit` green.
-- [ ] Update the Proxima docs page for the rename and for the canary path now
+- [x] `./build.ps1 pre-commit` green.
+- [x] Update the Proxima docs page for the rename and for the canary path now
       being wired.
 
 ## Validation
 
-Pending.
+`./build.ps1 pre-commit` — exit 0, 894 unit tests passed (7 skipped),
+28 component tests passed. Unchanged from the pre-change baseline.
+
+## Pull requests
+
+- Tools: <https://github.com/Azure/azure-verified-modules-tools/pull/61>
+- Managed files:
+  <https://github.com/Azure/azure-verified-modules-managed-files/pull/7>
+- Docs (Proxima):
+  <https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs/pull/31>
 
 ## Dependencies
 
