@@ -30,6 +30,18 @@ Describe "Repository management migration layout" {
         }
     }
 
+    It "tracks the managed root avm launcher as executable" {
+        $indexEntries = @(
+            & git -C $script:repoRoot ls-files --stage -- (
+                "repository-management/managed-files/files/root/avm"
+            ) 2>$null
+        )
+
+        $LASTEXITCODE | Should -Be 0
+        $indexEntries | Should -HaveCount 1
+        ($indexEntries[0] -split '\s+')[0] | Should -Be "100755"
+    }
+
     It "does not retain retired source layout references" {
         $roots = @(
             (Join-Path $script:repoRoot "repository-management")

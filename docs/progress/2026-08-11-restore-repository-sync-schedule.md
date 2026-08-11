@@ -10,7 +10,10 @@
 Restore the repository-management sync weekday schedule after the target
 plan-only cutover validation and source workflow disablement. Permanently
 exclude the retired governance and Terraform template repositories from
-repository discovery without relying on caller defaults.
+repository discovery without relying on caller defaults. Preserve the
+executable Git mode of the managed root `avm` launcher so scheduled sync does
+not change it from `100755` to `100644` in
+`Azure/terraform-azurerm-avm-ptn-example-repo`.
 
 ## Checklist
 
@@ -28,13 +31,18 @@ repository discovery without relying on caller defaults.
 - [x] Narrow the retired-repository guard to the inert exclusion and its tests.
 - [x] Re-run focused and pre-commit validation.
 - [x] Update and push the focused pull request.
+- [x] Restore the managed root `avm` launcher to Git mode `100755`.
+- [x] Add a cross-platform index-mode regression.
+- [x] Re-run focused and pre-commit validation.
+- [x] Update and push the focused pull request.
 
 ## Validation
 
 - GitHub Actions API: source `Repository Sync` workflow state is
   `disabled_manually`.
 - Focused repository discovery and migration regression tests: 11 passed.
-- `./build.ps1 pre-commit`: 878 unit tests passed, 7 skipped, and 26 component
+- Focused executable-mode migration regression tests: 7 passed.
+- `./build.ps1 pre-commit`: 879 unit tests passed, 7 skipped, and 26 component
   tests passed.
 
 ## Blockers or dependencies
