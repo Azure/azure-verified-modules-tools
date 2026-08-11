@@ -244,6 +244,7 @@ function Sync-AvmManagedFile {
 
     $toAdd = @()
     $toUpdate = @()
+    $updateReasons = @{}
     foreach ($targetPath in ($desired.Keys | Sort-Object)) {
         $desiredSha = $desired[$targetPath].Sha
         $desiredMode = $desired[$targetPath].Mode
@@ -254,8 +255,19 @@ function Sync-AvmManagedFile {
             $existingSha = $existingBlobs[$targetPath]
             $existingMode = $existingModes[$targetPath]
             if (-not $existingMode) { $existingMode = '100644' }
-            if ($existingSha -ne $desiredSha -or $existingMode -ne $desiredMode) {
+            $contentChanged = $existingSha -ne $desiredSha
+            $modeChanged = $existingMode -ne $desiredMode
+            if ($contentChanged -or $modeChanged) {
                 $toUpdate += $targetPath
+                $updateReasons[$targetPath] = if ($contentChanged -and $modeChanged) {
+                    "content and mode $existingMode -> $desiredMode"
+                }
+                elseif ($contentChanged) {
+                    'content'
+                }
+                else {
+                    "mode $existingMode -> $desiredMode"
+                }
             }
         }
     }
@@ -264,6 +276,18 @@ function Sync-AvmManagedFile {
     $lineAdded = @($changedLinePlans | Where-Object { -not $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
     $lineUpdated = @($changedLinePlans | Where-Object { $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
     Write-AvmLog ("sync: plan add={0}; update={1}; remove={2}; line-merge={3}" -f $toAdd.Count, $toUpdate.Count, $toRemove.Count, $changedLinePlans.Count) -Level Verbose | Out-Null
+    foreach ($p in @(@($toAdd + $lineAdded) | Sort-Object)) {
+        Write-AvmLog "sync: create $p" -Level Verbose | Out-Null
+    }
+    foreach ($p in $toUpdate) {
+        Write-AvmLog ("sync: update {0} ({1})" -f $p, $updateReasons[$p]) -Level Verbose | Out-Null
+    }
+    foreach ($p in $lineUpdated) {
+        Write-AvmLog "sync: update $p (managed lines)" -Level Verbose | Out-Null
+    }
+    foreach ($p in $toRemove) {
+        Write-AvmLog "sync: delete $p" -Level Verbose | Out-Null
+    }
 
     $issues = @()
     if ($CheckDrift) {

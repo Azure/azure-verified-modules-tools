@@ -287,6 +287,67 @@ Describe 'Sync-AvmManagedFile' {
         $second.Removed | Should -BeNullOrEmpty
     }
 
+    It 'logs each planned operation and omits unchanged files' {
+        Set-Content -LiteralPath (Join-Path $script:root 'create.txt') -Value "new`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'update.txt') -Value "current`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:root 'unchanged.txt') -Value "same`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'update.txt') -Value "stale`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'unchanged.txt') -Value "same`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'deprecated.txt') -Value "remove`n" -NoNewline
+
+        $cfg = Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $cfg -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $cfg 'config.json') -Value '{ "repositoryGroups": [] }' -NoNewline
+        Set-Content -LiteralPath (Join-Path $cfg 'deprecated-files.json') -Value '["deprecated.txt"]' -NoNewline
+
+        $output = @(InModuleScope 'Avm.Authoring' -Parameters @{
+                C = $script:context
+                B = $script:base
+                G = $cfg
+            } {
+                param($C, $B, $G)
+                Sync-AvmManagedFile `
+                    -Context $C `
+                    -ManagedFilesLocalPath $B `
+                    -ConfigLocalPath $G `
+                    -RepoId 'avm-res-foo' `
+                    -CheckDrift `
+                    -Verbose 4>&1
+            })
+        $messages = @($output |
+                Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
+
+        $messages | Should -Contain 'sync: create create.txt'
+        $messages | Should -Contain 'sync: update update.txt (content)'
+        $messages | Should -Contain 'sync: delete deprecated.txt'
+        $messages -join "`n" | Should -Not -Match 'unchanged\.txt'
+    }
+
+    It 'logs a Git mode-only update with the existing and desired modes' {
+        Set-Content -LiteralPath (Join-Path $script:root 'avm') -Value "#!/bin/sh`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm') -Value "#!/bin/sh`n" -NoNewline
+        & git -C $script:moduleDir init --quiet
+        & git -C $script:moduleDir add -- avm
+        & git -C $script:moduleDir update-index --chmod=+x -- avm
+
+        $output = @(InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base } {
+                param($C, $B)
+                Sync-AvmManagedFile `
+                    -Context $C `
+                    -ManagedFilesLocalPath $B `
+                    -CheckDrift `
+                    -Verbose 4>&1
+            })
+        $messages = @($output |
+                Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
+        $result = $output | Where-Object { $_ -isnot [System.Management.Automation.VerboseRecord] }
+
+        $result.Updated | Should -Be @('avm')
+        $messages | Should -Contain 'sync: update avm (mode 100755 -> 100644)'
+    }
+
     It 'updates a stale managed file' {
         $gitignore = Join-Path $script:root '.gitignore'
         Set-Content -LiteralPath $gitignore -Value "*.tfstate`n" -NoNewline

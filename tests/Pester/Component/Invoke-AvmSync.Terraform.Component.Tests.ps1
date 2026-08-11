@@ -74,6 +74,24 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
         Test-Path (Join-Path $fx.ModuleDir 'SECURITY.md') | Should -BeTrue
     }
 
+    It 'exposes changed paths through the public verbose stream without reporting unchanged files' {
+        $fx = script:New-SyncFixture -Name 'verbose'
+
+        $output = @(Invoke-AvmSync `
+                -Path $fx.ModuleDir `
+                -Ecosystem terraform `
+                -ManagedFilesLocalPath $fx.Base `
+                -CheckDrift `
+                -Verbose 4>&1)
+        $messages = @($output |
+                Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
+
+        $messages | Should -Contain 'sync: create .gitignore'
+        $messages | Should -Contain 'sync: create SECURITY.md'
+        $messages -join "`n" | Should -Not -Match 'main\.tf'
+    }
+
     It 'broadcasts _all templates under any named parent without creating a literal _all folder' {
         $fx = script:New-SyncFixture -Name 'broadcast'
         $moduleAll = Join-Path (Join-Path $fx.Root 'modules') '_all'
