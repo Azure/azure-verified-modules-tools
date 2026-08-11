@@ -50,7 +50,7 @@ AfterAll {
     Remove-Variable repositoryDiscoveryGhResponse -Scope Global -ErrorAction SilentlyContinue
 }
 
-Describe "Repository discovery permanent exclusions" {
+Describe "Repository discovery built-in exclusions" {
     BeforeEach {
         $script:metaDataFilePath = Join-Path $TestDrive "repository-metadata.csv"
         @(
@@ -61,7 +61,7 @@ Describe "Repository discovery permanent exclusions" {
         Remove-Item (Join-Path $TestDrive "issues.log.json") -ErrorAction SilentlyContinue
     }
 
-    It "applies permanent exclusions when no additional parameter is supplied" {
+    It "applies built-in exclusions when no additional parameter is supplied" {
         $repositories = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
                 (New-TestRepository -Name "terraform-azurerm-avm-template")
@@ -73,7 +73,7 @@ Describe "Repository discovery permanent exclusions" {
         $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
     }
 
-    It "applies permanent exclusions when the additional parameter is explicitly empty" {
+    It "applies built-in exclusions when the additional parameter is explicitly empty" {
         $repositories = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
                 (New-TestRepository -Name "terraform-azurerm-avm-template")
@@ -87,7 +87,7 @@ Describe "Repository discovery permanent exclusions" {
         $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
     }
 
-    It "adds caller-supplied exclusions to the permanent exclusions" {
+    It "adds caller-supplied exclusions to the built-in exclusions" {
         $repositories = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
                 (New-TestRepository -Name "terraform-azurerm-avm-template")
@@ -102,7 +102,7 @@ Describe "Repository discovery permanent exclusions" {
         $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
     }
 
-    It "matches permanent exclusions case-insensitively" {
+    It "matches built-in exclusions case-insensitively" {
         $repositories = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
                 (New-TestRepository -Name "TERRAFORM-AZURERM-AVM-TEMPLATE")

@@ -6,6 +6,8 @@ param(
   [array]$repoFilter = @(),
   [array]$validProviders = @("azure", "azurerm", "azapi"),
   [array]$reposToSkip = @(
+    "terraform-azurerm-avm-template",
+    "avm-terraform-governance",
     "bicep-registry-modules",
     "terraform-azure-modules",
     "ALZ-PowerShell-Module",
@@ -20,11 +22,6 @@ param(
   [array]$additionalReposToSkip = @(),
   [string]$outputDirectory = ".",
   [string]$metaDataFilePath = "./config/repository-metadata.csv"
-)
-
-$permanentReposToSkip = @(
-  "terraform-azurerm-avm-template",
-  "avm-terraform-governance"
 )
 
 Write-Host "Generating matrix for AVM repositories"
@@ -58,7 +55,7 @@ $moduleTypes = @{
   "template" = "template"
 }
 
-$finalReposToSkip = $permanentReposToSkip + $reposToSkip + $additionalReposToSkip
+$finalReposToSkip = $reposToSkip + $additionalReposToSkip
 
 Write-Host "Skipping repositories: $(ConvertTo-Json $finalReposToSkip)"
 

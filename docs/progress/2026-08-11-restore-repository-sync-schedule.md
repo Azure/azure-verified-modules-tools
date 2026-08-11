@@ -8,12 +8,12 @@
 ## Outcome
 
 Restore the repository-management sync weekday schedule after the target
-plan-only cutover validation and source workflow disablement. Permanently
-exclude the retired governance and Terraform template repositories from
-repository discovery without relying on caller defaults. Preserve the
-executable Git mode of the managed root `avm` launcher so scheduled sync does
-not change it from `100755` to `100644` in
-`Azure/terraform-azurerm-avm-ptn-example-repo`.
+plan-only cutover validation and source workflow disablement. Add the retired
+governance and Terraform template repositories to repository discovery's
+built-in skip defaults while keeping pipeline-supplied additional exclusions
+empty by default and additive. Preserve the executable Git mode of the managed
+root `avm` launcher so scheduled sync does not change it from `100755` to
+`100644` in `Azure/terraform-azurerm-avm-ptn-example-repo`.
 
 ## Checklist
 
@@ -25,9 +25,9 @@ not change it from `100755` to `100644` in
 - [x] Update migration regression coverage and progress wording.
 - [x] Run focused and pre-commit validation.
 - [x] Commit, push, and open the focused pull request.
-- [x] Move cutover exclusions into an internal permanent exclusion list.
+- [x] Add cutover exclusions to built-in repository-discovery defaults.
 - [x] Make caller-supplied repository exclusions additive.
-- [x] Add focused permanent-exclusion behavior tests.
+- [x] Add focused built-in exclusion behavior tests.
 - [x] Narrow the retired-repository guard to the inert exclusion and its tests.
 - [x] Re-run focused and pre-commit validation.
 - [x] Update and push the focused pull request.
@@ -36,6 +36,10 @@ not change it from `100755` to `100644` in
 - [x] Re-run focused and pre-commit validation.
 - [x] Update and push the focused pull request.
 - [x] Record the verified source, target, and migrated launcher modes.
+- [x] Consolidate cutover exclusions into the existing `$reposToSkip` default.
+- [x] Rename focused behavior tests for built-in exclusions.
+- [x] Re-run focused and pre-commit validation.
+- [x] Update and push the focused pull request.
 
 ## Executable-mode evidence
 
@@ -51,7 +55,7 @@ not change it from `100755` to `100644` in
 
 - GitHub Actions API: source `Repository Sync` workflow state is
   `disabled_manually`.
-- Focused repository discovery and migration regression tests: 11 passed.
+- Focused repository discovery and migration regression tests: 12 passed.
 - Focused executable-mode migration regression tests: 7 passed.
 - `./build.ps1 pre-commit`: 879 unit tests passed, 7 skipped, and 26 component
   tests passed.
