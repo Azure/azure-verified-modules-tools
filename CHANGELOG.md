@@ -60,8 +60,6 @@ section when cutting a release.
   which folds in both the repository-scoped `excludedManagedFiles` and the
   global `deprecated-files.json` and makes deletions order-aware, so a
   higher-order file group can reinstate a path a lower-order group deleted.
-  `repository-management/managed-files/` stays in place until the next release
-  ships, because the currently published module still resolves it.
 - Repository configuration moved from
   `repository-management/managed-files/config/config.json` to
   `repository-management/repository-config/config.json` and adopts a group-only
@@ -70,7 +68,11 @@ section when cutting a release.
   `default` group matching `repositories: ["*"]` replaces the implicit `all`
   pseudo-group along with the root-level `codeOwners`, `topics`, and
   `workloadIdentityFederationSubjectClaimOverrides` blocks.
-- The `canary-tooling` file group is retired.
+- Managed-file rollouts are staged through two named rings. The `canary` group
+  became `canary-ring-1`, covering the ten canary repositories, and a new
+  `canary-ring-0` group covers `avm-ptn-example-repo` alone. Both are wired to
+  matching file groups, so a risky file is authored in `canary-ring-0` and
+  promoted a ring at a time by moving it. The `canary` topic is unchanged.
 - Managed-file sync verbose output now identifies every planned create, update,
   and delete by repository-relative path. Update messages distinguish content,
   Git mode, and managed-line drift without logging file contents.
@@ -133,6 +135,10 @@ section when cutting a release.
 
 ### Removed
 
+- `repository-management/managed-files/`. The tree was retained only as a
+  compatibility shim for the previously published module, which resolved managed
+  files and config from it. Avm.Authoring now resolves both from
+  `Azure/azure-verified-modules-managed-files`, so the shim is retired.
 - The `Repository Management - Validate VS Code Extensions` workflow, its
   Pester test, and `repository-management/managed-files/scripts/`. The only
   file it validated was the managed-file `.vscode/extensions.json`, which is
