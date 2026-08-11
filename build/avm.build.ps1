@@ -332,8 +332,8 @@ task coverage {
         (Join-Path $script:moduleRoot 'Public'),
         (Join-Path $script:moduleRoot 'Private')
     )
-    $config.CodeCoverage.OutputFormat          = 'JaCoCo'
-    $config.CodeCoverage.OutputPath            = (Join-Path $coverageOut 'coverage.xml')
+    $config.CodeCoverage.OutputFormat          = 'Cobertura'
+    $config.CodeCoverage.OutputPath            = (Join-Path $coverageOut 'coverage.cobertura.xml')
     $config.CodeCoverage.OutputEncoding        = 'UTF8'
     # Set Pester's own target so its run-end summary matches our floor; the
     # hard gate below is what actually fails the build.
