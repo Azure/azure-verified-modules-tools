@@ -10,8 +10,8 @@ on:
         default: 'All'
         type: string
       repositories_to_skip:
-        description: 'Override the repositories to skip, use a comma separated list. Leave as empty to not skip any repositories.'
-        default: 'terraform-azurerm-avm-template'
+        description: 'Additional repositories to skip, as a comma separated list. Permanent exclusions always apply.'
+        default: ''
         type: string
       plan_only:
         description: 'Whether to only plan the changes'
@@ -33,9 +33,8 @@ on:
         description: 'Only add issues/PRs updated in the last N days (keeps runs under API rate limits). Use 0 to disable the look-back and sweep everything not already on the project (one-off initial back-fill).'
         default: '3'
         type: string
-  # Cutover: restore only after a plan-only run on main and disabling the source schedule.
-  # schedule:
-  #   - cron: '33 */4 * * 1-5'
+  schedule:
+    - cron: '33 */4 * * 1-5'
 
 permissions:
   id-token: write
@@ -76,7 +75,7 @@ jobs:
         id: matrix
         with:
           repositories: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories, 'All') }}
-          repositoriesToSkip: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories_to_skip, 'terraform-azurerm-avm-template') }}
+          repositoriesToSkip: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories_to_skip, '') }}
           clientId: ${{ vars.AVM_APP_CLIENT_ID }}
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
