@@ -15,22 +15,28 @@ version: 2
 # risk.
 
 updates:
+  # `/` covers root .github/workflows plus a root action.yml only; Dependabot
+  # does not recurse, so every nested workflow or composite action directory
+  # has to be listed. Globs are only supported by `directories`.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /repository-management/repository-sync/actions/*
     schedule:
       interval: weekly
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     commit-message:
       prefix: ci
       include: scope
     labels:
       - dependencies
       - github-actions
-    # Batch minor + patch bumps into one PR per week to avoid PR spam.
-    # Major bumps stay as individual PRs so they get individual review.
+    # Batch minor + patch bumps into one PR per directory per week to avoid
+    # PR spam. Major bumps stay as individual PRs so they get individual
+    # review.
     groups:
       actions-minor-patch:
         update-types:
