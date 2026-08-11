@@ -45,7 +45,8 @@ function Expand-AvmToolArchive {
                 $tar = Get-Command `
                     -Name 'tar' `
                     -CommandType Application `
-                    -ErrorAction SilentlyContinue
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
                 if (-not $tar) {
                     throw [System.IO.FileNotFoundException]::new(
                         "Expand-AvmToolArchive: 'tar' is not on PATH; required for tar.gz archives.")

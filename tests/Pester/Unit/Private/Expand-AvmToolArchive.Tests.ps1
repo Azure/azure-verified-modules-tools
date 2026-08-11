@@ -163,6 +163,37 @@ Describe 'Expand-AvmWindowsTarArchive' {
 }
 
 Describe 'Expand-AvmToolArchive tar.gz dispatch' {
+    It 'uses the first tar application when PATH returns duplicate matches' -Skip:$IsWindows {
+        $targetDir = Join-Path $TestDrive 'dispatch-expanded'
+        New-Item -ItemType Directory -Path $targetDir | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            TargetDir = $targetDir
+        } {
+            param($TargetDir)
+            Mock Get-Command {
+                [pscustomobject]@{ Source = '/usr/bin/tar' }
+                [pscustomobject]@{ Source = '/bin/tar' }
+            } -ParameterFilter {
+                $Name -eq 'tar' -and
+                $CommandType -eq 'Application'
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0 }
+            }
+
+            Expand-AvmToolArchive `
+                -ArchivePath '/tmp/dispatch.tar.gz' `
+                -Archive 'tar.gz' `
+                -TargetDir $TargetDir `
+                -EntrypointBasename 'tool'
+
+            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly -ParameterFilter {
+                $FilePath -eq '/usr/bin/tar'
+            }
+        }
+    }
+
     It 'uses managed extraction on Windows' -Skip:(-not $IsWindows) {
         $archivePath = Join-Path $TestDrive 'dispatch.tar.gz'
         & $script:newTarFixture -Path $archivePath -Entries @(
