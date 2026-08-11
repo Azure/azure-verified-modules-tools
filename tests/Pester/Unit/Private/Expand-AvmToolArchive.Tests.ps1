@@ -194,4 +194,55 @@ Describe 'Expand-AvmToolArchive tar.gz dispatch' {
         Test-Path -LiteralPath (Join-Path $targetDir 'tool.exe') |
             Should -BeTrue
     }
+
+    It 'resolves a single native tar when PATH exposes it more than once' -Skip:$IsWindows {
+        $archivePath = Join-Path $TestDrive 'native.tar.gz'
+        & $script:newTarFixture -Path $archivePath -Entries @(
+            [pscustomobject]@{
+                Type    = 'RegularFile'
+                Name    = 'tool'
+                Content = 'tool'
+            }
+        ) | Out-Null
+        $targetDir = Join-Path $TestDrive 'native-expanded'
+        New-Item -ItemType Directory -Path $targetDir | Out-Null
+
+        # Ubuntu runners carry both /usr/bin and /bin (a symlink to /usr/bin) on
+        # PATH, so `tar` resolves twice and `.Source` becomes an array.
+        $shadowDir = Join-Path $TestDrive 'shadow-bin'
+        New-Item -ItemType Directory -Path $shadowDir | Out-Null
+        $nativeTar = (
+            Get-Command -Name 'tar' -CommandType Application |
+                Select-Object -First 1
+        ).Source
+        New-Item `
+            -ItemType SymbolicLink `
+            -Path (Join-Path $shadowDir 'tar') `
+            -Target $nativeTar | Out-Null
+
+        $originalPath = $env:PATH
+        try {
+            $env:PATH = @($shadowDir, $originalPath) -join [System.IO.Path]::PathSeparator
+            @(Get-Command -Name 'tar' -CommandType Application).Count |
+                Should -BeGreaterThan 1
+
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                ArchivePath = $archivePath
+                TargetDir   = $targetDir
+            } {
+                param($ArchivePath, $TargetDir)
+                Expand-AvmToolArchive `
+                    -ArchivePath $ArchivePath `
+                    -Archive 'tar.gz' `
+                    -TargetDir $TargetDir `
+                    -EntrypointBasename 'tool'
+            }
+        }
+        finally {
+            $env:PATH = $originalPath
+        }
+
+        Get-Content -LiteralPath (Join-Path $targetDir 'tool') -Raw |
+            Should -Be 'tool'
+    }
 }
