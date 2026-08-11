@@ -49,6 +49,9 @@ section when cutting a release.
 
 ### Changed
 
+- Managed-file sync verbose output now identifies every planned create, update,
+  and delete by repository-relative path. Update messages distinguish content,
+  Git mode, and managed-line drift without logging file contents.
 - Managed-file sync now defaults to `Azure/azure-verified-modules-tools`
   (`repository-management/managed-files/files` with configuration under
   `repository-management/managed-files/config`). Configuration repository and
