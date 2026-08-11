@@ -1,3 +1,128 @@
+function Invoke-AvmTerraformPolicyExample {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        $Example,
+
+        [Parameter(Mandatory)]
+        $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $envVars = @{}
+    $primaryError = $null
+    $issues = [System.Collections.Generic.List[object]]::new()
+    $evaluated = 0
+
+    try {
+        Invoke-AvmScriptHook `
+            -HookPath (Join-Path $Example.StagedPath 'pre.ps1') `
+            -WorkingDirectory $Example.StagedPath `
+            -Label ("policy {0} pre.ps1" -f $Example.Name)
+
+        $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $Example.StagedPath '.env')
+
+        $null = Invoke-AvmProcess `
+            -FilePath $Options.TerraformPath `
+            -ArgumentList @('init', '-input=false', '-no-color') `
+            -WorkingDirectory $Example.StagedPath `
+            -EnvVars $envVars `
+            -Label ("terraform init ({0})" -f $Example.Name)
+
+        $null = Invoke-AvmProcess `
+            -FilePath $Options.TerraformPath `
+            -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
+            -WorkingDirectory $Example.StagedPath `
+            -EnvVars $envVars `
+            -Label ("terraform plan ({0})" -f $Example.Name)
+
+        $showResult = Invoke-AvmProcess `
+            -FilePath $Options.TerraformPath `
+            -ArgumentList @('show', '-json', 'tfplan') `
+            -WorkingDirectory $Example.StagedPath `
+            -EnvVars $envVars `
+            -Label ("terraform show ({0})" -f $Example.Name)
+
+        $planJsonPath = Join-Path $Example.StagedPath 'tfplan.json'
+        [System.IO.File]::WriteAllText(
+            $planJsonPath,
+            [string]$showResult.StdOut,
+            [System.Text.UTF8Encoding]::new($false))
+
+        $localExceptions = Join-Path $Example.StagedPath 'exceptions'
+        $policyRuns = @(
+            [pscustomobject]@{ Name = 'APRL'; Path = $Options.AprlPath }
+            [pscustomobject]@{ Name = 'AVMSEC'; Path = $Options.AvmsecPath }
+        )
+
+        foreach ($policyRun in $policyRuns) {
+            $arguments = [System.Collections.Generic.List[string]]::new()
+            $arguments.Add('test')
+            $arguments.Add('--all-namespaces')
+            $arguments.Add('--policy')
+            $arguments.Add([string]$policyRun.Path)
+            $arguments.Add('--policy')
+            $arguments.Add($Options.DefaultExceptions)
+            if (Test-Path -LiteralPath $localExceptions -PathType Container) {
+                $arguments.Add('--policy')
+                $arguments.Add($localExceptions)
+            }
+            $arguments.Add('--output')
+            $arguments.Add('json')
+            $arguments.Add('tfplan.json')
+
+            $policyResult = Invoke-AvmProcess `
+                -FilePath $Options.ConftestPath `
+                -ArgumentList $arguments.ToArray() `
+                -WorkingDirectory $Example.StagedPath `
+                -EnvVars $envVars `
+                -Label ("conftest {0} ({1})" -f $policyRun.Name, $Example.Name) `
+                -IgnoreExitCode
+
+            $parsed = ConvertFrom-AvmPolicyResult `
+                -Result $policyResult `
+                -ExamplePath $Example.RelativePath `
+                -PolicyName $policyRun.Name
+            $evaluated += $parsed.Evaluated
+            foreach ($issue in $parsed.Issues) {
+                $issues.Add($issue)
+            }
+        }
+    }
+    catch {
+        $primaryError = $_
+    }
+
+    try {
+        Invoke-AvmScriptHook `
+            -HookPath (Join-Path $Example.StagedPath 'post.ps1') `
+            -WorkingDirectory $Example.StagedPath `
+            -EnvVars $envVars `
+            -Label ("policy {0} post.ps1" -f $Example.Name)
+    }
+    catch {
+        if ($null -eq $primaryError) {
+            throw
+        }
+        Write-AvmLog `
+            -Level Warning `
+            -File (Join-Path $Example.RelativePath 'post.ps1') `
+            -Message ("Policy post hook also failed; preserving the primary error: {0}" -f $_.Exception.Message)
+    }
+
+    if ($null -ne $primaryError) {
+        throw $primaryError
+    }
+
+    return [pscustomobject]@{
+        Evaluated = $evaluated
+        Issues    = $issues.ToArray()
+    }
+}
+
 function Invoke-AvmTerraformCheckPolicy {
     <#
     .SYNOPSIS
@@ -6,7 +131,7 @@ function Invoke-AvmTerraformCheckPolicy {
     .DESCRIPTION
         Implements the legacy AVM pr-check policy lifecycle without mutating the
         repository. The module is copied beneath the AVM cache, then every direct
-        examples/* directory is evaluated independently:
+        examples/* directory is evaluated independently with bounded parallelism:
 
           - examples carrying .e2eignore are skipped
           - pre.ps1 runs when present; pre.sh is rejected with migration guidance
@@ -31,6 +156,10 @@ function Invoke-AvmTerraformCheckPolicy {
     .PARAMETER AllowPathFallback
         Allow Terraform and Conftest to resolve from PATH.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent examples to evaluate at once. Defaults to
+        one for direct engine calls.
+
     .OUTPUTS
         A Terraform engine result with Status, Evaluated, and Issues.
     #>
@@ -40,7 +169,10 @@ function Invoke-AvmTerraformCheckPolicy {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 1
     )
 
     Set-StrictMode -Version 3.0
@@ -103,6 +235,8 @@ function Invoke-AvmTerraformCheckPolicy {
     $stageRoot = Join-Path $stageParent ('avm-policy-' + [guid]::NewGuid().ToString('N'))
     $issues = [System.Collections.Generic.List[object]]::new()
     $evaluated = 0
+    $streamOutput = Test-AvmVerboseEnabled
+    $effectiveThrottle = if ($streamOutput) { 1 } else { $ThrottleLimit }
 
     try {
         Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
@@ -118,113 +252,45 @@ function Invoke-AvmTerraformCheckPolicy {
             -Force `
             -ErrorAction Stop
 
-        foreach ($sourceExample in $activeExamples) {
+        $examples = [System.Collections.Generic.List[object]]::new()
+        for ($exampleIndex = 0; $exampleIndex -lt $activeExamples.Count; $exampleIndex++) {
+            $sourceExample = $activeExamples[$exampleIndex]
             $relativeExample = [System.IO.Path]::GetRelativePath($Context.Root, $sourceExample)
             $stagedExample = Join-Path $stageRoot $relativeExample
             $exampleName = Split-Path -Path $sourceExample -Leaf
-            $envVars = @{}
-            $primaryError = $null
+            Write-AvmLog `
+                -Level Info `
+                -Message ("policy: example {0}/{1} = {2}" -f ($exampleIndex + 1), $activeExamples.Count, $exampleName) |
+                Out-Null
+            $examples.Add([pscustomobject]@{
+                    Name         = $exampleName
+                    RelativePath = $relativeExample
+                    StagedPath   = $stagedExample
+                })
+        }
 
-            try {
-                Invoke-AvmScriptHook `
-                    -HookPath (Join-Path $stagedExample 'pre.ps1') `
-                    -WorkingDirectory $stagedExample `
-                    -Label ("policy {0} pre.ps1" -f $exampleName)
-
-                $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $stagedExample '.env')
-
-                $initResult = Invoke-AvmProcess `
-                    -FilePath $terraform.Path `
-                    -ArgumentList @('init', '-input=false', '-no-color') `
-                    -WorkingDirectory $stagedExample `
-                    -EnvVars $envVars `
-                    -Label ("terraform init ({0})" -f $exampleName)
-                $null = $initResult
-
-                $planResult = Invoke-AvmProcess `
-                    -FilePath $terraform.Path `
-                    -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
-                    -WorkingDirectory $stagedExample `
-                    -EnvVars $envVars `
-                    -Label ("terraform plan ({0})" -f $exampleName)
-                $null = $planResult
-
-                $showResult = Invoke-AvmProcess `
-                    -FilePath $terraform.Path `
-                    -ArgumentList @('show', '-json', 'tfplan') `
-                    -WorkingDirectory $stagedExample `
-                    -EnvVars $envVars `
-                    -Label ("terraform show ({0})" -f $exampleName)
-
-                $planJsonPath = Join-Path $stagedExample 'tfplan.json'
-                [System.IO.File]::WriteAllText(
-                    $planJsonPath,
-                    [string]$showResult.StdOut,
-                    [System.Text.UTF8Encoding]::new($false))
-
-                $localExceptions = Join-Path $stagedExample 'exceptions'
-                $policyRuns = @(
-                    [pscustomobject]@{ Name = 'APRL'; Path = $aprlAsset.Path }
-                    [pscustomobject]@{ Name = 'AVMSEC'; Path = $avmsecAsset.Path }
-                )
-
-                foreach ($policyRun in $policyRuns) {
-                    $arguments = [System.Collections.Generic.List[string]]::new()
-                    $arguments.Add('test')
-                    $arguments.Add('--all-namespaces')
-                    $arguments.Add('--policy')
-                    $arguments.Add([string]$policyRun.Path)
-                    $arguments.Add('--policy')
-                    $arguments.Add($defaultExceptions)
-                    if (Test-Path -LiteralPath $localExceptions -PathType Container) {
-                        $arguments.Add('--policy')
-                        $arguments.Add($localExceptions)
-                    }
-                    $arguments.Add('--output')
-                    $arguments.Add('json')
-                    $arguments.Add('tfplan.json')
-
-                    $policyResult = Invoke-AvmProcess `
-                        -FilePath $conftest.Path `
-                        -ArgumentList $arguments.ToArray() `
-                        -WorkingDirectory $stagedExample `
-                        -EnvVars $envVars `
-                        -Label ("conftest {0} ({1})" -f $policyRun.Name, $exampleName) `
-                        -IgnoreExitCode
-
-                    $parsed = ConvertFrom-AvmPolicyResult `
-                        -Result $policyResult `
-                        -ExamplePath $relativeExample `
-                        -PolicyName $policyRun.Name
-                    $evaluated += $parsed.Evaluated
-                    foreach ($issue in $parsed.Issues) {
-                        $issues.Add($issue)
-                    }
-                }
-            }
-            catch {
-                $primaryError = $_
-            }
-
-            try {
-                Invoke-AvmScriptHook `
-                    -HookPath (Join-Path $stagedExample 'post.ps1') `
-                    -WorkingDirectory $stagedExample `
-                    -EnvVars $envVars `
-                    -Label ("policy {0} post.ps1" -f $exampleName)
-            }
-            catch {
-                if ($null -eq $primaryError) {
-                    throw
-                }
-                Write-AvmLog `
-                    -Level Warning `
-                    -File (Join-Path $relativeExample 'post.ps1') `
-                    -Message ("Policy post hook also failed; preserving the primary error: {0}" -f $_.Exception.Message)
-            }
-
-            if ($null -ne $primaryError) {
-                throw $primaryError
+        Write-AvmLog `
+            -Level Verbose `
+            -Message ("policy: processing examples with {0} worker(s)" -f $effectiveThrottle) |
+            Out-Null
+        $options = [pscustomobject]@{
+            TerraformPath     = $terraform.Path
+            ConftestPath      = $conftest.Path
+            AprlPath          = $aprlAsset.Path
+            AvmsecPath        = $avmsecAsset.Path
+            DefaultExceptions = $defaultExceptions
+        }
+        $exampleResults = @(
+            Invoke-AvmParallel `
+                -InputObject $examples.ToArray() `
+                -FunctionName 'Invoke-AvmTerraformPolicyExample' `
+                -Argument $options `
+                -ThrottleLimit $effectiveThrottle
+        )
+        foreach ($exampleResult in $exampleResults) {
+            $evaluated += $exampleResult.Evaluated
+            foreach ($issue in $exampleResult.Issues) {
+                $issues.Add($issue)
             }
         }
     }

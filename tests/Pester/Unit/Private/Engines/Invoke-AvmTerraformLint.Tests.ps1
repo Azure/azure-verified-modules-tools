@@ -493,6 +493,48 @@ rule "managed_identities" {
         }
     }
 
+    It 'initializes each distinct TFLint configuration once' {
+        $ctx = $script:context
+        foreach ($moduleName in @('first', 'second')) {
+            $moduleDir = Join-Path $script:moduleDir 'modules' $moduleName
+            New-Item -ItemType Directory -Path $moduleDir -Force | Out-Null
+            Set-Content `
+                -LiteralPath (Join-Path $moduleDir 'main.tf') `
+                -Value 'output "value" { value = 1 }' `
+                -Encoding utf8
+        }
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name"
+                }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformLint -Context $C
+
+            $result.Status | Should -Be 'pass'
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $ArgumentList -contains '--init'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -contains '--init') -and
+                (($ArgumentList -join '|') -like '*avm.tflint_module.hcl*')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
+                $ArgumentList -contains '--format=json'
+            }
+        }
+    }
+
     It 'rejects example shell hooks even when a PowerShell sibling exists' {
         $ctx = $script:context
         $exampleDir = Join-Path $script:moduleDir 'examples/default'

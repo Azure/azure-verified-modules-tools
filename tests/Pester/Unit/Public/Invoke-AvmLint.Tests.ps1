@@ -63,12 +63,14 @@ Describe 'Invoke-AvmLint' {
             }
             Mock Invoke-AvmBicepLint { throw 'wrong engine' }
             Mock Write-AvmLog
-            Invoke-AvmLint -Path $D
+            Invoke-AvmLint -Path $D -ThrottleLimit 7
         }
         $result.Engine | Should -Be 'terraform'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformLint -Exactly 1
+            Should -Invoke Invoke-AvmTerraformLint -Exactly 1 -ParameterFilter {
+                $ThrottleLimit -eq 7
+            }
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                 $Message -eq 'lint: running terraform lint engine' -and
                 $Level -eq 'Info'

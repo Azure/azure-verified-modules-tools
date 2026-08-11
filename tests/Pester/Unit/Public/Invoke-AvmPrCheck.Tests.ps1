@@ -367,15 +367,15 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTestUnit { throw 'pr-check must not run the standalone unit tier' }
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            $r = Invoke-AvmPrCheck -Path $D
+            $r = Invoke-AvmPrCheck -Path $D -ThrottleLimit 5
 
             # sync runs first in drift-check mode: -CheckDrift is forwarded via
             # the step's ExtraArgs so CI treats stale governed files as a fail.
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
             Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmLint            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmCheckPolicy     -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmLint            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5 }
+            Should -Invoke Invoke-AvmCheckPolicy     -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5 }
             Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTest            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTestUnit        -Times 0 -Exactly

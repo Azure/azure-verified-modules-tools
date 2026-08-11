@@ -62,9 +62,11 @@ Describe 'Invoke-AvmCheckPolicy' {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() }
             }
             Mock Invoke-AvmBicepCheckPolicy { throw 'wrong engine' }
-            $result = Invoke-AvmCheckPolicy -Path $D
+            $result = Invoke-AvmCheckPolicy -Path $D -ThrottleLimit 6
             $result.Engine | Should -Be 'terraform'
-            Should -Invoke Invoke-AvmTerraformCheckPolicy -Exactly 1
+            Should -Invoke Invoke-AvmTerraformCheckPolicy -Exactly 1 -ParameterFilter {
+                $ThrottleLimit -eq 6
+            }
             Should -Invoke Invoke-AvmBicepCheckPolicy -Times 0 -Exactly
         }
     }

@@ -28,6 +28,10 @@ function Invoke-AvmLint {
         When set, accept a PATH-resolved tool binary that self-reports the
         lock-pinned version.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent Terraform scopes to process at once.
+        Defaults to four. Bicep lint currently ignores this value.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Issues.
@@ -49,6 +53,9 @@ function Invoke-AvmLint {
 
         [switch] $AllowPathFallback,
 
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 4,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -66,7 +73,10 @@ function Invoke-AvmLint {
             Invoke-AvmBicepLint -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformLint -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmTerraformLint `
+                -Context $context `
+                -AllowPathFallback:$AllowPathFallback `
+                -ThrottleLimit $ThrottleLimit
         }
         default {
             throw [AvmContextException]::new(
