@@ -2,8 +2,8 @@
 # currently configured.
 #
 # Background: every AVM repository is governed by an explicit advanced-setup
-# CodeQL workflow shipped via
-# `../managed-files/files/root/.github/workflows/codeql.yml`
+# CodeQL workflow shipped via the managed files repository at
+# `terraform/files/root/.github/workflows/codeql.yml`
 # (language matrix is pinned to `actions`, action versions are SHA-pinned).
 # When GitHub's org/enterprise-level default-setup toggle is also on, GitHub
 # additionally spawns its own dynamic `dynamic/github-code-scanning/codeql`

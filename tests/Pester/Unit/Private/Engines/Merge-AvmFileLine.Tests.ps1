@@ -84,9 +84,9 @@ Describe 'Get-AvmManagedLineSpec' {
         $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)
         $script:base = Join-Path $TestDrive ("gov-" + $unique)
         $script:rootDir = Join-Path $script:base 'root'
-        $script:overlayDir = Join-Path $script:base 'canary'
+        $script:laterGroupDir = Join-Path $script:base 'canary'
         New-Item -ItemType Directory -Path $script:rootDir -Force | Out-Null
-        New-Item -ItemType Directory -Path $script:overlayDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:laterGroupDir -Force | Out-Null
     }
 
     It 'reads the root spec and normalises paths' {
@@ -95,36 +95,36 @@ Describe 'Get-AvmManagedLineSpec' {
 
         $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
             param($B)
-            Get-AvmManagedLineSpec -BaseDir $B
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
         }
         $spec.Contains('.gitignore') | Should -BeTrue
         $spec['.gitignore'].Required | Should -Be @('abc', 'def')
         $spec['.gitignore'].Removed | Should -Be @('old')
     }
 
-    It 'lets a later overlay requirement cancel an earlier removal' {
+    It 'lets a later file group requirement cancel an earlier removal' {
         Set-Content -LiteralPath (Join-Path $script:rootDir '.avm-managed-lines.json') `
             -Value '{ ".gitignore": { "removed": ["abc"] } }' -NoNewline
-        Set-Content -LiteralPath (Join-Path $script:overlayDir '.avm-managed-lines.json') `
+        Set-Content -LiteralPath (Join-Path $script:laterGroupDir '.avm-managed-lines.json') `
             -Value '{ ".gitignore": { "required": ["abc"] } }' -NoNewline
 
         $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
             param($B)
-            Get-AvmManagedLineSpec -BaseDir $B -Overlays @('canary')
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec['.gitignore'].Required | Should -Be @('abc')
         $spec['.gitignore'].Removed | Should -BeNullOrEmpty
     }
 
-    It 'lets a later overlay removal cancel an earlier requirement' {
+    It 'lets a later file group removal cancel an earlier requirement' {
         Set-Content -LiteralPath (Join-Path $script:rootDir '.avm-managed-lines.json') `
             -Value '{ ".gitignore": { "required": ["abc"] } }' -NoNewline
-        Set-Content -LiteralPath (Join-Path $script:overlayDir '.avm-managed-lines.json') `
+        Set-Content -LiteralPath (Join-Path $script:laterGroupDir '.avm-managed-lines.json') `
             -Value '{ ".gitignore": { "removed": ["abc"] } }' -NoNewline
 
         $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
             param($B)
-            Get-AvmManagedLineSpec -BaseDir $B -Overlays @('canary')
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec['.gitignore'].Removed | Should -Be @('abc')
         $spec['.gitignore'].Required | Should -BeNullOrEmpty
@@ -137,7 +137,7 @@ Describe 'Get-AvmManagedLineSpec' {
         {
             InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
                 param($B)
-                Get-AvmManagedLineSpec -BaseDir $B
+                Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
             }
         } | Should -Throw -ExceptionType ([System.InvalidOperationException])
     }
@@ -148,7 +148,7 @@ Describe 'Get-AvmManagedLineSpec' {
         {
             InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
                 param($B)
-                Get-AvmManagedLineSpec -BaseDir $B
+                Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
             }
         } | Should -Throw -ExceptionType ([System.InvalidOperationException])
     }
@@ -156,7 +156,7 @@ Describe 'Get-AvmManagedLineSpec' {
     It 'returns empty when no spec files exist' {
         $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:base } {
             param($B)
-            Get-AvmManagedLineSpec -BaseDir $B -Overlays @('canary')
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec.Keys.Count | Should -Be 0
     }

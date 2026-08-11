@@ -1,0 +1,136 @@
+{
+  "repositoryGroups": [
+    {
+      "name": "default",
+      "order": -1,
+      "repositories": [
+        "*"
+      ],
+      "managedFiles": [
+        "root"
+      ],
+      "topics": [
+        "azure-verified-modules",
+        "avm"
+      ],
+      "codeOwnersFileProtectionTeams": [
+        "azure-verified-modules-engineering-owners"
+      ],
+      "workloadIdentityFederationSubjectClaimOverrides": {
+        "jobWorkflowRef": "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
+      },
+      "teams": [
+        {
+          "name": "azure-verified-modules-module-contributors",
+          "description": "Azure Verified Modules Module Contributors.",
+          "repositoryPermission": "push",
+          "environmentApproval": true
+        },
+        {
+          "name": "azure-verified-modules-module-readers",
+          "description": "Azure Verified Modules Module Readers.",
+          "repositoryPermission": "triage",
+          "environmentApproval": false
+        },
+        {
+          "name": "azure-verified-modules-engineering-owners",
+          "description": "AVM engineering owners. Required reviewers for CODEOWNERS changes on all repositories and for all changes on tier 1 modules.",
+          "repositoryPermission": "push",
+          "environmentApproval": false
+        }
+      ]
+    },
+    {
+      "name": "canary",
+      "repositories": [
+        "avm-ptn-example-repo",
+        "avm-res-devopsinfrastructure-pool",
+        "avm-res-network-virtualnetwork",
+        "avm-res-documentdb-databaseaccount",
+        "avm-res-app-managedenvironment",
+        "avm-res-documentdb-mongocluster",
+        "avm-res-compute-disk",
+        "avm-res-dbformysql-flexibleserver",
+        "avm-res-cdn-profile",
+        "avm-res-avs-privatecloud"
+      ],
+      "topics": [
+        "canary"
+      ]
+    },
+    {
+      "name": "azure-verified-modules-tier-1",
+      "repositories": [
+        "avm-ptn-example-repo"
+      ],
+      "codeOwnersTeams": [
+        "azure-verified-modules-engineering-owners"
+      ],
+      "topics": [
+        "avm-tier-1"
+      ]
+    },
+    {
+      "name": "azure-verified-modules-tier-2",
+      "repositories": [
+        "avm-res-devopsinfrastructure-pool"
+      ],
+      "topics": [
+        "avm-tier-2"
+      ]
+    },
+    {
+      "name": "azure-verified-modules-tier-3",
+      "repositories": [
+        "avm-ptn-monitoring-amba-alz"
+      ],
+      "topics": [
+        "avm-tier-3"
+      ]
+    },
+    {
+      "name": "azure-landing-zones",
+      "order": 10,
+      "managedFiles": [
+        "alz"
+      ],
+      "repositories": [
+        "avm-ptn-alz",
+        "avm-ptn-alz-management",
+        "avm-ptn-alz-connectivity-hub-and-spoke-vnet",
+        "avm-ptn-alz-connectivity-virtual-wan",
+        "avm-ptn-alz-sub-vending",
+        "avm-ptn-alz-application-landing-zone-cicd-bootstrap-github",
+        "avm-ptn-alz-application-landing-zone-cicd-bootstrap-azure-devops"
+      ],
+      "teams": [
+        {
+          "name": "azure-landing-zone-contributors",
+          "description": "Contributors of Azure Landing Zone modules.",
+          "repositoryPermission": "push",
+          "environmentApproval": true
+        },
+        {
+          "name": "azure-landing-zone-readers",
+          "description": "Readers of Azure Landing Zone modules.",
+          "repositoryPermission": "triage",
+          "environmentApproval": false
+        }
+      ]
+    },
+    {
+      "name": "azure-migrate",
+      "repositories": [
+        "avm-ptn-azure-local-migrate"
+      ],
+      "teams": [
+        {
+          "name": "avm-owners-azure-migrate",
+          "description": "Contributors to the Azure Verified Module Azure Migrate Terraform repositories.",
+          "repositoryPermission": "push",
+          "environmentApproval": true
+        }
+      ]
+    }
+  ]
+}

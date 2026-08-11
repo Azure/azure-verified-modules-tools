@@ -17,8 +17,8 @@ param(
     [string]$repoId = "avm-ptn-example-repo",
     [string]$repoUrl = "https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo",
     [string]$outputDirectory = ".",
-    [string]$repoConfigFilePath = "../managed-files/config/config.json",
-    [string]$managedFilesBaseDir = "../managed-files/files",
+    [string]$repoConfigFilePath = "../repository-config/config.json",
+    [string]$managedFilesBaseDir = "../../../azure-verified-modules-managed-files/terraform/files",
     [object]$repoMetaData = $null,
     [string]$terraformModulePath = "./terraform",
     [string[]]$resourceTypesThatCannotBeDestroyed = @(

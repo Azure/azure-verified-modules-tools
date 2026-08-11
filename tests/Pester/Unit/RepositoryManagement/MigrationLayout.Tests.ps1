@@ -7,13 +7,7 @@ BeforeAll {
 Describe "Repository management migration layout" {
     It "contains each required isolated surface" {
         $requiredPaths = @(
-            "repository-management/managed-files/files/root"
-            "repository-management/managed-files/files/alz"
-            "repository-management/managed-files/files/canary"
-            "repository-management/managed-files/files/canary-tooling"
-            "repository-management/managed-files/config/config.json"
-            "repository-management/managed-files/config/deprecated-files.json"
-            "repository-management/managed-files/scripts/Test-VsCodeExtensions.ps1"
+            "repository-management/repository-config/config.json"
             "repository-management/repository-sync/terraform/main.tf"
             "repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1"
             "repository-management/repository-sync/actions/avm-repos/action.yml"
@@ -21,7 +15,6 @@ Describe "Repository management migration layout" {
             "repository-management/repository-creation/scripts/New-Repository.ps1"
             ".github/workflows/repository-management-sync.yml"
             ".github/workflows/repository-management-config-test.yml"
-            ".github/workflows/repository-management-extension-validation.yml"
         )
 
         foreach ($relativePath in $requiredPaths) {
@@ -30,16 +23,21 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It "tracks the managed root avm launcher as executable" {
-        $indexEntries = @(
-            & git -C $script:repoRoot ls-files --stage -- (
-                "repository-management/managed-files/files/root/avm"
-            ) 2>$null
+    It "retains the legacy managed files tree as a released-module compatibility shim" {
+        # The released Avm.Authoring on PSGallery still resolves managed files and
+        # config from repository-management/managed-files. Removing this tree before
+        # the next release ships would break `avm pre-commit` in every module repo,
+        # so its deletion must be a deliberate follow-up change.
+        $shimPaths = @(
+            "repository-management/managed-files/files/root"
+            "repository-management/managed-files/config/config.json"
+            "repository-management/managed-files/config/deprecated-files.json"
         )
 
-        $LASTEXITCODE | Should -Be 0
-        $indexEntries | Should -HaveCount 1
-        ($indexEntries[0] -split '\s+')[0] | Should -Be "100755"
+        foreach ($relativePath in $shimPaths) {
+            Test-Path -LiteralPath (Join-Path $script:repoRoot $relativePath) |
+                Should -BeTrue -Because "$relativePath is still consumed by the released Avm.Authoring"
+        }
     }
 
     It "does not retain retired source layout references" {
@@ -47,7 +45,6 @@ Describe "Repository management migration layout" {
             (Join-Path $script:repoRoot "repository-management")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-config-test.yml")
-            (Join-Path $script:repoRoot ".github/workflows/repository-management-extension-validation.yml")
         )
         $files = @(
             Get-ChildItem -LiteralPath $roots -Recurse -File |
@@ -62,8 +59,8 @@ Describe "Repository management migration layout" {
         )
 
         foreach ($pattern in $retiredReferences) {
-            $matches = @($files | Select-String -Pattern $pattern)
-            $matches | Should -BeNullOrEmpty -Because "'$pattern' belongs to the source layout"
+            $found = @($files | Select-String -Pattern $pattern)
+            $found | Should -BeNullOrEmpty -Because "'$pattern' belongs to the source layout"
         }
     }
 
@@ -125,10 +122,10 @@ Describe "Repository management migration layout" {
         ) -Raw
 
         $syncScript | Should -Match (
-            '\$repoConfigFilePath\s*=\s*"\.\./managed-files/config/config\.json"'
+            '\$repoConfigFilePath\s*=\s*"\.\./repository-config/config\.json"'
         )
         $syncScript | Should -Match (
-            '\$managedFilesBaseDir\s*=\s*"\.\./managed-files/files"'
+            '\$managedFilesBaseDir\s*=\s*"[^"]*azure-verified-modules-managed-files/terraform/files"'
         )
         $preCommitHelper | Should -Match (
             'ManagedFilesLocalPath\s*=\s*\$managedFilesBaseDir'

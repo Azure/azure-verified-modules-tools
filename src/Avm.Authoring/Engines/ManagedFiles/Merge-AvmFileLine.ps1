@@ -105,20 +105,20 @@ function Merge-AvmFileLine {
 function Get-AvmManagedLineSpec {
     <#
     .SYNOPSIS
-        Collect and stack the line-managed-file spec from a managed-files base
-        directory and its overlays.
+        Collect and stack the line-managed-file spec across a repository's
+        managed-file groups.
 
     .DESCRIPTION
-        Reads '<base>/root/.avm-managed-lines.json' plus one spec file per
-        overlay directory, in the same order Build-AvmManagedFilesMap applies the
-        overlays (root first, then overlays ascending). Each spec is a flat JSON
-        map of forward-slash relative path -> { required: [...], removed: [...] }.
+        Reads one '<base>/<group>/.avm-managed-lines.json' per file group, in
+        the same order Build-AvmManagedFilesMap applies the groups. Each spec is
+        a flat JSON map of forward-slash relative path ->
+        { required: [...], removed: [...] }.
 
-        Entries stack per line with last-writer-wins: a later overlay that
-        requires a line cancels an earlier overlay that removed it, and vice
-        versa, mirroring how overlay files win over root. Within a single spec
-        file a line in both 'required' and 'removed' is a contradiction and
-        throws.
+        Entries stack per line with last-writer-wins: a later group that
+        requires a line cancels an earlier group that removed it, and vice
+        versa, mirroring how later group files win over earlier ones. Within a
+        single spec file a line in both 'required' and 'removed' is a
+        contradiction and throws.
 
     .OUTPUTS
         An ordered hashtable keyed by relative path; each value is a
@@ -130,7 +130,7 @@ function Get-AvmManagedLineSpec {
         [Parameter(Mandatory)]
         [string] $BaseDir,
 
-        [string[]] $Overlays = @()
+        [string[]] $FileGroups = @()
     )
 
     Set-StrictMode -Version 3.0
@@ -138,10 +138,9 @@ function Get-AvmManagedLineSpec {
     $specFileName = Get-AvmManagedLineSpecFileName
 
     $dirs = New-Object System.Collections.Generic.List[string]
-    $dirs.Add((Join-Path $BaseDir 'root'))
-    foreach ($overlay in $Overlays) {
-        if ([string]::IsNullOrWhiteSpace($overlay)) { continue }
-        $dirs.Add((Join-Path $BaseDir $overlay))
+    foreach ($fileGroup in $FileGroups) {
+        if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
+        $dirs.Add((Join-Path $BaseDir $fileGroup))
     }
 
     $spec = [ordered]@{}

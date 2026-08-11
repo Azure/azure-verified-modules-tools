@@ -23,6 +23,48 @@ Describe 'Invoke-AvmSync' {
         $entry.Cmdlet | Should -Be 'Invoke-AvmSync'
     }
 
+    It 'accepts every managed-files sync option the engine exposes' {
+        # Derived from the engine rather than hardcoded, so a new engine option
+        # cannot be added without also surfacing it on the CLI.
+        $engineOptions = InModuleScope 'Avm.Authoring' {
+            (Get-Command Sync-AvmManagedFile).Parameters.Values |
+                Where-Object { $_.ParameterType -eq [string] } |
+                    Select-Object -ExpandProperty Name
+        }
+
+        $engineOptions | Should -Not -BeNullOrEmpty
+
+        $command = Get-Command Invoke-AvmSync -Module Avm.Authoring
+        foreach ($parameterName in $engineOptions) {
+            $command.Parameters.ContainsKey($parameterName) | Should -BeTrue -Because "Invoke-AvmSync should forward -$parameterName"
+            $command.Parameters[$parameterName].ParameterType | Should -Be ([string])
+        }
+    }
+
+    It 'forwards the file-group config options to the engine' {
+        $dir = Join-Path $TestDrive ("fgc-sync-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $ctx = [pscustomobject]@{
+                Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+            }
+            Mock Get-AvmModuleContext { $ctx }
+            Mock Sync-AvmManagedFile {
+                [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
+            }
+            Invoke-AvmSync -Path $D `
+                -FileGroupConfigPath 'custom/config/managed-files.json' `
+                -FileGroupConfigLocalPath 'D:\gov\managed-files.json' | Out-Null
+
+            Should -Invoke Sync-AvmManagedFile -Exactly 1 -ParameterFilter {
+                $FileGroupConfigPath -eq 'custom/config/managed-files.json' -and
+                $FileGroupConfigLocalPath -eq 'D:\gov\managed-files.json'
+            }
+        }
+    }
+
     It 'dispatches a terraform context to Sync-AvmManagedFile' {
         $dir = Join-Path $TestDrive ("tf-sync-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

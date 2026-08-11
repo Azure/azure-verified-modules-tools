@@ -89,20 +89,20 @@ Describe 'Invoke-AvmPreCommit' {
         @($observed.VerboseInfo) | Should -Contain 'nested pre-commit pass'
     }
 
-    It 'accepts every managed-files sync option on the CLI surface' {
+    It 'accepts every managed-files sync option the engine exposes' {
+        # Derived from the engine rather than hardcoded, so a new engine option
+        # cannot be added without also surfacing it on the CLI.
+        $engineOptions = InModuleScope 'Avm.Authoring' {
+            (Get-Command Sync-AvmManagedFile).Parameters.Values |
+                Where-Object { $_.ParameterType -eq [string] } |
+                    Select-Object -ExpandProperty Name
+        }
+
+        $engineOptions | Should -Not -BeNullOrEmpty
+
         $command = Get-Command Invoke-AvmPreCommit -Module Avm.Authoring
-        foreach ($parameterName in @(
-                'ManagedFilesRepo'
-                'ManagedFilesRef'
-                'ManagedFilesPath'
-                'ManagedFilesLocalPath'
-                'ConfigRepo'
-                'ConfigRef'
-                'ConfigPath'
-                'ConfigLocalPath'
-                'RepoId'
-            )) {
-            $command.Parameters.ContainsKey($parameterName) | Should -BeTrue
+        foreach ($parameterName in $engineOptions) {
+            $command.Parameters.ContainsKey($parameterName) | Should -BeTrue -Because "Invoke-AvmPreCommit should forward -$parameterName"
             $command.Parameters[$parameterName].ParameterType | Should -Be ([string])
         }
     }
