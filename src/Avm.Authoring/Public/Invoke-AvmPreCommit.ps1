@@ -80,6 +80,15 @@ function Invoke-AvmPreCommit {
         Direct local path to the managed-files base folder. Skips the managed
         files git fetch and is forwarded only to the Terraform sync step.
 
+    .PARAMETER FileGroupConfigPath
+        Path within the managed-files repo to the file-group config that
+        declares each group's deleted files. Forwarded only to the Terraform
+        sync step.
+
+    .PARAMETER FileGroupConfigLocalPath
+        Direct local path to the file-group config file. Forwarded only to the
+        Terraform sync step.
+
     .PARAMETER ConfigRepo
         owner/name of the git repo holding the managed-files config folder.
         Forwarded only to the Terraform sync step.
@@ -137,6 +146,9 @@ function Invoke-AvmPreCommit {
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
 
+        [string] $FileGroupConfigPath,
+        [string] $FileGroupConfigLocalPath,
+
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -189,6 +201,8 @@ function Invoke-AvmPreCommit {
         'ManagedFilesRef'
         'ManagedFilesPath'
         'ManagedFilesLocalPath'
+        'FileGroupConfigPath'
+        'FileGroupConfigLocalPath'
         'ConfigRepo'
         'ConfigRef'
         'ConfigPath'

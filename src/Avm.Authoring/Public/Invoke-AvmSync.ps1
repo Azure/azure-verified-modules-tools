@@ -61,6 +61,14 @@ function Invoke-AvmSync {
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. Skips the git fetch.
 
+    .PARAMETER FileGroupConfigPath
+        Path within the managed-files repo to the file-group config JSON.
+        Defaults to 'terraform/config/managed-files.json'.
+
+    .PARAMETER FileGroupConfigLocalPath
+        Direct local path to the file-group config JSON. Skips resolving it
+        from the managed-files source.
+
     .PARAMETER ConfigRepo
         owner/name of the git repo holding the config folder. Defaults to
         'Azure/azure-verified-modules-tools'. This is deliberately independent
@@ -113,6 +121,9 @@ function Invoke-AvmSync {
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
 
+        [string] $FileGroupConfigPath,
+        [string] $FileGroupConfigLocalPath,
+
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -140,6 +151,8 @@ function Invoke-AvmSync {
                 -ManagedFilesRef $ManagedFilesRef `
                 -ManagedFilesPath $ManagedFilesPath `
                 -ManagedFilesLocalPath $ManagedFilesLocalPath `
+                -FileGroupConfigPath $FileGroupConfigPath `
+                -FileGroupConfigLocalPath $FileGroupConfigLocalPath `
                 -ConfigRepo $ConfigRepo `
                 -ConfigRef $ConfigRef `
                 -ConfigPath $ConfigPath `

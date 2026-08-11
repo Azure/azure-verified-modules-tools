@@ -62,12 +62,16 @@ repository and the new one, and can drift, until that follow-up lands.
 - [x] Remove the VS Code extension validation workflow, its Pester test, and
       `repository-management/managed-files/scripts/`, now that the only file it
       validated lives in the managed-files repository behind its own workflow.
+- [x] Expose `-FileGroupConfigPath` and `-FileGroupConfigLocalPath` on
+      `Invoke-AvmSync` and `Invoke-AvmPreCommit`, and derive the expected
+      parameter surface from `Sync-AvmManagedFile` in test so a future engine
+      option cannot be added without also being surfaced.
 - [x] Complete the repository validation gate.
 - [x] Commit, push, and open the pull request.
 
 ## Validation
 
-- `./build.ps1 pre-commit` green end to end: layout OK, lint OK, 897 unit tests
+- `./build.ps1 pre-commit` green end to end: layout OK, lint OK, 894 unit tests
   passed with 0 failed and 7 skipped, 28 component tests passed with 0 failed.
 - `Test-RepositoryConfig.ps1` runs green against the relocated configuration.
 - A differential harness compared the old and new `Resolve-RepositorySettings`

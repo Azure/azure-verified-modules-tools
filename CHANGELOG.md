@@ -21,6 +21,11 @@ section when cutting a release.
 
 ### Added
 
+- `avm sync` and `avm pre-commit` now expose `-FileGroupConfigPath` and
+  `-FileGroupConfigLocalPath`, closing the last gap between the engine's
+  managed-file options and the public CLI surface. Both verbs now derive that
+  surface from the engine in test, so a future engine option cannot be added
+  without also being surfaced.
 - Pin manifest tests now assert that every `tests/fixtures/bin/*.ps1` stub
   self-reports the version pinned in `avm.pins.jsonc`, so a stale stub fails at
   its cause instead of surfacing as an unrelated Component-tier PATH miss.
