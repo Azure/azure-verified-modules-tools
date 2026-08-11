@@ -16,6 +16,8 @@
   "repositoryGroups": [
     {
       "name": "canary",
+      "managedFilesAdditional": "canary",
+      "managedFilesOrder": 10,
       "repositories": [
         "avm-ptn-example-repo",
         "avm-res-devopsinfrastructure-pool",
@@ -30,6 +32,14 @@
       ],
       "topics": [
         "canary"
+      ]
+    },
+    {
+      "name": "canary-tooling",
+      "managedFilesAdditional": "canary-tooling",
+      "managedFilesOrder": 20,
+      "repositories": [
+        "avm-ptn-example-repo"
       ]
     },
     {
