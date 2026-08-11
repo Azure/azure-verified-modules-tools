@@ -119,7 +119,7 @@ function Invoke-AvmTerraformTransform {
         The first call mutates '*.tf' in place (telemetry wiring, azapi
         headers, provider pins, block/attribute ordering, variables/outputs
         partitioning) and leaves '*.tf.mptfbackup' files; the second removes
-        those backups. This mirrors the upstream avm-terraform-governance
+        those backups. This mirrors the legacy Terraform governance
         pre-commit flow.
 
         Several of the vendored configs (e.g. order_resource_attrs) read

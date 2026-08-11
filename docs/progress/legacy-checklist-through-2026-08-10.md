@@ -96,7 +96,7 @@ Resolved entries are in [`progress-archive.md`](../progress-archive.md#resolved-
 
 Closed out. Full detail — every engine, both compositions, the supply-chain audit and the §7 deliverable list — is in [`progress-archive.md`](../progress-archive.md#phase-2--terraform-facade). One item remains open:
 
-   - [ ] Demo on `Azure/terraform-azurerm-avm-res-keyvault-vault` (or mock module): bare workstation, no container, no repo-local `./avm` script _(2026-06-02: on-disk fixture substrate landed at `tests/fixtures/modules/terraform-azurerm-avm-res-mock/` — copied from `Azure/avm-terraform-governance@65182443`; refreshed 2026-06-19 to governance SHA `7f8c4ee` (both `azurerm` + `azure` mock variants, now incl. `variables.example.tf`/`variables.telemetry.tf`); the demo itself still needs the actual bare-workstation walkthrough)_ _(2026-06-22: the **automated** form of this demo landed as `tests/Pester/Smoke/Invoke-AvmTerraform.RealBinaries.Smoke.Tests.ps1` — real pinned binaries, isolated `AVM_HOME`, no container/porch, runs the full `pre-commit` + `pr-check` chains against both on-disk fixtures with a no-drift gate after pre-commit; driven in CI by `.github/workflows/integration-terraform.yml` (OS×module matrix, OIDC). The checkbox stays `[ ]` until that workflow has had a green real-binary CI run — pending the `workflow` OAuth-scope push of the YAML and a confirmation that the fixtures are byte-canonical for the pinned tool versions.)_
+   - [ ] Demo on `Azure/terraform-azurerm-avm-res-keyvault-vault` (or mock module): bare workstation, no container, no repo-local `./avm` script _(2026-06-02: on-disk fixture substrate landed at `tests/fixtures/modules/terraform-azurerm-avm-res-mock/` — copied from `legacy Terraform governance repository at commit 65182443`; refreshed 2026-06-19 to governance SHA `7f8c4ee` (both `azurerm` + `azure` mock variants, now incl. `variables.example.tf`/`variables.telemetry.tf`); the demo itself still needs the actual bare-workstation walkthrough)_ _(2026-06-22: the **automated** form of this demo landed as `tests/Pester/Smoke/Invoke-AvmTerraform.RealBinaries.Smoke.Tests.ps1` — real pinned binaries, isolated `AVM_HOME`, no container/porch, runs the full `pre-commit` + `pr-check` chains against both on-disk fixtures with a no-drift gate after pre-commit; driven in CI by `.github/workflows/integration-terraform.yml` (OS×module matrix, OIDC). The checkbox stays `[ ]` until that workflow has had a green real-binary CI run — pending the `workflow` OAuth-scope push of the YAML and a confirmation that the fixtures are byte-canonical for the pinned tool versions.)_
 
 ---
 
@@ -140,10 +140,10 @@ Closed out. Full detail — every engine, both compositions, the supply-chain au
 ## Phase 6 — Upstream promotion
 
 - [ ] PR to `Azure/bicep-registry-modules`: switch composite actions + workflows to `avm` verbs, delete legacy `utilities/tools/*.ps1` entry-point scripts
-- [ ] PR to `Azure/avm-terraform-governance`: delete `./avm`, `./avm.ps1`, `Makefile`; move `porch-configs/`, `mapotf-configs/`, `grept-policies/` to `legacy/`
+- [ ] PR to `legacy Terraform governance repository`: delete `./avm`, `./avm.ps1`, `Makefile`; move `porch-configs/`, `mapotf-configs/`, `grept-policies/` to `legacy/`
 - [ ] Templated PR to every Terraform module repo: delete `./avm`, `./avm.ps1`, `Makefile`; README pointer to `Install-Module Avm`
 - [ ] `docs/legacy-tooling.md` migration doc in each upstream repo (one row per removed script with its `avm` verb equivalent)
-- [ ] Container retirement notice: `mcr.microsoft.com/azterraform:avm-*` marked deprecated in `Azure/avm-terraform-governance` README
+- [ ] Container retirement notice: `mcr.microsoft.com/azterraform:avm-*` marked deprecated in `legacy Terraform governance repository` README
 - [ ] Exit criterion: both upstream repos build and pass CI on standard runners with no container step and no repo-local entry-point scripts
 
 ---

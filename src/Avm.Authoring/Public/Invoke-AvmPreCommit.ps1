@@ -13,13 +13,13 @@ function Invoke-AvmPreCommit {
         executed step reports Status='pass' (format reports an implicit
         pass when no errors are thrown).
 
-        The Terraform chain follows the upstream avm-terraform-governance
+        The Terraform chain follows the legacy Terraform governance
         pre-commit.porch.yaml philosophy: after an initial managed-files
         sync it stays fast and fully offline
         (check convention -> transform -> format -> docs), so it
         never needs `terraform init`. The `sync` step runs FIRST so the
         rest of the chain sees the freshest governed files; it fetches the
-        managed-file source (the Azure/avm-terraform-governance repo by
+        managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
         The two checks that require an

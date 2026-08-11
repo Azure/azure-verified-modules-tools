@@ -140,7 +140,7 @@ BeforeAll {
     Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value $tflintHook -Encoding utf8NoBOM
 
     # avm.tf.gitignore-essentials requires all 24 canonical globs from
-    # upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
+    # legacy Terraform governance git-ignore policy.
     $gitignoreGlobs = @(
         '.DS_Store',
         '.terraform.lock.hcl',

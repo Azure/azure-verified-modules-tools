@@ -20,7 +20,7 @@ locals {
 locals {
   default_tags = {
     environment = "test"
-    managed_by  = "avm-terraform-governance"
+    managed_by  = "avm-tooling"
   }
 }
 

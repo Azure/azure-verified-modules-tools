@@ -112,7 +112,7 @@ jobs:
       # OIDC plumbing for `azure/login`. The `test` step today is validate-only
       # (`terraform init -backend=false` + `terraform validate -json`) so it does
       # not actually need Azure auth, but we wire login per the same pattern as
-      # avm-terraform-governance so the chain is ready when test grows to plan.
+      # the legacy Terraform governance workflow so the chain is ready when test grows to plan.
       ARM_USE_OIDC: 'true'
       ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}

@@ -11,10 +11,11 @@ function Invoke-AvmSync {
         managed files, updates stale ones, and removes deprecated files.
 
         The managed-file source defaults to the public
-        Azure/avm-terraform-governance repo (ref 'main', base folder
-        'managed-files', config folder 'tf-repo-mgmt/repository-config'). Every
-        piece of that is overridable, either per parameter here, via
-        AVM_MANAGED_FILES_* environment variables, or via a repo-committed
+        Azure/azure-verified-modules-tools repo (ref 'main', base folder
+        'repository-management/managed-files/files', config folder
+        'repository-management/managed-files/config'). Every piece of that is
+        overridable, either per parameter here, via AVM_MANAGED_FILES_*
+        environment variables, or via a repo-committed
         '.avm/managed-files.json'. A direct local source
         (-ManagedFilesLocalPath) skips the git fetch entirely.
 
@@ -47,14 +48,14 @@ function Invoke-AvmSync {
 
     .PARAMETER ManagedFilesRepo
         owner/name of the git repo holding the managed files. Defaults to
-        'Azure/avm-terraform-governance'.
+        'Azure/azure-verified-modules-tools'.
 
     .PARAMETER ManagedFilesRef
         Git ref to fetch. Defaults to 'main'.
 
     .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder. Defaults
-        to 'managed-files'.
+        to 'repository-management/managed-files/files'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. Skips the git fetch.
@@ -69,7 +70,8 @@ function Invoke-AvmSync {
 
     .PARAMETER ConfigPath
         Path within the config repo to the folder holding 'config.json' and
-        'deprecated-files.json'. Defaults to 'tf-repo-mgmt/repository-config'.
+        'deprecated-files.json'. Defaults to
+        'repository-management/managed-files/config'.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the config folder. Skips the config repo fetch.

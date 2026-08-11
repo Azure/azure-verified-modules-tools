@@ -24,7 +24,7 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 ## Source
 
 Both fixtures were copied from
-[`Azure/avm-terraform-governance`](https://github.com/Azure/avm-terraform-governance)
+legacy Terraform governance repository
 at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
 `main`, 2026-06-16). Upstream paths:
 
@@ -79,35 +79,17 @@ any of those globs. Dropping `.gitignore` would make the fixture
 non-compliant against our own convention chain, so the real-binary
 `pre-commit` / `pr-check` integration (`tests/Pester/Integration/`) would report
 `check convention = fail`. Keeping it lets both chains go green
-end-to-end. Refresh it together with the rest of the module surface.
+end-to-end. Maintain it together with the rest of the fixture surface.
 
-## Refreshing from upstream
+## Maintaining the fixtures
 
-When upstream changes meaningfully (provider major bump, telemetry
-contract change, new example shape):
-
-```pwsh
-# 1. Shallow-clone upstream into a temp folder with autocrlf off.
-git -c core.autocrlf=false clone --depth 1 --filter=blob:none --sparse `
-    https://github.com/Azure/avm-terraform-governance.git "$env:TEMP\avm-tfgov-snapshot"
-git -C "$env:TEMP\avm-tfgov-snapshot" sparse-checkout set `
-    tests/terraform-azurerm-avm-res-mock `
-    tests/terraform-azure-avm-res-mock
-
-# 2. Re-curate the keep list (see top of this README) and copy by path.
-#    Drop the same governance/legacy/editor noise listed above.
-
-# 3. Run `./build.ps1 pre-commit` — should stay green (fixtures live
-#    outside the build's scan scope).
-
-# 4. Bump the source SHA in this README's "Source" section and commit
-#    with a Conventional `test(fixtures): refresh …` message.
-```
+The copies in this repository are authoritative. Update them in a focused
+change when a provider major, telemetry contract, or example shape changes,
+preserve the curation boundaries above, and run `./build.ps1 pre-commit`.
 
 The `.gitattributes` rules at repo root force LF + UTF-8 (no BOM) on
 `*.tf`, `*.md`, `*.yml`, `*.hcl`, `*.sh`, `*.ps1` etc., so the on-disk
-encoding will be correct as long as the source clone was made with
-`core.autocrlf=false`.
+encoding remains deterministic.
 
 ## What isn't here yet
 

@@ -136,7 +136,7 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             $globs = @($r.Parameters.RequiredGlobs)
             $globs.Count | Should -Be 23
 
-            # Canonical entries from upstream avm-terraform-governance/grept-policies/git_ignore.grept.hcl.
+            # Canonical entries from the legacy Terraform governance git-ignore policy.
             $expected = @(
                 '.DS_Store',
                 '.terraform.lock.hcl',

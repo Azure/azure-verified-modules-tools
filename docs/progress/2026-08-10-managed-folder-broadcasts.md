@@ -20,7 +20,7 @@ missing target parents or child directories.
 - [x] Preserve concrete-path, overlay, exclusion, drift, SHA, and mode behavior.
 - [x] Cover arbitrary parents through unit and component tests.
 - [x] Complete `./build.ps1 pre-commit`.
-- [x] Keep dependent governance [PR #550](https://github.com/Azure/avm-terraform-governance/pull/550) draft until a compatible release exists.
+- [x] Keep dependent governance PR #550 draft until a compatible release exists.
 
 ## Validation
 
@@ -29,7 +29,7 @@ passed. Layout and lint completed with the repository warning baseline.
 
 ## Dependencies
 
-Governance [PR #550](https://github.com/Azure/avm-terraform-governance/pull/550)
+Governance PR #550
 must merge only after tooling
 [PR #43](https://github.com/Azure/azure-verified-modules-tools/pull/43)
 is released and adopted by the governance sync.

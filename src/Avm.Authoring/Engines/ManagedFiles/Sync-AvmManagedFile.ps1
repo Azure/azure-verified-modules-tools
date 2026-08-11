@@ -6,19 +6,19 @@ function Sync-AvmManagedFile {
         deprecated-file removals directly to the working tree.
 
     .DESCRIPTION
-        Engine implementation behind Invoke-AvmSync. Ported from the
-        Azure/avm-terraform-governance repo-sync tooling, reduced to the
-        *file-sync* concern only: it never opens or merges a pull request, it
-        mutates the local working tree ($Context.Root) in place.
+        Engine implementation behind Invoke-AvmSync, reduced to the *file-sync*
+        concern only: it never opens or merges a pull request, it mutates the
+        local working tree ($Context.Root) in place.
 
         Source of the managed files (highest precedence first):
 
           1. Explicit cmdlet parameters.
           2. Environment variables (AVM_MANAGED_FILES_*).
           3. A repo-committed '.avm/managed-files.json' under $Context.Root.
-          4. Defaults: the public Azure/avm-terraform-governance repo, 'main'
-             ref, 'managed-files' base folder, and 'tf-repo-mgmt/repository-config'
-             config folder.
+          4. Defaults: the public Azure/azure-verified-modules-tools repo,
+             'main' ref, 'repository-management/managed-files/files' base
+             folder, and 'repository-management/managed-files/config' config
+             folder.
 
         A direct local path (-ManagedFilesLocalPath or
         AVM_MANAGED_FILES_LOCAL_PATH) short-circuits the git fetch entirely and
@@ -65,14 +65,15 @@ function Sync-AvmManagedFile {
 
     .PARAMETER ManagedFilesRepo
         owner/name of the git repo that holds the managed files. Defaults to
-        'Azure/avm-terraform-governance'.
+        'Azure/azure-verified-modules-tools'.
 
     .PARAMETER ManagedFilesRef
         Git ref (branch/tag/sha) to fetch. Defaults to 'main'.
 
     .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder (the one
-        that contains 'root/' and the overlays). Defaults to 'managed-files'.
+        that contains 'root/' and the overlays). Defaults to
+        'repository-management/managed-files/files'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. When supplied the
@@ -88,7 +89,8 @@ function Sync-AvmManagedFile {
 
     .PARAMETER ConfigPath
         Path within the config repo to the folder holding 'config.json' and
-        'deprecated-files.json'. Defaults to 'tf-repo-mgmt/repository-config'.
+        'deprecated-files.json'. Defaults to
+        'repository-management/managed-files/config'.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the config folder. When supplied no config repo is
@@ -373,14 +375,14 @@ function Resolve-AvmManagedFilesSetting {
         return $Default
     }
 
-    $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/avm-terraform-governance'
+    $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/azure-verified-modules-tools'
     $ref = & $pick $ManagedFilesRef 'AVM_MANAGED_FILES_REF' 'ref' 'main'
-    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'managed-files'
+    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'repository-management/managed-files/files'
     $localPath = & $pick $ManagedFilesLocalPath 'AVM_MANAGED_FILES_LOCAL_PATH' 'localPath' ''
 
     $configRepoValue = & $pick $ConfigRepo 'AVM_MANAGED_FILES_CONFIG_REPO' 'configRepo' $repo
     $configRefValue = & $pick $ConfigRef 'AVM_MANAGED_FILES_CONFIG_REF' 'configRef' $ref
-    $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'tf-repo-mgmt/repository-config'
+    $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'repository-management/managed-files/config'
     $configLocalPath = & $pick $ConfigLocalPath 'AVM_MANAGED_FILES_CONFIG_LOCAL_PATH' 'configLocalPath' ''
 
     # RepoId is captured here only as its authoritative short-circuit value: an
@@ -913,9 +915,9 @@ function Add-AvmManagedFilesFromDir {
         Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
             # '.gitkeep' files exist only to keep otherwise-empty overlay
             # directories tracked in git. They are placeholders, never real managed
-            # content, so they must not be synced into target repos. The upstream
-            # avm-terraform-governance sync applies the same filter; omitting it
-            # here would make every drift check demand a file the sync never writes.
+            # content, so they must not be synced into target repos. Repository
+            # sync applies the same filter; omitting it here would make every
+            # drift check demand a file the sync never writes.
             # The line-managed-file spec is tooling metadata consumed separately, so
             # it is filtered here for the same reason.
             $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
@@ -1022,7 +1024,7 @@ function Resolve-AvmManagedFilesRepositorySetting {
         silently changed precedence.
 
         This ordering must stay identical to Get-RepositorySettings in
-        tf-repo-mgmt/scripts/lib/RepositoryConfig.ps1 in avm-terraform-governance,
+        repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1,
         or 'avm pr-check' drift detection will disagree with what the sync
         pipeline actually writes.
     #>

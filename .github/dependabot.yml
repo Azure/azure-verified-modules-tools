@@ -36,3 +36,23 @@ updates:
         update-types:
           - minor
           - patch
+
+  - package-ecosystem: terraform
+    directories:
+      - /repository-management/repository-sync/terraform
+      - /repository-management/repository-sync/terraform/modules/**
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      terraform:
+        patterns:
+          - "*"

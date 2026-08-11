@@ -10,6 +10,65 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Resolve-AvmManagedFilesSetting defaults' {
+    It 'uses the tooling repository paths and inherits the effective managed source for config' {
+        $environmentNames = @(
+            'AVM_MANAGED_FILES_REPO'
+            'AVM_MANAGED_FILES_REF'
+            'AVM_MANAGED_FILES_PATH'
+            'AVM_MANAGED_FILES_LOCAL_PATH'
+            'AVM_MANAGED_FILES_CONFIG_REPO'
+            'AVM_MANAGED_FILES_CONFIG_REF'
+            'AVM_MANAGED_FILES_CONFIG_PATH'
+            'AVM_MANAGED_FILES_CONFIG_LOCAL_PATH'
+            'AVM_MANAGED_FILES_REPO_ID'
+        )
+        $originalEnvironment = @{}
+
+        try {
+            foreach ($name in $environmentNames) {
+                $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, $null)
+            }
+
+            $settings = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $TestDrive } {
+                param($Root)
+                Resolve-AvmManagedFilesSetting -Root $Root
+            }
+
+            $settings.ManagedFilesRepo | Should -Be 'Azure/azure-verified-modules-tools'
+            $settings.ManagedFilesRef | Should -Be 'main'
+            $settings.ManagedFilesPath | Should -Be 'repository-management/managed-files/files'
+            $settings.ConfigRepo | Should -Be $settings.ManagedFilesRepo
+            $settings.ConfigRef | Should -Be $settings.ManagedFilesRef
+            $settings.ConfigPath | Should -Be 'repository-management/managed-files/config'
+
+            $overridden = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $TestDrive } {
+                param($Root)
+                Resolve-AvmManagedFilesSetting `
+                    -Root $Root `
+                    -ManagedFilesRepo 'example/source' `
+                    -ManagedFilesRef 'pinned'
+            }
+
+            $overridden.ConfigRepo | Should -Be 'example/source'
+            $overridden.ConfigRef | Should -Be 'pinned'
+        }
+        finally {
+            foreach ($name in $environmentNames) {
+                [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name])
+            }
+        }
+    }
+
+    It 'contains no live dependency on the retired governance repository' {
+        $retiredIdentifier = 'avm-terraform-' + 'governance'
+        $sourcePath = Join-Path $script:moduleRoot 'Engines' 'ManagedFiles' 'Sync-AvmManagedFile.ps1'
+        Get-Content -LiteralPath $sourcePath -Raw |
+            Should -Not -Match ([regex]::Escape($retiredIdentifier))
+    }
+}
+
 Describe 'Sync-AvmManagedFile' {
     BeforeEach {
         $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)
