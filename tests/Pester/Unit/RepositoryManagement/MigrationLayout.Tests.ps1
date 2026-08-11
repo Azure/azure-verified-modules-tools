@@ -21,7 +21,6 @@ Describe "Repository management migration layout" {
             "repository-management/repository-creation/scripts/New-Repository.ps1"
             ".github/workflows/repository-management-sync.yml"
             ".github/workflows/repository-management-config-test.yml"
-            ".github/workflows/repository-management-pr-cleanup.yml"
             ".github/workflows/repository-management-extension-validation.yml"
         )
 
@@ -36,7 +35,6 @@ Describe "Repository management migration layout" {
             (Join-Path $script:repoRoot "repository-management")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-config-test.yml")
-            (Join-Path $script:repoRoot ".github/workflows/repository-management-pr-cleanup.yml")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-extension-validation.yml")
         )
         $files = @(
