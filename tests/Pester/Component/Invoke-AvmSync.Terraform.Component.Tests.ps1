@@ -23,9 +23,10 @@ BeforeAll {
     $script:moduleManifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
     Import-Module -Name $script:moduleManifest -Force
 
-    # Builds a self-contained fixture: a terraform module working tree plus a
-    # local governance base folder (root/ overlay), returned as a pair so each
-    # It can mutate its own copy without cross-contamination.
+    # Builds a self-contained fixture: a terraform module working tree, a local
+    # governance base folder (root/ file group) and the repository config that
+    # maps every repository onto that group, returned together so each It can
+    # mutate its own copy without cross-contamination.
     function script:New-SyncFixture {
         param([string] $Name)
 
@@ -46,7 +47,33 @@ BeforeAll {
         Set-Content -LiteralPath (Join-Path $root '.gitignore') -Value "*.tfstate`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $root 'SECURITY.md') -Value "# Security`n" -NoNewline
 
-        [pscustomobject]@{ ModuleDir = $moduleDir; Base = $base; Root = $root }
+        [pscustomobject]@{
+            ModuleDir = $moduleDir
+            Base      = $base
+            Root      = $root
+            Config    = script:New-SyncConfigDirectory -Path (Join-Path $TestDrive ("cfg-$Name"))
+        }
+    }
+
+    # Writes the repository config that maps every repository onto the root
+    # file group through the wildcard entry, matching the shipped schema.
+    function script:New-SyncConfigDirectory {
+        param([string] $Path)
+
+        $null = New-Item -ItemType Directory -Path $Path -Force
+        $config = [ordered]@{
+            repositoryGroups = @(
+                [ordered]@{
+                    name         = 'default'
+                    repositories = @('*')
+                    order        = -100
+                    managedFiles = @('root')
+                }
+            )
+        }
+
+        Set-Content -LiteralPath (Join-Path $Path 'config.json') -Value ($config | ConvertTo-Json -Depth 10) -Encoding utf8NoBOM
+        $Path
     }
 }
 
@@ -59,7 +86,7 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
     It 'reconciles the working tree against a local governance source and writes the managed files' {
         $fx = script:New-SyncFixture -Name 'apply'
 
-        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base
+        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base -ConfigLocalPath $fx.Config
 
         $result | Should -Not -BeNullOrEmpty
         $result.PSObject.Properties['Engine'].Value         | Should -Be 'terraform'
@@ -81,6 +108,7 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
                 -Path $fx.ModuleDir `
                 -Ecosystem terraform `
                 -ManagedFilesLocalPath $fx.Base `
+                -ConfigLocalPath $fx.Config `
                 -CheckDrift `
                 -Verbose 4>&1)
         $messages = @($output |
@@ -109,7 +137,7 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
             $null = New-Item -ItemType Directory -Path (Join-Path $fx.ModuleDir $relativeDir) -Force
         }
 
-        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base
+        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base -ConfigLocalPath $fx.Config
 
         $result.PSObject.Properties['Status'].Value         | Should -Be 'pass'
         $result.PSObject.Properties['FilesProcessed'].Value | Should -Be 7
@@ -132,12 +160,12 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
         $fx = script:New-SyncFixture -Name 'drift'
 
         # First apply brings the working tree in sync.
-        Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base | Out-Null
+        Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base -ConfigLocalPath $fx.Config | Out-Null
 
         # Mutate the governance source so the on-disk copy is now stale.
         Set-Content -LiteralPath (Join-Path $fx.Root '.gitignore') -Value "*.tfstate`n.terraform/`n" -NoNewline
 
-        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base -CheckDrift
+        $result = Invoke-AvmSync -Path $fx.ModuleDir -Ecosystem terraform -ManagedFilesLocalPath $fx.Base -ConfigLocalPath $fx.Config -CheckDrift
 
         $result.PSObject.Properties['Status'].Value          | Should -Be 'fail'
         @($result.PSObject.Properties['Updated'].Value).Count | Should -Be 1
@@ -162,7 +190,11 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
             Set-Content -LiteralPath (Join-Path $root '.gitignore') -Value "*.tfstate`n" -NoNewline
             Set-Content -LiteralPath (Join-Path $root 'nested' 'SECURITY.md') -Value "# Security`n" -NoNewline
 
-            $result = Invoke-AvmSync -Path $moduleDir -Ecosystem terraform -ManagedFilesLocalPath (Join-Path $probe 'gov')
+            $result = Invoke-AvmSync `
+                -Path $moduleDir `
+                -Ecosystem terraform `
+                -ManagedFilesLocalPath (Join-Path $probe 'gov') `
+                -ConfigLocalPath (script:New-SyncConfigDirectory -Path (Join-Path $probe 'cfg'))
 
             $result.PSObject.Properties['Status'].Value   | Should -Be 'pass'
             @($result.PSObject.Properties['Added'].Value) | Should -Be @('.gitignore', 'nested/SECURITY.md')

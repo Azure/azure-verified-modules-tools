@@ -13,7 +13,7 @@ function Invoke-AvmSync {
         The managed-file source defaults to the public
         Azure/azure-verified-modules-tools repo (ref 'main', base folder
         'repository-management/managed-files/files', config folder
-        'repository-management/managed-files/config'). Every piece of that is
+        'repository-management/repository-config'). Every piece of that is
         overridable, either per parameter here, via AVM_MANAGED_FILES_*
         environment variables, or via a repo-committed
         '.avm/managed-files.json'. A direct local source
@@ -71,7 +71,7 @@ function Invoke-AvmSync {
     .PARAMETER ConfigPath
         Path within the config repo to the folder holding 'config.json' and
         'deprecated-files.json'. Defaults to
-        'repository-management/managed-files/config'.
+        'repository-management/repository-config'.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the config folder. Skips the config repo fetch.

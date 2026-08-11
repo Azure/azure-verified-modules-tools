@@ -147,7 +147,7 @@ try {
     $result = Invoke-AvmPreCommitWithUpgradeRetry `
         -repoId "avm-res-test" `
         -managedFilesBaseDir "../managed-files/files" `
-        -repositoryConfigDir "../managed-files/config"
+        -repositoryConfigDir "../repository-config"
 
     Assert-Equal -Actual $result.Status -Expected "pass" -Description "pre-commit status after upgrade"
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "pre-commit invocation count"
@@ -168,7 +168,7 @@ try {
         Invoke-AvmPreCommitWithUpgradeRetry `
             -repoId "avm-res-test" `
             -managedFilesBaseDir "../managed-files/files" `
-            -repositoryConfigDir "../managed-files/config"
+            -repositoryConfigDir "../repository-config"
     }
 
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 1 -Description "unrelated error invocation count"
@@ -186,7 +186,7 @@ try {
         Invoke-AvmPreCommitWithUpgradeRetry `
             -repoId "avm-res-test" `
             -managedFilesBaseDir "../managed-files/files" `
-            -repositoryConfigDir "../managed-files/config"
+            -repositoryConfigDir "../repository-config"
     }
 
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "retry failure invocation count"
