@@ -49,6 +49,12 @@ section when cutting a release.
 
 ### Changed
 
+- Managed-file sync now defaults to `Azure/azure-verified-modules-tools`
+  (`repository-management/managed-files/files` with configuration under
+  `repository-management/managed-files/config`). Configuration repository and
+  ref defaults continue to inherit the effective managed-file source. The
+  obsolete MAPOTF refresh dependency on the retired governance repository was
+  removed; packaged MAPOTF configuration is authoritative here.
 - Convention rename fixes now reconcile an existing destination. Non-whitespace
   content from singular Terraform files is appended to the plural file before
   the singular file is removed; whitespace-only singular files are removed

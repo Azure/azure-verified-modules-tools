@@ -19,7 +19,7 @@ function Invoke-AvmPreCommit {
         (check convention -> transform -> format -> docs), so it
         never needs `terraform init`. The `sync` step runs FIRST so the
         rest of the chain sees the freshest governed files; it fetches the
-        managed-file source (the Azure/avm-terraform-governance repo by
+        managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
         The two checks that require an

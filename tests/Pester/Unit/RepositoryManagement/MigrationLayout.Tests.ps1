@@ -99,4 +99,29 @@ Describe "Repository management migration layout" {
             '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
         )
     }
+
+    It "passes the relocated managed files and configuration to Avm.Authoring explicitly" {
+        $syncScript = Get-Content -LiteralPath (
+            Join-Path $script:repoRoot "repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1"
+        ) -Raw
+        $preCommitHelper = Get-Content -LiteralPath (
+            Join-Path $script:repoRoot "repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1"
+        ) -Raw
+
+        $syncScript | Should -Match (
+            '\$repoConfigFilePath\s*=\s*"\.\./managed-files/config/config\.json"'
+        )
+        $syncScript | Should -Match (
+            '\$managedFilesBaseDir\s*=\s*"\.\./managed-files/files"'
+        )
+        $preCommitHelper | Should -Match (
+            'ManagedFilesLocalPath\s*=\s*\$managedFilesBaseDir'
+        )
+        $preCommitHelper | Should -Match (
+            'ConfigLocalPath\s*=\s*\$repositoryConfigDir'
+        )
+        Test-Path -LiteralPath (
+            Join-Path $script:repoRoot "scripts/Update-AvmMapotfConfig.ps1"
+        ) | Should -BeFalse
+    }
 }

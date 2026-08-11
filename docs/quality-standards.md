@@ -333,36 +333,29 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 ## 12. Packaged governance assets
 
-Some governance-authored assets are **vendored into the module** under `src/Avm.Authoring/Resources/` because the engines need them at runtime and cannot reach the consumer repo's synced copies (they run before or independently of `avm sync`). These are copies, so they can drift from their upstream source in `Azure/avm-terraform-governance`.
+Some assets are **packaged into the module** under
+`src/Avm.Authoring/Resources/` because the engines need them at runtime and
+cannot reach the consumer repo's synced copies (they run before or
+independently of `avm sync`). The copies in this repository are authoritative.
+Their initial snapshots came from `Azure/avm-terraform-governance`; that
+historical provenance does not define an update or runtime dependency.
 
 Currently vendored:
 
-- `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`, `avm.tflint_example.hcl` — from governance `tflint-configs/`, applied per scope by `Invoke-AvmTerraformLint` (root / `modules/*` / `examples/*`).
-- `Resources/mapotf/pre-commit/*.mptf.hcl` — from governance `mapotf-configs/pre-commit/`, used by `Invoke-AvmTerraformTransform`.
+- `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`,
+  `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
+  (root / `modules/*` / `examples/*`).
+- `Resources/mapotf/pre-commit/*.mptf.hcl` - used by
+  `Invoke-AvmTerraformTransform`.
 
 **Update process.**
 
-*TFLint configs* — when governance moves ahead:
-
-1. Compare the vendored files against upstream `main`:
-   ```powershell
-   'avm.tflint.hcl','avm.tflint_module.hcl','avm.tflint_example.hcl' | ForEach-Object {
-     $u = "https://raw.githubusercontent.com/Azure/avm-terraform-governance/main/tflint-configs/$_"
-     $local = Get-Content "src/Avm.Authoring/Resources/tflint/$_" -Raw
-     $remote = (Invoke-WebRequest $u -UseBasicParsing).Content
-     "{0}: {1}" -f $_, ($(if ($local -eq $remote) { 'up-to-date' } else { 'DRIFTED' }))
-   }
-   ```
-2. Re-fetch drifted files with `curl.exe -sSL <url> -o <path>`, normalise CRLF → LF, save UTF-8 no-BOM, keep ASCII-only (the tflint configs are ASCII today; if upstream introduces non-ASCII, mirror it verbatim like the mapotf bundle below).
-3. Run `./build.ps1 pre-commit`; the packaging guard in `Test-AvmModuleLayout.Tests.ps1` asserts both the tflint configs (still pinning the `avm` plugin) and the mapotf bundle exist under `Resources/`.
-4. Note the refresh (and the upstream commit SHA) in the changelog so releases don't silently drift.
-
-*mapotf pre-commit bundle* — the module is the source of truth; upstream governance is expected to drop its `mapotf-configs/pre-commit/` copy once every consumer is on the module. To detect and close drift against the pinned upstream revision:
-
-1. `pwsh scripts/Update-AvmMapotfConfig.ps1 -Check` reports drift against the `$Ref` pin baked into the script; CI runs this as a gate.
-2. `pwsh scripts/Update-AvmMapotfConfig.ps1` (optionally `-Ref <sha>` to move the pin) re-mirrors the bundle into `Resources/mapotf/pre-commit`.
-3. These configs are mirrored **byte-for-byte** and legitimately contain non-ASCII characters (em-dashes, arrows) in comments. Do **not** transcode them to ASCII. They are `.hcl`, so the `src/` encoding guard (BOM/CRLF check on a fixed extension list) and PSScriptAnalyzer do not scan them.
-4. When the pin moves, update the `$Ref` default in the script and record the new SHA in the changelog.
+1. Change the authoritative files under `Resources/` in a focused pull request
+   and explain the source or rationale in the changelog.
+2. Preserve the mapotf files byte-for-byte when importing reviewed changes;
+   they legitimately contain non-ASCII characters in comments.
+3. Run `./build.ps1 pre-commit`; the packaging guard in
+   `Test-AvmModuleLayout.Tests.ps1` asserts that both bundles exist.
 
 **Deliberate deviations from the governance chain** (documented so a future reader doesn't "fix" them as bugs):
 
@@ -1211,7 +1204,10 @@ Concrete reasoning:
 
 ## Appendix J. 2026-06-19 Terraform pre-commit ground-truth refresh
 
-This appendix is the **authoritative current state** for the Terraform pre-commit pivot. Appendices B, C, and I above carry dated update banners pointing here; where they disagree with this appendix, **this appendix wins**.
+This appendix records the **2026-06-19 implementation state** for the Terraform
+pre-commit pivot. The packaged MAPOTF configuration now lives under
+`src/Avm.Authoring/Resources/mapotf/pre-commit/` and is authoritative in this
+repository; section 12 defines its current maintenance contract.
 
 > **STATUS 2026-06-19 — Terraform `pre-commit` is DONE end-to-end.** `slice-g-transform` landed: `mapotf` v0.1.4 pinned in `avm.pins.jsonc` (commit `1eb82d7`, six SHA256s from J.4 via `scripts/Update-AvmPins.ps1 -Mapotf`); `Invoke-AvmTerraformTransform` wired against the vendored `config/mapotf/pre-commit/` — `mapotf transform` → `clean-backup`, `-CheckDrift` for pr-check, `tests/fixtures/bin/mapotf.ps1` stub, 12 unit + 3 integration tests — and threaded into the pre-commit/pr-check Terraform chains (commit `c3dd21a`). `g-testmodules` landed: both on-disk mock fixtures (`terraform-azurerm-avm-res-mock` 25 files, `terraform-azure-avm-res-mock` 45 files) refreshed to governance SHA `7f8c4ee` and **verified byte-for-byte against upstream** for the full functional Terraform surface (commit `664da48`). The pre-commit chain `check convention → transform → format → lint → test → docs` now has **zero stub engines**. Gate green at **432/0/7**; 3/3 Terraform integration tests pass.
 
@@ -1291,7 +1287,10 @@ These use mapotf's newer primitives — `reorder_attributes`, `sort_blocks_in_fi
 Steps:
 
 1. **Pin `Azure/mapotf` v0.1.4 in `avm.pins.jsonc`** — six platforms, the six SHA256s in J.4, mixed `archives` map (`tar.gz` + `zip`) with `urlTemplate` using `{version}`/`{os}`/`{arch}`/`{ext}` placeholders. Add a `Get-MapotfEntry` helper to `scripts/Update-AvmPins.ps1` mirroring `Get-ConftestEntry`.
-2. **Supply the configs (decision A — RESOLVED = vendor, see below).** The nine configs are **vendored** into `config/mapotf/pre-commit/` (top-level `config/`, kept out of the module tree) and mirrored from `Azure/avm-terraform-governance//mapotf-configs/pre-commit` at a pinned SHA via `scripts/Update-AvmMapotfConfig.ps1`. `Invoke-AvmTerraformTransform` resolves this in-repo path directly — no pinned-asset download, fully offline. See [`config/README.md`](../config/README.md).
+2. **Supply the configs (decision A - RESOLVED = package).** The nine configs
+   ship under `src/Avm.Authoring/Resources/mapotf/pre-commit/`.
+   `Invoke-AvmTerraformTransform` resolves this packaged path directly - no
+   pinned-asset download or upstream synchronization.
 3. **Implement `Invoke-AvmTerraformTransform`** — drop the `AvmConfigurationException` stub; resolve the mapotf binary + the configs asset; run `mapotf transform --mptf-dir <asset.Path> --tf-dir <Context.Root>` then `mapotf clean-backup --tf-dir <Context.Root>` via `Invoke-AvmProcess`; return the standard envelope (`Engine='terraform'`, `Tool='mapotf/<version>'`, `Status`, `Issues`). `[CmdletBinding(SupportsShouldProcess)]` — it mutates files.
 4. **pr-check drift-check** — after transform + clean-backup, run `git status --porcelain` (or a `git diff --quiet` equivalent) scoped to `Context.Root`; non-empty ⇒ `Status='fail'` with the drifted files as `Issues`. This is the "flag" half of J.3.
 5. **Tests** — promote `Invoke-AvmTerraformTransform.Tests.ps1` from stub-only (mock `Invoke-AvmProcess`; assert argv shape, clean-backup call, missing-asset → `AvmConfigurationException` → `skipped`); add a `mapotf` stub under `tests/fixtures/bin/` mirroring `conftest.ps1`; extend the Terraform Component test.
@@ -1299,10 +1298,20 @@ Steps:
 
 **Two strategic decisions — both RESOLVED with the user 2026-06-19:**
 
-- **(A) How to supply the configs — RESOLVED = vendor.** The user directed (2026-06-19): *"We want to move the mapotf configs into this repo in a separate folder to the powershell module… until we can release this module we'll need to keep the configs in sync and then we'll be able to delete them from the avm-terraform-gov repo."* So the configs are **vendored** into a top-level `config/mapotf/pre-commit/` (not `src/Avm.Authoring/Resources/`, because they're destined to become the canonical copy and are kept separate from the module), mirrored at pin `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` via `scripts/Update-AvmMapotfConfig.ps1` (`-Check` for the CI drift gate). This supersedes the (i) pinned-asset recommendation — vendoring is offline by construction, needs no descriptor, and is the path to canonical ownership. Landed as the `slice-g1-vendor-configs` slice. See [`config/README.md`](../config/README.md).
+- **(A) How to supply the configs - RESOLVED = package.** The original
+  2026-06-19 decision moved the bundle into this repository ahead of module
+  release. The completed state packages the canonical bundle under
+  `src/Avm.Authoring/Resources/mapotf/pre-commit/`; the transitional upstream
+  synchronization utility has been removed.
 - **(B) fix-in-pre-commit + drift-check-in-pr-check semantics (J.3) — RESOLVED = follow upstream.** The user confirmed (2026-06-19, *"yes proceed"*) the upstream-canonical model: `pre-commit` **fixes** via `mapotf transform`, `pr-check` **flags drift** via re-transform + `git status --porcelain`. This consciously reverses the 2026-06-03 flag-only preference.
 
-With (A) and (B) resolved, the only remaining Slice G work was the **engine**. **DONE 2026-06-19** (`slice-g-transform`, commit `c3dd21a`): `mapotf` v0.1.4 pinned, `Invoke-AvmTerraformTransform` implemented against `config/mapotf/pre-commit/` (transform → clean-backup, `-CheckDrift` drift gate for pr-check), `tests/fixtures/bin/mapotf.ps1` stub + 12 unit + 3 integration tests, wired into both the pre-commit and pr-check Terraform chains. The config-supply half (`slice-g1-vendor-configs`, commit `37fb848`) was already done. **Terraform pre-commit parity is achieved.**
+With (A) and (B) resolved, the only remaining Slice G work was the **engine**.
+**DONE 2026-06-19** (`slice-g-transform`, commit `c3dd21a`): `mapotf` v0.1.4
+pinned, `Invoke-AvmTerraformTransform` implemented against the packaged bundle
+(transform -> clean-backup, `-CheckDrift` drift gate for pr-check),
+`tests/fixtures/bin/mapotf.ps1` stub + 12 unit + 3 integration tests, wired into
+both the pre-commit and pr-check Terraform chains. **Terraform pre-commit parity
+is achieved.**
 
 ## Appendix K. Terraform test-fixture traps
 

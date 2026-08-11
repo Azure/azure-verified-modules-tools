@@ -105,7 +105,6 @@ azure-verified-modules-tools/
     fixtures/                     # static test inputs
   scripts/
     Install-AvmBuildPrerequisites.ps1
-    Update-AvmMapotfConfig.ps1
     Update-AvmPins.ps1
     Publish-AvmAuthoring.ps1      # validates and publishes ADO-signed release assets
   docs/

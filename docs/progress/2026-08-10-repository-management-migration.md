@@ -23,6 +23,9 @@ without changing sync behavior. Schedule activation is deferred for cutover.
 - [x] Remove the redundant repository-management PR cleanup workflow.
 - [x] Align repository-sync settings with scoped variables and one secret.
 - [x] Disable scheduled sync until the manual cutover is validated.
+- [x] Repoint Avm.Authoring managed-file defaults to this repository.
+- [x] Remove the retired repository from supported MAPOTF maintenance tooling.
+- [x] Validate and prepare the runtime repointing correction for release.
 
 ## Validation
 
@@ -44,6 +47,10 @@ without changing sync behavior. Schedule activation is deferred for cutover.
   cutover guard.
 - `./build.ps1 pre-commit`: 869 unit and 26 component tests passed with the
   schedule disabled.
+- Focused managed-file and migration tests: 52 passed.
+- `./build.ps1 pre-commit`: 872 unit tests passed, 7 skipped, and 26 component
+  tests passed after repointing the runtime defaults and removing the obsolete
+  MAPOTF upstream refresh.
 
 ## Provenance
 
@@ -58,3 +65,7 @@ including the three ARM identifiers and all 21 test subscription IDs;
 commented out for cutover. Merge with it disabled, manually dispatch a plan-only
 sync on target `main`, disable the source schedule, then restore the target
 schedule in a follow-up.
+
+The corrected Avm.Authoring defaults are recorded under `CHANGELOG.md`
+`[Unreleased]`. The in-repository module manifest remains unchanged by design;
+the existing release pipeline stamps the next tag into the published package.
