@@ -15,10 +15,11 @@ function Sync-AvmManagedFile {
           1. Explicit cmdlet parameters.
           2. Environment variables (AVM_MANAGED_FILES_*).
           3. A repo-committed '.avm/managed-files.json' under $Context.Root.
-          4. Defaults: the public Azure/azure-verified-modules-tools repo,
-             'main' ref, 'repository-management/managed-files/files' base
-             folder, and 'repository-management/managed-files/config' config
-             folder.
+          4. Defaults: files from Azure/azure-verified-modules-managed-files
+             ('main' ref, 'terraform/files' base folder, file-group config
+             'terraform/config/managed-files.json') and config.json from
+             Azure/azure-verified-modules-tools ('main' ref,
+             'repository-management/repository-config' folder).
 
         A direct local path (-ManagedFilesLocalPath or
         AVM_MANAGED_FILES_LOCAL_PATH) short-circuits the git fetch entirely and
@@ -71,41 +72,48 @@ function Sync-AvmManagedFile {
         Git ref (branch/tag/sha) to fetch. Defaults to 'main'.
 
     .PARAMETER ManagedFilesPath
+    .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder (the one
-        that contains 'root/' and the overlays). Defaults to
-        'repository-management/managed-files/files'.
+        that contains the file group folders). Defaults to 'terraform/files'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. When supplied the
         git fetch is skipped entirely.
 
+    .PARAMETER FileGroupConfigPath
+        Path within the managed-files repo to the file-group config that
+        declares each group's deleted files. Defaults to
+        'terraform/config/managed-files.json'.
+
+    .PARAMETER FileGroupConfigLocalPath
+        Direct local path to the file-group config file. When omitted with a
+        local managed-files path, it is looked up alongside the files folder.
+
     .PARAMETER ConfigRepo
         owner/name of the git repo that holds the config folder. Defaults to
-        the same repo as ManagedFilesRepo.
+        'Azure/azure-verified-modules-tools'.
 
     .PARAMETER ConfigRef
-        Git ref for the config repo. Defaults to the same ref as
-        ManagedFilesRef.
+        Git ref for the config repo. Defaults to 'main'.
 
     .PARAMETER ConfigPath
-        Path within the config repo to the folder holding 'config.json' and
-        'deprecated-files.json'. Defaults to
-        'repository-management/managed-files/config'.
+        Path within the config repo to the folder holding 'config.json'.
+        Defaults to 'repository-management/repository-config'.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the config folder. When supplied no config repo is
         fetched.
 
     .PARAMETER RepoId
-        The repository id used to look up overlays/exclusions in config.json.
-        When omitted it is resolved by Resolve-AvmManagedFilesRepoId: an explicit
+        The repository id used to look up file groups in config.json. When
+        omitted it is resolved by Resolve-AvmManagedFilesRepoId: an explicit
         AVM_MANAGED_FILES_REPO_ID environment value or '.avm/managed-files.json'
         repoId override is authoritative; otherwise a candidate is derived from
         the git origin remote, then the working-tree folder name, with a leading
         'terraform-azurerm-' / 'terraform-azapi-' prefix stripped. Matching a
-        config.json repositoryGroups entry selects overlays and exclusions; an
-        unmatched id still receives the shared root files. Resolution fails only
-        when no repository id can be determined.
+        config.json repositoryGroups entry adds that group's file groups; every
+        repository matches the 'default' group and so receives the shared root
+        files. Resolution fails only when no repository id can be determined.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
@@ -128,6 +136,9 @@ function Sync-AvmManagedFile {
         [string] $ManagedFilesRef,
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
+
+        [string] $FileGroupConfigPath,
+        [string] $FileGroupConfigLocalPath,
 
         [string] $ConfigRepo,
         [string] $ConfigRef,
@@ -153,6 +164,8 @@ function Sync-AvmManagedFile {
         -ManagedFilesRef $ManagedFilesRef `
         -ManagedFilesPath $ManagedFilesPath `
         -ManagedFilesLocalPath $ManagedFilesLocalPath `
+        -FileGroupConfigPath $FileGroupConfigPath `
+        -FileGroupConfigLocalPath $FileGroupConfigLocalPath `
         -ConfigRepo $ConfigRepo `
         -ConfigRef $ConfigRef `
         -ConfigPath $ConfigPath `
@@ -165,19 +178,18 @@ function Sync-AvmManagedFile {
     $source = Resolve-AvmManagedFilesSource -Settings $settings -GitPath $gitPath
     Write-AvmLog ("sync: source kind={0}; managed-files={1}; config={2}" -f $source.SourceKind, $source.ManagedBaseDir, $source.ConfigDir) -Level Verbose | Out-Null
 
-    $overlays = @()
-    $excluded = @()
-    $deprecated = @()
+    $fileGroups = @()
+    $deletedFilesByGroup = @{}
     $repositoryConfig = $null
     if ($source.ConfigDir -and (Test-Path -LiteralPath $source.ConfigDir -PathType Container)) {
         $configFile = Join-Path $source.ConfigDir 'config.json'
         if (Test-Path -LiteralPath $configFile -PathType Leaf) {
             $repositoryConfig = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
         }
-        $deprecatedFile = Join-Path $source.ConfigDir 'deprecated-files.json'
-        if (Test-Path -LiteralPath $deprecatedFile -PathType Leaf) {
-            $deprecated = @(Get-Content -LiteralPath $deprecatedFile -Raw | ConvertFrom-Json)
-        }
+    }
+
+    if ($source.FileGroupConfigFile -and (Test-Path -LiteralPath $source.FileGroupConfigFile -PathType Leaf)) {
+        $deletedFilesByGroup = Get-AvmManagedFilesDeletedFileMap -Path $source.FileGroupConfigFile
     }
 
     $repoId = Resolve-AvmManagedFilesRepoId `
@@ -188,39 +200,37 @@ function Sync-AvmManagedFile {
         -Interactive (Test-AvmManagedFilesInteractive)
 
     if ($repositoryConfig) {
-        $resolved = Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $repoId
-        $overlays = $resolved.ManagedFilesAdditional
-        $excluded = $resolved.ExcludedManagedFiles
+        $fileGroups = (Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $repoId).FileGroups
     }
-    Write-AvmLog ("sync: repo-id={0}; overlays={1}; exclusions={2}; deprecated-candidates={3}" -f $repoId, $overlays.Count, $excluded.Count, $deprecated.Count) -Level Verbose | Out-Null
+    Write-AvmLog ("sync: repo-id={0}; file-groups={1}" -f $repoId, ($fileGroups -join ', ')) -Level Verbose | Out-Null
 
-    $map = Build-AvmManagedFilesMap `
+    $managed = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
         -TargetRoot $root `
-        -Overlays $overlays `
-        -Excluded $excluded `
+        -FileGroups $fileGroups `
+        -DeletedFilesByGroup $deletedFilesByGroup `
         -RepoId $repoId `
         -GitPath $gitPath
 
-    $desired = Get-AvmDesiredManagedFile -ManagedFiles $map
+    $desired = Get-AvmDesiredManagedFile -ManagedFiles $managed.Files
 
-    # Deprecated removals win over managed adds if both name the same path.
-    $matchedDeprecated = @(Get-AvmMatchingDeprecatedPath -CandidatePaths $deprecated -Root $root)
-    $deprecatedLookup = @{}
-    foreach ($p in $matchedDeprecated) { $deprecatedLookup[$p] = $true }
+    # Deleted files win over managed adds if both name the same path.
+    $matchedDeleted = @(Get-AvmMatchingDeprecatedPath -CandidatePaths $managed.Deleted -Root $root)
+    $deletedLookup = @{}
+    foreach ($p in $matchedDeleted) { $deletedLookup[$p] = $true }
     foreach ($p in @($desired.Keys)) {
-        if ($deprecatedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
+        if ($deletedLookup.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
     }
-    Write-AvmLog ("sync: desired files={0}; matched deprecated files={1}" -f $desired.Count, $matchedDeprecated.Count) -Level Verbose | Out-Null
+    Write-AvmLog ("sync: desired files={0}; matched deleted files={1}" -f $desired.Count, $matchedDeleted.Count) -Level Verbose | Out-Null
 
     # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
     # overwritten wholesale, so the consumer keeps its own additions. The spec
-    # stacks across root + overlays like the files themselves. A path owned by
-    # the line spec must not also be whole-file managed (line-merge wins), and a
-    # deprecated removal still trumps a line merge.
-    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -Overlays $overlays
+    # stacks across file groups like the files themselves. A path owned by the
+    # line spec must not also be whole-file managed (line-merge wins), and a
+    # deletion still trumps a line merge.
+    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -FileGroups $fileGroups
     foreach ($p in @($lineSpec.Keys)) {
-        if ($deprecatedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
+        if ($deletedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
     }
     foreach ($p in @($lineSpec.Keys)) {
         if ($desired.ContainsKey($p)) { $desired.Remove($p) | Out-Null }
@@ -271,7 +281,7 @@ function Sync-AvmManagedFile {
             }
         }
     }
-    $toRemove = @($matchedDeprecated | Sort-Object)
+    $toRemove = @($matchedDeleted | Sort-Object)
 
     $lineAdded = @($changedLinePlans | Where-Object { -not $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
     $lineUpdated = @($changedLinePlans | Where-Object { $_.Existed } | ForEach-Object { $_.Path } | Sort-Object)
@@ -294,7 +304,7 @@ function Sync-AvmManagedFile {
         Write-AvmLog 'sync: check-drift mode; reporting planned changes without writing' -Level Verbose | Out-Null
         $issueList = New-Object System.Collections.Generic.List[object]
         foreach ($p in $toRemove) {
-            $issueList.Add((New-AvmSyncIssue -File $p -Message 'deprecated file present in the repository; it should be removed.'))
+            $issueList.Add((New-AvmSyncIssue -File $p -Message 'deleted file present in the repository; it should be removed.'))
         }
         foreach ($p in $toAdd) {
             $issueList.Add((New-AvmSyncIssue -File $p -Message 'managed file missing from the repository; it should be added.'))
@@ -381,6 +391,8 @@ function Resolve-AvmManagedFilesSetting {
         [string] $ManagedFilesRef,
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
+        [string] $FileGroupConfigPath,
+        [string] $FileGroupConfigLocalPath,
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -399,34 +411,43 @@ function Resolve-AvmManagedFilesSetting {
         return $Default
     }
 
-    $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/azure-verified-modules-tools'
+    # Managed file content lives in its own repository so that overlays can be
+    # reviewed and released independently of the tooling. config.json stays in
+    # the tools repository, so the config defaults are not derived from the
+    # managed-files repo or ref.
+    $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/azure-verified-modules-managed-files'
     $ref = & $pick $ManagedFilesRef 'AVM_MANAGED_FILES_REF' 'ref' 'main'
-    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'repository-management/managed-files/files'
+    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'terraform/files'
     $localPath = & $pick $ManagedFilesLocalPath 'AVM_MANAGED_FILES_LOCAL_PATH' 'localPath' ''
 
-    $configRepoValue = & $pick $ConfigRepo 'AVM_MANAGED_FILES_CONFIG_REPO' 'configRepo' $repo
-    $configRefValue = & $pick $ConfigRef 'AVM_MANAGED_FILES_CONFIG_REF' 'configRef' $ref
-    $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'repository-management/managed-files/config'
+    $fileGroupConfigPath = & $pick $FileGroupConfigPath 'AVM_MANAGED_FILES_GROUP_CONFIG_PATH' 'fileGroupConfigPath' 'terraform/config/managed-files.json'
+    $fileGroupConfigLocalPath = & $pick $FileGroupConfigLocalPath 'AVM_MANAGED_FILES_GROUP_CONFIG_LOCAL_PATH' 'fileGroupConfigLocalPath' ''
+
+    $configRepoValue = & $pick $ConfigRepo 'AVM_MANAGED_FILES_CONFIG_REPO' 'configRepo' 'Azure/azure-verified-modules-tools'
+    $configRefValue = & $pick $ConfigRef 'AVM_MANAGED_FILES_CONFIG_REF' 'configRef' 'main'
+    $configPathValue = & $pick $ConfigPath 'AVM_MANAGED_FILES_CONFIG_PATH' 'configPath' 'repository-management/repository-config'
     $configLocalPath = & $pick $ConfigLocalPath 'AVM_MANAGED_FILES_CONFIG_LOCAL_PATH' 'configLocalPath' ''
 
     # RepoId is captured here only as its authoritative short-circuit value: an
     # explicit -RepoId parameter, the AVM_MANAGED_FILES_REPO_ID environment
     # variable, or a '.avm/managed-files.json' repoId override. Inference from the
     # git origin or the folder leaf happens later in
-    # Resolve-AvmManagedFilesRepoId. Governance membership prioritises a matching
-    # candidate but is optional because ungrouped repositories use root files.
+    # Resolve-AvmManagedFilesRepoId. Group membership prioritises a matching
+    # candidate; the 'default' group's '*' wildcard covers every repository.
     $repoIdValue = & $pick $RepoId 'AVM_MANAGED_FILES_REPO_ID' 'repoId' ''
 
     return @{
-        ManagedFilesRepo      = $repo
-        ManagedFilesRef       = $ref
-        ManagedFilesPath      = $path
-        ManagedFilesLocalPath = $localPath
-        ConfigRepo            = $configRepoValue
-        ConfigRef             = $configRefValue
-        ConfigPath            = $configPathValue
-        ConfigLocalPath       = $configLocalPath
-        RepoId                = $repoIdValue
+        ManagedFilesRepo         = $repo
+        ManagedFilesRef          = $ref
+        ManagedFilesPath         = $path
+        ManagedFilesLocalPath    = $localPath
+        FileGroupConfigPath      = $fileGroupConfigPath
+        FileGroupConfigLocalPath = $fileGroupConfigLocalPath
+        ConfigRepo               = $configRepoValue
+        ConfigRef                = $configRefValue
+        ConfigPath               = $configPathValue
+        ConfigLocalPath          = $configLocalPath
+        RepoId                   = $repoIdValue
     }
 }
 
@@ -736,10 +757,11 @@ function Resolve-AvmManagedFilesSource {
         }
 
         return @{
-            ManagedBaseDir = $baseDir
-            ConfigDir      = $configDir
-            SourceKind     = 'local'
-            ToolPath       = $baseDir
+            ManagedBaseDir      = $baseDir
+            ConfigDir           = $configDir
+            FileGroupConfigFile = (Resolve-AvmFileGroupConfigFile -Settings $Settings -ManagedBaseDir $baseDir)
+            SourceKind          = 'local'
+            ToolPath            = $baseDir
         }
     }
 
@@ -750,6 +772,11 @@ function Resolve-AvmManagedFilesSource {
 
     $checkout = Get-AvmManagedFilesCheckout -Repo $Settings.ManagedFilesRepo -Ref $Settings.ManagedFilesRef -GitPath $GitPath
     $baseDir = Join-Path $checkout $Settings.ManagedFilesPath
+
+    $fileGroupConfigFile = $Settings.FileGroupConfigLocalPath
+    if (-not $fileGroupConfigFile) {
+        $fileGroupConfigFile = Join-Path $checkout $Settings.FileGroupConfigPath
+    }
 
     $configDir = $null
     if ($Settings.ConfigLocalPath -and (Test-Path -LiteralPath $Settings.ConfigLocalPath -PathType Container)) {
@@ -764,11 +791,40 @@ function Resolve-AvmManagedFilesSource {
     }
 
     return @{
-        ManagedBaseDir = $baseDir
-        ConfigDir      = $configDir
-        SourceKind     = 'governance'
-        ToolPath       = $baseDir
+        ManagedBaseDir      = $baseDir
+        ConfigDir           = $configDir
+        FileGroupConfigFile = $fileGroupConfigFile
+        SourceKind          = 'governance'
+        ToolPath            = $baseDir
     }
+}
+
+function Resolve-AvmFileGroupConfigFile {
+    <#
+    .SYNOPSIS
+        Locate the file-group config for a local managed-files path.
+
+    .DESCRIPTION
+        Uses an explicit FileGroupConfigLocalPath when supplied. Otherwise
+        assumes the managed-files repository layout, where the files directory
+        and the config directory are siblings, and looks for
+        '<parent-of-files>/config/managed-files.json'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable] $Settings,
+
+        [Parameter(Mandatory)]
+        [string] $ManagedBaseDir
+    )
+
+    if ($Settings.FileGroupConfigLocalPath) { return $Settings.FileGroupConfigLocalPath }
+
+    $parent = Split-Path -Parent $ManagedBaseDir
+    if (-not $parent) { return $null }
+    return (Join-Path (Join-Path $parent 'config') 'managed-files.json')
 }
 
 function Get-AvmManagedFilesCheckout {
@@ -976,14 +1032,22 @@ function Add-AvmManagedFilesFromDir {
 function Build-AvmManagedFilesMap {
     <#
     .SYNOPSIS
-        Build the managed-files map from '<base>/root' plus zero or more
-        overlays, minus any excluded paths.
+        Build the managed-files map and the deleted-file list by walking the
+        ordered file groups that apply to a repository.
 
     .DESCRIPTION
-        Overlays are applied in the order supplied, after 'root'. A file
-        present in more than one source is taken from the last source that
-        declares it, so later overlays win over earlier ones and every overlay
-        wins over 'root'.
+        File groups are applied in the order supplied. A file present in more
+        than one group is taken from the last group that declares it, so later
+        groups win over earlier ones.
+
+        Each group may also declare deleted files. A deletion removes the path
+        from the map at the point the group is applied, so a later group can
+        re-add a file that an earlier group deleted, and a later group can
+        delete a file that an earlier group added. Any path still present in
+        the map at the end is not reported as deleted.
+
+        Returns a hashtable with 'Files' (target path -> source descriptor) and
+        'Deleted' (sorted target paths that should not exist in the repository).
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -997,60 +1061,95 @@ function Build-AvmManagedFilesMap {
         [Parameter(Mandatory)]
         [string] $TargetRoot,
 
-        [string[]] $Overlays = @(),
+        [string[]] $FileGroups = @(),
 
-        [string[]] $Excluded = @(),
+        [hashtable] $DeletedFilesByGroup = @{},
 
         [string] $RepoId,
 
         [string] $GitPath
     )
 
-    $rootDir = Join-Path $BaseDir 'root'
-
     $map = @{}
-    Add-AvmManagedFilesFromDir -BaseDir $rootDir -Map $map -TargetRoot $TargetRoot -GitPath $GitPath
-    foreach ($overlay in $Overlays) {
-        if ([string]::IsNullOrWhiteSpace($overlay)) { continue }
-        Add-AvmManagedFilesFromDir -BaseDir (Join-Path $BaseDir $overlay) -Map $map -TargetRoot $TargetRoot -GitPath $GitPath
-    }
+    $deleted = @{}
 
-    foreach ($excludedPath in $Excluded) {
-        foreach ($resolvedExcludedPath in @(Resolve-AvmManagedFileTargetPath -RelativePath $excludedPath -TargetRoot $TargetRoot)) {
-            if ($map.ContainsKey($resolvedExcludedPath)) {
-                $map.Remove($resolvedExcludedPath) | Out-Null
-                Write-AvmLog "Excluded managed file from sync: $resolvedExcludedPath" -Level Verbose
+    foreach ($fileGroup in $FileGroups) {
+        if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
+
+        Add-AvmManagedFilesFromDir -BaseDir (Join-Path $BaseDir $fileGroup) -Map $map -TargetRoot $TargetRoot -GitPath $GitPath
+
+        if (-not $DeletedFilesByGroup.ContainsKey($fileGroup)) { continue }
+        foreach ($deletedPath in @($DeletedFilesByGroup[$fileGroup])) {
+            if ([string]::IsNullOrWhiteSpace($deletedPath)) { continue }
+            foreach ($resolvedPath in @(Resolve-AvmManagedFileTargetPath -RelativePath $deletedPath -TargetRoot $TargetRoot)) {
+                if ($map.ContainsKey($resolvedPath)) {
+                    $map.Remove($resolvedPath) | Out-Null
+                    Write-AvmLog "File group '$fileGroup' deletes managed file: $resolvedPath" -Level Verbose
+                }
+                $deleted[$resolvedPath] = $true
             }
         }
     }
 
-    Write-AvmLog "Resolved $($map.Count) managed file(s) for repository '$RepoId' (overlays='$($Overlays -join ', ')', exclusions=$($Excluded.Count))." -Level Verbose
+    # A later group re-adding a path un-deletes it.
+    foreach ($presentPath in @($map.Keys)) { $deleted.Remove($presentPath) | Out-Null }
+
+    Write-AvmLog "Resolved $($map.Count) managed file(s) and $($deleted.Count) deleted file(s) for repository '$RepoId' (fileGroups='$($FileGroups -join ', ')')." -Level Verbose
+
+    return @{
+        Files   = $map
+        Deleted = @($deleted.Keys | Sort-Object)
+    }
+}
+
+function Get-AvmManagedFilesDeletedFileMap {
+    <#
+    .SYNOPSIS
+        Read the managed-files repository's file-group config and return a map
+        of file group name to the paths that group deletes.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    $map = @{}
+    $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if (-not ($config.PSObject.Properties.Name -contains 'fileGroups') -or -not $config.fileGroups) { return $map }
+
+    foreach ($fileGroup in @($config.fileGroups)) {
+        if (-not $fileGroup.name) { continue }
+        if ($fileGroup.PSObject.Properties.Name -contains 'deletedFiles' -and $fileGroup.deletedFiles) {
+            $map[[string]$fileGroup.name] = @($fileGroup.deletedFiles)
+        }
+    }
+
     return $map
 }
 
 function Resolve-AvmManagedFilesRepositorySetting {
     <#
     .SYNOPSIS
-        Resolve the per-repository managed-files overlays and exclusions from a
+        Resolve the ordered managed-file groups that apply to a repository from a
         parsed config.json by matching the repository id against
         'repositoryGroups'.
 
     .DESCRIPTION
         A repository may belong to several groups that each declare a
-        'managedFilesAdditional' overlay. All of them apply, stacked so that a
-        later overlay's files win over an earlier one's.
+        'managedFiles' list. All of them apply, stacked so that a later group's
+        files win over an earlier one's.
 
-        Stacking order is explicit: each group may carry an integer
-        'managedFilesOrder' (default 0). Overlays sort by that value ascending,
-        with ties broken by declaration order in config.json. A lower order is
-        applied earlier and therefore *loses* to a higher order. Relying on
-        declaration order alone was fragile - reordering config.json for tidiness
-        silently changed precedence.
+        Stacking order is explicit: each group may carry an integer 'order'
+        (default 0). Groups sort by that value ascending, with ties broken by
+        declaration order in config.json. A lower order is applied earlier and
+        therefore *loses* to a higher order. Relying on declaration order alone
+        was fragile - reordering config.json for tidiness silently changed
+        precedence.
 
-        This ordering must stay identical to Get-RepositorySettings in
-        repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1,
-        or 'avm pr-check' drift detection will disagree with what the sync
-        pipeline actually writes.
+        The 'default' group matches every repository via the '*' wildcard and
+        carries a negative order so that its files always apply first.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -1067,46 +1166,40 @@ function Resolve-AvmManagedFilesRepositorySetting {
 
     $repositoryGroups = @()
     if ($RepositoryConfig.PSObject.Properties.Name -contains 'repositoryGroups' -and $RepositoryConfig.repositoryGroups) {
-        $repositoryGroups = @($RepositoryConfig.repositoryGroups | Where-Object { $_.repositories -contains $RepoId })
+        $repositoryGroups = @(
+            $RepositoryConfig.repositoryGroups |
+                Where-Object { $_.repositories -contains '*' -or $_.repositories -contains $RepoId }
+        )
     }
 
-    $overlayEntries = @()
+    $groupEntries = @()
     $declarationIndex = 0
     foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesAdditional' -and $repositoryGroup.managedFilesAdditional) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFiles' -and $repositoryGroup.managedFiles) {
             $order = 0
-            if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesOrder' -and $null -ne $repositoryGroup.managedFilesOrder) {
-                $order = [int] $repositoryGroup.managedFilesOrder
+            if ($repositoryGroup.PSObject.Properties.Name -contains 'order' -and $null -ne $repositoryGroup.order) {
+                $order = [int] $repositoryGroup.order
             }
-            foreach ($overlay in @($repositoryGroup.managedFilesAdditional)) {
-                $overlayEntries += [pscustomobject]@{
-                    Overlay = $overlay
-                    Order   = $order
-                    Index   = $declarationIndex
+            foreach ($fileGroup in @($repositoryGroup.managedFiles)) {
+                $groupEntries += [pscustomobject]@{
+                    FileGroup = $fileGroup
+                    Order     = $order
+                    Index     = $declarationIndex
                 }
             }
         }
         $declarationIndex++
     }
 
-    $managedFilesAdditional = @(
-        $overlayEntries |
+    $fileGroups = @(
+        $groupEntries |
             Sort-Object -Property Order, Index |
-            Select-Object -ExpandProperty Overlay |
+            Select-Object -ExpandProperty FileGroup |
             Select-Object -Unique
     )
 
-    $excludedManagedFiles = @()
-    foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains 'excludedManagedFiles' -and $repositoryGroup.excludedManagedFiles) {
-            $excludedManagedFiles += @($repositoryGroup.excludedManagedFiles)
-        }
-    }
-    $excludedManagedFiles = @($excludedManagedFiles | Select-Object -Unique)
-
     return @{
-        ManagedFilesAdditional = $managedFilesAdditional
-        ExcludedManagedFiles   = $excludedManagedFiles
+        FileGroups = $fileGroups
     }
 }
 

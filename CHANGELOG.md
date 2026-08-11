@@ -21,6 +21,11 @@ section when cutting a release.
 
 ### Added
 
+- `avm sync` and `avm pre-commit` now expose `-FileGroupConfigPath` and
+  `-FileGroupConfigLocalPath`, closing the last gap between the engine's
+  managed-file options and the public CLI surface. Both verbs now derive that
+  surface from the engine in test, so a future engine option cannot be added
+  without also being surfaced.
 - Pin manifest tests now assert that every `tests/fixtures/bin/*.ps1` stub
   self-reports the version pinned in `avm.pins.jsonc`, so a stale stub fails at
   its cause instead of surfacing as an unrelated Component-tier PATH miss.
@@ -49,15 +54,31 @@ section when cutting a release.
 
 ### Changed
 
+- Managed files now live in `Azure/azure-verified-modules-managed-files` under
+  `terraform/files`, and file-group definition moved with them to
+  `terraform/config/managed-files.json`. Each file group owns its `deletedFiles`,
+  which folds in both the repository-scoped `excludedManagedFiles` and the
+  global `deprecated-files.json` and makes deletions order-aware, so a
+  higher-order file group can reinstate a path a lower-order group deleted.
+  `repository-management/managed-files/` stays in place until the next release
+  ships, because the currently published module still resolves it.
+- Repository configuration moved from
+  `repository-management/managed-files/config/config.json` to
+  `repository-management/repository-config/config.json` and adopts a group-only
+  schema. Every group declares its own `teams`, `managedFiles` replaces
+  `managedFilesAdditional`, `order` replaces `managedFilesOrder`, and a
+  `default` group matching `repositories: ["*"]` replaces the implicit `all`
+  pseudo-group along with the root-level `codeOwners`, `topics`, and
+  `workloadIdentityFederationSubjectClaimOverrides` blocks.
+- The `canary-tooling` file group is retired.
 - Managed-file sync verbose output now identifies every planned create, update,
   and delete by repository-relative path. Update messages distinguish content,
   Git mode, and managed-line drift without logging file contents.
-- Managed-file sync now defaults to `Azure/azure-verified-modules-tools`
-  (`repository-management/managed-files/files` with configuration under
-  `repository-management/managed-files/config`). Configuration repository and
-  ref defaults continue to inherit the effective managed-file source. The
-  obsolete MAPOTF refresh dependency on the retired governance repository was
-  removed; packaged MAPOTF configuration is authoritative here.
+- Managed-file sync configuration repository and ref defaults are independent of
+  the managed-file source, because `config.json` stays in the tools repo while
+  the files themselves moved. The obsolete MAPOTF refresh
+  dependency on the retired governance repository was removed; packaged MAPOTF
+  configuration is authoritative here.
 - Convention rename fixes now reconcile an existing destination. Non-whitespace
   content from singular Terraform files is appended to the plural file before
   the singular file is removed; whitespace-only singular files are removed
@@ -109,6 +130,14 @@ section when cutting a release.
   clean-worktree preflight then
   `sync → format → transform → lint → check policy → check convention → validate → docs`
   for `pr-check`, with unit tests retained as a separate CI job).
+
+### Removed
+
+- The `Repository Management - Validate VS Code Extensions` workflow, its
+  Pester test, and `repository-management/managed-files/scripts/`. The only
+  file it validated was the managed-file `.vscode/extensions.json`, which is
+  now covered by `validate-vscode-extensions.yml` in
+  `Azure/azure-verified-modules-managed-files`.
 
 ### Fixed
 

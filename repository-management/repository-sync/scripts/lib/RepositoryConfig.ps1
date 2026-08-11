@@ -1,8 +1,13 @@
-# Resolves the per-repository view of `managed-files/config/config.json`:
-# team mappings, code-owners teams, topics, managed-files overlay/exclusions.
+# Resolves the per-repository view of `repository-config/config.json`:
+# teams, code-owners teams, topics, and workload identity federation claim
+# overrides.
+#
+# Managed-file group selection is deliberately NOT resolved here. Avm.Authoring's
+# Sync-AvmManagedFile.ps1 owns that resolution end to end, so there is only one
+# implementation of the ordering rules to keep correct.
 #
 # Returns a hashtable so the orchestrator can pull fields by name rather than
-# unpacking 8 positional return values.
+# unpacking positional return values.
 
 function Resolve-RepositorySettings {
     param(
@@ -10,16 +15,28 @@ function Resolve-RepositorySettings {
         [string]$repoId
     )
 
-    $repositoryGroups = $repositoryConfig.repositoryGroups | Where-Object { $_.repositories -contains $repoId }
+    # A group whose `repositories` contains "*" matches every repository. The
+    # `default` group uses this to carry organisation-wide settings, replacing
+    # the former root-level blocks and the implicit "all" pseudo-group.
+    $repositoryGroups = @(
+        $repositoryConfig.repositoryGroups |
+            Where-Object { $_.repositories -contains '*' -or $_.repositories -contains $repoId }
+    )
 
     $repositoryGroupNames = @($repositoryGroups | ForEach-Object { $_.name })
-    $repositoryGroupNames += "all"
 
+    # Teams are declared inline on the group they apply to. De-duplicate by
+    # name so a team named by more than one matching group is only requested
+    # once.
     $teams = @()
-    foreach ($repositoryGroupName in $repositoryGroupNames) {
-        $teamMappings = @($repositoryConfig.teamMappings | Where-Object { $_.repositoryGroups -contains $repositoryGroupName })
-        if ($teamMappings.Count -gt 0) {
-            $teams += $teamMappings
+    $seenTeamNames = @{}
+    foreach ($repositoryGroup in $repositoryGroups) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'teams' -and $repositoryGroup.teams) {
+            foreach ($team in @($repositoryGroup.teams)) {
+                if ($seenTeamNames.ContainsKey($team.name)) { continue }
+                $seenTeamNames[$team.name] = $true
+                $teams += $team
+            }
         }
     }
 
@@ -29,111 +46,48 @@ function Resolve-RepositorySettings {
     # owners team).
     $codeOwnersDefaultTeams = @()
     foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains "codeOwnersTeams" -and $repositoryGroup.codeOwnersTeams) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'codeOwnersTeams' -and $repositoryGroup.codeOwnersTeams) {
             $codeOwnersDefaultTeams += $repositoryGroup.codeOwnersTeams
         }
     }
     $codeOwnersDefaultTeams = @($codeOwnersDefaultTeams | Select-Object -Unique)
 
-    # The teams that protect the CODEOWNERS file itself are global and apply
-    # to every repository regardless of tier.
+    # The teams that protect the CODEOWNERS file itself. The `default` group
+    # sets these for every repository; a group may add more.
     $codeOwnersFileProtectionTeams = @()
-    if ($repositoryConfig.PSObject.Properties.Name -contains "codeOwners" -and $repositoryConfig.codeOwners -and $repositoryConfig.codeOwners.fileProtectionTeams) {
-        $codeOwnersFileProtectionTeams = @($repositoryConfig.codeOwners.fileProtectionTeams)
-    }
-
-    # Collect repository topics: start from the global default topics and add
-    # any topics defined on each matching repository group (e.g.
-    # `avm-tier-1`). The result is the authoritative topic list for the
-    # repository, so any topic set on the repo that is not in this list will
-    # be removed by Terraform.
-    $repositoryTopics = @()
-    if ($repositoryConfig.PSObject.Properties.Name -contains "topics" -and $repositoryConfig.topics -and $repositoryConfig.topics.default) {
-        $repositoryTopics += $repositoryConfig.topics.default
-    }
     foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains "topics" -and $repositoryGroup.topics) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'codeOwnersFileProtectionTeams' -and $repositoryGroup.codeOwnersFileProtectionTeams) {
+            $codeOwnersFileProtectionTeams += $repositoryGroup.codeOwnersFileProtectionTeams
+        }
+    }
+    $codeOwnersFileProtectionTeams = @($codeOwnersFileProtectionTeams | Select-Object -Unique)
+
+    # Collect repository topics from every matching group. The result is the
+    # authoritative topic list for the repository, so any topic set on the repo
+    # that is not in this list will be removed by Terraform.
+    $repositoryTopics = @()
+    foreach ($repositoryGroup in $repositoryGroups) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'topics' -and $repositoryGroup.topics) {
             $repositoryTopics += $repositoryGroup.topics
         }
     }
     $repositoryTopics = @($repositoryTopics | Select-Object -Unique)
 
-    # Collect and order the managed-files overlay sets declared on any matching
-    # repository group (e.g. `alz` for the azure-landing-zones group). Lower
-    # orders are applied first, so a higher-order overlay wins for duplicate
-    # paths. This ordering is mirrored in Avm.Authoring's
-    # Sync-AvmManagedFile.ps1 and the two implementations must not diverge.
-    $overlayEntries = @()
-    $declarationIndex = 0
-    foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesAdditional' -and $repositoryGroup.managedFilesAdditional) {
-            $order = 0
-            if ($repositoryGroup.PSObject.Properties.Name -contains 'managedFilesOrder' -and $null -ne $repositoryGroup.managedFilesOrder) {
-                $order = [int] $repositoryGroup.managedFilesOrder
-            }
-            foreach ($overlay in @($repositoryGroup.managedFilesAdditional)) {
-                $overlayEntries += [pscustomobject]@{
-                    Overlay = $overlay
-                    Order   = $order
-                    Index   = $declarationIndex
-                }
-            }
-        }
-        $declarationIndex++
-    }
-
-    $managedFilesAdditional = @(
-        $overlayEntries |
-            Sort-Object -Property Order, Index |
-            Select-Object -ExpandProperty Overlay |
-            Select-Object -Unique
-    )
-
-    # Collect the set of managed files to exclude from the final map for
-    # this repository. Excluded files are pulled in from every matching
-    # repository group's `excludedManagedFiles` field and de-duplicated. Use
-    # this to suppress files that exist in `managed-files/files/root/` (or in the
-    # overlay) but should not be deployed to repositories in this group
-    # (e.g. ALZ repos don't ship the generic AVM module issue templates).
-    $excludedManagedFiles = @()
-    foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains "excludedManagedFiles" -and $repositoryGroup.excludedManagedFiles) {
-            $excludedManagedFiles += @($repositoryGroup.excludedManagedFiles)
-        }
-    }
-    $excludedManagedFiles = @($excludedManagedFiles | Select-Object -Unique)
-
-    # Workload identity federation subject-claim overrides. Root values apply
-    # to every repository, and repository groups can override individual keys.
-    #
-    # Merged per key across every group containing the repo, using the same
-    # (managedFilesOrder, declaration index) precedence as managed-files
-    # overlays: higher order wins.
+    # Workload identity federation subject-claim overrides, merged per key
+    # across every group containing the repo using the same (order,
+    # declaration index) precedence as managed-file groups: higher order wins.
+    # The `default` group declares a negative order so it always loses.
     $supportedClaimOverrides = @{
         jobWorkflowRef = "github_job_workflow_ref"
     }
 
     $claimOverrideEntries = @()
-    if ($repositoryConfig.PSObject.Properties.Name -contains "workloadIdentityFederationSubjectClaimOverrides" -and $repositoryConfig.workloadIdentityFederationSubjectClaimOverrides) {
-        foreach ($claimOverride in $repositoryConfig.workloadIdentityFederationSubjectClaimOverrides.PSObject.Properties) {
-            if (-not $supportedClaimOverrides.ContainsKey($claimOverride.Name)) {
-                throw "Repository config root sets unsupported workloadIdentityFederationSubjectClaimOverrides key '$($claimOverride.Name)'. Supported keys: $($supportedClaimOverrides.Keys -join ', ')."
-            }
-            $claimOverrideEntries += [pscustomobject]@{
-                Claim = $claimOverride.Name
-                Value = $claimOverride.Value
-                Order = [int]::MinValue
-                Index = -1
-            }
-        }
-    }
-
     $claimDeclarationIndex = 0
     foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains "workloadIdentityFederationSubjectClaimOverrides" -and $repositoryGroup.workloadIdentityFederationSubjectClaimOverrides) {
+        if ($repositoryGroup.PSObject.Properties.Name -contains 'workloadIdentityFederationSubjectClaimOverrides' -and $repositoryGroup.workloadIdentityFederationSubjectClaimOverrides) {
             $order = 0
-            if ($repositoryGroup.PSObject.Properties.Name -contains "managedFilesOrder" -and $null -ne $repositoryGroup.managedFilesOrder) {
-                $order = [int]$repositoryGroup.managedFilesOrder
+            if ($repositoryGroup.PSObject.Properties.Name -contains 'order' -and $null -ne $repositoryGroup.order) {
+                $order = [int]$repositoryGroup.order
             }
             foreach ($claimOverride in $repositoryGroup.workloadIdentityFederationSubjectClaimOverrides.PSObject.Properties) {
                 if (-not $supportedClaimOverrides.ContainsKey($claimOverride.Name)) {
@@ -173,8 +127,6 @@ function Resolve-RepositorySettings {
         CodeOwnersDefaultTeams                          = $codeOwnersDefaultTeams
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics
-        ManagedFilesAdditional                          = $managedFilesAdditional
-        ExcludedManagedFiles                            = $excludedManagedFiles
         WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
     }
 }
