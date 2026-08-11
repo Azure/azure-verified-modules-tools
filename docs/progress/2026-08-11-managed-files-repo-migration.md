@@ -52,6 +52,16 @@ repository and the new one, and can drift, until that follow-up lands.
 - [x] Check the new repository out in the repository-sync workflow.
 - [x] Update the affected Pester tests and `Test-RepositoryConfig.ps1`.
 - [x] Update the changelog.
+- [x] Correct the managed-file source defaults documented in the comment-based
+      help for `Invoke-AvmSync`, `Invoke-AvmPreCommit`, and
+      `Sync-AvmManagedFile`, plus the `Avm.Authoring` README example and the
+      `CodeQlDefaultSetup.ps1` provenance comment.
+- [x] Assert the managed-files and repository-config paths forwarded by
+      `Invoke-AvmPreCommitWithUpgradeRetry` in `Test-AvmPreCommit.ps1`, so the
+      stale path that survived the migration cannot silently return.
+- [x] Remove the VS Code extension validation workflow, its Pester test, and
+      `repository-management/managed-files/scripts/`, now that the only file it
+      validated lives in the managed-files repository behind its own workflow.
 - [x] Complete the repository validation gate.
 - [x] Commit, push, and open the pull request.
 

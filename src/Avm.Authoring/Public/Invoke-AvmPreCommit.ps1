@@ -88,8 +88,8 @@ function Invoke-AvmPreCommit {
         Git ref for the config repo. Forwarded only to the Terraform sync step.
 
     .PARAMETER ConfigPath
-        Path within the config repo to the folder holding 'config.json' and
-        'deprecated-files.json'. Forwarded only to the Terraform sync step.
+        Path within the config repo to the folder holding 'config.json'.
+        Forwarded only to the Terraform sync step.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the managed-files config folder. Skips the config

@@ -15,10 +15,11 @@ function Sync-AvmManagedFile {
           1. Explicit cmdlet parameters.
           2. Environment variables (AVM_MANAGED_FILES_*).
           3. A repo-committed '.avm/managed-files.json' under $Context.Root.
-          4. Defaults: the public Azure/azure-verified-modules-tools repo,
-             'main' ref, 'repository-management/managed-files/files' base
-             folder, and 'repository-management/repository-config' config
-             folder.
+          4. Defaults: files from Azure/azure-verified-modules-managed-files
+             ('main' ref, 'terraform/files' base folder, file-group config
+             'terraform/config/managed-files.json') and config.json from
+             Azure/azure-verified-modules-tools ('main' ref,
+             'repository-management/repository-config' folder).
 
         A direct local path (-ManagedFilesLocalPath or
         AVM_MANAGED_FILES_LOCAL_PATH) short-circuits the git fetch entirely and

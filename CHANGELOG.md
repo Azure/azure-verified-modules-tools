@@ -69,8 +69,9 @@ section when cutting a release.
 - Managed-file sync verbose output now identifies every planned create, update,
   and delete by repository-relative path. Update messages distinguish content,
   Git mode, and managed-line drift without logging file contents.
-- Managed-file sync configuration repository and ref defaults continue to
-  inherit the effective managed-file source. The obsolete MAPOTF refresh
+- Managed-file sync configuration repository and ref defaults are independent of
+  the managed-file source, because `config.json` stays in the tools repo while
+  the files themselves moved. The obsolete MAPOTF refresh
   dependency on the retired governance repository was removed; packaged MAPOTF
   configuration is authoritative here.
 - Convention rename fixes now reconcile an existing destination. Non-whitespace
@@ -124,6 +125,14 @@ section when cutting a release.
   clean-worktree preflight then
   `sync → format → transform → lint → check policy → check convention → validate → docs`
   for `pr-check`, with unit tests retained as a separate CI job).
+
+### Removed
+
+- The `Repository Management - Validate VS Code Extensions` workflow, its
+  Pester test, and `repository-management/managed-files/scripts/`. The only
+  file it validated was the managed-file `.vscode/extensions.json`, which is
+  now covered by `validate-vscode-extensions.yml` in
+  `Azure/azure-verified-modules-managed-files`.
 
 ### Fixed
 

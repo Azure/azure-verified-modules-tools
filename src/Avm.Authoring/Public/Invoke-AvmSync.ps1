@@ -10,9 +10,10 @@ function Invoke-AvmSync {
         tree's managed files with the governance source: it adds missing
         managed files, updates stale ones, and removes deprecated files.
 
-        The managed-file source defaults to the public
-        Azure/azure-verified-modules-tools repo (ref 'main', base folder
-        'repository-management/managed-files/files', config folder
+        Managed file content and the repository config come from two separate
+        repositories. Files default to Azure/azure-verified-modules-managed-files
+        (ref 'main', base folder 'terraform/files'); config.json defaults to
+        Azure/azure-verified-modules-tools (ref 'main', folder
         'repository-management/repository-config'). Every piece of that is
         overridable, either per parameter here, via AVM_MANAGED_FILES_*
         environment variables, or via a repo-committed
@@ -48,30 +49,30 @@ function Invoke-AvmSync {
 
     .PARAMETER ManagedFilesRepo
         owner/name of the git repo holding the managed files. Defaults to
-        'Azure/azure-verified-modules-tools'.
+        'Azure/azure-verified-modules-managed-files'.
 
     .PARAMETER ManagedFilesRef
         Git ref to fetch. Defaults to 'main'.
 
     .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder. Defaults
-        to 'repository-management/managed-files/files'.
+        to 'terraform/files'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. Skips the git fetch.
 
     .PARAMETER ConfigRepo
-        owner/name of the git repo holding the config folder. Defaults to the
-        same repo as -ManagedFilesRepo.
+        owner/name of the git repo holding the config folder. Defaults to
+        'Azure/azure-verified-modules-tools'. This is deliberately independent
+        of -ManagedFilesRepo, because config.json stays in the tools repo.
 
     .PARAMETER ConfigRef
-        Git ref for the config repo. Defaults to the same ref as
+        Git ref for the config repo. Defaults to 'main', independently of
         -ManagedFilesRef.
 
     .PARAMETER ConfigPath
-        Path within the config repo to the folder holding 'config.json' and
-        'deprecated-files.json'. Defaults to
-        'repository-management/repository-config'.
+        Path within the config repo to the folder holding 'config.json'.
+        Defaults to 'repository-management/repository-config'.
 
     .PARAMETER ConfigLocalPath
         Direct local path to the config folder. Skips the config repo fetch.

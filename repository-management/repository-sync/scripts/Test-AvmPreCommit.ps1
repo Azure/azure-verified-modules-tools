@@ -121,6 +121,8 @@ function Update-PSResource {
     $script:moduleUpdateParameters = @{} + $PSBoundParameters
 }
 
+$script:preCommitParameters = @{}
+
 function Invoke-AvmPreCommit {
     param(
         [string]$Ecosystem,
@@ -130,6 +132,7 @@ function Invoke-AvmPreCommit {
     )
 
     $script:preCommitInvocationCount++
+    $script:preCommitParameters = @{} + $PSBoundParameters
     if ($script:preCommitInvocationCount -le $script:preCommitErrorCodes.Count) {
         $exception = [System.InvalidOperationException]::new("A newer version of Avm.Authoring is required.")
         $exception | Add-Member -NotePropertyName Code -NotePropertyValue $script:preCommitErrorCodes[$script:preCommitInvocationCount - 1]
@@ -142,14 +145,21 @@ function Invoke-AvmPreCommit {
     }
 }
 
+$script:retryParameters = @{
+    repoId              = "avm-res-test"
+    managedFilesBaseDir = "../../../azure-verified-modules-managed-files/terraform/files"
+    repositoryConfigDir = "../repository-config"
+}
+
 try {
     $script:preCommitErrorCodes = @("AVM1050")
-    $result = Invoke-AvmPreCommitWithUpgradeRetry `
-        -repoId "avm-res-test" `
-        -managedFilesBaseDir "../managed-files/files" `
-        -repositoryConfigDir "../repository-config"
+    $result = Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters
 
     Assert-Equal -Actual $result.Status -Expected "pass" -Description "pre-commit status after upgrade"
+    Assert-Equal -Actual $script:preCommitParameters.Ecosystem -Expected "terraform" -Description "forwarded ecosystem"
+    Assert-Equal -Actual $script:preCommitParameters.RepoId -Expected $script:retryParameters.repoId -Description "forwarded repo id"
+    Assert-Equal -Actual $script:preCommitParameters.ManagedFilesLocalPath -Expected $script:retryParameters.managedFilesBaseDir -Description "forwarded managed files path"
+    Assert-Equal -Actual $script:preCommitParameters.ConfigLocalPath -Expected $script:retryParameters.repositoryConfigDir -Description "forwarded repository config path"
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "pre-commit invocation count"
     Assert-Equal -Actual $script:moduleImportCount -Expected 2 -Description "module import count"
     Assert-Equal -Actual $script:moduleUpdateCount -Expected 1 -Description "module update count"
@@ -165,10 +175,7 @@ try {
     Assert-Throws `
         -ExpectedMessage "A newer version of Avm.Authoring is required." `
         -Action {
-        Invoke-AvmPreCommitWithUpgradeRetry `
-            -repoId "avm-res-test" `
-            -managedFilesBaseDir "../managed-files/files" `
-            -repositoryConfigDir "../repository-config"
+        Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters
     }
 
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 1 -Description "unrelated error invocation count"
@@ -183,10 +190,7 @@ try {
     Assert-Throws `
         -ExpectedMessage "A newer version of Avm.Authoring is required." `
         -Action {
-        Invoke-AvmPreCommitWithUpgradeRetry `
-            -repoId "avm-res-test" `
-            -managedFilesBaseDir "../managed-files/files" `
-            -repositoryConfigDir "../repository-config"
+        Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters
     }
 
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "retry failure invocation count"
