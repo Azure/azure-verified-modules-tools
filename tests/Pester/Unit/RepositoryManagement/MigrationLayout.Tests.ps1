@@ -124,4 +124,14 @@ Describe "Repository management migration layout" {
             Join-Path $script:repoRoot "scripts/Update-AvmMapotfConfig.ps1"
         ) | Should -BeFalse
     }
+
+    It "contains no tracked reference to the retired governance repository" {
+        $retiredIdentifier = 'avm-terraform-' + 'governance'
+        $grepOutput = @(
+            & git -C $script:repoRoot grep -in -e $retiredIdentifier 2>$null
+        )
+
+        $LASTEXITCODE | Should -Be 1
+        $grepOutput | Should -BeNullOrEmpty
+    }
 }

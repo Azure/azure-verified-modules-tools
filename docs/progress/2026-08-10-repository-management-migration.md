@@ -7,8 +7,8 @@
 
 ## Outcome
 
-Move the active Terraform repository-management automation from
-`Azure/avm-terraform-governance` into isolated folders in this repository
+Move the active Terraform repository-management automation from the legacy
+Terraform governance repository into isolated folders in this repository
 without changing sync behavior. Schedule activation is deferred for cutover.
 
 ## Checklist
@@ -26,6 +26,7 @@ without changing sync behavior. Schedule activation is deferred for cutover.
 - [x] Repoint Avm.Authoring managed-file defaults to this repository.
 - [x] Remove the retired repository from supported MAPOTF maintenance tooling.
 - [x] Validate and prepare the runtime repointing correction for release.
+- [x] Remove the retired repository identifier from every tracked file.
 
 ## Validation
 
@@ -51,10 +52,15 @@ without changing sync behavior. Schedule activation is deferred for cutover.
 - `./build.ps1 pre-commit`: 872 unit tests passed, 7 skipped, and 26 component
   tests passed after repointing the runtime defaults and removing the obsolete
   MAPOTF upstream refresh.
+- `git grep -in -e '<retired-repository-identifier>'`: no matches (exit code 1).
+- `Invoke-Pester` for `MigrationLayout.Tests.ps1`: 6 passed with the
+  repository-wide retired-identifier guard.
+- `./build.ps1 pre-commit`: 873 unit tests passed, 7 skipped, and 26 component
+  tests passed after the repository-wide reference cleanup.
 
 ## Provenance
 
-Source snapshot: `Azure/avm-terraform-governance` commit
+Source snapshot: legacy Terraform governance repository commit
 `59078e1bde61af0a5881331d2d26a41f791f5624`.
 
 ## Blockers or dependencies

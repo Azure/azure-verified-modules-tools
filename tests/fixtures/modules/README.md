@@ -24,7 +24,7 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 ## Source
 
 Both fixtures were copied from
-[`Azure/avm-terraform-governance`](https://github.com/Azure/avm-terraform-governance)
+legacy Terraform governance repository
 at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
 `main`, 2026-06-16). Upstream paths:
 

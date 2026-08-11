@@ -9,7 +9,7 @@
 ## Outcome
 
 Preserve exact parity with the legacy Porch retry regex introduced by
-[Azure/avm-terraform-governance#529](https://github.com/Azure/avm-terraform-governance/pull/529),
+legacy Terraform governance repository PR #529,
 then classify `LocationNotAvailableForResourceGroup` apply failures as
 retryable.
 

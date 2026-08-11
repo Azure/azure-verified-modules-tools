@@ -13,7 +13,7 @@ function Invoke-AvmPreCommit {
         executed step reports Status='pass' (format reports an implicit
         pass when no errors are thrown).
 
-        The Terraform chain follows the upstream avm-terraform-governance
+        The Terraform chain follows the legacy Terraform governance
         pre-commit.porch.yaml philosophy: after an initial managed-files
         sync it stays fast and fully offline
         (check convention -> transform -> format -> docs), so it

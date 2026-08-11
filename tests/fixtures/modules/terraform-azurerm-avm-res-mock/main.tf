@@ -14,7 +14,7 @@ locals {
 locals {
   default_tags = {
     environment = "test"
-    managed_by  = "avm-terraform-governance"
+    managed_by  = "avm-tooling"
   }
 }
 
@@ -38,7 +38,7 @@ resource "azurerm_management_lock" "rg_lock" {
   lock_level = "CanNotDelete"
   name       = "${local.resource_group_prefix}-${random_string.suffix.result}-lock"
   scope      = azurerm_resource_group.this["primary"].id
-  notes      = "Locked by avm-terraform-governance mock module fixture."
+  notes      = "Locked by the AVM mock module fixture."
 
   depends_on = [
     azurerm_resource_group.this,

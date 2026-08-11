@@ -337,7 +337,7 @@ Some assets are **packaged into the module** under
 `src/Avm.Authoring/Resources/` because the engines need them at runtime and
 cannot reach the consumer repo's synced copies (they run before or
 independently of `avm sync`). The copies in this repository are authoritative.
-Their initial snapshots came from `Azure/avm-terraform-governance`; that
+Their initial snapshots came from `legacy Terraform governance repository`; that
 historical provenance does not define an update or runtime dependency.
 
 Currently vendored:
@@ -462,10 +462,10 @@ Documentation: add a one-line cross-reference under the spec §6 quote at the to
 ## Appendix A. Decision: `grept` policy disposition
 
 > **Status:** Audit landed 2026-06-04 (Slice B of the Terraform-first pivot plan).
-> **Upstream snapshot reviewed:** [`Azure/avm-terraform-governance@65182443`](https://github.com/Azure/avm-terraform-governance/tree/65182443/grept-policies).
+> **Upstream snapshot reviewed:** legacy Terraform governance repository at commit `65182443`.
 > **Why this lives here:** the [consolidation plan §10 Phase 4](avm-consolidation-plan.md#10-phase-by-phase-delivery) treats `grept` as REPLACED, not selectively ported. This appendix records the per-policy disposition that drives Slice C's primitive set and Slice D's port list, so future agents don't re-litigate the decisions.
 >
-> **⚠️ Partially reversed 2026-07-08 (managed-files sync restored as a dedicated verb).** Rows **#6 `deprecated_files`** ("Drop (mostly)") and **#7 `managed_files`** ("Drop entirely") are superseded *for the file-sync concern only*: the tooling now ships an `avm sync` verb (`Engines/ManagedFiles/Sync-AvmManagedFile.ps1`) that re-introduces governance managed-file + deprecated-file syncing, modelled on `Azure/avm-terraform-governance` `tf-repo-mgmt/` (its `repository-config/config.json` repository-groups + `deprecated-files.json` + `managed-files/root` overlay), **file-sync only (no PR creation)**, wired as the FIRST `pre-commit` step and into `pr-check` (drift = hard fail). This does **not** re-open the `check convention` decisions: the audit's core stance — *no bulk byte-match primitive inside the convention framework* (§"Cross-cutting decisions" #1) — still holds, because managed-files sync is a **separate engine/verb**, not a convention rule. So the "wrong shape for `avm check convention`" reasoning in rows #6/#7 is unaffected; only the "drop the capability entirely" conclusion is reversed. See [`progress.md`](progress.md) Part 2.
+> **⚠️ Partially reversed 2026-07-08 (managed-files sync restored as a dedicated verb).** Rows **#6 `deprecated_files`** ("Drop (mostly)") and **#7 `managed_files`** ("Drop entirely") are superseded *for the file-sync concern only*: the tooling now ships an `avm sync` verb (`Engines/ManagedFiles/Sync-AvmManagedFile.ps1`) that re-introduces governance managed-file + deprecated-file syncing, modelled on the legacy Terraform governance repository's `tf-repo-mgmt/` layout (its `repository-config/config.json` repository-groups + `deprecated-files.json` + `managed-files/root` overlay), **file-sync only (no PR creation)**, wired as the FIRST `pre-commit` step and into `pr-check` (drift = hard fail). This does **not** re-open the `check convention` decisions: the audit's core stance — *no bulk byte-match primitive inside the convention framework* (§"Cross-cutting decisions" #1) — still holds, because managed-files sync is a **separate engine/verb**, not a convention rule. So the "wrong shape for `avm check convention`" reasoning in rows #6/#7 is unaffected; only the "drop the capability entirely" conclusion is reversed. See [`progress.md`](progress.md) Part 2.
 
 ### Context
 
@@ -539,7 +539,7 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 >
 > The per-config audit and reasoning below are retained verbatim as the historical record (they explain *why* wrapping beats reimplementing).
 
-**Context.** Upstream `avm-terraform-governance@65182443` invokes `mapotf transform --mptf-dir <pinned> --tf-dir .` (then `mapotf clean-backup --tf-dir .`) against three configs at `mapotf-configs/pre-commit/*.mptf.hcl`. This audit answers, per config: (1) what does it concretely do; (2) is it important to the AVM contract; (3) what is the cheapest replacement (native PowerShell / general CLI / keep upstream via build-and-host); (4) effort. Read it before Slice G (`Invoke-AvmTerraformTransform`).
+**Context.** Upstream `legacy Terraform governance repository at commit 65182443` invokes `mapotf transform --mptf-dir <pinned> --tf-dir .` (then `mapotf clean-backup --tf-dir .`) against three configs at `mapotf-configs/pre-commit/*.mptf.hcl`. This audit answers, per config: (1) what does it concretely do; (2) is it important to the AVM contract; (3) what is the cheapest replacement (native PowerShell / general CLI / keep upstream via build-and-host); (4) effort. Read it before Slice G (`Invoke-AvmTerraformTransform`).
 
 ### Per-config audit
 
@@ -554,7 +554,7 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 Concrete reasoning:
 
 1. **The two big configs are non-trivial to reimplement.** ~250 lines of HCL across configs #1 + #2, with `for_each`, `try()`, three-state merge synthesis, nested `depends_on` between transforms, and multi-line string templating. PowerShell needs an HCL parser (no mature vendorable option exists; `terraform-config-inspect` only emits structure, not attribute bodies). `hcledit` scripts can do leaf rewrites but the cross-config dependency graph (config #1's `var.enable_telemetry` block must land before config #2's data sources) becomes a hand-maintained shell orchestration.
-2. **Configs evolve upstream.** New `azapi_*` resource types, telemetry payload churn, and provider-version drift all happen on `avm-terraform-governance`'s schedule. A verbatim-upstream pin gives us one SHA to bump; a rewrite forks us into perpetual catch-up.
+2. **Configs evolve upstream.** New `azapi_*` resource types, telemetry payload churn, and provider-version drift all happen on `legacy Terraform governance repository`'s schedule. A verbatim-upstream pin gives us one SHA to bump; a rewrite forks us into perpetual catch-up.
 3. **mapotf the tool is small.** `lonegunmanb/mapotf` is ~3k LoC Go. The cost of adding a release workflow once is much less than the cost of reimplementing 3 configs + maintaining them forever.
 4. **Config #3 is trivial in any path.** It bundles for free under (c), and inlining it as an `hcledit` two-liner stays viable if (c) ever falls through. Doesn't change the recommendation.
 
@@ -574,7 +574,7 @@ Concrete reasoning:
 ### Open follow-ups before Slice G can land
 
 1. **Confirm `mapotf` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 in `docs/progress/legacy-checklist-through-2026-08-10.md`) noted mapotf does not ship releases today. Owner: investigate `lonegunmanb/mapotf` (canonical home; `Azure/mapotf` is a hard fork not actively releasing). If still absent → resolve next item.
-2. **Pick a hosting strategy for mapotf release artefacts.** Three options: (i) PR a release workflow into upstream `lonegunmanb/mapotf`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — same A/B/C question already open from the 2026-05-27 audit.
+2. **Pick a hosting strategy for mapotf release artefacts.** Three options: (i) PR a release workflow into upstream `lonegunmanb/mapotf`; (ii) build + host artefacts in `legacy Terraform governance repository` releases; (iii) build + host in this repo's own releases. **User decision** — same A/B/C question already open from the 2026-05-27 audit.
 3. **Confirm config pinning approach.** Pinned-asset bundle ships as (i) tarball of upstream `mapotf-configs/pre-commit/` at a specific SHA, or (ii) re-bundled tagged release on our side. (i) keeps drift visible to consumers; (ii) gives us editorial control. **User decision; default = (i).**
 4. **Settle the pinned-asset descriptor name.** Proposed: `avm-mapotf-configs-pre-commit`. Aligns with `avm-policy-aprl` / `avm-policy-avmsec` already in use.
 
@@ -597,7 +597,7 @@ Concrete reasoning:
 >
 > **Consequence:** Slice H stays closed (no avmfix chain). The "build-and-host avmfix" recommendation below is **superseded** — avmfix is not adopted in any form; its behaviours come from wrapping mapotf (Slice G). The catalogue is preserved because it is the precise map of *what the mapotf configs now do*, which is invaluable when validating a Slice G run.
 
-**Context.** Upstream `avm-terraform-governance@65182443` runs `avmfix --folder . --exclude <pattern>` against the module root, then again against each subdir of `./modules` and `./examples` at `depth=1`. avmfix (`lonegunmanb/avmfix@a8d494fe`, ~3 KB main + ~37 files under `pkg/`) is structured as a per-file walker that runs **twice** in succession (file-relocation passes can move blocks between `variables.tf` / `outputs.tf` / `main.tf`, which then need re-walking) over every `*.tf` file in scope. This audit answers, per behaviour: (1) what does it concretely do; (2) is it important to the AVM contract; (3) is it covered by `terraform fmt`; (4) what is the cheapest replacement (drop / general CLI / native PowerShell / keep upstream via build-and-host); (5) effort. Read it before Slice H (`Format-AvmTerraformModule` avmfix-equivalent chain).
+**Context.** Upstream `legacy Terraform governance repository at commit 65182443` runs `avmfix --folder . --exclude <pattern>` against the module root, then again against each subdir of `./modules` and `./examples` at `depth=1`. avmfix (`lonegunmanb/avmfix@a8d494fe`, ~3 KB main + ~37 files under `pkg/`) is structured as a per-file walker that runs **twice** in succession (file-relocation passes can move blocks between `variables.tf` / `outputs.tf` / `main.tf`, which then need re-walking) over every `*.tf` file in scope. This audit answers, per behaviour: (1) what does it concretely do; (2) is it important to the AVM contract; (3) is it covered by `terraform fmt`; (4) what is the cheapest replacement (drop / general CLI / native PowerShell / keep upstream via build-and-host); (5) effort. Read it before Slice H (`Format-AvmTerraformModule` avmfix-equivalent chain).
 
 ### Per-behaviour audit
 
@@ -649,7 +649,7 @@ Concrete reasoning:
 ### Open follow-ups before Slice H can land
 
 1. **Confirm `avmfix` release-shipping status.** The 2026-05-27 conftest-lock audit (commit `d2ab4e2`, see Phase 2 §2 in `docs/progress/legacy-checklist-through-2026-08-10.md`) noted avmfix does not ship releases today. Owner: investigate `lonegunmanb/avmfix` (canonical home; no `Azure/avmfix` fork exists, unlike mapotf). If still absent → resolve next item.
-2. **Pick a hosting strategy for avmfix release artefacts.** Same A/B/C as mapotf: (i) PR a release workflow into upstream `lonegunmanb/avmfix`; (ii) build + host artefacts in `Azure/avm-terraform-governance` releases; (iii) build + host in this repo's own releases. **User decision** — resolve once for both mapotf + avmfix.
+2. **Pick a hosting strategy for avmfix release artefacts.** Same A/B/C as mapotf: (i) PR a release workflow into upstream `lonegunmanb/avmfix`; (ii) build + host artefacts in `legacy Terraform governance repository` releases; (iii) build + host in this repo's own releases. **User decision** — resolve once for both mapotf + avmfix.
 3. **Settle the `avm.pins.jsonc` entry shape.** Same shape as `conftest` / `terraform-docs` (binary archive per platform, SHA256-verified). Six platforms: windows/linux/darwin × amd64/arm64. avmfix uses `go-releaser`-style naming if a release workflow is added.
 4. **Decide whether to bundle behaviour #2's `terraform-config-inspect` dependency separately.** avmfix vendors it; if we ever rip the schema-free behaviours into PowerShell as an offline fallback, we'd need an equivalent. Defer until follow-up #2 lands.
 
@@ -1215,10 +1215,10 @@ repository; section 12 defines its current maintenance contract.
 
 ### J.1 What changed upstream (the pivot)
 
-Three upstream facts changed since the 2026-05/2026-06 audits, reported by the user on 2026-06-19 and verified against `Azure/avm-terraform-governance` + `Azure/mapotf`:
+Three upstream facts changed since the 2026-05/2026-06 audits, reported by the user on 2026-06-19 and verified against the legacy Terraform governance repository and `Azure/mapotf`:
 
 1. **`avmfix` is deprecated and replaced by `mapotf`.** All block-reordering / hygiene / file-partitioning work (the full Appendix C 10-behaviour catalogue) is now done by `mapotf transform` against the hosted `mapotf-configs/pre-commit/*.mptf.hcl` bundle. avmfix is not adopted in any form. **Slice F is dead; Slice H stays closed.**
-2. **`grept` is gone, replaced by "repo sync" in the governance repo.** Repo-level managed-file synchronisation now lives in `Azure/avm-terraform-governance`'s `tf-repo-mgmt/` PowerShell tooling — a **repo-scaffolding** layer, not a per-module pre-commit step. It is **out of scope** for `avm pre-commit` (see J.6). The custom-instruction "grept → PowerShell modules" is satisfied *upstream* by `tf-repo-mgmt`; our per-module convention rules (Slices C/D, already shipped) cover the per-module subset that does belong in pre-commit.
+2. **`grept` is gone, replaced by "repo sync" in the governance repo.** Repo-level managed-file synchronisation moved to the legacy Terraform governance repository's `tf-repo-mgmt/` PowerShell tooling — a **repo-scaffolding** layer, not a per-module pre-commit step. It is **out of scope** for `avm pre-commit` (see J.6). The custom-instruction "grept → PowerShell modules" is satisfied *upstream* by `tf-repo-mgmt`; our per-module convention rules (Slices C/D, already shipped) cover the per-module subset that does belong in pre-commit.
 3. **`Azure/mapotf` now ships releases.** The Appendix B supply-chain blocker is dead — we pin the upstream release, no build-and-host.
 
 **Net effect on the plan:** the only remaining engine for Terraform pre-commit parity is **`mapotf transform` (Slice G)**, now fully unblocked. **`hcl2json`/Slice R is superseded and dropped.**
@@ -1228,7 +1228,7 @@ Three upstream facts changed since the 2026-05/2026-06 audits, reported by the u
 **`pre-commit.porch.yaml` — 5 steps (fix-locally):**
 
 1. `git config --local core.autocrlf false` (LF guard; our `.gitattributes` is authoritative, so N/A for us).
-2. `mapotf transform --mptf-dir "$AVM_MPTF_URL" --tf-dir .` — `AVM_MPTF_URL` defaults to `git::https://github.com/Azure/avm-terraform-governance.git//mapotf-configs/pre-commit`.
+2. `mapotf transform --mptf-dir "$AVM_MPTF_URL" --tf-dir .` — `AVM_MPTF_URL` formerly defaulted to the legacy governance-hosted MAPOTF bundle.
 3. `terraform -version` (tfenv install trigger; we already wire `Install-AvmTool terraform`).
 4. `mapotf clean-backup --tf-dir .` — removes the `.tf.mptfbackup` files step 2 leaves behind.
 5. `terraform-docs -c .terraform-docs.yml` over root + `examples/*` + `modules/*` (already wired via `Invoke-AvmTerraformDocs`).
@@ -1270,7 +1270,7 @@ So the AVM-canonical model is **fix-in-pre-commit, flag-drift-in-pr-check**. Our
 
 ### J.5 The governance config bundle (the `--mptf-dir` payload)
 
-`Azure/avm-terraform-governance//mapotf-configs/pre-commit` — **nine** `.mptf.hcl` configs as of pin SHA `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (2026-06-16):
+The legacy governance path `mapotf-configs/pre-commit` contained **nine** `.mptf.hcl` configs as of pin SHA `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (2026-06-16):
 
 `avm_headers_for_azapi`, `main_telemetry_tf`, `move_misplaced_blocks`, `order_module_attrs`, `order_resource_attrs`, `order_resource_meta`, `required_provider_versions`, `sort_outputs`, `sort_variables`.
 

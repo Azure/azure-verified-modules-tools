@@ -1,6 +1,6 @@
 # AVM Tooling Consolidation Plan
 
-A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bicep monorepo's `utilities/pipelines/*.ps1` estate, the Terraform governance repo's `./avm` Bash shim plus `Makefile` plus `porch-configs/`, the `mapotf` / `avmfix` / `grept` Go binaries, PSRule.Rules.Azure, the Conftest policy bundles, and the `mcr.microsoft.com/azterraform` container — behind a single CLI. The CLI lives in this repository, starts as a facade over today's tools, and selectively replaces them as the surface stabilises. Once proven, it replaces the existing tooling in [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules) and [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance).
+A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bicep monorepo's `utilities/pipelines/*.ps1` estate, the Terraform governance repo's `./avm` Bash shim plus `Makefile` plus `porch-configs/`, the `mapotf` / `avmfix` / `grept` Go binaries, PSRule.Rules.Azure, the Conftest policy bundles, and the `mcr.microsoft.com/azterraform` container — behind a single CLI. The CLI lives in this repository, starts as a facade over today's tools, and selectively replaces them as the surface stabilises. Once proven, it replaces the existing tooling in [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules) and legacy Terraform governance repository.
 
 ---
 
@@ -431,12 +431,12 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 - PR to [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules):
   - Switch composite actions (`.github/actions/templates/avm-*`) and workflows to invoke `avm` verbs instead of `pwsh -File utilities/tools/*.ps1`.
   - Delete the legacy `utilities/tools/*.ps1` entry-point scripts once no workflow or composite action references them. The module continues to call the same underlying engines internally.
-- PR to [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance):
+- PR to legacy Terraform governance repository:
   - **Delete** `./avm` (Bash), `./avm.ps1`, and `Makefile`. There is no replacement shim — contributors run `Install-Module Avm` and call `avm <verb>` from any module folder.
   - Move `porch-configs/`, `mapotf-configs/`, `grept-policies/` under a `legacy/` folder, retained read-only for historical reference.
 - PR to every Terraform module repo (templated, automated): **delete** `./avm`, `./avm.ps1`, and `Makefile`; add a one-line `README` note pointing at `Install-Module Avm`.
 - A migration document at `docs/legacy-tooling.md` in each upstream repo that lists every removed script and its new `avm` verb equivalent.
-- **Container retirement.** The `mcr.microsoft.com/azterraform:avm-*` image is marked deprecated in `Azure/avm-terraform-governance` `README.md`. The Dockerfile and `azterraform` build pipeline are moved to a `legacy/` folder with a notice that the CLI runs natively. Any contributor or CI job that still wants a container can `docker run mcr.microsoft.com/powershell:lts-7.4-ubuntu-22.04 pwsh -c 'Install-Module Avm; avm …'`, but no first-class image is maintained.
+- **Container retirement.** The `mcr.microsoft.com/azterraform:avm-*` image is marked deprecated in `legacy Terraform governance repository` `README.md`. The Dockerfile and `azterraform` build pipeline are moved to a `legacy/` folder with a notice that the CLI runs natively. Any contributor or CI job that still wants a container can `docker run mcr.microsoft.com/powershell:lts-7.4-ubuntu-22.04 pwsh -c 'Install-Module Avm; avm …'`, but no first-class image is maintained.
 
 **Exit criteria**: both upstream repos build and pass CI using the module exclusively, on standard GitHub-hosted runners with no container step and no repo-local entry-point scripts. No shims remain because none were ever introduced.
 
@@ -541,7 +541,7 @@ Cross-cutting engineering standards (encoding, cross-OS rules, subprocess invoca
 - Spec: [avm-implementation-spec.md](avm-implementation-spec.md)
 - Cross-cutting standards: [quality-standards.md](quality-standards.md)
 - Bicep monorepo: [Azure/bicep-registry-modules](https://github.com/Azure/bicep-registry-modules)
-- Terraform governance: [Azure/avm-terraform-governance](https://github.com/Azure/avm-terraform-governance)
+- Terraform governance: legacy Terraform governance repository
 - AVM specifications: [azure.github.io/Azure-Verified-Modules](https://azure.github.io/Azure-Verified-Modules/)
 - Invoke-Build: [github.com/nightroman/Invoke-Build](https://github.com/nightroman/Invoke-Build)
 - PSRule.Rules.Azure: [github.com/Azure/PSRule.Rules.Azure](https://github.com/Azure/PSRule.Rules.Azure)

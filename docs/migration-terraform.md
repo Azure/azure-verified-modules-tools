@@ -23,8 +23,8 @@ and consolidation plan remain authoritative for engineering rules and scope.
 ## 1. Why migrate
 
 The legacy AVM Terraform tooling assumes a Docker- or Podman-managed
-container, a repo-local `Makefile` that downloads itself from
-`avm-terraform-governance@main` at runtime, and a `./avm` Bash + PWSH
+container, a repo-local `Makefile` that downloads itself from the legacy
+Terraform governance repository's default branch at runtime, and a `./avm` Bash + PWSH
 shim. That works well in CI but is heavy on a contributor workstation:
 container runtime to install, repo-local writeable `Makefile` to keep
 in sync, and a custom CA story for corporate networks.
@@ -313,8 +313,8 @@ an independent record under `docs/progress/`.
   runs an optional `pre.ps1` / `post.ps1` per example. Setup hooks must
   be PowerShell — a `setup.sh` / `teardown.sh` is rejected with an
   `AvmConfigurationException`.
-- **Governance-side fleet automation** — three workflows in
-  `Azure/avm-terraform-governance` shell out to the repo-local `./avm`
+- **Governance-side fleet automation** — three workflows in the legacy
+  Terraform governance repository shell out to the repo-local `./avm`
   shim rather than to this module: `dependabot-precommit.yml` (added
   upstream 2026-07-22 — runs pre-commit against open Terraform Dependabot
   PR branches across the fleet and pushes the regenerated docs back so

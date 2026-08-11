@@ -1,7 +1,7 @@
 # Reusable CI workflow for Azure Verified Modules (AVM) Terraform module repos.
 #
 # This is the PowerShell-Gallery replacement for the governance-managed
-# `Azure/avm-terraform-governance` `managed-pr-check.yml` template. Instead of
+# legacy Terraform governance `managed-pr-check.yml` template. Instead of
 # running the toolchain inside a Docker image via make + porch, it installs the
 # `Avm.Authoring` module from the PowerShell Gallery and drives the same test
 # tiers through the `avm` CLI. The runner is assumed to have PowerShell 7.4+

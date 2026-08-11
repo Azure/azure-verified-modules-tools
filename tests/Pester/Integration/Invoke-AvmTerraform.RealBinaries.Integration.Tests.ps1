@@ -244,7 +244,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $result.Status | Should -Be 'pass'
 
             # Fail the build if pre-commit changed anything: a canonical module
-            # (synced from avm-terraform-governance) must survive pre-commit
+            # (synced from legacy Terraform governance) must survive pre-commit
             # untouched. Any add/remove/modify is real drift worth a red build.
             $drift = @(Get-AvmIntegrationTreeDiff -Reference $script:OriginalModule -Difference $script:StagedModule)
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"

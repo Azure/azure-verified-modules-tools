@@ -155,7 +155,7 @@ function Invoke-AvmTerraformLint {
             tflint --config <absolute ruleset> --format=json \
                    --minimum-failure-severity=<threshold>        (lint)
 
-        This mirrors the upstream avm-terraform-governance pre-check flow,
+        This mirrors the legacy Terraform governance pre-check flow,
         including its repository-root override lookup and override-first
         attribute precedence. Example scopes reject tflint-pre.sh and run
         tflint-pre.ps1, when present, after Terraform initialization and before

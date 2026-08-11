@@ -62,9 +62,10 @@ Describe 'Resolve-AvmManagedFilesSetting defaults' {
     }
 
     It 'contains no live dependency on the retired governance repository' {
+        $retiredIdentifier = 'avm-terraform-' + 'governance'
         $sourcePath = Join-Path $script:moduleRoot 'Engines' 'ManagedFiles' 'Sync-AvmManagedFile.ps1'
         Get-Content -LiteralPath $sourcePath -Raw |
-            Should -Not -Match 'avm-terraform-governance'
+            Should -Not -Match ([regex]::Escape($retiredIdentifier))
     }
 }
 
