@@ -21,6 +21,7 @@ without changing its scheduled behavior.
 - [x] Complete PowerShell and Terraform validation.
 - [x] Commit, push, and open the focused pull request.
 - [x] Remove the redundant repository-management PR cleanup workflow.
+- [x] Align repository-sync settings with repository variables and one secret.
 
 ## Validation
 
@@ -34,6 +35,10 @@ without changing its scheduled behavior.
 - `Invoke-Pester` for `MigrationLayout.Tests.ps1`: 2 passed.
 - `./build.ps1 pre-commit`: 867 unit and 26 component tests passed after
   removing the redundant cleanup workflow.
+- `Invoke-Pester` for `MigrationLayout.Tests.ps1`: 3 passed after validating
+  the repository variable and secret references.
+- `./build.ps1 pre-commit`: 868 unit and 26 component tests passed after
+  aligning the workflow configuration contexts.
 
 ## Provenance
 
@@ -42,5 +47,6 @@ Source snapshot: `Azure/avm-terraform-governance` commit
 
 ## Blockers or dependencies
 
-The target `avm` environment needs the 12 repository-sync secrets currently
-configured on the source repository before the migrated workflow can run.
+The target has the known repository variables configured, including all 21 test
+subscription IDs. `AVM_APP_CLIENT_ID` still needs to be supplied; the `avm`
+environment also needs the `AVM_APP_PRIVATE_KEY` secret.

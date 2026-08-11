@@ -54,4 +54,34 @@ Describe "Repository management migration layout" {
             $matches | Should -BeNullOrEmpty -Because "'$pattern' belongs to the source layout"
         }
     }
+
+    It "uses repository variables for sync configuration and only secrets the app private key" {
+        $workflow = Get-Content -LiteralPath (
+            Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
+        ) -Raw
+        $requiredVariables = @(
+            "ARM_CLIENT_ID"
+            "ARM_SUBSCRIPTION_ID"
+            "ARM_TENANT_ID"
+            "AVM_APP_CLIENT_ID"
+            "IDENTITY_RESOURCE_GROUP_NAME"
+            "MANAGEMENT_GROUP_ID"
+            "STORAGE_ACCOUNT_CONTAINER_NAME"
+            "STORAGE_ACCOUNT_NAME"
+            "STORAGE_ACCOUNT_RESOURCE_GROUP_NAME"
+            "TEST_SUBSCRIPTION_IDS"
+        )
+
+        foreach ($variable in $requiredVariables) {
+            $workflow | Should -Match "\$\{\{\s*vars\.$variable\s*\}\}"
+        }
+
+        $secretReferences = @(
+            [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Sort-Object -Unique
+        )
+        $secretReferences | Should -Be @("AVM_APP_PRIVATE_KEY")
+        $workflow | Should -Not -Match "TARGET_SUBSCRIPTION_ID"
+    }
 }

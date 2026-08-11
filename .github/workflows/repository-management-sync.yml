@@ -76,7 +76,7 @@ jobs:
         with:
           repositories: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories, 'All') }}
           repositoriesToSkip: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories_to_skip, 'terraform-azurerm-avm-template') }}
-          clientId: ${{ secrets.AVM_APP_CLIENT_ID }}
+          clientId: ${{ vars.AVM_APP_CLIENT_ID }}
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
   run-sync:
@@ -112,7 +112,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ secrets.AVM_APP_CLIENT_ID }}
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
@@ -122,9 +122,9 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
 
       - name: Download Labels CSV File
         run: |
@@ -162,12 +162,12 @@ jobs:
           Write-Host "Running repo sync"
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
-            -managementGroupId "${{ secrets.MANAGEMENT_GROUP_ID }}" `
+            -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
             -testSubscriptionIds $testSubscriptionIds `
-            -stateStorageAccountName "${{ secrets.STORAGE_ACCOUNT_NAME }}" `
-            -stateResourceGroupName "${{ secrets.STORAGE_ACCOUNT_RESOURCE_GROUP_NAME }}" `
-            -stateContainerName "${{ secrets.STORAGE_ACCOUNT_CONTAINER_NAME }}" `
-            -identityResourceGroupName "${{ secrets.IDENTITY_RESOURCE_GROUP_NAME }}" `
+            -stateStorageAccountName "${{ vars.STORAGE_ACCOUNT_NAME }}" `
+            -stateResourceGroupName "${{ vars.STORAGE_ACCOUNT_RESOURCE_GROUP_NAME }}" `
+            -stateContainerName "${{ vars.STORAGE_ACCOUNT_CONTAINER_NAME }}" `
+            -identityResourceGroupName "${{ vars.IDENTITY_RESOURCE_GROUP_NAME }}" `
             -repoId "${{ matrix.repoId }}" `
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
@@ -177,12 +177,12 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
           ARM_USE_AZUREAD: true
           ARM_USE_OIDC: true
-          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
 
       - name: Upload Issue Logs Json
