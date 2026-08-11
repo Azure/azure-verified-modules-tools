@@ -87,14 +87,15 @@ Describe "Repository management migration layout" {
         $workflow | Should -Not -Match "TARGET_SUBSCRIPTION_ID"
     }
 
-    It "keeps scheduled sync disabled during cutover with manual plan-only as the default" {
+    It "runs the exact weekday sync schedule with manual plan-only as the default" {
         $workflow = Get-Content -LiteralPath (
             Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
         ) -Raw
 
-        $workflow | Should -Not -Match '(?m)^  schedule:\s*$'
-        $workflow | Should -Match "(?m)^  # schedule:\s*$"
-        $workflow | Should -Match "(?m)^  #   - cron: '33 \*/4 \* \* 1-5'\s*$"
+        ([regex]::Matches(
+                $workflow,
+                "(?m)^  schedule:\r?\n    - cron: '33 \*/4 \* \* 1-5'\s*$"
+            )).Count | Should -Be 1
         $workflow | Should -Match (
             '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
         )
