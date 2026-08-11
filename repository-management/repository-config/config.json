@@ -41,7 +41,21 @@
       ]
     },
     {
-      "name": "canary",
+      "name": "canary-ring-0",
+      "order": 20,
+      "managedFiles": [
+        "canary-ring-0"
+      ],
+      "repositories": [
+        "avm-ptn-example-repo"
+      ]
+    },
+    {
+      "name": "canary-ring-1",
+      "order": 10,
+      "managedFiles": [
+        "canary-ring-1"
+      ],
       "repositories": [
         "avm-ptn-example-repo",
         "avm-res-devopsinfrastructure-pool",

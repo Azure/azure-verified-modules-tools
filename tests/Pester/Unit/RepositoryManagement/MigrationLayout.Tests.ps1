@@ -23,20 +23,20 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It "retains the legacy managed files tree as a released-module compatibility shim" {
-        # The released Avm.Authoring on PSGallery still resolves managed files and
-        # config from repository-management/managed-files. Removing this tree before
-        # the next release ships would break `avm pre-commit` in every module repo,
-        # so its deletion must be a deliberate follow-up change.
-        $shimPaths = @(
+    It "no longer carries the legacy managed files tree" {
+        # Managed files now live in Azure/azure-verified-modules-managed-files.
+        # Avm.Authoring 0.8.0 resolves them from there, so the local shim that
+        # served the previously released module has been retired.
+        $retiredPaths = @(
+            "repository-management/managed-files"
             "repository-management/managed-files/files/root"
             "repository-management/managed-files/config/config.json"
             "repository-management/managed-files/config/deprecated-files.json"
         )
 
-        foreach ($relativePath in $shimPaths) {
+        foreach ($relativePath in $retiredPaths) {
             Test-Path -LiteralPath (Join-Path $script:repoRoot $relativePath) |
-                Should -BeTrue -Because "$relativePath is still consumed by the released Avm.Authoring"
+                Should -BeFalse -Because "$relativePath moved to the managed files repository"
         }
     }
 
