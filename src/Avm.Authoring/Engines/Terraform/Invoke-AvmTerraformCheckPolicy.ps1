@@ -25,26 +25,37 @@ function Invoke-AvmTerraformPolicyExample {
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $Example.StagedPath '.env')
 
-        $null = Invoke-AvmProcess `
-            -FilePath $Options.TerraformPath `
-            -ArgumentList @('init', '-input=false', '-no-color') `
+        $terraformLock = Lock-AvmTerraformPluginCache `
             -WorkingDirectory $Example.StagedPath `
-            -EnvVars $envVars `
-            -Label ("terraform init ({0})" -f $Example.Name)
+            -EnvVars $envVars
+        try {
+            $null = Invoke-AvmTerraformInit `
+                -TerraformPath $Options.TerraformPath `
+                -WorkingDirectory $Example.StagedPath `
+                -EnvVars $envVars `
+                -Label ("terraform init ({0})" -f $Example.Name) `
+                -NoColor `
+                -SkipPluginCacheLock
 
-        $null = Invoke-AvmProcess `
-            -FilePath $Options.TerraformPath `
-            -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
-            -WorkingDirectory $Example.StagedPath `
-            -EnvVars $envVars `
-            -Label ("terraform plan ({0})" -f $Example.Name)
+            $null = Invoke-AvmProcess `
+                -FilePath $Options.TerraformPath `
+                -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
+                -WorkingDirectory $Example.StagedPath `
+                -EnvVars $envVars `
+                -Label ("terraform plan ({0})" -f $Example.Name)
 
-        $showResult = Invoke-AvmProcess `
-            -FilePath $Options.TerraformPath `
-            -ArgumentList @('show', '-json', 'tfplan') `
-            -WorkingDirectory $Example.StagedPath `
-            -EnvVars $envVars `
-            -Label ("terraform show ({0})" -f $Example.Name)
+            $showResult = Invoke-AvmProcess `
+                -FilePath $Options.TerraformPath `
+                -ArgumentList @('show', '-json', 'tfplan') `
+                -WorkingDirectory $Example.StagedPath `
+                -EnvVars $envVars `
+                -Label ("terraform show ({0})" -f $Example.Name)
+        }
+        finally {
+            if ($null -ne $terraformLock) {
+                $terraformLock.Dispose()
+            }
+        }
 
         $planJsonPath = Join-Path $Example.StagedPath 'tfplan.json'
         [System.IO.File]::WriteAllText(

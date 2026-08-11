@@ -156,9 +156,8 @@ function Initialize-AvmTerraformLintScope {
             -ErrorAction SilentlyContinue
     ).Count
 
-    $null = Invoke-AvmProcess `
-        -FilePath $Options.TerraformPath `
-        -ArgumentList @('init', '-input=false') `
+    $null = Invoke-AvmTerraformInit `
+        -TerraformPath $Options.TerraformPath `
         -WorkingDirectory $Scope.Dir `
         -Label ('{0}: terraform init' -f $Scope.Label) `
         -StreamOutput:$Options.StreamOutput
