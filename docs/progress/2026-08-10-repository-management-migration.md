@@ -9,7 +9,7 @@
 
 Move the active Terraform repository-management automation from
 `Azure/avm-terraform-governance` into isolated folders in this repository
-without changing its scheduled behavior.
+without changing sync behavior. Schedule activation is deferred for cutover.
 
 ## Checklist
 
@@ -22,6 +22,7 @@ without changing its scheduled behavior.
 - [x] Commit, push, and open the focused pull request.
 - [x] Remove the redundant repository-management PR cleanup workflow.
 - [x] Align repository-sync settings with scoped variables and one secret.
+- [x] Disable scheduled sync until the manual cutover is validated.
 
 ## Validation
 
@@ -39,6 +40,10 @@ without changing its scheduled behavior.
   the repository variable and secret references.
 - `./build.ps1 pre-commit`: 868 unit and 26 component tests passed after
   aligning the workflow configuration contexts.
+- `Invoke-Pester` for `MigrationLayout.Tests.ps1`: 4 passed with the schedule
+  cutover guard.
+- `./build.ps1 pre-commit`: 869 unit and 26 component tests passed with the
+  schedule disabled.
 
 ## Provenance
 
@@ -49,5 +54,7 @@ Source snapshot: `Azure/avm-terraform-governance` commit
 
 All configuration is present: all 10 settings are `avm` environment variables,
 including the three ARM identifiers and all 21 test subscription IDs;
-`AVM_APP_PRIVATE_KEY` is the sole `avm` environment secret. The remaining merge
-gate is a plan-only canary sync.
+`AVM_APP_PRIVATE_KEY` is the sole `avm` environment secret. The schedule remains
+commented out for cutover. Merge with it disabled, manually dispatch a plan-only
+sync on target `main`, disable the source schedule, then restore the target
+schedule in a follow-up.

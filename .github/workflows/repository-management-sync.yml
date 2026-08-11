@@ -33,8 +33,9 @@ on:
         description: 'Only add issues/PRs updated in the last N days (keeps runs under API rate limits). Use 0 to disable the look-back and sweep everything not already on the project (one-off initial back-fill).'
         default: '3'
         type: string
-  schedule:
-    - cron: '33 */4 * * 1-5'
+  # Cutover: restore only after a plan-only run on main and disabling the source schedule.
+  # schedule:
+  #   - cron: '33 */4 * * 1-5'
 
 permissions:
   id-token: write
