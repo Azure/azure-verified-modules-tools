@@ -6,6 +6,8 @@ param(
   [array]$repoFilter = @(),
   [array]$validProviders = @("azure", "azurerm", "azapi"),
   [array]$reposToSkip = @(
+    "terraform-azurerm-avm-template",
+    "avm-terraform-governance",
     "bicep-registry-modules",
     "terraform-azure-modules",
     "ALZ-PowerShell-Module",

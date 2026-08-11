@@ -9,7 +9,8 @@
 
 Move the active Terraform repository-management automation from the legacy
 Terraform governance repository into isolated folders in this repository
-without changing sync behavior. Schedule activation is deferred for cutover.
+without changing sync behavior. Schedule activation was deferred for cutover
+and restored after the manual plan-only validation completed.
 
 ## Checklist
 
@@ -27,6 +28,7 @@ without changing sync behavior. Schedule activation is deferred for cutover.
 - [x] Remove the retired repository from supported MAPOTF maintenance tooling.
 - [x] Validate and prepare the runtime repointing correction for release.
 - [x] Remove the retired repository identifier from every tracked file.
+- [x] Restore the weekday repository-sync schedule after cutover validation.
 
 ## Validation
 
@@ -67,10 +69,9 @@ Source snapshot: legacy Terraform governance repository commit
 
 All configuration is present: all 10 settings are `avm` environment variables,
 including the three ARM identifiers and all 21 test subscription IDs;
-`AVM_APP_PRIVATE_KEY` is the sole `avm` environment secret. The schedule remains
-commented out for cutover. Merge with it disabled, manually dispatch a plan-only
-sync on target `main`, disable the source schedule, then restore the target
-schedule in a follow-up.
+`AVM_APP_PRIVATE_KEY` is the sole `avm` environment secret. The manual plan-only
+sync on target `main` completed successfully, the source workflow was disabled
+manually, and the target weekday schedule is restored.
 
 The corrected Avm.Authoring defaults are recorded under `CHANGELOG.md`
 `[Unreleased]`. The in-repository module manifest remains unchanged by design;

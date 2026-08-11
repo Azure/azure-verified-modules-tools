@@ -30,6 +30,18 @@ Describe "Repository management migration layout" {
         }
     }
 
+    It "tracks the managed root avm launcher as executable" {
+        $indexEntries = @(
+            & git -C $script:repoRoot ls-files --stage -- (
+                "repository-management/managed-files/files/root/avm"
+            ) 2>$null
+        )
+
+        $LASTEXITCODE | Should -Be 0
+        $indexEntries | Should -HaveCount 1
+        ($indexEntries[0] -split '\s+')[0] | Should -Be "100755"
+    }
+
     It "does not retain retired source layout references" {
         $roots = @(
             (Join-Path $script:repoRoot "repository-management")
@@ -87,14 +99,18 @@ Describe "Repository management migration layout" {
         $workflow | Should -Not -Match "TARGET_SUBSCRIPTION_ID"
     }
 
-    It "keeps scheduled sync disabled during cutover with manual plan-only as the default" {
+    It "runs the exact weekday sync schedule with manual plan-only as the default" {
         $workflow = Get-Content -LiteralPath (
             Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
         ) -Raw
 
-        $workflow | Should -Not -Match '(?m)^  schedule:\s*$'
-        $workflow | Should -Match "(?m)^  # schedule:\s*$"
-        $workflow | Should -Match "(?m)^  #   - cron: '33 \*/4 \* \* 1-5'\s*$"
+        ([regex]::Matches(
+                $workflow,
+                "(?m)^  schedule:\r?\n    - cron: '33 \*/4 \* \* 1-5'\s*$"
+            )).Count | Should -Be 1
+        $workflow | Should -Match (
+            "(?ms)^      repositories_to_skip:\r?\n.*?^        default:\s*''\s*$"
+        )
         $workflow | Should -Match (
             '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
         )
@@ -125,13 +141,31 @@ Describe "Repository management migration layout" {
         ) | Should -BeFalse
     }
 
-    It "contains no tracked reference to the retired governance repository" {
+    It "limits the retired governance identifier to its inert exclusion and tests" {
         $retiredIdentifier = 'avm-terraform-' + 'governance'
         $grepOutput = @(
             & git -C $script:repoRoot grep -in -e $retiredIdentifier 2>$null
         )
+        $allowedProductionLine = (
+            '^repository-management/repository-sync/actions/avm-repos/scripts/' +
+            'Get-RepositoriesWhereAppInstalled\.ps1:\d+:\s*"' +
+            [regex]::Escape($retiredIdentifier) +
+            '",?\s*$'
+        )
+        $allowedTestLine = (
+            '^tests/Pester/Unit/RepositoryManagement/' +
+            'RepositoryDiscovery\.Tests\.ps1:\d+:'
+        )
+        $unexpectedReferences = @(
+            $grepOutput |
+                Where-Object {
+                    $_ -notmatch $allowedProductionLine -and
+                    $_ -notmatch $allowedTestLine
+                }
+        )
 
-        $LASTEXITCODE | Should -Be 1
-        $grepOutput | Should -BeNullOrEmpty
+        $LASTEXITCODE | Should -Be 0
+        $grepOutput | Should -Not -BeNullOrEmpty
+        $unexpectedReferences | Should -BeNullOrEmpty
     }
 }
