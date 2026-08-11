@@ -55,11 +55,11 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It "uses repository variables for sync configuration and only secrets the app private key" {
+    It "uses avm environment variables and only secrets the app private key" {
         $workflow = Get-Content -LiteralPath (
             Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
         ) -Raw
-        $requiredVariables = @(
+        $environmentVariables = @(
             "ARM_CLIENT_ID"
             "ARM_SUBSCRIPTION_ID"
             "ARM_TENANT_ID"
@@ -72,10 +72,12 @@ Describe "Repository management migration layout" {
             "TEST_SUBSCRIPTION_IDS"
         )
 
-        foreach ($variable in $requiredVariables) {
+        foreach ($variable in $environmentVariables) {
             $workflow | Should -Match "\$\{\{\s*vars\.$variable\s*\}\}"
         }
 
+        ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
+            Should -Be 2
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |

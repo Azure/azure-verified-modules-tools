@@ -21,7 +21,7 @@ without changing its scheduled behavior.
 - [x] Complete PowerShell and Terraform validation.
 - [x] Commit, push, and open the focused pull request.
 - [x] Remove the redundant repository-management PR cleanup workflow.
-- [x] Align repository-sync settings with repository variables and one secret.
+- [x] Align repository-sync settings with scoped variables and one secret.
 
 ## Validation
 
@@ -47,7 +47,7 @@ Source snapshot: `Azure/avm-terraform-governance` commit
 
 ## Blockers or dependencies
 
-All 10 target repository variables are configured, including
-`AVM_APP_CLIENT_ID` and all 21 test subscription IDs. The only remaining
-operator action is setting the `AVM_APP_PRIVATE_KEY` secret in the target `avm`
-environment.
+All configuration is present: all 10 settings are `avm` environment variables,
+including the three ARM identifiers and all 21 test subscription IDs;
+`AVM_APP_PRIVATE_KEY` is the sole `avm` environment secret. The remaining merge
+gate is a plan-only canary sync.
