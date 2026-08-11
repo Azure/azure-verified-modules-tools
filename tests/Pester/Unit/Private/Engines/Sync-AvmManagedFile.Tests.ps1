@@ -316,7 +316,7 @@ Describe 'Sync-AvmManagedFile' {
             })
         $messages = @($output |
                 Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
-                ForEach-Object { $_.Message })
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
 
         $messages | Should -Contain 'sync: create create.txt'
         $messages | Should -Contain 'sync: update update.txt (content)'
@@ -341,7 +341,7 @@ Describe 'Sync-AvmManagedFile' {
             })
         $messages = @($output |
                 Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
-                ForEach-Object { $_.Message })
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
         $result = $output | Where-Object { $_ -isnot [System.Management.Automation.VerboseRecord] }
 
         $result.Updated | Should -Be @('avm')

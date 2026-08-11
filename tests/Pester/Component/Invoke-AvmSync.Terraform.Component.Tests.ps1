@@ -85,7 +85,7 @@ Describe 'Component: Invoke-AvmSync (terraform managed-files sync end-to-end)' -
                 -Verbose 4>&1)
         $messages = @($output |
                 Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
-                ForEach-Object { $_.Message })
+                ForEach-Object { $_.Message -replace "$([char]27)\[[0-9;]*m", '' })
 
         $messages | Should -Contain 'sync: create .gitignore'
         $messages | Should -Contain 'sync: create SECURITY.md'

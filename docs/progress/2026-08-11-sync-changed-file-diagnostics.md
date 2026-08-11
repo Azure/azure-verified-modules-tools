@@ -33,6 +33,9 @@ repository-relative path and operation without exposing file contents.
 - `./build.ps1 test`
 - `./build.ps1 component`
 - `./build.ps1 pre-commit`
+- Hosted CI initially failed the two new exact-message unit assertions on all
+  three operating systems because GitHub Actions enables ANSI log colouring.
+  The assertions now strip ANSI formatting before comparing message text.
 
 ## Blockers or dependencies
 
