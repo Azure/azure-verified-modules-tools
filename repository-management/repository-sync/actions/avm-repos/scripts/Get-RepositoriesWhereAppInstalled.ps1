@@ -22,6 +22,11 @@ param(
   [string]$metaDataFilePath = "./config/repository-metadata.csv"
 )
 
+$permanentReposToSkip = @(
+  "terraform-azurerm-avm-template",
+  "avm-terraform-governance"
+)
+
 Write-Host "Generating matrix for AVM repositories"
 
 $env:ARM_USE_AZUREAD = "true"
@@ -53,7 +58,7 @@ $moduleTypes = @{
   "template" = "template"
 }
 
-$finalReposToSkip = $reposToSkip + $additionalReposToSkip
+$finalReposToSkip = $permanentReposToSkip + $reposToSkip + $additionalReposToSkip
 
 Write-Host "Skipping repositories: $(ConvertTo-Json $finalReposToSkip)"
 

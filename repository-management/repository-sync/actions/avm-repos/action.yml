@@ -6,7 +6,7 @@ inputs:
     description: "Target repositories, comma separated list to select specific repositories: 'avm-res-keyvault-vault'."
     default: "All"
   repositoriesToSkip:
-    description: "Repositories to skip, comma separated list of repos to skip, e.g. 'avm-template'."
+    description: "Additional repositories to skip, as a comma separated list."
     default: ""
   outputDirectory:
     description: "Output directory for the repository data"

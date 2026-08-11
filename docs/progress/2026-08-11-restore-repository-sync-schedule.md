@@ -8,7 +8,9 @@
 ## Outcome
 
 Restore the repository-management sync weekday schedule after the target
-plan-only cutover validation and source workflow disablement.
+plan-only cutover validation and source workflow disablement. Permanently
+exclude the retired governance and Terraform template repositories from
+repository discovery without relying on caller defaults.
 
 ## Checklist
 
@@ -20,13 +22,19 @@ plan-only cutover validation and source workflow disablement.
 - [x] Update migration regression coverage and progress wording.
 - [x] Run focused and pre-commit validation.
 - [x] Commit, push, and open the focused pull request.
+- [x] Move cutover exclusions into an internal permanent exclusion list.
+- [x] Make caller-supplied repository exclusions additive.
+- [x] Add focused permanent-exclusion behavior tests.
+- [x] Narrow the retired-repository guard to the inert exclusion and its tests.
+- [x] Re-run focused and pre-commit validation.
+- [x] Update and push the focused pull request.
 
 ## Validation
 
 - GitHub Actions API: source `Repository Sync` workflow state is
   `disabled_manually`.
-- `Invoke-Pester` for `MigrationLayout.Tests.ps1`: 6 passed.
-- `./build.ps1 pre-commit`: 873 unit tests passed, 7 skipped, and 26 component
+- Focused repository discovery and migration regression tests: 11 passed.
+- `./build.ps1 pre-commit`: 878 unit tests passed, 7 skipped, and 26 component
   tests passed.
 
 ## Blockers or dependencies
