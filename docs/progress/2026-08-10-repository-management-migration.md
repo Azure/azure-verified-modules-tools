@@ -47,6 +47,7 @@ Source snapshot: `Azure/avm-terraform-governance` commit
 
 ## Blockers or dependencies
 
-The target has the known repository variables configured, including all 21 test
-subscription IDs. `AVM_APP_CLIENT_ID` still needs to be supplied; the `avm`
-environment also needs the `AVM_APP_PRIVATE_KEY` secret.
+All 10 target repository variables are configured, including
+`AVM_APP_CLIENT_ID` and all 21 test subscription IDs. The only remaining
+operator action is setting the `AVM_APP_PRIVATE_KEY` secret in the target `avm`
+environment.
