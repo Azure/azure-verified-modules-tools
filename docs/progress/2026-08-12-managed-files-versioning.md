@@ -215,13 +215,37 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ### Phase 5 — repository sync
 
-- [ ] Stop passing `-managedFilesBaseDir` / config local paths in
+- [x] Stop passing `-managedFilesBaseDir` in
       `.github/workflows/repository-management-sync.yml` so each repository
-      resolves its own pinned ref through the ref-keyed cache.
-- [ ] Implement the open-pull-request staleness gate in
-      `lib/AvmPreCommit.ps1`.
-- [ ] Pass `-Upgrade` only when unblocked or when the delta is a major.
-- [ ] Cover the gate with tests, including the bot-author and draft exclusions.
+      resolves its own pinned ref through the ref-keyed cache. The
+      `Checkout managed files repository` step and the `-managedFilesBaseDir`
+      argument are both gone, and `Invoke-RepositorySync.ps1` no longer accepts
+      the parameter.
+- [x] Kept `-ConfigLocalPath`. This deviates from the original plan wording,
+      which grouped the config local path with the managed-files local path. The
+      reason for dropping the managed-files path does not apply to the config
+      path: `Resolve-AvmManagedFilesSource` short-circuits to `SourceKind='local'`
+      only on `ManagedFilesLocalPath`, so the config path never suppresses version
+      resolution, and the repository config genuinely lives in this repository
+      rather than in a versioned release.
+- [x] Implement the open-pull-request staleness gate in
+      `lib/ManagedFilesUpgrade.ps1`. `Resolve-AvmManagedFilesUpgradeDecision`
+      reads the repository's pin, discovers the newest release with
+      `git ls-remote --tags`, and only queries `gh pr list` when the delta is a
+      minor or patch. The decision is an explicit pre-flight check rather than an
+      exception-driven retry, so the reason is logged on every repository,
+      including in plan-only mode.
+- [x] Pass `-Upgrade` only when unblocked or when the delta is a major. A major
+      is evaluated before the pull-request query, so a forced upgrade never spends
+      a `gh` call and can never be blocked. Lookup failures on either side fall
+      back to the pinned version rather than failing the sync.
+- [x] Cover the gate with tests, including the bot-author and draft exclusions.
+      `Test-ManagedFilesUpgrade.ps1` covers pin reading, tag parsing and sorting
+      (including non-semver tags), the 14-day staleness boundary either side, bot
+      and draft exclusion, major-overrides-blocking, and both lookup failures.
+      `Test-AvmPreCommit.ps1` now asserts the `Upgrade` switch is absent by
+      default and forwarded when requested. Both are registered in
+      `.github/workflows/repository-management-config-test.yml`.
 
 ### Phase 6 — rollout and documentation
 
@@ -234,7 +258,7 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ## Validation
 
-Phases 2, 3 and 4 complete.
+Phases 2, 3, 4 and 5 complete.
 
 - `./build.ps1 pre-commit` — 949 unit tests, 28 component tests, 0 errors.
 - 30 unit tests cover the version primitives; 17 cover the version plan
@@ -250,6 +274,10 @@ Phases 2, 3 and 4 complete.
   real tag discovery through `git ls-remote`, the unpinned bootstrap plan, the
   behind-branch message for a stale pin, and the on-disk pin round-trip
   including the no-BOM / LF / trailing-newline encoding contract.
+- The repository-sync harness scripts pass:
+  `Test-ManagedFilesUpgrade.ps1` (upgrade decision, tag discovery, pull-request
+  filtering) and `Test-AvmPreCommit.ps1` (switch forwarding and the existing
+  upgrade-retry behaviour).
 - End-to-end smoke test against the live managed-files repository: an unpinned
   repository adopted `v0.1.0`, stamped `.avm/managed-files-version.json` with
   the commit and committer date, and a second run reported `status=upToDate`

@@ -113,7 +113,7 @@ Describe "Repository management migration layout" {
         )
     }
 
-    It "passes the relocated managed files and configuration to Avm.Authoring explicitly" {
+    It "passes the relocated configuration to Avm.Authoring and lets each repository resolve its own managed files" {
         $syncScript = Get-Content -LiteralPath (
             Join-Path $script:repoRoot "repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1"
         ) -Raw
@@ -124,12 +124,8 @@ Describe "Repository management migration layout" {
         $syncScript | Should -Match (
             '\$repoConfigFilePath\s*=\s*"\.\./repository-config/config\.json"'
         )
-        $syncScript | Should -Match (
-            '\$managedFilesBaseDir\s*=\s*"[^"]*azure-verified-modules-managed-files/terraform/files"'
-        )
-        $preCommitHelper | Should -Match (
-            'ManagedFilesLocalPath\s*=\s*\$managedFilesBaseDir'
-        )
+        $syncScript | Should -Not -Match 'managedFilesBaseDir'
+        $preCommitHelper | Should -Not -Match 'ManagedFilesLocalPath'
         $preCommitHelper | Should -Match (
             'ConfigLocalPath\s*=\s*\$repositoryConfigDir'
         )
