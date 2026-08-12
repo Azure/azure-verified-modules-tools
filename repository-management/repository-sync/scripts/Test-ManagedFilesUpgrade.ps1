@@ -161,6 +161,10 @@ try {
     foreach ($repoRoot in $repoRoots) {
         Remove-Item -LiteralPath $repoRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    # The stubs above drive $global:LASTEXITCODE, so clear it or the shell running
+    # this script inherits the last simulated failure as its own exit code.
+    $global:LASTEXITCODE = 0
 }
 
 Write-Host "Managed files upgrade decision tests passed."
