@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $script:AvmLatestModuleVersion = $null
 $script:AvmModuleVersionCheckCompleted = $false
 $script:AvmModuleVersionSkipWarningWritten = $false
+$script:AvmLatestManagedFilesVersion = @{}
 $script:AvmNestedCommandDepth = 0
 
 # Console encoding (spec open question 2): on Windows, the default console
