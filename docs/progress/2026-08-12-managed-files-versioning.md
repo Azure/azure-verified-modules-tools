@@ -157,22 +157,40 @@ Each phase is a separate commit, and phases 1-2 are a prerequisite for the rest.
 
 ### Phase 1 — un-ignore `.avm`
 
-- [ ] Add `.avm-managed-lines.json` to the `root` group in the managed-files
+- [x] Add `.avm-managed-lines.json` to the `root` group in the managed-files
       repository, removing `.avm` and requiring `.avm/managed-files.json` so the
       local override stays untracked.
-- [ ] Confirm no interaction with `avm.tf.gitignore-essentials`.
-- [ ] Verify `Get-AvmManagedLinePlan` creates `.gitignore` when absent.
+- [x] Confirm no interaction with `avm.tf.gitignore-essentials`. The rule's 23
+      required globs do not include `.avm`, so the removal cannot fight it.
+- [x] Verify `Get-AvmManagedLinePlan` creates `.gitignore` when absent. Covered
+      by `Merge-AvmFileLine.Tests.ps1` ("creates a plan for a missing file with
+      LF endings").
 
-Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
+Lands in `Azure/azure-verified-modules-managed-files`, not this repository:
+[managed-files#8](https://github.com/Azure/azure-verified-modules-managed-files/pull/8).
+
+Validated by running the real `Get-AvmManagedLineSpec` and
+`Get-AvmManagedLinePlan` against the live `.gitignore` of
+`Azure/terraform-azurerm-avm-res-storage-storageaccount`: the plan reports
+`removed=[.avm]` and `added=[.avm/managed-files.json]`, the bare `.avm` line is
+gone, and a second pass reports `Changed=False`.
+
+**This pull request must merge before the first semver release is cut**,
+otherwise the pin is gitignored in every module repository.
 
 ### Phase 2 — version primitives
 
-- [ ] `AvmManagedFilesVersionException` (`AVM1060`) and a non-terminating
+- [x] `AvmManagedFilesVersionException` (`AVM1060`) and a non-terminating
       lookup-failure exception alongside `AvmGalleryLookupException`.
-- [ ] `Get-AvmLatestManagedFilesVersion`, `Get-AvmManagedFilesVersionPin`,
-      `Set-AvmManagedFilesVersionPin`, `Test-AvmManagedFilesVersion`.
-- [ ] Unit tests for semver ordering, peeled-tag filtering, malformed pins, and
-      the offline path.
+      `AvmManagedFilesLookupException` mirrors the gallery equivalent and
+      derives directly from `AvmException`; `AvmManagedFilesVersionException`
+      carries exit code 11.
+- [x] `Get-AvmLatestManagedFilesVersion`, `Get-AvmManagedFilesVersionPin`,
+      `Set-AvmManagedFilesVersionPin`, `Test-AvmManagedFilesVersion`, plus
+      `Get-AvmManagedFilesVersionPinPath` for the shared path contract.
+- [x] Unit tests for semver ordering, peeled-tag filtering, malformed pins, and
+      the offline path. 30 tests across four files under
+      `tests/Pester/Unit/Private/`.
 
 ### Phase 3 — sync integration
 
@@ -249,7 +267,9 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ### Phase 6 — rollout and documentation
 
-- [ ] Cut `v1.0.0` of the managed-files repository manually.
+- [ ] Cut `v1.0.0` of the managed-files repository manually. **Blocked on
+      [managed-files#8](https://github.com/Azure/azure-verified-modules-managed-files/pull/8)
+      merging first.**
 - [ ] First repository sync stamps a pin into every module repository.
 - [x] Update `docs/avm-implementation-spec.md` with the pin file, the precedence
       tier, and `AVM1060`. §8 now lists `managed-files-version.json`, carves it
@@ -265,7 +285,7 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ## Validation
 
-Phases 2, 3, 4 and 5 complete.
+Phases 1, 2, 3, 4 and 5 complete.
 
 - `./build.ps1 pre-commit` — 949 unit tests, 28 component tests, 0 errors.
 - 30 unit tests cover the version primitives; 17 cover the version plan
@@ -292,7 +312,9 @@ Phases 2, 3, 4 and 5 complete.
 
 ## Dependencies
 
-- Phase 1 lands in `Azure/azure-verified-modules-managed-files`.
+- Phase 1 lands in `Azure/azure-verified-modules-managed-files`:
+  [managed-files#8](https://github.com/Azure/azure-verified-modules-managed-files/pull/8).
+  Must merge before any release is cut.
 - Phase 6 depends on a manual release in that repository.
 - The managed-files repository has five open Dependabot pull requests, which are
   useful live test data for the phase 5 exclusion rule.
