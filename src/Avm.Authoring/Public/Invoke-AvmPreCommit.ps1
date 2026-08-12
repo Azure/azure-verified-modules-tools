@@ -108,6 +108,16 @@ function Invoke-AvmPreCommit {
         Repository id used to look up overlays/exclusions in config.json.
         Forwarded only to the Terraform sync step.
 
+    .PARAMETER Upgrade
+        Move the repository to the latest managed-files release and restamp
+        '.avm/managed-files-version.json'. Without it the sync stays on the
+        recorded pin and only warns about newer patch or minor releases.
+        Forwarded only to the Terraform sync step.
+
+    .PARAMETER SkipManagedFilesVersionCheck
+        Skip the managed-files release lookup and sync against whatever ref the
+        normal precedence resolves. Forwarded only to the Terraform sync step.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -155,6 +165,9 @@ function Invoke-AvmPreCommit {
         [string] $ConfigLocalPath,
 
         [string] $RepoId,
+
+        [switch] $Upgrade,
+        [switch] $SkipManagedFilesVersionCheck,
 
         [switch] $SkipModuleVersionCheck
     )
@@ -208,6 +221,8 @@ function Invoke-AvmPreCommit {
         'ConfigPath'
         'ConfigLocalPath'
         'RepoId'
+        'Upgrade'
+        'SkipManagedFilesVersionCheck'
     )
 
     foreach ($def in $stepDefs) {
@@ -253,6 +268,13 @@ function Invoke-AvmPreCommit {
             # Verb genuinely does not apply to this ecosystem (e.g. bicep-docs).
             # Continue the chain; do not flip overall status.
             $stepStatus = 'skipped'
+            $stepError = $_.Exception.Message
+        }
+        catch [AvmManagedFilesVersionException] {
+            # A superseded major is an adoption gap, not a broken environment.
+            # Reporting it as fail keeps the message actionable and lets the
+            # caller re-run with -Upgrade, where error would read as a defect.
+            $stepStatus = 'fail'
             $stepError = $_.Exception.Message
         }
         catch [AvmConfigurationException] {

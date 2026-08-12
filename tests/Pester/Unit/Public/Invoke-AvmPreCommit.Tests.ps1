@@ -277,6 +277,105 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Steps.Step | Should -Be @('sync', 'check convention', 'transform', 'format', 'docs')
     }
 
+    It 'exposes the managed-files version switches the engine understands' {
+        $command = Get-Command Invoke-AvmPreCommit -Module Avm.Authoring
+        foreach ($parameterName in @('Upgrade', 'SkipManagedFilesVersionCheck')) {
+            $command.Parameters.ContainsKey($parameterName) | Should -BeTrue -Because "Invoke-AvmPreCommit should forward -$parameterName"
+            $command.Parameters[$parameterName].ParameterType | Should -Be ([System.Management.Automation.SwitchParameter])
+        }
+    }
+
+    It 'forwards the managed-files version switches to the terraform sync step' {
+        $dir = Join-Path $TestDrive ("precommit-tf-version-switches-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+            $r = Invoke-AvmPreCommit -Path $D -Ecosystem terraform -Upgrade -SkipManagedFilesVersionCheck
+
+            Should -Invoke Invoke-AvmSync -Exactly 1 -ParameterFilter {
+                $Upgrade -eq $true -and $SkipManagedFilesVersionCheck -eq $true
+            }
+            # The switches are managed-files concerns; no other step may see them.
+            Should -Invoke Invoke-AvmFormat -Times 0 -Exactly -ParameterFilter { $Upgrade -eq $true }
+            Should -Invoke Invoke-AvmDocs   -Times 0 -Exactly -ParameterFilter { $Upgrade -eq $true }
+
+            $r
+        }
+
+        $result.Status | Should -Be 'pass'
+    }
+
+    It 'omits the managed-files version switches when they were not supplied' {
+        $dir = Join-Path $TestDrive ("precommit-tf-version-default-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+            $null = Invoke-AvmPreCommit -Path $D -Ecosystem terraform
+
+            Should -Invoke Invoke-AvmSync -Times 0 -Exactly -ParameterFilter {
+                $PSBoundParameters.ContainsKey('Upgrade') -or
+                $PSBoundParameters.ContainsKey('SkipManagedFilesVersionCheck')
+            }
+        }
+    }
+
+    It 'reports a superseded managed-files major as a failed step, not an error, and continues the chain' {
+        $dir = Join-Path $TestDrive ("precommit-tf-major-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync {
+                throw [AvmManagedFilesVersionException]::new(
+                    '1.4.2', '2.0.0',
+                    "managed files are pinned to 1.4.2 but major release 2.0.0 is available; re-run with -Upgrade to adopt it")
+            }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Invoke-AvmPreCommit -Path $D -Ecosystem terraform
+        }
+
+        $result.Status            | Should -Be 'fail'
+        $result.Steps.Count       | Should -Be 5
+        $result.Steps[0].Step     | Should -Be 'sync'
+        $result.Steps[0].Status   | Should -Be 'fail'
+        $result.Steps[0].Error    | Should -Match 'major release 2\.0\.0'
+        $result.Steps[0].Error    | Should -Match '-Upgrade'
+        # An adoption gap must not abort the chain the way 'error' does.
+        ($result.Steps[1..4] | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+    }
+
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
         $dir = Join-Path $TestDrive ("precommit-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

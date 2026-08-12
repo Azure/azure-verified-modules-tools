@@ -187,13 +187,31 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ### Phase 4 — pre-commit and pr-check
 
-- [ ] Extend `$syncParameterNames` in `Invoke-AvmPreCommit` with the new
-      parameters; `Test-AvmPreCommit.ps1` derives the expected surface from
-      `Sync-AvmManagedFile`, so this is enforced by test.
-- [ ] Catch `AvmManagedFilesVersionException` explicitly in `Invoke-AvmPreCommit`
-      and map it to `fail` rather than `error`, with an actionable message.
-- [ ] Fail `pr-check` on an unadopted major.
-- [ ] Component tests covering warn, error, and upgrade paths.
+- [x] Extend `$syncParameterNames` in `Invoke-AvmPreCommit` with the new
+      parameters. The derived-surface test filters to `[string]` parameters, so
+      the two switches needed dedicated forwarding tests rather than being
+      picked up automatically.
+- [x] Catch `AvmManagedFilesVersionException` explicitly in `Invoke-AvmPreCommit`
+      and map it to `fail` rather than `error`, with an actionable message. The
+      chain continues past the failed step, matching `AvmConfigurationException`.
+- [x] Fail `pr-check` on an unadopted major. No code change was required:
+      `Invoke-AvmPrCheck` runs the sync step with `-CheckDrift`, and Phase 3
+      already raises a sync issue against `.avm/managed-files-version.json` for a
+      superseded major, which forces the step to `fail` and propagates to the
+      overall result. Only the comment-based help was updated.
+- [x] No CLI dispatch work was needed. `Invoke-Avm` strips leading dashes,
+      converts kebab-case to PascalCase, and treats `SwitchParameter` as a
+      valueless flag, so `avm pre-commit -upgrade`, `--upgrade` and
+      `--skip-managed-files-version-check` all bind unchanged.
+- [x] Tests for the warn, error and upgrade paths. Placed at the unit tier
+      (engine plan branching plus pre-commit chain behaviour) and the integration
+      tier, not the component tier: `Get-AvmLatestManagedFilesVersion` builds
+      `https://github.com/<repo>.git` in the module, so a component fixture
+      cannot substitute a local remote, and the existing component fixtures pass
+      `-ManagedFilesLocalPath`, which short-circuits version enforcement by
+      design. `tests/Pester/Integration/ManagedFilesVersion.Integration.Tests.ps1`
+      covers real tag discovery, the unpinned bootstrap plan, the behind-branch
+      message, and the on-disk pin round-trip.
 
 ### Phase 5 — repository sync
 
@@ -216,13 +234,22 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ## Validation
 
-Phases 2 and 3 complete.
+Phases 2, 3 and 4 complete.
 
-- `./build.ps1 pre-commit` — 945 unit tests, 28 component tests, 0 errors.
+- `./build.ps1 pre-commit` — 949 unit tests, 28 component tests, 0 errors.
 - 30 unit tests cover the version primitives; 17 cover the version plan
   resolver; 4 cover the sync engine's version branching (major throws, major
   under `-CheckDrift` becomes a drift issue, stamp on demand, never stamp under
   `-CheckDrift`).
+- 4 unit tests cover the `Invoke-AvmPreCommit` surface: both switches are
+  exposed, both are forwarded to the terraform sync step, neither is forwarded
+  when unsupplied, and a superseded major becomes a failed step that leaves the
+  remaining four steps running.
+- 4 integration tests (`ManagedFilesVersion.Integration.Tests.ps1`, tagged
+  `Integration`, skipped under `AVM_OFFLINE`) run against the live repository:
+  real tag discovery through `git ls-remote`, the unpinned bootstrap plan, the
+  behind-branch message for a stale pin, and the on-disk pin round-trip
+  including the no-BOM / LF / trailing-newline encoding contract.
 - End-to-end smoke test against the live managed-files repository: an unpinned
   repository adopted `v0.1.0`, stamped `.avm/managed-files-version.json` with
   the commit and committer date, and a second run reported `status=upToDate`
