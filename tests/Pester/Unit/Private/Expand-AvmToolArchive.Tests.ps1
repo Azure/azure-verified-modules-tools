@@ -163,37 +163,6 @@ Describe 'Expand-AvmWindowsTarArchive' {
 }
 
 Describe 'Expand-AvmToolArchive tar.gz dispatch' {
-    It 'uses the first tar application when PATH returns duplicate matches' -Skip:$IsWindows {
-        $targetDir = Join-Path $TestDrive 'dispatch-expanded'
-        New-Item -ItemType Directory -Path $targetDir | Out-Null
-
-        InModuleScope 'Avm.Authoring' -Parameters @{
-            TargetDir = $targetDir
-        } {
-            param($TargetDir)
-            Mock Get-Command {
-                [pscustomobject]@{ Source = '/usr/bin/tar' }
-                [pscustomobject]@{ Source = '/bin/tar' }
-            } -ParameterFilter {
-                $Name -eq 'tar' -and
-                $CommandType -eq 'Application'
-            }
-            Mock Invoke-AvmProcess {
-                [pscustomobject]@{ ExitCode = 0 }
-            }
-
-            Expand-AvmToolArchive `
-                -ArchivePath '/tmp/dispatch.tar.gz' `
-                -Archive 'tar.gz' `
-                -TargetDir $TargetDir `
-                -EntrypointBasename 'tool'
-
-            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly -ParameterFilter {
-                $FilePath -eq '/usr/bin/tar'
-            }
-        }
-    }
-
     It 'uses managed extraction on Windows' -Skip:(-not $IsWindows) {
         $archivePath = Join-Path $TestDrive 'dispatch.tar.gz'
         & $script:newTarFixture -Path $archivePath -Entries @(
@@ -224,5 +193,56 @@ Describe 'Expand-AvmToolArchive tar.gz dispatch' {
 
         Test-Path -LiteralPath (Join-Path $targetDir 'tool.exe') |
             Should -BeTrue
+    }
+
+    It 'resolves a single native tar when PATH exposes it more than once' -Skip:$IsWindows {
+        $archivePath = Join-Path $TestDrive 'native.tar.gz'
+        & $script:newTarFixture -Path $archivePath -Entries @(
+            [pscustomobject]@{
+                Type    = 'RegularFile'
+                Name    = 'tool'
+                Content = 'tool'
+            }
+        ) | Out-Null
+        $targetDir = Join-Path $TestDrive 'native-expanded'
+        New-Item -ItemType Directory -Path $targetDir | Out-Null
+
+        # Ubuntu runners carry both /usr/bin and /bin (a symlink to /usr/bin) on
+        # PATH, so `tar` resolves twice and `.Source` becomes an array.
+        $shadowDir = Join-Path $TestDrive 'shadow-bin'
+        New-Item -ItemType Directory -Path $shadowDir | Out-Null
+        $nativeTar = (
+            Get-Command -Name 'tar' -CommandType Application |
+                Select-Object -First 1
+        ).Source
+        New-Item `
+            -ItemType SymbolicLink `
+            -Path (Join-Path $shadowDir 'tar') `
+            -Target $nativeTar | Out-Null
+
+        $originalPath = $env:PATH
+        try {
+            $env:PATH = @($shadowDir, $originalPath) -join [System.IO.Path]::PathSeparator
+            @(Get-Command -Name 'tar' -CommandType Application).Count |
+                Should -BeGreaterThan 1
+
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                ArchivePath = $archivePath
+                TargetDir   = $targetDir
+            } {
+                param($ArchivePath, $TargetDir)
+                Expand-AvmToolArchive `
+                    -ArchivePath $ArchivePath `
+                    -Archive 'tar.gz' `
+                    -TargetDir $TargetDir `
+                    -EntrypointBasename 'tool'
+            }
+        }
+        finally {
+            $env:PATH = $originalPath
+        }
+
+        Get-Content -LiteralPath (Join-Path $targetDir 'tool') -Raw |
+            Should -Be 'tool'
     }
 }

@@ -1,8 +1,8 @@
 # Linux tar command resolution
 
-**Status**: blocked
+**Status**: complete
 **Started**: 2026-08-11
-**Updated**: 2026-08-11
+**Updated**: 2026-08-12
 **Branch**: `copilot/fix-avm-pr-check-linux`
 
 ## Outcome
@@ -14,8 +14,8 @@ exist on `PATH`.
 
 - [x] Add regression coverage for duplicate `tar` applications on `PATH`.
 - [x] Resolve one `tar` application before invoking archive extraction.
-- [ ] Run targeted and pre-commit validation.
-- [ ] Commit and push the slice.
+- [x] Run targeted and pre-commit validation.
+- [x] Commit and push the slice.
 
 ## Validation
 
@@ -28,8 +28,11 @@ exist on `PATH`.
 - `./scripts/Install-AvmBuildPrerequisites.ps1 -MaxAttempts 5
   -InitialDelaySeconds 2` exhausted all retries because PSGallery returned
   `Resource temporarily unavailable`.
+- After merging `main`, the focused archive suite passed with 4 tests passing
+  and 1 Windows-only test skipped.
+- `./build.ps1 pre-commit` passed after loading official InvokeBuild 5.14.23
+  from a temporary module path: 5 tasks, 0 errors.
 
 ## Blockers or dependencies
 
-PSGallery must become reachable so `InvokeBuild` can be installed and the
-required repository gate can run before commit.
+None.
