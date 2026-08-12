@@ -51,9 +51,9 @@ path resolves outside the repository through `Get-AvmFolder`. Today
 unblocking the pin.
 
 **A line-merge mechanism already exists and is unused.** `Merge-AvmFileLine.ps1`
-supports both `required` and `removed` lines through an
-`.avm-managed-lines.json` spec placed in a managed-files overlay group, stacking
-across groups exactly like files do. No group ships a spec yet, so this feature
+supports both `required` and `removed` lines through a `managedLines` key on a
+managed-files group in `terraform/config/managed-files.json`, stacking across
+groups exactly like files do. No group ships a spec yet, so this feature
 is its first consumer. The separate `avm.tf.gitignore-essentials` convention rule
 is append-only and does not list `.avm`, so the two do not collide.
 
@@ -157,9 +157,9 @@ Each phase is a separate commit, and phases 1-2 are a prerequisite for the rest.
 
 ### Phase 1 — un-ignore `.avm`
 
-- [x] Add `.avm-managed-lines.json` to the `root` group in the managed-files
-      repository, removing `.avm` and requiring `.avm/managed-files.json` so the
-      local override stays untracked.
+- [x] Add a `managedLines` spec to the `root` group in the managed-files
+      repository's `terraform/config/managed-files.json`, removing `.avm` and
+      requiring `.avm/managed-files.json` so the local override stays untracked.
 - [x] Confirm no interaction with `avm.tf.gitignore-essentials`. The rule's 23
       required globs do not include `.avm`, so the removal cannot fight it.
 - [x] Verify `Get-AvmManagedLinePlan` creates `.gitignore` when absent. Covered

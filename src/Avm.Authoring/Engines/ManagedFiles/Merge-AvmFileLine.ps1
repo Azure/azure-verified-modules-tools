@@ -1,21 +1,3 @@
-function Get-AvmManagedLineSpecFileName {
-    <#
-    .SYNOPSIS
-        The sentinel file name that carries a line-managed-file spec inside a
-        managed-files overlay directory.
-
-    .DESCRIPTION
-        The spec lives beside the overlay content (in 'root' and each group
-        overlay) so it stacks per repository group exactly like the files
-        themselves. It is tooling metadata, not synced content, so
-        Add-AvmManagedFilesFromDir filters it out of the managed-files map the
-        same way it filters '.gitkeep'.
-    #>
-    [OutputType([string])]
-    param()
-    return '.avm-managed-lines.json'
-}
-
 function Merge-AvmFileLine {
     <#
     .SYNOPSIS
@@ -109,16 +91,21 @@ function Get-AvmManagedLineSpec {
         managed-file groups.
 
     .DESCRIPTION
-        Reads one '<base>/<group>/.avm-managed-lines.json' per file group, in
-        the same order Build-AvmManagedFilesMap applies the groups. Each spec is
-        a flat JSON map of forward-slash relative path ->
-        { required: [...], removed: [...] }.
+        Reads the 'managedLines' key of each file group in the managed-files
+        repository's group config -- the same file that carries 'deletedFiles'
+        -- in the same order Build-AvmManagedFilesMap applies the groups. Both
+        are instructions about how to mutate a target repository rather than
+        content copied into it, so they live together in config and can never be
+        mistaken for a file to sync.
+
+        Each 'managedLines' value is a flat JSON map of forward-slash relative
+        path -> { required: [...], removed: [...] }.
 
         Entries stack per line with last-writer-wins: a later group that
         requires a line cancels an earlier group that removed it, and vice
         versa, mirroring how later group files win over earlier ones. Within a
-        single spec file a line in both 'required' and 'removed' is a
-        contradiction and throws.
+        single group a line in both 'required' and 'removed' is a contradiction
+        and throws.
 
     .OUTPUTS
         An ordered hashtable keyed by relative path; each value is a
@@ -127,38 +114,48 @@ function Get-AvmManagedLineSpec {
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
-        [Parameter(Mandatory)]
-        [string] $BaseDir,
+        [AllowEmptyString()]
+        [string] $Path = '',
 
         [string[]] $FileGroups = @()
     )
 
     Set-StrictMode -Version 3.0
 
-    $specFileName = Get-AvmManagedLineSpecFileName
-
-    $dirs = New-Object System.Collections.Generic.List[string]
-    foreach ($fileGroup in $FileGroups) {
-        if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
-        $dirs.Add((Join-Path $BaseDir $fileGroup))
-    }
-
     $spec = [ordered]@{}
 
-    foreach ($dir in $dirs) {
-        $specFile = Join-Path $dir $specFileName
-        if (-not (Test-Path -LiteralPath $specFile -PathType Leaf)) { continue }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $spec }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $spec }
 
-        $raw = Get-Content -LiteralPath $specFile -Raw
-        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+    $raw = Get-Content -LiteralPath $Path -Raw
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $spec }
 
-        try {
-            $parsed = $raw | ConvertFrom-Json
-        }
-        catch {
-            throw [System.InvalidOperationException]::new(
-                "Managed-line spec '$specFile' is not valid JSON: $($_.Exception.Message)")
-        }
+    try {
+        $config = $raw | ConvertFrom-Json
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(
+            "Managed-files group config '$Path' is not valid JSON: $($_.Exception.Message)")
+    }
+    if ($null -eq $config) { return $spec }
+    if (-not ($config.PSObject.Properties.Name -contains 'fileGroups') -or -not $config.fileGroups) { return $spec }
+
+    $groupByName = @{}
+    foreach ($configuredGroup in @($config.fileGroups)) {
+        if ($null -eq $configuredGroup) { continue }
+        if (-not ($configuredGroup.PSObject.Properties.Name -contains 'name') -or -not $configuredGroup.name) { continue }
+        $groupByName[[string]$configuredGroup.name] = $configuredGroup
+    }
+
+    foreach ($fileGroup in $FileGroups) {
+        if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
+        $groupName = [string]$fileGroup
+        if (-not $groupByName.ContainsKey($groupName)) { continue }
+
+        $configuredGroup = $groupByName[$groupName]
+        if (-not ($configuredGroup.PSObject.Properties.Name -contains 'managedLines') -or -not $configuredGroup.managedLines) { continue }
+
+        $parsed = $configuredGroup.managedLines
         if ($null -eq $parsed) { continue }
 
         foreach ($property in $parsed.PSObject.Properties) {
@@ -188,7 +185,7 @@ function Get-AvmManagedLineSpec {
                 $t = ([string]$r).Trim()
                 if ($t.Length -gt 0 -and $fileRequired.Contains($t)) {
                     throw [System.InvalidOperationException]::new(
-                        "Managed-line spec '$specFile' lists line '$t' for '$targetPath' in both 'required' and 'removed'.")
+                        "Managed-line spec for file group '$groupName' in '$Path' lists line '$t' for '$targetPath' in both 'required' and 'removed'.")
                 }
             }
 

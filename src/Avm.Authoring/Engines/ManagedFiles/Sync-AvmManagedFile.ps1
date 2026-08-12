@@ -270,10 +270,11 @@ function Sync-AvmManagedFile {
 
     # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
     # overwritten wholesale, so the consumer keeps its own additions. The spec
+    # lives in the managed-files group config alongside 'deletedFiles' and
     # stacks across file groups like the files themselves. A path owned by the
     # line spec must not also be whole-file managed (line-merge wins), and a
     # deletion still trumps a line merge.
-    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -FileGroups $fileGroups
+    $lineSpec = Get-AvmManagedLineSpec -Path $source.FileGroupConfigFile -FileGroups $fileGroups
     foreach ($p in @($lineSpec.Keys)) {
         if ($deletedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
     }
@@ -1120,8 +1121,6 @@ function Add-AvmManagedFilesFromDir {
     $baseDirAbsolute = (Get-Item -LiteralPath $BaseDir -Force).FullName
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
-    $lineSpecName = Get-AvmManagedLineSpecFileName
-
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
     $sourceFiles = @(
         Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
@@ -1130,9 +1129,7 @@ function Add-AvmManagedFilesFromDir {
             # content, so they must not be synced into target repos. Repository
             # sync applies the same filter; omitting it here would make every
             # drift check demand a file the sync never writes.
-            # The line-managed-file spec is tooling metadata consumed separately, so
-            # it is filtered here for the same reason.
-            $_.Name -ne '.gitkeep' -and $_.Name -ne $lineSpecName
+            $_.Name -ne '.gitkeep'
         } | ForEach-Object {
             $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
             $mode = $modeMap[$relativePath]

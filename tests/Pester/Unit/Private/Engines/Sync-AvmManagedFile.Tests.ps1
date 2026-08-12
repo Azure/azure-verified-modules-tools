@@ -35,12 +35,22 @@ BeforeAll {
     function script:New-TestFileGroupConfig {
         param(
             [Parameter(Mandatory)] [string] $Path,
-            [hashtable] $DeletedFilesByGroup = @{}
+            [hashtable] $DeletedFilesByGroup = @{},
+            [hashtable] $ManagedLinesByGroup = @{}
         )
 
+        $names = @(@($DeletedFilesByGroup.Keys) + @($ManagedLinesByGroup.Keys) | Select-Object -Unique)
+
         $fileGroups = @(
-            foreach ($name in $DeletedFilesByGroup.Keys) {
-                [ordered]@{ name = $name; deletedFiles = @($DeletedFilesByGroup[$name]) }
+            foreach ($name in $names) {
+                $group = [ordered]@{ name = $name }
+                if ($DeletedFilesByGroup.ContainsKey($name)) {
+                    $group['deletedFiles'] = @($DeletedFilesByGroup[$name])
+                }
+                if ($ManagedLinesByGroup.ContainsKey($name)) {
+                    $group['managedLines'] = $ManagedLinesByGroup[$name]
+                }
+                $group
             }
         )
 
@@ -592,12 +602,16 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'creates a line-managed file when it is missing and classifies it as Added' {
-        $spec = '{ ".gitignore": { "required": ["*.tfstate", ".terraform/"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('*.tfstate', '.terraform/'); removed = @() } }
+        }
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
-            param($C, $B, $Cfg)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        # The working tree has no .gitignore at all: the sync must create it.
+        Test-Path (Join-Path $script:moduleDir '.gitignore') | Should -BeFalse
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F
         }
 
         $result.Status | Should -Be 'pass'
@@ -606,20 +620,37 @@ Describe 'Sync-AvmManagedFile' {
         $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
         $onDisk | Should -Match '\*\.tfstate'
         $onDisk | Should -Match '\.terraform/'
-        # The spec sentinel is tooling metadata and must never be synced.
-        Test-Path (Join-Path $script:moduleDir '.avm-managed-lines.json') | Should -BeFalse
+    }
+
+    It 'creates a line-managed file in a nested directory that does not exist yet' {
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.config/nested/ignore.txt' = @{ required = @('first-line') } }
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Contain '.config/nested/ignore.txt'
+
+        $target = Join-Path $script:moduleDir '.config/nested/ignore.txt'
+        Test-Path $target | Should -BeTrue
+        (Get-Content -Raw -LiteralPath $target) | Should -Match 'first-line'
     }
 
     It 'merges required lines into an existing file, preserving the user additions' {
-        $spec = '{ ".gitignore": { "required": ["*.tfstate"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('*.tfstate'); removed = @() } }
+        }
 
         # The consumer already has a hand-authored entry that must survive.
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "my-custom-secret.txt`n" -NoNewline
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
-            param($C, $B, $Cfg)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F
         }
 
         $result.Status  | Should -Be 'pass'
@@ -632,14 +663,15 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'removes a deprecated line while preserving the rest' {
-        $spec = '{ ".gitignore": { "required": [], "removed": ["obsolete-entry"] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @(); removed = @('obsolete-entry') } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "keep-me`nobsolete-entry`nkeep-me-too`n" -NoNewline
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
-            param($C, $B, $Cfg)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F
         }
 
         $result.Status  | Should -Be 'pass'
@@ -652,14 +684,15 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'reports drift for a line-managed file under -CheckDrift and writes nothing' {
-        $spec = '{ ".gitignore": { "required": [".terraform/"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('.terraform/'); removed = @() } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "existing`n" -NoNewline
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
-            param($C, $B, $Cfg)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -CheckDrift
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F -CheckDrift
         }
 
         $result.Status       | Should -Be 'fail'
@@ -674,14 +707,15 @@ Describe 'Sync-AvmManagedFile' {
         # Root ships .gitignore as a whole file, but the line spec claims the same
         # path: the line merge must win so the consumer keeps its own additions.
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "whole-file-version`n" -NoNewline
-        $spec = '{ ".gitignore": { "required": ["line-managed-entry"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        $fgc = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json') -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('line-managed-entry'); removed = @() } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "user-line`n" -NoNewline
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
-            param($C, $B, $Cfg)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir; F = $fgc } {
+            param($C, $B, $Cfg, $F)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F
         }
 
         $result.Status | Should -Be 'pass'
