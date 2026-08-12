@@ -28,7 +28,7 @@ Confirmed with the requester on 2026-08-12.
 | --- | --- |
 | Where does the pin live? | `.avm/managed-files-version.json`, kept separate from the existing `.avm/managed-files.json` local override |
 | `.avm` is currently gitignored | Remove it via the managed-line spec; it is a pre-existing bug that also blocks `.avm/context.psd1` and `.avm/rules/*.psd1` |
-| Pin contents | Tag version, source repo, resolved commit hash, and update timestamp |
+| Pin contents | Tag version, source repo, resolved commit hash, commit date, and update timestamp |
 | `pre-commit` default behaviour | Sync to the **pinned** version; warn on newer minor/patch; error on newer major and prompt for `-Upgrade` |
 | Staleness window | 14 days, measured on pull request `updatedAt` |
 | Non-blocking pull requests | Dependabot, any `Bot` author, and drafts |
@@ -75,12 +75,16 @@ to go (see phase 5).
   "version": "1.2.3",
   "repo": "Azure/azure-verified-modules-managed-files",
   "commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9",
+  "commitDate": "2026-08-10T14:02:11Z",
   "updatedAt": "2026-08-12T10:30:00Z"
 }
 ```
 
 `version` is semver without a leading `v`, matching the convention already
 documented in `Resources/avm.pins.jsonc`. The git tag is derived as `v$version`.
+`commitDate` is the committer date of the tagged commit and `updatedAt` is when
+the pin was last stamped, so a reader can tell how old the release is
+independently of when this repository adopted it. Both are ISO 8601 UTC.
 
 ### Ref precedence
 
@@ -174,7 +178,8 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 - [ ] Add the pin to the `$pick` precedence chain in `Sync-AvmManagedFile`.
 - [ ] Add `-Upgrade` and `-SkipManagedFilesVersionCheck` parameters.
-- [ ] Capture the resolved commit via `git rev-parse HEAD` on the checkout so the
+- [ ] Capture the resolved commit and its committer date via
+      `git rev-parse HEAD` and `git show -s --format=%cI` on the checkout so the
       pin records provenance.
 - [ ] Stamp the pin on `-Upgrade` and on the unpinned bootstrap, never in
       `-CheckDrift`.
