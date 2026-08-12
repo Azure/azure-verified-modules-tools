@@ -280,8 +280,17 @@ otherwise the pin is gitignored in every module repository.
       to stop claiming codes that are already allocated. §20 gains a
       "Managed-files releases" section covering the release cadence and the
       fleet-sync gate, and §24 defines the pin in the glossary.
-- [ ] Propose a matching change to `Azure-Verified-Modules-Docs`, checking for an
-      open pull request first.
+- [x] Propose a matching change to `Azure-Verified-Modules-Docs`, checking for an
+      open pull request first. No open pull requests existed, so a new branch
+      `users/jaredfholgate/managed-files-versioning` carries
+      [Docs#37](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs/pull/37):
+      a new how-to, `Manage Managed-File Versions and Releases (Terraform)`, plus
+      a correction to `deploy-canary-managed-file-update.md`, which claimed
+      content always comes from managed-files `main` and that nothing overrides
+      that. It now describes pinned delivery, gains a "Cut a release" section,
+      and carries release steps through both ring promotions, the rollback, and
+      the worked example. `docfx --warningsAsErrors` and
+      `Test-DocsNavigation.ps1` both pass.
 
 ## Validation
 
@@ -318,3 +327,23 @@ Phases 1, 2, 3, 4 and 5 complete.
 - Phase 6 depends on a manual release in that repository.
 - The managed-files repository has five open Dependabot pull requests, which are
   useful live test data for the phase 5 exclusion rule.
+- Documentation:
+  [Docs#37](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs/pull/37)
+  describes behaviour that ships with
+  [tools#65](https://github.com/Azure/azure-verified-modules-tools/pull/65), so it
+  should not merge ahead of it.
+
+## Open questions
+
+- **Canary changes now need a release each.** Delivery is gated on a published
+  tag, so every canary ring promotion and every rollback needs its own release.
+  Should each canary change get a normal release, or should pre-release tags
+  (`v1.1.0-rc.1`) be supported for soaking? The semver sort does not currently
+  handle pre-release identifiers.
+- **A canary repository can block its own canary.** If the ring repository has an
+  open, non-stale, non-bot pull request, a patch or minor release will not reach
+  it and the canary silently does nothing. There is no targeted "force this
+  repository's pin" mechanism; a workflow input would be the obvious addition.
+- **Overridden repositories are silent on a major.** When a repository sets an
+  explicit ref through tiers 1–3, version enforcement is disabled entirely, so an
+  unadopted major produces no warning at all.
