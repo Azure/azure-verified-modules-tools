@@ -40,17 +40,19 @@ function Remove-LegacyBranchProtection {
 
     $endpoint = "repos/$orgAndRepoName/branches/$defaultBranch/protection"
 
-    # `gh api` exits non-zero on 4xx, so a 404 (no protection rule present)
-    # is the common-case "no-op" path we have to swallow. Capture stderr so
-    # we can distinguish the 404 from a genuine error.
-    $stderrFile = [System.IO.Path]::GetTempFileName()
     try {
-        $null = gh api $endpoint 2>$stderrFile
-        $exit = $LASTEXITCODE
-        $stderr = ""
-        if (Test-Path $stderrFile) { $stderr = (Get-Content -Path $stderrFile -Raw) }
+        $getResult = Invoke-GitHubCliWithRetry `
+            -commands @(
+                @{
+                    Arguments = @("api", $endpoint)
+                    OutputLog = "gh-branch-protection-get.output.log"
+                }
+            ) `
+            -errorLog "gh-branch-protection-get.error.log" `
+            -maxRetries 5 `
+            -retryDelayIncremental 5
 
-        if ($exit -eq 0) {
+        if ($getResult.success) {
             # 200 OK -> a classic branch-protection rule exists.
             Write-Host "$modeTag $orgAndRepoName has a legacy classic branch-protection rule on '$defaultBranch'." -ForegroundColor Yellow
 
@@ -59,25 +61,30 @@ function Remove-LegacyBranchProtection {
                 return $result
             }
 
-            $deleteStderr = [System.IO.Path]::GetTempFileName()
-            try {
-                $null = gh api $endpoint --method DELETE 2>$deleteStderr
-                $deleteExit = $LASTEXITCODE
-                if ($deleteExit -ne 0) {
-                    $deleteErr = ""
-                    if (Test-Path $deleteStderr) { $deleteErr = (Get-Content -Path $deleteStderr -Raw) }
-                    throw "gh api DELETE $endpoint exited $deleteExit : $deleteErr"
+            $deleteResult = Invoke-GitHubCliWithRetry `
+                -commands @(
+                    @{
+                        Arguments = @("api", $endpoint, "--method", "DELETE")
+                        OutputLog = "gh-branch-protection-delete.output.log"
+                    }
+                ) `
+                -errorLog "gh-branch-protection-delete.error.log" `
+                -maxRetries 5 `
+                -retryDelayIncremental 5
+            if (!$deleteResult.success) {
+                if ($deleteResult.error -match "HTTP 404") {
+                    Write-Host "  Legacy branch-protection rule already gone on $orgAndRepoName/$defaultBranch (HTTP 404)."
+                    return $result
                 }
-                Write-Host "  Deleted legacy branch-protection rule on $orgAndRepoName/$defaultBranch." -ForegroundColor Green
-                $result.Removed = $true
-            } finally {
-                Remove-Item -Path $deleteStderr -Force -ErrorAction SilentlyContinue
+                throw "gh api DELETE $endpoint exited $($deleteResult.exitCode) : $($deleteResult.error)"
             }
-        } elseif ($stderr -match "HTTP 404" -or $stderr -match "Branch not protected") {
+            Write-Host "  Deleted legacy branch-protection rule on $orgAndRepoName/$defaultBranch." -ForegroundColor Green
+            $result.Removed = $true
+        } elseif ($getResult.error -match "HTTP 404" -or $getResult.error -match "Branch not protected") {
             # No classic branch-protection rule present. Expected case.
             Write-Host "$modeTag $orgAndRepoName has no legacy classic branch-protection rule on '$defaultBranch'."
         } else {
-            throw "gh api $endpoint exited $exit : $stderr"
+            throw "gh api $endpoint exited $($getResult.exitCode) : $($getResult.error)"
         }
     } catch {
         Write-Warning "  Failed to check/remove legacy branch protection for $orgAndRepoName : $_"
@@ -87,8 +94,6 @@ function Remove-LegacyBranchProtection {
             -message "Failed to check or remove legacy classic branch-protection on $orgAndRepoName/$defaultBranch." `
             -data $null `
             -issueLog $result.IssueLog
-    } finally {
-        Remove-Item -Path $stderrFile -Force -ErrorAction SilentlyContinue
     }
 
     return $result

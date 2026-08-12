@@ -121,8 +121,20 @@ function Invoke-AvmPreCommitForRepository {
         if ($LASTEXITCODE -ne 0) { throw "gh auth setup-git exited $LASTEXITCODE" }
 
         Write-Host "$modeTag Cloning $orgAndRepoName into $tempDir..." -ForegroundColor DarkGray
-        gh repo clone $orgAndRepoName $tempDir -- --quiet --depth 1 --branch $defaultBranch
-        if ($LASTEXITCODE -ne 0) { throw "gh repo clone exited $LASTEXITCODE" }
+        $cloneResult = Invoke-GitHubCliWithRetry `
+            -commands @(
+                @{
+                    Arguments = @("repo", "clone", $orgAndRepoName, "`"$tempDir`"", "--", "--quiet", "--depth", "1", "--branch", $defaultBranch)
+                    OutputLog = "gh-clone.output.log"
+                }
+            ) `
+            -errorLog "gh-clone.error.log" `
+            -maxRetries 5 `
+            -retryDelayIncremental 5 `
+            -printOutputOnError
+        if (!$cloneResult.success) {
+            throw "gh repo clone exited $($cloneResult.exitCode): $($cloneResult.error)"
+        }
 
         Push-Location $tempDir
         try {
@@ -175,26 +187,57 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             git push --quiet --set-upstream origin $branchName
             if ($LASTEXITCODE -ne 0) { throw "git push exited $LASTEXITCODE" }
 
-            $prCreateOutput = gh pr create `
-                --repo $orgAndRepoName `
-                --base $defaultBranch `
-                --head $branchName `
-                --title $prTitle `
-                --body $prBody
-            if ($LASTEXITCODE -ne 0) { throw "gh pr create exited $LASTEXITCODE" }
+            $prBodyFile = Join-Path $tempDir "pr-body.md"
+            Set-Content -LiteralPath $prBodyFile -Value $prBody -Encoding utf8
+            $prCreateResult = Invoke-GitHubCliWithRetry `
+                -commands @(
+                    @{
+                        Arguments = @(
+                            "pr", "create",
+                            "--repo=$orgAndRepoName",
+                            "--base=$defaultBranch",
+                            "--head=$branchName",
+                            "--title=`"$prTitle`"",
+                            "--body-file=`"$prBodyFile`""
+                        )
+                        OutputLog = "gh-pr-create.output.log"
+                    }
+                ) `
+                -errorLog "gh-pr-create.error.log" `
+                -maxRetries 5 `
+                -retryDelayIncremental 5 `
+                -printOutputOnError `
+                -returnOutput
+            if (!$prCreateResult.success) {
+                throw "gh pr create exited $($prCreateResult.exitCode): $($prCreateResult.error)"
+            }
 
-            $prUrl = (@($prCreateOutput) | Where-Object { $_ -and $_.ToString().Trim() -ne "" } | Select-Object -Last 1).ToString().Trim()
+            $prUrl = (@($prCreateResult.output) | Where-Object { $_ -and $_.ToString().Trim() -ne "" } | Select-Object -Last 1).ToString().Trim()
             if ([string]::IsNullOrWhiteSpace($prUrl)) { throw "gh pr create returned no URL on stdout" }
             Write-Host "Opened PR: $prUrl" -ForegroundColor DarkGray
 
-            gh pr merge $prUrl `
-                --repo $orgAndRepoName `
-                --squash `
-                --admin `
-                --delete-branch `
-                --subject $prTitle `
-                --body ""
-            if ($LASTEXITCODE -ne 0) { throw "gh pr merge exited $LASTEXITCODE" }
+            $prMergeResult = Invoke-GitHubCliWithRetry `
+                -commands @(
+                    @{
+                        Arguments = @(
+                            "pr", "merge", $prUrl,
+                            "--repo=$orgAndRepoName",
+                            "--squash",
+                            "--admin",
+                            "--delete-branch",
+                            "--subject=`"$prTitle`"",
+                            "--body="
+                        )
+                        OutputLog = "gh-pr-merge.output.log"
+                    }
+                ) `
+                -errorLog "gh-pr-merge.error.log" `
+                -maxRetries 5 `
+                -retryDelayIncremental 5 `
+                -printOutputOnError
+            if (!$prMergeResult.success) {
+                throw "gh pr merge exited $($prMergeResult.exitCode): $($prMergeResult.error)"
+            }
             Write-Host "Merged PR: $prUrl" -ForegroundColor Green
         } finally {
             Pop-Location

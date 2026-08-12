@@ -5,6 +5,18 @@
 # single-command callers can access fields directly via `$result.success`
 # without indexing into `[0]`.
 
+function Get-GitHubTransientRetryPatterns {
+    return @(
+        "API rate limit exceeded",
+        "tls: failed to verify certificate",
+        "x509: certificate is not valid for any names",
+        "x509: certificate signed by unknown authority",
+        "self-signed certificate",
+        "connection reset",
+        "unexpected EOF"
+    )
+}
+
 function Invoke-TerraformWithRetry {
     param(
         [hashtable[]]$commands,
@@ -23,7 +35,11 @@ function Invoke-TerraformWithRetry {
             "Error: Failed to install provider",
             "Error: Failed to query available provider packages",
             "failed to retrieve cryptographic signature for provider",
-            "403 API rate limit"
+            "403 API rate limit",
+            "tls: failed to verify certificate",
+            "x509: certificate is not valid for any names",
+            "x509: certificate signed by unknown authority",
+            "self-signed certificate"
         ),
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
@@ -194,9 +210,10 @@ function Invoke-GitHubCliWithRetry {
         [string]$errorLog = "error.log",
         [int]$maxRetries = 50,
         [int]$retryDelayIncremental = 10,
-        [string[]]$retryOn = @("API rate limit exceeded"),
+        [string[]]$retryOn = (Get-GitHubTransientRetryPatterns),
         [switch]$printOutput,
         [switch]$printOutputOnError,
+        [switch]$returnOutput,
         [switch]$returnOutputParsedFromJson
     )
 
@@ -210,6 +227,7 @@ function Invoke-GitHubCliWithRetry {
         -retryOn $retryOn `
         -printOutput:$printOutput.IsPresent `
         -printOutputOnError:$printOutputOnError.IsPresent `
+        -returnOutput:$returnOutput.IsPresent `
         -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent
 }
 
@@ -274,6 +292,7 @@ function Invoke-CommandWithRetry {
         [hashtable[]]$recoveryActions = @(),
         [switch]$printOutput,
         [switch]$printOutputOnError,
+        [switch]$returnOutput,
         [switch]$returnOutputParsedFromJson
     )
 
@@ -383,7 +402,9 @@ function Invoke-CommandWithRetry {
                     Write-Host "Error Log:"
                     Get-Content -Path $errorLog | Write-Host
                     $returnOutputs += @{
-                        success = $false
+                        success  = $false
+                        exitCode = $process.ExitCode
+                        error    = ($errorOutput -join [System.Environment]::NewLine)
                     }
                     return $returnOutputs
                 }
@@ -398,6 +419,11 @@ function Invoke-CommandWithRetry {
                     $returnOutputs += @{
                         success = $true
                         output  = $parsedOutput
+                    }
+                } elseif ($returnOutput) {
+                    $returnOutputs += @{
+                        success = $true
+                        output  = (Get-Content -Path $localLogPath -Raw).TrimEnd()
                     }
                 } else {
                     $returnOutputs += @{

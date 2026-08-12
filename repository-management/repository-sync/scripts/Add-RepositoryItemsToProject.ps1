@@ -47,11 +47,9 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "Logging.ps1")
 . (Join-Path $libDir "RetryHelpers.ps1")
 
-# Extended retry-match list: the default only covers "API rate limit exceeded".
-# We additionally cover GitHub's secondary/abuse rate limits and common transient
-# gateway/timeout failures so a busy run backs off and retries instead of failing.
-$retryOn = @(
-    "API rate limit exceeded",
+# Extend the shared GitHub transport failures with API-specific throttling and
+# gateway responses used by the project sync.
+$retryOn = @((Get-GitHubTransientRetryPatterns) + @(
     "secondary rate limit",
     "exceeded a secondary rate limit",
     "was submitted too quickly",
@@ -65,7 +63,7 @@ $retryOn = @(
     "connection reset",
     "Server Error",
     "EOF"
-)
+) | Sort-Object -Unique)
 
 $projectLogFile = Join-Path $outputDirectory "project-sync.log"
 $projectLogFileJson = Join-Path $outputDirectory "project-sync.log.json"
