@@ -15,11 +15,22 @@ function Sync-AvmManagedFile {
           1. Explicit cmdlet parameters.
           2. Environment variables (AVM_MANAGED_FILES_*).
           3. A repo-committed '.avm/managed-files.json' under $Context.Root.
-          4. Defaults: files from Azure/azure-verified-modules-managed-files
+          4. For the ref only: the semver pin in
+             '.avm/managed-files-version.json', fetched as tag 'v<version>'.
+          5. Defaults: files from Azure/azure-verified-modules-managed-files
              ('main' ref, 'terraform/files' base folder, file-group config
              'terraform/config/managed-files.json') and config.json from
              Azure/azure-verified-modules-tools ('main' ref,
              'repository-management/repository-config' folder).
+
+        Managed files are released with semver tags, and each repository pins
+        the release it tracks. The engine syncs the pinned release, warns when a
+        newer minor or patch exists, and refuses to run when a major release is
+        available (a drift check reports that as an issue instead of throwing).
+        -Upgrade moves to the newest release and stamps the pin; a repository
+        with no pin adopts the newest release silently. Tag lookup failures are
+        non-fatal: the engine warns and continues from the pin. An explicitly
+        requested ref (tiers 1-3) opts the repository out of pin handling.
 
         A direct local path (-ManagedFilesLocalPath or
         AVM_MANAGED_FILES_LOCAL_PATH) short-circuits the git fetch entirely and
@@ -115,6 +126,15 @@ function Sync-AvmManagedFile {
         repository matches the 'default' group and so receives the shared root
         files. Resolution fails only when no repository id can be determined.
 
+    .PARAMETER Upgrade
+        Sync the newest managed-files release rather than the pinned one and
+        rewrite '.avm/managed-files-version.json' to match. Has no effect when
+        the ref is overridden explicitly or when the release lookup fails.
+
+    .PARAMETER SkipManagedFilesVersionCheck
+        Bypass pin resolution and release-drift enforcement entirely, leaving
+        the ref exactly as the other precedence tiers resolved it.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, Issues, Added, Updated, Removed.
@@ -145,7 +165,11 @@ function Sync-AvmManagedFile {
         [string] $ConfigPath,
         [string] $ConfigLocalPath,
 
-        [string] $RepoId
+        [string] $RepoId,
+
+        [switch] $Upgrade,
+
+        [switch] $SkipManagedFilesVersionCheck
     )
 
     Set-StrictMode -Version 3.0
@@ -174,6 +198,27 @@ function Sync-AvmManagedFile {
 
     $gitPath = (Get-Command -Name 'git' -CommandType Application -ErrorAction SilentlyContinue |
             Select-Object -First 1).Source
+
+    $versionPlan = Resolve-AvmManagedFilesVersionPlan `
+        -Settings $settings `
+        -GitPath $gitPath `
+        -Upgrade:$Upgrade `
+        -SkipVersionCheck:$SkipManagedFilesVersionCheck
+    $settings.ManagedFilesRef = $versionPlan.Ref
+    Write-AvmLog ("sync: managed-files version status={0}; ref={1}" -f $versionPlan.Status, $versionPlan.Ref) -Level Verbose | Out-Null
+
+    # A major release must be adopted deliberately. Outside drift checks that is
+    # a hard stop so the author runs the upgrade; a drift check instead reports
+    # it as an issue so the whole report is still produced.
+    if ($versionPlan.Status -eq 'major' -and -not $Upgrade -and -not $CheckDrift) {
+        throw [AvmManagedFilesVersionException]::new(
+            [string]$versionPlan.PinnedVersion,
+            [string]$versionPlan.LatestVersion,
+            $versionPlan.Message)
+    }
+    if ($versionPlan.Message -and -not ($versionPlan.Status -eq 'major' -and $CheckDrift)) {
+        Write-AvmLog $versionPlan.Message -Level Warning | Out-Null
+    }
 
     $source = Resolve-AvmManagedFilesSource -Settings $settings -GitPath $gitPath
     Write-AvmLog ("sync: source kind={0}; managed-files={1}; config={2}" -f $source.SourceKind, $source.ManagedBaseDir, $source.ConfigDir) -Level Verbose | Out-Null
@@ -300,9 +345,14 @@ function Sync-AvmManagedFile {
     }
 
     $issues = @()
+    $pinAdded = @()
+    $pinUpdated = @()
     if ($CheckDrift) {
         Write-AvmLog 'sync: check-drift mode; reporting planned changes without writing' -Level Verbose | Out-Null
         $issueList = New-Object System.Collections.Generic.List[object]
+        if ($versionPlan.Status -eq 'major') {
+            $issueList.Add((New-AvmSyncIssue -File '.avm/managed-files-version.json' -Message $versionPlan.Message))
+        }
         foreach ($p in $toRemove) {
             $issueList.Add((New-AvmSyncIssue -File $p -Message 'deleted file present in the repository; it should be removed.'))
         }
@@ -354,6 +404,29 @@ function Sync-AvmManagedFile {
                 }
             }
         }
+
+        if ($versionPlan.ShouldStamp -and $versionPlan.TargetVersion) {
+            $pinPath = Get-AvmManagedFilesVersionPinPath -Root $root
+            $pinExisted = Test-Path -LiteralPath $pinPath -PathType Leaf
+            $provenance = if ($source.CheckoutDir) {
+                Get-AvmManagedFilesCheckoutProvenance -CheckoutDir $source.CheckoutDir -GitPath $gitPath
+            }
+            else {
+                @{ Commit = ''; CommitDate = '' }
+            }
+            $stamped = Set-AvmManagedFilesVersionPin `
+                -Root $root `
+                -Version $versionPlan.TargetVersion `
+                -Repo $settings.ManagedFilesRepo `
+                -Commit $provenance.Commit `
+                -CommitDate $provenance.CommitDate
+            if ($stamped) {
+                Write-AvmLog ("sync: managed-files version pinned to {0}" -f $versionPlan.TargetVersion) -Level Verbose | Out-Null
+                if ($pinExisted) { $pinUpdated = @('.avm/managed-files-version.json') }
+                else { $pinAdded = @('.avm/managed-files-version.json') }
+            }
+        }
+
         $status = 'pass'
     }
 
@@ -365,8 +438,8 @@ function Sync-AvmManagedFile {
         Status         = $status
         FilesProcessed = $desired.Count + $linePlans.Count
         Issues         = $issues
-        Added          = @($toAdd + $lineAdded)
-        Updated        = @($toUpdate + $lineUpdated)
+        Added          = @($toAdd + $lineAdded + $pinAdded)
+        Updated        = @($toUpdate + $lineUpdated + $pinUpdated)
         Removed        = $toRemove
     }
 }
@@ -416,9 +489,25 @@ function Resolve-AvmManagedFilesSetting {
     # the tools repository, so the config defaults are not derived from the
     # managed-files repo or ref.
     $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/azure-verified-modules-managed-files'
-    $ref = & $pick $ManagedFilesRef 'AVM_MANAGED_FILES_REF' 'ref' 'main'
     $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'terraform/files'
     $localPath = & $pick $ManagedFilesLocalPath 'AVM_MANAGED_FILES_LOCAL_PATH' 'localPath' ''
+
+    # The ref is resolved separately from $pick because the version pin sits
+    # between the repo-committed override and the 'main' default, and because
+    # downstream version handling needs to know which tier won: an explicitly
+    # requested ref opts the repository out of pin enforcement.
+    $refSource = 'default'
+    $ref = & $pick $ManagedFilesRef 'AVM_MANAGED_FILES_REF' 'ref' ''
+    if ($ManagedFilesRef) { $refSource = 'explicit' }
+    elseif ($ref -and [System.Environment]::GetEnvironmentVariable('AVM_MANAGED_FILES_REF')) { $refSource = 'environment' }
+    elseif ($ref) { $refSource = 'file' }
+
+    $versionPin = Get-AvmManagedFilesVersionPin -Root $Root
+    if (-not $ref -and $versionPin) {
+        $ref = 'v{0}' -f $versionPin.Version
+        $refSource = 'pin'
+    }
+    if (-not $ref) { $ref = 'main' }
 
     $fileGroupConfigPath = & $pick $FileGroupConfigPath 'AVM_MANAGED_FILES_GROUP_CONFIG_PATH' 'fileGroupConfigPath' 'terraform/config/managed-files.json'
     $fileGroupConfigLocalPath = & $pick $FileGroupConfigLocalPath 'AVM_MANAGED_FILES_GROUP_CONFIG_LOCAL_PATH' 'fileGroupConfigLocalPath' ''
@@ -439,6 +528,8 @@ function Resolve-AvmManagedFilesSetting {
     return @{
         ManagedFilesRepo         = $repo
         ManagedFilesRef          = $ref
+        ManagedFilesRefSource    = $refSource
+        ManagedFilesVersionPin   = $versionPin
         ManagedFilesPath         = $path
         ManagedFilesLocalPath    = $localPath
         FileGroupConfigPath      = $fileGroupConfigPath
@@ -761,6 +852,7 @@ function Resolve-AvmManagedFilesSource {
             ConfigDir           = $configDir
             FileGroupConfigFile = (Resolve-AvmFileGroupConfigFile -Settings $Settings -ManagedBaseDir $baseDir)
             SourceKind          = 'local'
+            CheckoutDir         = $null
             ToolPath            = $baseDir
         }
     }
@@ -795,6 +887,7 @@ function Resolve-AvmManagedFilesSource {
         ConfigDir           = $configDir
         FileGroupConfigFile = $fileGroupConfigFile
         SourceKind          = 'governance'
+        CheckoutDir         = $checkout
         ToolPath            = $baseDir
     }
 }
@@ -869,6 +962,45 @@ function Get-AvmManagedFilesCheckout {
     }
 
     return $cacheRoot
+}
+
+function Get-AvmManagedFilesCheckoutProvenance {
+    <#
+    .SYNOPSIS
+        Read the commit sha and committer date from a managed-files checkout,
+        returning empty strings when git cannot answer.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $CheckoutDir,
+
+        [AllowEmptyString()]
+        [string] $GitPath = ''
+    )
+
+    $result = @{ Commit = ''; CommitDate = '' }
+    if (-not $GitPath -or -not (Test-Path -LiteralPath $CheckoutDir -PathType Container)) { return $result }
+
+    try {
+        $sha = Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $CheckoutDir, 'rev-parse', 'HEAD') -TimeoutSec 30 -IgnoreExitCode
+        if ($sha.ExitCode -eq 0) { $result.Commit = ([string]$sha.StdOut).Trim() }
+
+        $date = Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $CheckoutDir, 'show', '-s', '--format=%cI', 'HEAD') -TimeoutSec 30 -IgnoreExitCode
+        if ($date.ExitCode -eq 0) {
+            $raw = ([string]$date.StdOut).Trim()
+            $parsed = [datetimeoffset]::MinValue
+            if ($raw -and [datetimeoffset]::TryParse($raw, [ref]$parsed)) {
+                $result.CommitDate = $parsed.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            }
+        }
+    }
+    catch {
+        Write-AvmLog ("sync: could not read managed-files provenance: {0}" -f $_.Exception.Message) -Level Verbose | Out-Null
+    }
+
+    return $result
 }
 
 function Get-AvmGitIndexMode {

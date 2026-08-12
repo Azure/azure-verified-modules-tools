@@ -145,6 +145,12 @@ class AvmManagedFilesVersionException : AvmException {
     [int] $ExitCode
 
     AvmManagedFilesVersionException(
+        [string] $message
+    ) : base($message, 'AVM1060') {
+        $this.ExitCode = 11
+    }
+
+    AvmManagedFilesVersionException(
         [string] $pinnedVersion,
         [string] $latestVersion,
         [string] $message

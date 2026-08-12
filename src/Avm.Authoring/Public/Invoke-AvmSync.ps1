@@ -90,6 +90,13 @@ function Invoke-AvmSync {
         Defaults to the leaf of the module root with a leading
         'terraform-azurerm-' / 'terraform-azapi-' prefix stripped.
 
+    .PARAMETER Upgrade
+        Sync the newest managed-files release instead of the version pinned in
+        '.avm/managed-files-version.json', and rewrite the pin to match.
+
+    .PARAMETER SkipManagedFilesVersionCheck
+        Bypass managed-files version pinning and release-drift enforcement.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Issues, Added, Updated, Removed.
@@ -131,6 +138,10 @@ function Invoke-AvmSync {
 
         [string] $RepoId,
 
+        [switch] $Upgrade,
+
+        [switch] $SkipManagedFilesVersionCheck,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -157,7 +168,9 @@ function Invoke-AvmSync {
                 -ConfigRef $ConfigRef `
                 -ConfigPath $ConfigPath `
                 -ConfigLocalPath $ConfigLocalPath `
-                -RepoId $RepoId
+                -RepoId $RepoId `
+                -Upgrade:$Upgrade `
+                -SkipManagedFilesVersionCheck:$SkipManagedFilesVersionCheck
         }
         default {
             throw [AvmNotSupportedException]::new(

@@ -176,14 +176,14 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ### Phase 3 — sync integration
 
-- [ ] Add the pin to the `$pick` precedence chain in `Sync-AvmManagedFile`.
-- [ ] Add `-Upgrade` and `-SkipManagedFilesVersionCheck` parameters.
-- [ ] Capture the resolved commit and its committer date via
+- [x] Add the pin to the `$pick` precedence chain in `Sync-AvmManagedFile`.
+- [x] Add `-Upgrade` and `-SkipManagedFilesVersionCheck` parameters.
+- [x] Capture the resolved commit and its committer date via
       `git rev-parse HEAD` and `git show -s --format=%cI` on the checkout so the
       pin records provenance.
-- [ ] Stamp the pin on `-Upgrade` and on the unpinned bootstrap, never in
+- [x] Stamp the pin on `-Upgrade` and on the unpinned bootstrap, never in
       `-CheckDrift`.
-- [ ] Surface both parameters through `Invoke-AvmSync`.
+- [x] Surface both parameters through `Invoke-AvmSync`.
 
 ### Phase 4 — pre-commit and pr-check
 
@@ -216,7 +216,17 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 ## Validation
 
-Not yet run; this document currently records design only.
+Phases 2 and 3 complete.
+
+- `./build.ps1 pre-commit` — 945 unit tests, 28 component tests, 0 errors.
+- 30 unit tests cover the version primitives; 17 cover the version plan
+  resolver; 4 cover the sync engine's version branching (major throws, major
+  under `-CheckDrift` becomes a drift issue, stamp on demand, never stamp under
+  `-CheckDrift`).
+- End-to-end smoke test against the live managed-files repository: an unpinned
+  repository adopted `v0.1.0`, stamped `.avm/managed-files-version.json` with
+  the commit and committer date, and a second run reported `status=upToDate`
+  against `ref=v0.1.0` without rewriting the pin.
 
 ## Dependencies
 

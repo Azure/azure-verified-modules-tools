@@ -691,6 +691,119 @@ Describe 'Sync-AvmManagedFile' {
         $onDisk | Should -Match 'line-managed-entry'
         $onDisk | Should -Not -Match 'whole-file-version'
     }
+
+    It 'stops the sync when the pinned managed-files major version is superseded' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $err = {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+                param($C, $B, $Cfg)
+
+                Mock Resolve-AvmManagedFilesVersionPlan {
+                    @{
+                        Ref           = 'v1.4.2'
+                        Status        = 'major'
+                        PinnedVersion = [semver]'1.4.2'
+                        LatestVersion = [semver]'2.0.0'
+                        TargetVersion = [semver]'1.4.2'
+                        ShouldStamp   = $false
+                        Message       = 'managed-files major release 2.0.0 is available.'
+                    }
+                }
+
+                Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+            }
+        } | Should -Throw -PassThru
+
+        $err.Exception.Code | Should -Be 'AVM1060'
+        $err.Exception.ExitCode | Should -Be 11
+        $err.Exception.PinnedVersion | Should -Be '1.4.2'
+        $err.Exception.LatestVersion | Should -Be '2.0.0'
+        Test-Path (Join-Path $script:moduleDir 'SECURITY.md') | Should -BeFalse
+    }
+
+    It 'reports a superseded major as a drift issue instead of throwing under -CheckDrift' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v1.4.2'
+                    Status        = 'major'
+                    PinnedVersion = [semver]'1.4.2'
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'1.4.2'
+                    ShouldStamp   = $false
+                    Message       = 'managed-files major release 2.0.0 is available.'
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].File | Should -Be '.avm/managed-files-version.json'
+        $result.Issues[0].Message | Should -Match 'major release 2\.0\.0'
+        Test-Path (Join-Path $script:moduleDir '.avm' 'managed-files-version.json') | Should -BeFalse
+    }
+
+    It 'stamps the version pin when the plan asks for it' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v2.0.0'
+                    Status        = 'unpinned'
+                    PinnedVersion = $null
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'2.0.0'
+                    ShouldStamp   = $true
+                    Message       = $null
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added | Should -Contain '.avm/managed-files-version.json'
+
+        $pinPath = Join-Path $script:moduleDir '.avm' 'managed-files-version.json'
+        Test-Path $pinPath | Should -BeTrue
+        $pin = Get-Content -Raw -LiteralPath $pinPath | ConvertFrom-Json
+        $pin.version | Should -Be '2.0.0'
+        $pin.repo | Should -Not -BeNullOrEmpty
+    }
+
+    It 'never stamps the version pin under -CheckDrift' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v2.0.0'
+                    Status        = 'unpinned'
+                    PinnedVersion = $null
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'2.0.0'
+                    ShouldStamp   = $true
+                    Message       = $null
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        Test-Path (Join-Path $script:moduleDir '.avm' 'managed-files-version.json') | Should -BeFalse
+    }
 }
 
 Describe 'Resolve-AvmManagedFilesRepositorySetting file group ordering' {
