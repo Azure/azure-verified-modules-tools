@@ -251,8 +251,15 @@ Lands in `Azure/azure-verified-modules-managed-files`, not this repository.
 
 - [ ] Cut `v1.0.0` of the managed-files repository manually.
 - [ ] First repository sync stamps a pin into every module repository.
-- [ ] Update `docs/avm-implementation-spec.md` with the pin file, the precedence
-      tier, and `AVM1060`.
+- [x] Update `docs/avm-implementation-spec.md` with the pin file, the precedence
+      tier, and `AVM1060`. §8 now lists `managed-files-version.json`, carves it
+      out of the read-only rule, and adds a "Managed-file version pin" section
+      covering the schema, the five-tier ref precedence, the fact that tiers 1–3
+      disable enforcement, and the enforcement matrix. §14 gains `AVM1050`/exit
+      10 and `AVM1060`/exit 11, and the exit-code reservations move to `12–19`
+      to stop claiming codes that are already allocated. §20 gains a
+      "Managed-files releases" section covering the release cadence and the
+      fleet-sync gate, and §24 defines the pin in the glossary.
 - [ ] Propose a matching change to `Azure-Verified-Modules-Docs`, checking for an
       open pull request first.
 

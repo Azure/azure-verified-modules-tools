@@ -312,28 +312,83 @@ The CLI does not require any per-repo state. Persistent state (tool cache,
 resolved governance assets, logs) lives under `$AVM_HOME` / the per-OS
 folders described in §7, never inside the user's module repo.
 
-A repo may *optionally* carry a hand-authored `.avm/` folder to override
-defaults for that working copy. These files are authored by the user and
-committed (or not) at their discretion; the CLI only ever reads them:
+A repo may *optionally* carry a `.avm/` folder holding per-repo overrides and
+the managed-files pin. Everything except the pin is hand-authored, and the CLI
+only ever reads it:
 
 ```text
 <repo>/
   .avm/
-    config.json            # per-repo pinned-asset / policy overrides
-    managed-files.json     # per-repo managed-files sync-source override
-    context.psd1           # per-repo context override
-    .disable               # zero-byte sentinel — CLI refuses to run if present
+    config.json                  # per-repo pinned-asset / policy overrides
+    managed-files.json           # per-repo managed-files sync-source override
+    managed-files-version.json   # managed-files release pin (CLI-managed)
+    context.psd1                 # per-repo context override
+    .disable                     # zero-byte sentinel — CLI refuses to run if present
 ```
 
 Rules:
 
-- The CLI never creates `.avm/` and never writes into it. If none of these
-  files exist, the CLI runs entirely from packaged defaults and `$AVM_HOME`.
+- `managed-files-version.json` is the sole file in `.avm/` the CLI writes; see
+  the version-pin section below. Every other file is read-only to the CLI,
+  which never creates it. If none exist, the CLI runs entirely from packaged
+  defaults and `$AVM_HOME`.
 - The CLI never adds `.avm/` (or anything else) to the repo's `.gitignore`.
-  Whether `.avm/` overrides are tracked in git is the user's choice.
+  Whether the override files are tracked in git is the user's choice, but the
+  version pin must be committed, so the managed-files repository removes the
+  historical `.avm` entry from the managed `.gitignore`.
 - The leading dot is a Unix convention. Windows Explorer does not treat dotfiles as hidden, and we **do not** set `FILE_ATTRIBUTE_HIDDEN` via `attrib +h` — too surprising and not worth the friction.
 - The CLI never creates other dotfiles or dot-folders in user repos (no `.avm-cache`, no `.avmrc`, etc.). One folder, one namespace.
 - A `.avm/.disable` sentinel makes the CLI exit `2` with a clear message: `"avm is disabled in this repository (remove .avm/.disable to re-enable)"`. This gives a clean opt-out for repos that don't want the CLI to ever touch them, even by accident.
+
+### Managed-file version pin
+
+`.avm/managed-files-version.json` records which release of the managed-files
+repository a module repo is synced against. It is written by `avm pre-commit`
+and read by every managed-file operation:
+
+```json
+{
+  "version": "1.0.0",
+  "repo": "Azure/azure-verified-modules-managed-files",
+  "commit": "3f949ae3da0ead8bdb85d405659c9991a976b231",
+  "commitDate": "2026-08-11T21:52:43Z",
+  "updatedAt": "2026-08-12T11:08:52Z"
+}
+```
+
+`version` is a semver string with no leading `v`; the corresponding git tag is
+`v$version`. `commitDate` is the committer date of the tagged commit and
+`updatedAt` is when the CLI last wrote the file. Both are rendered as
+`yyyy-MM-ddTHH:mm:ssZ`. The file is UTF-8 without BOM, LF-terminated, with a
+trailing newline, per §5.
+
+The sync ref is resolved by this precedence, highest first:
+
+1. An explicit `-ManagedFilesRef` argument.
+2. `AVM_MANAGED_FILES_REF`.
+3. `ref` in `.avm/managed-files.json`.
+4. `v$version` from `.avm/managed-files-version.json`.
+5. `main`.
+
+Tiers 1–3 are deliberate operator overrides and disable version enforcement
+entirely — no warning, no error, and no write to the pin. Only tier 4 or the
+unpinned fallback participate in the checks below.
+
+Enforcement, given the newest published release:
+
+- **Equal** — sync at the pin, say nothing.
+- **Newer patch or minor** — sync at the pin and warn.
+- **Newer major** — throw `AvmManagedFilesVersionException` (`AVM1060`). The
+  operator must rerun with `-Upgrade`.
+- **No pin** — adopt the newest release and stamp it silently. This is how the
+  file first appears in a repo.
+- **Lookup failed** — warn and continue against the pin. Managed-file sync must
+  not depend on network reachability.
+
+`-Upgrade` always moves to the newest release and rewrites the pin. Drift
+checks (`avm pr-check`) never write the pin, because they run against a clean
+working tree that they must leave clean; a superseded major surfaces there as a
+drift finding rather than a rewrite.
 
 ### Managed-file source layout
 
@@ -554,17 +609,24 @@ Both call the same implementation. The dispatcher is generated from a single ver
 - Every public function: `Set-StrictMode -Version 3.0` and `$ErrorActionPreference = 'Stop'` in `begin`.
 - Terminating errors use `throw [<SpecificException>]::new(<message>, <innerException>)`. Generic `throw "string"` is reserved for prototype code and is flagged by PSScriptAnalyzer custom rule `AvmAvoidStringThrow`.
 - A small set of exception types lives in `Private/Exceptions/`:
-  - `AvmConfigurationException` — bad config, missing required env var.
-  - `AvmToolException` — tool resolver / install / SHA mismatch.
-  - `AvmProcessException` — subprocess exited non-zero; includes captured stdout / stderr.
-  - `AvmContextException` — repo context resolver couldn't classify the path.
+  - `AvmConfigurationException` (`AVM1001`) — bad config, missing required env var.
+  - `AvmToolException` (`AVM1010`) — tool resolver / install / SHA mismatch.
+  - `AvmProcessException` (`AVM1020`) — subprocess exited non-zero; includes captured stdout / stderr.
+  - `AvmContextException` (`AVM1030`) — repo context resolver couldn't classify the path.
+  - `AvmCommandException` (`AVM1040`) — a composite verb reported a failing status.
+  - `AvmModuleVersionException` (`AVM1050`) — the installed module is behind the published release.
+  - `AvmManagedFilesVersionException` (`AVM1060`) — a new major managed-files release supersedes the repo's pin.
 - Exit codes from the dispatcher:
   - `0` — success.
   - `1` — user error (bad args, bad config, expected condition).
   - `2` — internal / unexpected error.
-  - `10–19` — reserved for the `tool` verb tree.
+  - `10` — the installed module is superseded and must be upgraded.
+  - `11` — the managed-files pin is superseded by a major release.
+  - `12–19` — reserved for the `tool` verb tree.
   - `20–29` — reserved for the `test` verb tree.
   - `30–39` — reserved for `publish` / `release`.
+- Exceptions carrying an `ExitCode` property set it themselves; the dispatcher
+  honours it rather than mapping the type to a code.
 
 ---
 
@@ -701,6 +763,28 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); release script verifies an entry exists for the new version before publishing.
 - Manifest `Prerelease` field is set by the release script from the git tag; never edited by hand.
 
+### Managed-files releases
+
+`Azure/azure-verified-modules-managed-files` is versioned independently of the
+module and released by hand through the GitHub UI. It has no release
+automation, and adding some is out of scope.
+
+- SemVer 2.0.0, tagged `vX.Y.Z`. The tag is the contract; nothing consumes
+  branches except the `main` fallback for unpinned repos.
+- **Patch or minor** for changes module repos can adopt on their own schedule.
+  Repos warn until they upgrade, and the fleet sync rolls them forward
+  opportunistically.
+- **Major** to force adoption. Every pinned repo then errors on `avm pre-commit`
+  until upgraded, `avm pr-check` fails, and the fleet sync upgrades regardless of
+  open pull requests. Reserve it for changes that must land everywhere at once.
+
+The fleet sync in `repository-management/` decides per repo whether to pass
+`-Upgrade`. It upgrades when the delta is a major, and otherwise only when the
+repo has no open pull request that a managed-file change could conflict with.
+Draft pull requests, bot-authored pull requests, and pull requests untouched for
+more than 14 days are ignored for that purpose. Lookup failures leave the repo on
+its pin rather than guessing.
+
 ---
 
 ## 21. Telemetry (deferred to Phase 3)
@@ -743,6 +827,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - **AVM** — Azure Verified Modules.
 - **Lock manifest** — `src/Avm.Authoring/Resources/avm.pins.jsonc`. Pins every managed tool's version and SHA256.
 - **Managed tool** — any binary the CLI installs and resolves itself (Terraform, TFLint, `avmfix`, …).
+- **Managed-file pin** — `<repo>/.avm/managed-files-version.json`. Records the managed-files release a repo is synced against, per §8.
 - **Module context** — the `pscustomobject` returned by `Get-AvmModuleContext` describing a Bicep or Terraform module's root, ecosystem, scope, and owner.
 - **Public verb** — a verb exposed to end users via the `avm` dispatcher and the approved-verb cmdlets. Every public verb is in §4 of the plan.
 - **Tier 1 / Tier 2** — OS support tiers defined in §2.
