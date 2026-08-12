@@ -54,8 +54,10 @@ unblocking the pin.
 supports both `required` and `removed` lines through a `managedLines` key on a
 managed-files group in `terraform/config/managed-files.json`, stacking across
 groups exactly like files do. No group ships a spec yet, so this feature
-is its first consumer. The separate `avm.tf.gitignore-essentials` convention rule
-is append-only and does not list `.avm`, so the two do not collide.
+is its first consumer. The `root` group's spec now also carries every functional
+pattern from the AVM Terraform template `.gitignore`; the 23 globs enforced by the
+`avm.tf.gitignore-essentials` convention rule are a strict subset of it, so the two
+agree and the sync auto-fixes what the rule previously only reported.
 
 **Repository sync currently bypasses ref resolution entirely.** The workflow
 checks the managed-files repository out at its default branch and passes
@@ -160,20 +162,30 @@ Each phase is a separate commit, and phases 1-2 are a prerequisite for the rest.
 - [x] Add a `managedLines` spec to the `root` group in the managed-files
       repository's `terraform/config/managed-files.json`, removing `.avm` and
       requiring `.avm/managed-files.json` so the local override stays untracked.
+- [x] Populate the same spec with every functional pattern from the AVM Terraform
+      template `.gitignore` (27 patterns) so the fleet converges on it. Comments
+      and blank lines are excluded: missing required lines are appended at the end
+      of the file rather than in position, so a required comment would land
+      stranded and detached from the patterns it describes.
 - [x] Confirm no interaction with `avm.tf.gitignore-essentials`. The rule's 23
-      required globs do not include `.avm`, so the removal cannot fight it.
+      required globs are a strict subset of the 28 required lines, so the two
+      agree; the sync now auto-fixes what the rule previously only reported.
 - [x] Verify `Get-AvmManagedLinePlan` creates `.gitignore` when absent. Covered
       by `Merge-AvmFileLine.Tests.ps1` ("creates a plan for a missing file with
-      LF endings").
+      LF endings") and by two end-to-end tests in `Sync-AvmManagedFile.Tests.ps1`,
+      one of which targets a directory that does not exist yet.
 
 Lands in `Azure/azure-verified-modules-managed-files`, not this repository:
 [managed-files#8](https://github.com/Azure/azure-verified-modules-managed-files/pull/8).
 
 Validated by running the real `Get-AvmManagedLineSpec` and
-`Get-AvmManagedLinePlan` against the live `.gitignore` of
-`Azure/terraform-azurerm-avm-res-storage-storageaccount`: the plan reports
-`removed=[.avm]` and `added=[.avm/managed-files.json]`, the bare `.avm` line is
-gone, and a second pass reports `Changed=False`.
+`Get-AvmManagedLinePlan` against the authored config: it parses to a single
+`.gitignore` entry with 28 required and 1 removed line; against the template
+`.gitignore` verbatim the plan reports `added=[.avm/managed-files.json]` and
+`removed=[.avm]` and nothing else, confirming the copied patterns are faithful;
+against a repository with no `.gitignore` it reports `Existed=False`,
+`Changed=True` and writes all 28 lines; and a second pass reports
+`Changed=False`.
 
 **This pull request must merge before the first semver release is cut**,
 otherwise the pin is gitignored in every module repository.
