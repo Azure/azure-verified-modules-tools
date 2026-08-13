@@ -91,12 +91,12 @@ function Get-AvmManagedLineSpec {
         managed-file groups.
 
     .DESCRIPTION
-        Reads the 'managedLines' key of each file group in the managed-files
-        repository's group config -- the same file that carries 'deletedFiles'
-        -- in the same order Build-AvmManagedFilesMap applies the groups. Both
-        are instructions about how to mutate a target repository rather than
-        content copied into it, so they live together in config and can never be
-        mistaken for a file to sync.
+        Reads the 'managedLines' key of each file group's '_config.json' -- the
+        same file that carries 'deletedFiles' -- in the same order
+        Build-AvmManagedFilesMap applies the groups. Both are instructions about
+        how to mutate a target repository rather than content copied into it, so
+        they live in the group's reserved config file and can never be mistaken
+        for a file to sync.
 
         Each 'managedLines' value is a flat JSON map of forward-slash relative
         path -> { required: [...], removed: [...] }.
@@ -115,7 +115,7 @@ function Get-AvmManagedLineSpec {
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [AllowEmptyString()]
-        [string] $Path = '',
+        [string] $BaseDir = '',
 
         [string[]] $FileGroups = @()
     )
@@ -124,38 +124,17 @@ function Get-AvmManagedLineSpec {
 
     $spec = [ordered]@{}
 
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $spec }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $spec }
-
-    $raw = Get-Content -LiteralPath $Path -Raw
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $spec }
-
-    try {
-        $config = $raw | ConvertFrom-Json
-    }
-    catch {
-        throw [System.InvalidOperationException]::new(
-            "Managed-files group config '$Path' is not valid JSON: $($_.Exception.Message)")
-    }
-    if ($null -eq $config) { return $spec }
-    if (-not ($config.PSObject.Properties.Name -contains 'fileGroups') -or -not $config.fileGroups) { return $spec }
-
-    $groupByName = @{}
-    foreach ($configuredGroup in @($config.fileGroups)) {
-        if ($null -eq $configuredGroup) { continue }
-        if (-not ($configuredGroup.PSObject.Properties.Name -contains 'name') -or -not $configuredGroup.name) { continue }
-        $groupByName[[string]$configuredGroup.name] = $configuredGroup
-    }
+    if ([string]::IsNullOrWhiteSpace($BaseDir)) { return $spec }
 
     foreach ($fileGroup in $FileGroups) {
         if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
         $groupName = [string]$fileGroup
-        if (-not $groupByName.ContainsKey($groupName)) { continue }
 
-        $configuredGroup = $groupByName[$groupName]
-        if (-not ($configuredGroup.PSObject.Properties.Name -contains 'managedLines') -or -not $configuredGroup.managedLines) { continue }
+        $config = Get-AvmManagedFileGroupConfig -BaseDir $BaseDir -FileGroup $groupName
+        if ($null -eq $config) { continue }
+        if (-not ($config.PSObject.Properties.Name -contains 'managedLines') -or -not $config.managedLines) { continue }
 
-        $parsed = $configuredGroup.managedLines
+        $parsed = $config.managedLines
         if ($null -eq $parsed) { continue }
 
         foreach ($property in $parsed.PSObject.Properties) {
@@ -185,7 +164,7 @@ function Get-AvmManagedLineSpec {
                 $t = ([string]$r).Trim()
                 if ($t.Length -gt 0 -and $fileRequired.Contains($t)) {
                     throw [System.InvalidOperationException]::new(
-                        "Managed-line spec for file group '$groupName' in '$Path' lists line '$t' for '$targetPath' in both 'required' and 'removed'.")
+                        "Managed-line spec for file group '$groupName' lists line '$t' for '$targetPath' in both 'required' and 'removed'.")
                 }
             }
 

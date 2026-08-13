@@ -52,7 +52,7 @@ unblocking the pin.
 
 **A line-merge mechanism already exists and is unused.** `Merge-AvmFileLine.ps1`
 supports both `required` and `removed` lines through a `managedLines` key on a
-managed-files group in `terraform/config/managed-files.json`, stacking across
+managed-files group's `_config.json`, stacking across
 groups exactly like files do. No group ships a spec yet, so this feature
 is its first consumer. The `root` group's spec now also carries every functional
 pattern from the AVM Terraform template `.gitignore`. The 23 globs previously
@@ -161,7 +161,7 @@ Each phase is a separate commit, and phases 1-2 are a prerequisite for the rest.
 ### Phase 1 — un-ignore `.avm`
 
 - [x] Add a `managedLines` spec to the `root` group in the managed-files
-      repository's `terraform/config/managed-files.json`, removing `.avm` and
+      repository's `terraform/root/_config.json`, removing `.avm` and
       requiring `.avm/managed-files.json` so the local override stays untracked.
 - [x] Populate the same spec with every functional pattern from the AVM Terraform
       template `.gitignore` (27 patterns) so the fleet converges on it. Comments
@@ -334,6 +334,43 @@ Phases 1, 2, 3, 4 and 5 complete.
   repository adopted `v0.1.0`, stamped `.avm/managed-files-version.json` with
   the commit and committer date, and a second run reported `status=upToDate`
   against `ref=v0.1.0` without rewriting the pin.
+
+## Follow-up — managed-files layout restructure
+
+Landed on the same branch after phase 6, before the first release is cut, while
+there is still zero back-compatibility surface: `v0.1.0` is the only tag and no
+repository carries a pin yet.
+
+The governance layout changes from a payload folder plus a central group config:
+
+```text
+terraform/files/<group>/...        terraform/<group>/_config.json
+terraform/config/managed-files.json    terraform/<group>/...
+```
+
+- [x] Reserved filename `_config.json`, excluded from the payload **only at the
+      group root**. A `_config.json` nested below the root is ordinary content
+      and still syncs. `_` rather than `.` because the payload is dotfile-heavy
+      and `_` matches the existing `_all/` meta convention.
+- [x] Drop the `name` key: the folder name is the group name. `config.json`
+      already references groups by folder name and `Build-AvmManagedFilesMap`
+      already does `Join-Path $BaseDir $fileGroup`.
+- [x] Add a dev-facing `description` key. The engine ignores it; the
+      managed-files pull-request workflow requires it on every group.
+- [x] `Get-AvmManagedFileGroupConfigFileName` / `Get-AvmManagedFileGroupConfig`
+      replace `Resolve-AvmFileGroupConfigFile`. `Get-AvmManagedFilesDeletedFileMap`
+      and `Get-AvmManagedLineSpec` both take `-BaseDir` plus `-FileGroups`.
+- [x] `ManagedFilesPath` default `terraform/files` → `terraform`.
+- [x] Remove `-FileGroupConfigPath` / `-FileGroupConfigLocalPath` from
+      `Invoke-AvmSync` and `Invoke-AvmPreCommit`, plus the two environment
+      variables `AVM_MANAGED_FILES_GROUP_CONFIG_PATH` and
+      `AVM_MANAGED_FILES_GROUP_CONFIG_LOCAL_PATH`. Breaking, but the module is
+      pre-1.0 and the parameters were only ever used by the governance sync.
+
+The `fileGroups` array in the old central config was a lookup table masquerading
+as an ordered list: the real stacking order comes from each repository group's
+integer `order` in `repository-management/repository-config/config.json`, and the
+array order was never read. Per-folder config removes that false affordance.
 
 ## Dependencies
 

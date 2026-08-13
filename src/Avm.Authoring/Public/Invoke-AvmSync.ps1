@@ -12,7 +12,7 @@ function Invoke-AvmSync {
 
         Managed file content and the repository config come from two separate
         repositories. Files default to Azure/azure-verified-modules-managed-files
-        (ref 'main', base folder 'terraform/files'); config.json defaults to
+        (ref 'main', base folder 'terraform'); config.json defaults to
         Azure/azure-verified-modules-tools (ref 'main', folder
         'repository-management/repository-config'). Every piece of that is
         overridable, either per parameter here, via AVM_MANAGED_FILES_*
@@ -56,18 +56,10 @@ function Invoke-AvmSync {
 
     .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder. Defaults
-        to 'terraform/files'.
+        to 'terraform'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. Skips the git fetch.
-
-    .PARAMETER FileGroupConfigPath
-        Path within the managed-files repo to the file-group config JSON.
-        Defaults to 'terraform/config/managed-files.json'.
-
-    .PARAMETER FileGroupConfigLocalPath
-        Direct local path to the file-group config JSON. Skips resolving it
-        from the managed-files source.
 
     .PARAMETER ConfigRepo
         owner/name of the git repo holding the config folder. Defaults to
@@ -128,9 +120,6 @@ function Invoke-AvmSync {
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
 
-        [string] $FileGroupConfigPath,
-        [string] $FileGroupConfigLocalPath,
-
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -162,8 +151,6 @@ function Invoke-AvmSync {
                 -ManagedFilesRef $ManagedFilesRef `
                 -ManagedFilesPath $ManagedFilesPath `
                 -ManagedFilesLocalPath $ManagedFilesLocalPath `
-                -FileGroupConfigPath $FileGroupConfigPath `
-                -FileGroupConfigLocalPath $FileGroupConfigLocalPath `
                 -ConfigRepo $ConfigRepo `
                 -ConfigRef $ConfigRef `
                 -ConfigPath $ConfigPath `

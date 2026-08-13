@@ -73,7 +73,7 @@ Each fixture **does** keep its module-level `.gitignore` (copied verbatim
 from upstream). It is *not* dropped like the rest of the editor/tooling
 metadata because it is genuine module content that the managed-files
 engine maintains through the `managedLines` line spec in the governance
-repository's `terraform/config/managed-files.json`. Keeping it lets the
+repository's `terraform/root/_config.json`. Keeping it lets the
 real-binary `pre-commit` / `pr-check` integration
 (`tests/Pester/Integration/`) exercise the line-merge path against a
 realistic starting file. Maintain it together with the rest of the

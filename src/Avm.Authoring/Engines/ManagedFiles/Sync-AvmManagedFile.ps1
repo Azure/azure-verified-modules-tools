@@ -18,10 +18,14 @@ function Sync-AvmManagedFile {
           4. For the ref only: the semver pin in
              '.avm/managed-files-version.json', fetched as tag 'v<version>'.
           5. Defaults: files from Azure/azure-verified-modules-managed-files
-             ('main' ref, 'terraform/files' base folder, file-group config
-             'terraform/config/managed-files.json') and config.json from
+             ('main' ref, 'terraform' base folder) and config.json from
              Azure/azure-verified-modules-tools ('main' ref,
              'repository-management/repository-config' folder).
+
+        Each file group is a folder directly under the managed-files base
+        folder. A group may carry a '_config.json' beside its payload declaring
+        'deletedFiles' and 'managedLines' for that group; the file is reserved
+        and never synced into a target repository.
 
         Managed files are released with semver tags, and each repository pins
         the release it tracks. The engine syncs the pinned release, warns when a
@@ -83,22 +87,12 @@ function Sync-AvmManagedFile {
         Git ref (branch/tag/sha) to fetch. Defaults to 'main'.
 
     .PARAMETER ManagedFilesPath
-    .PARAMETER ManagedFilesPath
         Path within the source repo to the managed-files base folder (the one
-        that contains the file group folders). Defaults to 'terraform/files'.
+        that contains the file group folders). Defaults to 'terraform'.
 
     .PARAMETER ManagedFilesLocalPath
         Direct local path to the managed-files base folder. When supplied the
         git fetch is skipped entirely.
-
-    .PARAMETER FileGroupConfigPath
-        Path within the managed-files repo to the file-group config that
-        declares each group's deleted files. Defaults to
-        'terraform/config/managed-files.json'.
-
-    .PARAMETER FileGroupConfigLocalPath
-        Direct local path to the file-group config file. When omitted with a
-        local managed-files path, it is looked up alongside the files folder.
 
     .PARAMETER ConfigRepo
         owner/name of the git repo that holds the config folder. Defaults to
@@ -157,9 +151,6 @@ function Sync-AvmManagedFile {
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
 
-        [string] $FileGroupConfigPath,
-        [string] $FileGroupConfigLocalPath,
-
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -188,8 +179,6 @@ function Sync-AvmManagedFile {
         -ManagedFilesRef $ManagedFilesRef `
         -ManagedFilesPath $ManagedFilesPath `
         -ManagedFilesLocalPath $ManagedFilesLocalPath `
-        -FileGroupConfigPath $FileGroupConfigPath `
-        -FileGroupConfigLocalPath $FileGroupConfigLocalPath `
         -ConfigRepo $ConfigRepo `
         -ConfigRef $ConfigRef `
         -ConfigPath $ConfigPath `
@@ -233,10 +222,6 @@ function Sync-AvmManagedFile {
         }
     }
 
-    if ($source.FileGroupConfigFile -and (Test-Path -LiteralPath $source.FileGroupConfigFile -PathType Leaf)) {
-        $deletedFilesByGroup = Get-AvmManagedFilesDeletedFileMap -Path $source.FileGroupConfigFile
-    }
-
     $repoId = Resolve-AvmManagedFilesRepoId `
         -Root $root `
         -ExplicitRepoId $settings.RepoId `
@@ -248,6 +233,8 @@ function Sync-AvmManagedFile {
         $fileGroups = (Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $repositoryConfig -RepoId $repoId).FileGroups
     }
     Write-AvmLog ("sync: repo-id={0}; file-groups={1}" -f $repoId, ($fileGroups -join ', ')) -Level Verbose | Out-Null
+
+    $deletedFilesByGroup = Get-AvmManagedFilesDeletedFileMap -BaseDir $source.ManagedBaseDir -FileGroups $fileGroups
 
     $managed = Build-AvmManagedFilesMap `
         -BaseDir $source.ManagedBaseDir `
@@ -270,11 +257,11 @@ function Sync-AvmManagedFile {
 
     # Line-managed files (e.g. .gitignore) are merged line-by-line rather than
     # overwritten wholesale, so the consumer keeps its own additions. The spec
-    # lives in the managed-files group config alongside 'deletedFiles' and
-    # stacks across file groups like the files themselves. A path owned by the
-    # line spec must not also be whole-file managed (line-merge wins), and a
+    # lives in each group's '_config.json' alongside 'deletedFiles' and stacks
+    # across file groups like the files themselves. A path owned by the line
+    # spec must not also be whole-file managed (line-merge wins), and a
     # deletion still trumps a line merge.
-    $lineSpec = Get-AvmManagedLineSpec -Path $source.FileGroupConfigFile -FileGroups $fileGroups
+    $lineSpec = Get-AvmManagedLineSpec -BaseDir $source.ManagedBaseDir -FileGroups $fileGroups
     foreach ($p in @($lineSpec.Keys)) {
         if ($deletedLookup.ContainsKey($p)) { $lineSpec.Remove($p) | Out-Null }
     }
@@ -465,8 +452,7 @@ function Resolve-AvmManagedFilesSetting {
         [string] $ManagedFilesRef,
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
-        [string] $FileGroupConfigPath,
-        [string] $FileGroupConfigLocalPath,
+
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
@@ -490,7 +476,7 @@ function Resolve-AvmManagedFilesSetting {
     # the tools repository, so the config defaults are not derived from the
     # managed-files repo or ref.
     $repo = & $pick $ManagedFilesRepo 'AVM_MANAGED_FILES_REPO' 'repo' 'Azure/azure-verified-modules-managed-files'
-    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'terraform/files'
+    $path = & $pick $ManagedFilesPath 'AVM_MANAGED_FILES_PATH' 'path' 'terraform'
     $localPath = & $pick $ManagedFilesLocalPath 'AVM_MANAGED_FILES_LOCAL_PATH' 'localPath' ''
 
     # The ref is resolved separately from $pick because the version pin sits
@@ -509,9 +495,6 @@ function Resolve-AvmManagedFilesSetting {
         $refSource = 'pin'
     }
     if (-not $ref) { $ref = 'main' }
-
-    $fileGroupConfigPath = & $pick $FileGroupConfigPath 'AVM_MANAGED_FILES_GROUP_CONFIG_PATH' 'fileGroupConfigPath' 'terraform/config/managed-files.json'
-    $fileGroupConfigLocalPath = & $pick $FileGroupConfigLocalPath 'AVM_MANAGED_FILES_GROUP_CONFIG_LOCAL_PATH' 'fileGroupConfigLocalPath' ''
 
     $configRepoValue = & $pick $ConfigRepo 'AVM_MANAGED_FILES_CONFIG_REPO' 'configRepo' 'Azure/azure-verified-modules-tools'
     $configRefValue = & $pick $ConfigRef 'AVM_MANAGED_FILES_CONFIG_REF' 'configRef' 'main'
@@ -533,8 +516,6 @@ function Resolve-AvmManagedFilesSetting {
         ManagedFilesVersionPin   = $versionPin
         ManagedFilesPath         = $path
         ManagedFilesLocalPath    = $localPath
-        FileGroupConfigPath      = $fileGroupConfigPath
-        FileGroupConfigLocalPath = $fileGroupConfigLocalPath
         ConfigRepo               = $configRepoValue
         ConfigRef                = $configRefValue
         ConfigPath               = $configPathValue
@@ -849,12 +830,11 @@ function Resolve-AvmManagedFilesSource {
         }
 
         return @{
-            ManagedBaseDir      = $baseDir
-            ConfigDir           = $configDir
-            FileGroupConfigFile = (Resolve-AvmFileGroupConfigFile -Settings $Settings -ManagedBaseDir $baseDir)
-            SourceKind          = 'local'
-            CheckoutDir         = $null
-            ToolPath            = $baseDir
+            ManagedBaseDir = $baseDir
+            ConfigDir      = $configDir
+            SourceKind     = 'local'
+            CheckoutDir    = $null
+            ToolPath       = $baseDir
         }
     }
 
@@ -865,11 +845,6 @@ function Resolve-AvmManagedFilesSource {
 
     $checkout = Get-AvmManagedFilesCheckout -Repo $Settings.ManagedFilesRepo -Ref $Settings.ManagedFilesRef -GitPath $GitPath
     $baseDir = Join-Path $checkout $Settings.ManagedFilesPath
-
-    $fileGroupConfigFile = $Settings.FileGroupConfigLocalPath
-    if (-not $fileGroupConfigFile) {
-        $fileGroupConfigFile = Join-Path $checkout $Settings.FileGroupConfigPath
-    }
 
     $configDir = $null
     if ($Settings.ConfigLocalPath -and (Test-Path -LiteralPath $Settings.ConfigLocalPath -PathType Container)) {
@@ -884,41 +859,12 @@ function Resolve-AvmManagedFilesSource {
     }
 
     return @{
-        ManagedBaseDir      = $baseDir
-        ConfigDir           = $configDir
-        FileGroupConfigFile = $fileGroupConfigFile
-        SourceKind          = 'governance'
-        CheckoutDir         = $checkout
-        ToolPath            = $baseDir
+        ManagedBaseDir = $baseDir
+        ConfigDir      = $configDir
+        SourceKind     = 'governance'
+        CheckoutDir    = $checkout
+        ToolPath       = $baseDir
     }
-}
-
-function Resolve-AvmFileGroupConfigFile {
-    <#
-    .SYNOPSIS
-        Locate the file-group config for a local managed-files path.
-
-    .DESCRIPTION
-        Uses an explicit FileGroupConfigLocalPath when supplied. Otherwise
-        assumes the managed-files repository layout, where the files directory
-        and the config directory are siblings, and looks for
-        '<parent-of-files>/config/managed-files.json'.
-    #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [hashtable] $Settings,
-
-        [Parameter(Mandatory)]
-        [string] $ManagedBaseDir
-    )
-
-    if ($Settings.FileGroupConfigLocalPath) { return $Settings.FileGroupConfigLocalPath }
-
-    $parent = Split-Path -Parent $ManagedBaseDir
-    if (-not $parent) { return $null }
-    return (Join-Path (Join-Path $parent 'config') 'managed-files.json')
 }
 
 function Get-AvmManagedFilesCheckout {
@@ -1092,7 +1038,8 @@ function Add-AvmManagedFilesFromDir {
     .SYNOPSIS
         Add every file under a base directory to a managed-files map keyed by
         forward-slash relative path, capturing the source path and git index
-        mode. Dotfiles are included; '.gitkeep' placeholders are not.
+        mode. Dotfiles are included; '.gitkeep' placeholders and the group's
+        reserved '_config.json' are not.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -1122,13 +1069,13 @@ function Add-AvmManagedFilesFromDir {
     $modeMap = Get-AvmGitIndexMode -Dir $baseDirAbsolute -GitPath $GitPath
 
     # -Force: dotfiles are hidden on Linux/macOS and would be skipped silently.
+    $reservedConfigName = Get-AvmManagedFileGroupConfigFileName
     $sourceFiles = @(
         Get-ChildItem -LiteralPath $baseDirAbsolute -Recurse -File -Force | Where-Object {
-            # '.gitkeep' files exist only to keep otherwise-empty overlay
-            # directories tracked in git. They are placeholders, never real managed
-            # content, so they must not be synced into target repos. Repository
-            # sync applies the same filter; omitting it here would make every
-            # drift check demand a file the sync never writes.
+            # '.gitkeep' placeholders keep otherwise-empty directories tracked in
+            # git and are never real managed content. Managed-files no longer
+            # ships any, but the guard stays: one that slipped through would land
+            # in every target repo and need a 'deletedFiles' entry to unwind.
             $_.Name -ne '.gitkeep'
         } | ForEach-Object {
             $relativePath = [System.IO.Path]::GetRelativePath($baseDirAbsolute, $_.FullName) -replace '\\', '/'
@@ -1140,6 +1087,12 @@ function Add-AvmManagedFilesFromDir {
                 Mode         = $mode
                 IsBroadcast  = $relativePath -cmatch '^.+?/_all/.+'
             }
+        } | Where-Object {
+            # A group's '_config.json' declares that group's 'deletedFiles' and
+            # 'managedLines'. It is instruction, not payload, so it is reserved
+            # at the group root only; a nested '_config.json' deeper in the tree
+            # is ordinary content and still syncs.
+            $_.RelativePath -cne $reservedConfigName
         }
     )
 
@@ -1231,28 +1184,91 @@ function Build-AvmManagedFilesMap {
     }
 }
 
+function Get-AvmManagedFileGroupConfigFileName {
+    <#
+    .SYNOPSIS
+        The reserved file name that carries a managed-file group's config.
+
+    .DESCRIPTION
+        The leading underscore keeps the file visually distinct from the payload
+        it sits beside, which is dotfile-heavy, and matches the existing '_all'
+        broadcast convention where an underscore prefix marks a name the sync
+        interprets rather than copies.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    return '_config.json'
+}
+
+function Get-AvmManagedFileGroupConfig {
+    <#
+    .SYNOPSIS
+        Read a managed-file group's '_config.json', or return $null when the
+        group does not declare one.
+
+    .DESCRIPTION
+        The config is optional to the engine: a group that only ships payload
+        needs no instructions. The managed-files repository requires one on
+        every group so each carries a human-readable 'description', but that is
+        a repository policy enforced there, not a contract the engine relies on.
+    #>
+    [CmdletBinding()]
+    [OutputType([psobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseDir,
+
+        [Parameter(Mandatory)]
+        [string] $FileGroup
+    )
+
+    Set-StrictMode -Version 3.0
+
+    $path = Join-Path (Join-Path $BaseDir $FileGroup) (Get-AvmManagedFileGroupConfigFileName)
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+
+    $raw = Get-Content -LiteralPath $path -Raw
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+
+    try {
+        return ($raw | ConvertFrom-Json)
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(
+            "Managed-file group config is not valid JSON: $path ($($_.Exception.Message))")
+    }
+}
+
 function Get-AvmManagedFilesDeletedFileMap {
     <#
     .SYNOPSIS
-        Read the managed-files repository's file-group config and return a map
-        of file group name to the paths that group deletes.
+        Read each file group's '_config.json' and return a map of group name to
+        the paths that group deletes.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)]
-        [string] $Path
+        [string] $BaseDir,
+
+        [string[]] $FileGroups = @()
     )
 
-    $map = @{}
-    $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    if (-not ($config.PSObject.Properties.Name -contains 'fileGroups') -or -not $config.fileGroups) { return $map }
+    Set-StrictMode -Version 3.0
 
-    foreach ($fileGroup in @($config.fileGroups)) {
-        if (-not $fileGroup.name) { continue }
-        if ($fileGroup.PSObject.Properties.Name -contains 'deletedFiles' -and $fileGroup.deletedFiles) {
-            $map[[string]$fileGroup.name] = @($fileGroup.deletedFiles)
-        }
+    $map = @{}
+
+    foreach ($fileGroup in $FileGroups) {
+        if ([string]::IsNullOrWhiteSpace($fileGroup)) { continue }
+
+        $config = Get-AvmManagedFileGroupConfig -BaseDir $BaseDir -FileGroup $fileGroup
+        if ($null -eq $config) { continue }
+        if (-not ($config.PSObject.Properties.Name -contains 'deletedFiles')) { continue }
+        if (-not $config.deletedFiles) { continue }
+
+        $map[[string]$fileGroup] = @($config.deletedFiles)
     }
 
     return $map

@@ -82,19 +82,28 @@ Describe 'Merge-AvmFileLine' {
 Describe 'Get-AvmManagedLineSpec' {
     BeforeEach {
         $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)
-        $script:configDir = Join-Path $TestDrive ("gov-" + $unique)
-        New-Item -ItemType Directory -Path $script:configDir -Force | Out-Null
-        $script:configFile = Join-Path $script:configDir 'managed-files.json'
+        $script:baseDir = Join-Path $TestDrive ("gov-" + $unique)
+        New-Item -ItemType Directory -Path $script:baseDir -Force | Out-Null
+
+        function script:New-TestGroupConfig {
+            param(
+                [Parameter(Mandatory)] [string] $Group,
+                [Parameter(Mandatory)] [AllowEmptyString()] [string] $Json
+            )
+            $dir = Join-Path $script:baseDir $Group
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir '_config.json') -Value $Json -NoNewline
+        }
     }
 
     It 'reads the root group spec and normalises path separators' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ { "name": "root", "managedLines": { ".github\\x.txt": ' +
-            '{ "required": ["abc", "def"], "removed": ["old"] } } } ] }')
+        New-TestGroupConfig -Group 'root' -Json (
+            '{ "managedLines": { ".github\\x.txt": ' +
+            '{ "required": ["abc", "def"], "removed": ["old"] } } }')
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root')
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
         }
         $spec.Contains('.github/x.txt') | Should -BeTrue
         $spec['.github/x.txt'].Required | Should -Be @('abc', 'def')
@@ -102,107 +111,106 @@ Describe 'Get-AvmManagedLineSpec' {
     }
 
     It 'lets a later file group requirement cancel an earlier removal' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ ' +
-            '{ "name": "root", "managedLines": { ".gitignore": { "removed": ["abc"] } } }, ' +
-            '{ "name": "canary", "managedLines": { ".gitignore": { "required": ["abc"] } } } ] }')
+        New-TestGroupConfig -Group 'root' -Json '{ "managedLines": { ".gitignore": { "removed": ["abc"] } } }'
+        New-TestGroupConfig -Group 'canary' -Json '{ "managedLines": { ".gitignore": { "required": ["abc"] } } }'
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root', 'canary')
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec['.gitignore'].Required | Should -Be @('abc')
         $spec['.gitignore'].Removed | Should -BeNullOrEmpty
     }
 
     It 'lets a later file group removal cancel an earlier requirement' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ ' +
-            '{ "name": "root", "managedLines": { ".gitignore": { "required": ["abc"] } } }, ' +
-            '{ "name": "canary", "managedLines": { ".gitignore": { "removed": ["abc"] } } } ] }')
+        New-TestGroupConfig -Group 'root' -Json '{ "managedLines": { ".gitignore": { "required": ["abc"] } } }'
+        New-TestGroupConfig -Group 'canary' -Json '{ "managedLines": { ".gitignore": { "removed": ["abc"] } } }'
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root', 'canary')
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec['.gitignore'].Removed | Should -Be @('abc')
         $spec['.gitignore'].Required | Should -BeNullOrEmpty
     }
 
-    It 'stacks in the requested file-group order, not the config declaration order' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ ' +
-            '{ "name": "canary", "managedLines": { ".gitignore": { "required": ["abc"] } } }, ' +
-            '{ "name": "root", "managedLines": { ".gitignore": { "removed": ["abc"] } } } ] }')
+    It 'stacks strictly in the requested file-group order' {
+        New-TestGroupConfig -Group 'root' -Json '{ "managedLines": { ".gitignore": { "removed": ["abc"] } } }'
+        New-TestGroupConfig -Group 'canary' -Json '{ "managedLines": { ".gitignore": { "required": ["abc"] } } }'
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root', 'canary')
+        $reversed = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('canary', 'root')
         }
-        $spec['.gitignore'].Required | Should -Be @('abc')
-        $spec['.gitignore'].Removed | Should -BeNullOrEmpty
+        $reversed['.gitignore'].Removed | Should -Be @('abc')
+        $reversed['.gitignore'].Required | Should -BeNullOrEmpty
     }
 
     It 'ignores file groups the repository does not use' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ ' +
-            '{ "name": "root", "managedLines": { ".gitignore": { "required": ["abc"] } } }, ' +
-            '{ "name": "alz", "managedLines": { ".gitignore": { "required": ["alz-only"] } } } ] }')
+        New-TestGroupConfig -Group 'root' -Json '{ "managedLines": { ".gitignore": { "required": ["abc"] } } }'
+        New-TestGroupConfig -Group 'alz' -Json '{ "managedLines": { ".gitignore": { "required": ["alz-only"] } } }'
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root')
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
         }
         $spec['.gitignore'].Required | Should -Be @('abc')
     }
 
     It 'throws when one file group lists a line as both required and removed' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ { "name": "root", "managedLines": { ".gitignore": ' +
-            '{ "required": ["x"], "removed": ["x"] } } } ] }')
+        New-TestGroupConfig -Group 'root' -Json (
+            '{ "managedLines": { ".gitignore": { "required": ["x"], "removed": ["x"] } } }')
 
         {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-                param($C)
-                Get-AvmManagedLineSpec -Path $C -FileGroups @('root')
+            InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+                param($B)
+                Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
             }
         } | Should -Throw -ExceptionType ([System.InvalidOperationException])
     }
 
     It 'throws on invalid JSON' {
-        Set-Content -LiteralPath $script:configFile -Value '{ not json' -NoNewline
+        New-TestGroupConfig -Group 'root' -Json '{ not json'
 
         {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-                param($C)
-                Get-AvmManagedLineSpec -Path $C -FileGroups @('root')
+            InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+                param($B)
+                Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
             }
         } | Should -Throw -ExceptionType ([System.InvalidOperationException])
     }
 
     It 'returns empty when no file group declares managed lines' {
-        Set-Content -LiteralPath $script:configFile -NoNewline -Value (
-            '{ "fileGroups": [ { "name": "root", "deletedFiles": ["old.txt"] } ] }')
+        New-TestGroupConfig -Group 'root' -Json '{ "deletedFiles": ["old.txt"] }'
 
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:configFile } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root', 'canary')
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root', 'canary')
         }
         $spec.Keys.Count | Should -Be 0
     }
 
-    It 'returns empty when the config file does not exist' {
-        $missing = Join-Path $script:configDir 'does-not-exist.json'
-        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ C = $missing } {
-            param($C)
-            Get-AvmManagedLineSpec -Path $C -FileGroups @('root')
+    It 'returns empty when a group declares no config file' {
+        New-Item -ItemType Directory -Path (Join-Path $script:baseDir 'root') -Force | Out-Null
+
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('root')
         }
         $spec.Keys.Count | Should -Be 0
     }
 
-    It 'returns empty when no config path is supplied' {
+    It 'returns empty when the group folder does not exist' {
+        $spec = InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:baseDir } {
+            param($B)
+            Get-AvmManagedLineSpec -BaseDir $B -FileGroups @('does-not-exist')
+        }
+        $spec.Keys.Count | Should -Be 0
+    }
+
+    It 'returns empty when no base directory is supplied' {
         $spec = InModuleScope 'Avm.Authoring' {
-            Get-AvmManagedLineSpec -Path '' -FileGroups @('root')
+            Get-AvmManagedLineSpec -BaseDir '' -FileGroups @('root')
         }
         $spec.Keys.Count | Should -Be 0
     }

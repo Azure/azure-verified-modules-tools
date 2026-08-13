@@ -41,7 +41,7 @@ Describe 'Invoke-AvmSync' {
         }
     }
 
-    It 'forwards the file-group config options to the engine' {
+    It 'forwards the managed-files source options to the engine' {
         $dir = Join-Path $TestDrive ("fgc-sync-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -55,12 +55,12 @@ Describe 'Invoke-AvmSync' {
                 [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
             Invoke-AvmSync -Path $D `
-                -FileGroupConfigPath 'custom/config/managed-files.json' `
-                -FileGroupConfigLocalPath 'D:\gov\managed-files.json' | Out-Null
+                -ManagedFilesPath 'custom/terraform' `
+                -ManagedFilesLocalPath 'D:\gov\terraform' | Out-Null
 
             Should -Invoke Sync-AvmManagedFile -Exactly 1 -ParameterFilter {
-                $FileGroupConfigPath -eq 'custom/config/managed-files.json' -and
-                $FileGroupConfigLocalPath -eq 'D:\gov\managed-files.json'
+                $ManagedFilesPath -eq 'custom/terraform' -and
+                $ManagedFilesLocalPath -eq 'D:\gov\terraform'
             }
         }
     }
