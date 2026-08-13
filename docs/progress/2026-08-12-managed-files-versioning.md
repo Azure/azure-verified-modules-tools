@@ -372,11 +372,24 @@ as an ordered list: the real stacking order comes from each repository group's
 integer `order` in `repository-management/repository-config/config.json`, and the
 array order was never read. Per-folder config removes that false affordance.
 
+The managed-files side of the restructure is
+[managed-files#12](https://github.com/Azure/azure-verified-modules-managed-files/pull/12).
+It also adds `scripts/Test-FileGroupConfig.ps1` and a pull-request workflow that
+requires a `_config.json` with a non-empty `description` on every group, rejects
+unknown keys, and rejects `.gitkeep`.
+
 ## Dependencies
 
 - Phase 1 lands in `Azure/azure-verified-modules-managed-files`:
   [managed-files#8](https://github.com/Azure/azure-verified-modules-managed-files/pull/8).
   Must merge before any release is cut.
+- The layout restructure lands in the same repository:
+  [managed-files#12](https://github.com/Azure/azure-verified-modules-managed-files/pull/12).
+  Must merge, and a release must be cut from the result, before
+  [tools#65](https://github.com/Azure/azure-verified-modules-tools/pull/65)
+  merges. `v0.1.0` predates both the `managedLines` spec and the flattened
+  layout, so a repository bootstrapping against it would pin a release the new
+  engine cannot read.
 - Phase 6 depends on a manual release in that repository.
 - The managed-files repository has five open Dependabot pull requests, which are
   useful live test data for the phase 5 exclusion rule.
