@@ -126,45 +126,6 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             [string]$r.Parameters.FixCreateFile | Should -Be '.gitkeep'
         }
 
-        It 'ships avm.tf.gitignore-essentials with the upstream glob set, minus .avm' {
-            $r = $script:rulesById['avm.tf.gitignore-essentials']
-            $r | Should -Not -BeNullOrEmpty
-            $r.Kind | Should -Be 'GitignoreMustContain'
-            $r.Severity | Should -Be 'error'
-            $r.AppliesTo | Should -Be 'root'
-
-            $globs = @($r.Parameters.RequiredGlobs)
-            $globs.Count | Should -Be 23
-
-            # Canonical entries from the legacy Terraform governance git-ignore policy.
-            $expected = @(
-                '.DS_Store',
-                '.terraform.lock.hcl',
-                '.terraformrc',
-                '*.md.tmp',
-                '*.mptfbackup',
-                '*.tfstate.*',
-                '*.tfstate',
-                '*.tfvars.json',
-                '*.tfvars',
-                '**/.terraform/*',
-                '*tfplan*',
-                'avm.tflint_example.hcl',
-                'avm.tflint_example.merged.hcl',
-                'avm.tflint_module.hcl',
-                'avm.tflint_module.merged.hcl',
-                'avm.tflint.hcl',
-                'avm.tflint.merged.hcl',
-                'avmmakefile',
-                'crash.*.log',
-                'crash.log',
-                'examples/*/policy',
-                'README-generated.md',
-                'terraform.rc'
-            )
-            $globs | Should -Be $expected
-            $globs | Should -Not -Contain '.avm'
-        }
     }
 
     Context 'Every shipped rule passes the schema validator' {

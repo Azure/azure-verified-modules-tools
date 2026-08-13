@@ -70,16 +70,14 @@ exist in the upstream mock.
 ### Kept on purpose: `.gitignore`
 
 Each fixture **does** keep its module-level `.gitignore` (copied verbatim
-from upstream — the same 24-glob canonical AVM line set). It is *not*
-dropped like the rest of the editor/tooling metadata because
-`avm check convention` ships a built-in rule — `avm.tf.gitignore-essentials`
-(`src/Avm.Authoring/Resources/Rules/030-gitignore-essentials.psd1`,
-severity `error`) — that fails a module whose root `.gitignore` is missing
-any of those globs. Dropping `.gitignore` would make the fixture
-non-compliant against our own convention chain, so the real-binary
-`pre-commit` / `pr-check` integration (`tests/Pester/Integration/`) would report
-`check convention = fail`. Keeping it lets both chains go green
-end-to-end. Maintain it together with the rest of the fixture surface.
+from upstream). It is *not* dropped like the rest of the editor/tooling
+metadata because it is genuine module content that the managed-files
+engine maintains through the `managedLines` line spec in the governance
+repository's `terraform/config/managed-files.json`. Keeping it lets the
+real-binary `pre-commit` / `pr-check` integration
+(`tests/Pester/Integration/`) exercise the line-merge path against a
+realistic starting file. Maintain it together with the rest of the
+fixture surface.
 
 ## Maintaining the fixtures
 

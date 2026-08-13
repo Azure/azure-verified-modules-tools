@@ -55,9 +55,10 @@ supports both `required` and `removed` lines through a `managedLines` key on a
 managed-files group in `terraform/config/managed-files.json`, stacking across
 groups exactly like files do. No group ships a spec yet, so this feature
 is its first consumer. The `root` group's spec now also carries every functional
-pattern from the AVM Terraform template `.gitignore`; the 23 globs enforced by the
-`avm.tf.gitignore-essentials` convention rule are a strict subset of it, so the two
-agree and the sync auto-fixes what the rule previously only reported.
+pattern from the AVM Terraform template `.gitignore`. The 23 globs previously
+enforced by the `avm.tf.gitignore-essentials` convention rule are a strict subset
+of it, so that rule (and its `GitignoreMustContain` primitive) has been removed:
+the sync now repairs what the rule only reported.
 
 **Repository sync currently bypasses ref resolution entirely.** The workflow
 checks the managed-files repository out at its default branch and passes
@@ -168,8 +169,11 @@ Each phase is a separate commit, and phases 1-2 are a prerequisite for the rest.
       of the file rather than in position, so a required comment would land
       stranded and detached from the patterns it describes.
 - [x] Confirm no interaction with `avm.tf.gitignore-essentials`. The rule's 23
-      required globs are a strict subset of the 28 required lines, so the two
-      agree; the sync now auto-fixes what the rule previously only reported.
+      required globs were a strict subset of the 28 required lines, making the
+      rule pure duplication. It has since been **removed** along with its
+      `GitignoreMustContain` primitive and rule kind: `.gitignore` enforcement
+      now lives solely in the managed-files line spec, which repairs drift
+      instead of only reporting it.
 - [x] Verify `Get-AvmManagedLinePlan` creates `.gitignore` when absent. Covered
       by `Merge-AvmFileLine.Tests.ps1` ("creates a plan for a missing file with
       LF endings") and by two end-to-end tests in `Sync-AvmManagedFile.Tests.ps1`,

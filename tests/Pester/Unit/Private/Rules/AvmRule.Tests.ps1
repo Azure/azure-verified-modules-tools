@@ -133,10 +133,6 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                         Id = 'avm.test.required-directory'; Kind = 'DirectoryMustExist'; Description = 'd'
                         Parameters = @{ Path = 'examples'; MinimumChildDirectories = 1 }; Expected = $false
                     }
-                    @{
-                        Id = 'avm.test.gitignore'; Kind = 'GitignoreMustContain'; Description = 'd'
-                        Parameters = @{ RequiredGlobs = @('*.tfstate') }; Expected = $true
-                    }
                 )
 
                 foreach ($definition in $definitions) {
@@ -378,35 +374,6 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match 'cannot combine'
-            }
-        }
-
-        It 'rejects GitignoreMustContain with an empty RequiredGlobs list' {
-            InModuleScope 'Avm.Authoring' {
-                $def = @{
-                    Id          = 'avm.test.empty-globs'
-                    Kind        = 'GitignoreMustContain'
-                    Description = 'd'
-                    Parameters  = @{ RequiredGlobs = @() }
-                }
-
-                $err = $null
-                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
-                $err.Message | Should -Match 'must have at least one entry'
-            }
-        }
-
-        It 'rejects GitignoreMustContain with a whitespace-only glob entry' {
-            InModuleScope 'Avm.Authoring' {
-                $def = @{
-                    Id          = 'avm.test.blank-glob'
-                    Kind        = 'GitignoreMustContain'
-                    Description = 'd'
-                    Parameters  = @{ RequiredGlobs = @('.terraform/', '   ') }
-                }
-                $err = $null
-                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
-                $err.Message | Should -Match 'entries must be non-empty'
             }
         }
     }

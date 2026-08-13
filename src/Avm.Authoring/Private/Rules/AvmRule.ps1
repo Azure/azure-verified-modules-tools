@@ -131,9 +131,8 @@ function Test-AvmRule {
         Schema:
           - Id          : required, lowercase kebab/dot identifier
                           (^[a-z][a-z0-9.-]*$), unique within the loaded set.
-          - Kind        : required, one of the four primitive kinds:
-                          FileMustNotExist, FileMustExist, DirectoryMustExist,
-                          GitignoreMustContain.
+          - Kind        : required, one of the three primitive kinds:
+                          FileMustNotExist, FileMustExist, DirectoryMustExist.
           - Description : required, non-empty string.
           - Severity    : optional, 'error' | 'warning' (default 'error').
           - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all',
@@ -144,7 +143,6 @@ function Test-AvmRule {
               FileMustExist        : Path (string). Optional: FixContentTemplate (string).
               DirectoryMustExist   : Path (string). Optional: MinimumChildDirectories
                                      (positive integer), FixCreateFile (leaf file name).
-              GitignoreMustContain : RequiredGlobs (string[]), at least one entry.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -162,7 +160,6 @@ function Test-AvmRule {
             'FileMustNotExist'
             'FileMustExist'
             'DirectoryMustExist'
-            'GitignoreMustContain'
         )
         $validSeverities = @('error', 'warning')
         $validAppliesTo = @('root', 'examples', 'modules', 'all')
@@ -284,23 +281,6 @@ function Test-AvmRule {
                         "avm-rule '$id': DirectoryMustExist cannot combine MinimumChildDirectories with FixCreateFile.")
                 }
             }
-            'GitignoreMustContain' {
-                if (-not $params.ContainsKey('RequiredGlobs')) {
-                    throw [System.Data.DataException]::new(
-                        "avm-rule '$id': GitignoreMustContain requires Parameters.RequiredGlobs.")
-                }
-                $globs = @($params.RequiredGlobs)
-                if ($globs.Count -eq 0) {
-                    throw [System.Data.DataException]::new(
-                        "avm-rule '$id': GitignoreMustContain RequiredGlobs must have at least one entry.")
-                }
-                foreach ($g in $globs) {
-                    if ([string]::IsNullOrWhiteSpace([string]$g)) {
-                        throw [System.Data.DataException]::new(
-                            "avm-rule '$id': GitignoreMustContain RequiredGlobs entries must be non-empty.")
-                    }
-                }
-            }
         }
 
         return $true
@@ -331,9 +311,6 @@ function Test-AvmRuleFixable {
         }
         'DirectoryMustExist' {
             return $Rule.Parameters.ContainsKey('FixCreateFile')
-        }
-        'GitignoreMustContain' {
-            return $true
         }
         default {
             return $false

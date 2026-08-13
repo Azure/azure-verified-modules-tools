@@ -22,7 +22,7 @@ BeforeAll {
         return [pscustomobject]@{ Ecosystem = 'terraform'; Root = $Root }
     }
 
-    # Pre-stages the minimum on-disk shape (files + dirs + .gitignore) that
+    # Pre-stages the minimum on-disk shape (files + dirs) that
     # satisfies every error-severity built-in rule shipped under
     # src/Avm.Authoring/Resources/Rules/. After calling this, no built-in
     # rule should fire. Tests can then layer their own per-repo rules on top.
@@ -35,15 +35,6 @@ BeforeAll {
         [System.IO.File]::WriteAllText((Join-Path $root 'examples/default/_header.md'), '# header', $utf8)
         New-Item -ItemType Directory -Path (Join-Path $root 'tests/unit') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $root 'tests/unit/main.tftest.hcl'), '# test', $utf8)
-        $globs = @(
-            '.DS_Store', '.terraform.lock.hcl', '.terraformrc', '*.md.tmp', '*.mptfbackup',
-            '*.tfstate.*', '*.tfstate', '*.tfvars.json', '*.tfvars', '**/.terraform/*',
-            '*tfplan*', 'avm.tflint_example.hcl', 'avm.tflint_example.merged.hcl',
-            'avm.tflint_module.hcl', 'avm.tflint_module.merged.hcl', 'avm.tflint.hcl',
-            'avm.tflint.merged.hcl', 'avmmakefile', 'crash.*.log', 'crash.log',
-            'examples/*/policy', 'README-generated.md', 'terraform.rc', '.avm'
-        )
-        [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), (($globs -join "`n") + "`n"), $utf8)
         return $root
     }
 }
@@ -69,7 +60,7 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
 
     It 'returns status=pass when only warning-severity issues fire' {
         # Baseline root satisfies every error-severity built-in rule
-        # (terraform.tf, _header.md, examples/, tests/, .gitignore), so no
+        # (terraform.tf, _header.md, examples/, tests/), so no
         # built-in rule fires. A per-repo warning-severity rule for a missing
         # file is layered on to prove a firing warning does not flip Status.
         $root = script:NewBaselineRoot
@@ -361,7 +352,6 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         Join-Path $root 'outputs.tf' | Should -Exist
         Join-Path $root '_header.md' | Should -Exist
         Join-Path $root 'tests/.gitkeep' | Should -Exist
-        Join-Path $root '.gitignore' | Should -Exist
         Join-Path $root 'terraform.tf' | Should -Not -Exist
         Join-Path $root 'examples' | Should -Not -Exist
 
