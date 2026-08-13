@@ -18,7 +18,6 @@ param(
     [string]$repoUrl = "https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo",
     [string]$outputDirectory = ".",
     [string]$repoConfigFilePath = "../repository-config/config.json",
-    [string]$managedFilesBaseDir = "../../../azure-verified-modules-managed-files/terraform/files",
     [object]$repoMetaData = $null,
     [string]$terraformModulePath = "./terraform",
     [string[]]$resourceTypesThatCannotBeDestroyed = @(
@@ -44,6 +43,7 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "RepositoryConfig.ps1")
 . (Join-Path $libDir "RepoTree.ps1")
 . (Join-Path $libDir "AvmPreCommit.ps1")
+. (Join-Path $libDir "ManagedFilesUpgrade.ps1")
 . (Join-Path $libDir "BranchProtection.ps1")
 . (Join-Path $libDir "UnmanagedRulesets.ps1")
 . (Join-Path $libDir "CodeQlDefaultSetup.ps1")
@@ -211,9 +211,9 @@ $issueLog = Invoke-TerraformPlanAndApply `
     -stateContainerName $stateContainerName `
     -issueLog $issueLog
 
-# Run the complete authoring pre-commit gauntlet after Terraform succeeds.
-# The local managed-files and config paths avoid refetching this governance
-# repository for every target module.
+# Run the complete authoring pre-commit gauntlet after Terraform succeeds. Managed
+# files are fetched per repository so each one resolves the release tag recorded in
+# its own .avm/managed-files-version.json.
 if(!$repositoryCreationModeEnabled) {
     if($issueLog.Count -gt $preTerraformIssueCount) {
         Write-Host "Skipping avm pre-commit for $orgAndRepoName because terraform reported issues for this run." -ForegroundColor Yellow
@@ -221,7 +221,6 @@ if(!$repositoryCreationModeEnabled) {
         $preCommitResult = Invoke-AvmPreCommitForRepository `
             -orgAndRepoName $orgAndRepoName `
             -repoId $repoId `
-            -managedFilesBaseDir (Resolve-Path $managedFilesBaseDir).Path `
             -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `

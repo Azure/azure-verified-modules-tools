@@ -13,7 +13,18 @@ function Invoke-TerraformWithRetry {
         [string]$errorLog = "error.log",
         [int]$maxRetries = 50,
         [int]$retryDelayIncremental = 10,
-        [string[]]$retryOn = @("429 Too Many Requests", "Client.Timeout exceeded while awaiting headers", "Error: Failed to install provider", "Error: Failed to query available provider packages", "403 API rate limit"),
+        [string[]]$retryOn = @(
+            "429 Too Many Requests",
+            "500 Internal Server Error",
+            "502 Bad Gateway",
+            "503 Service Unavailable",
+            "504 Gateway Timeout",
+            "Client.Timeout exceeded while awaiting headers",
+            "Error: Failed to install provider",
+            "Error: Failed to query available provider packages",
+            "failed to retrieve cryptographic signature for provider",
+            "403 API rate limit"
+        ),
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
         [string]$stateBlobName,
@@ -202,6 +213,55 @@ function Invoke-GitHubCliWithRetry {
         -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent
 }
 
+# Terraform colourises its diagnostics even when stdout and stderr are
+# redirected to files, and it splits the escape codes around the `Error: `
+# prefix, so a raw match on "Error: Failed to install provider" never fires.
+function Remove-AnsiEscapeCode {
+    param([string[]]$text)
+
+    if (!$text) {
+        return @()
+    }
+
+    return @($text | ForEach-Object { [regex]::Replace([string]$_, "\x1B\[[0-9;?]*[ -/]*[@-~]", "") })
+}
+
+# Terraform boxes its diagnostics behind a `│` gutter and hard-wraps the detail
+# at roughly 78 columns, so a pattern that spans a wrap never matches a single
+# line. Flattening to one whitespace-normalised string makes those matchable.
+function ConvertTo-FlatErrorText {
+    param([string[]]$text)
+
+    if (!$text) {
+        return ""
+    }
+
+    return (((($text -join " ") -replace "[\u2500-\u257F]", " ") -replace "\s+", " ")).Trim()
+}
+
+# Returns the text that matched the pattern, or $null when it does not match.
+# Prefers the offending line so the retry message stays useful, and falls back
+# to the flattened output for patterns that span a wrap.
+function Get-ErrorOutputMatch {
+    param(
+        [string[]]$errorOutput,
+        [string]$flattenedError,
+        [string]$pattern
+    )
+
+    foreach ($line in $errorOutput) {
+        if ($line -like "*$pattern*") {
+            return $line
+        }
+    }
+
+    if ($flattenedError -like "*$pattern*") {
+        return $pattern
+    }
+
+    return $null
+}
+
 function Invoke-CommandWithRetry {
     param(
         $parentCommand,
@@ -229,7 +289,7 @@ function Invoke-CommandWithRetry {
             $arguments = $command.Arguments
 
             $localLogPath = $outputLog
-            if ($command.OutputLog) {
+            if ($command.ContainsKey("OutputLog") -and $command.OutputLog) {
                 $localLogPath = $command.OutputLog
             }
 
@@ -246,17 +306,18 @@ function Invoke-CommandWithRetry {
             if ($process.ExitCode -ne 0) {
                 Write-Host "$parentCommand failed with exit code $($process.ExitCode)."
 
-                $errorOutput = @(Get-Content -Path $errorLog)
+                $errorOutput = @(Remove-AnsiEscapeCode -text @(Get-Content -Path $errorLog))
+                $flattenedError = ConvertTo-FlatErrorText -text $errorOutput
 
                 if ($retryOn -contains "*") {
                     $shouldRetry = $true
                 } else {
-                    foreach ($line in $errorOutput) {
-                        foreach ($retryError in $retryOn) {
-                            if ($line -like "*$retryError*") {
-                                Write-Host "Retrying $parentCommand due to error: $line"
-                                $shouldRetry = $true
-                            }
+                    foreach ($retryError in $retryOn) {
+                        $matchedText = Get-ErrorOutputMatch -errorOutput $errorOutput -flattenedError $flattenedError -pattern $retryError
+                        if ($matchedText) {
+                            Write-Host "Retrying $parentCommand due to error: $matchedText"
+                            $shouldRetry = $true
+                            break
                         }
                     }
                 }
@@ -268,7 +329,7 @@ function Invoke-CommandWithRetry {
                     foreach ($recovery in $recoveryActions) {
                         $matchedPattern = $false
                         foreach ($pattern in @($recovery.Pattern)) {
-                            if ($errorOutput | Where-Object { $_ -like "*$pattern*" }) {
+                            if (Get-ErrorOutputMatch -errorOutput $errorOutput -flattenedError $flattenedError -pattern $pattern) {
                                 $matchedPattern = $true
                                 break
                             }
@@ -278,15 +339,20 @@ function Invoke-CommandWithRetry {
                         }
 
                         $maxRecoveryAttempts = 1
-                        if ($recovery.MaxAttempts) {
+                        if ($recovery.ContainsKey("MaxAttempts") -and $recovery.MaxAttempts) {
                             $maxRecoveryAttempts = $recovery.MaxAttempts
                         }
-                        if ($recovery.Attempts -ge $maxRecoveryAttempts) {
-                            Write-Host "Recovery for '$($recovery.Name)' already attempted $($recovery.Attempts) time(s). Not retrying."
+
+                        $recoveryAttempts = 0
+                        if ($recovery.ContainsKey("Attempts")) {
+                            $recoveryAttempts = [int]$recovery.Attempts
+                        }
+                        if ($recoveryAttempts -ge $maxRecoveryAttempts) {
+                            Write-Host "Recovery for '$($recovery.Name)' already attempted $recoveryAttempts time(s). Not retrying."
                             continue
                         }
 
-                        $recovery.Attempts = [int]$recovery.Attempts + 1
+                        $recovery.Attempts = $recoveryAttempts + 1
                         Write-Host "Attempting recovery for '$($recovery.Name)' (attempt $($recovery.Attempts) of $maxRecoveryAttempts)."
 
                         $recovered = $false

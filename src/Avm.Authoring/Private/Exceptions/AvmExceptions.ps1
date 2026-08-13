@@ -134,3 +134,37 @@ class AvmGalleryLookupException : System.Exception {
     AvmGalleryLookupException([string] $message) : base($message) {}
     AvmGalleryLookupException([string] $message, [Exception] $innerException) : base($message, $innerException) {}
 }
+
+# A module repository is pinned to a managed-files release whose major version
+# has been superseded. Terminating because a major is the mechanism by which a
+# breaking managed-file change is forced onto the fleet: syncing at the stale
+# pin would quietly leave the repository on the superseded contract.
+class AvmManagedFilesVersionException : AvmException {
+    [string] $PinnedVersion
+    [string] $LatestVersion
+    [int] $ExitCode
+
+    AvmManagedFilesVersionException(
+        [string] $message
+    ) : base($message, 'AVM1060') {
+        $this.ExitCode = 11
+    }
+
+    AvmManagedFilesVersionException(
+        [string] $pinnedVersion,
+        [string] $latestVersion,
+        [string] $message
+    ) : base($message, 'AVM1060') {
+        $this.PinnedVersion = $pinnedVersion
+        $this.LatestVersion = $latestVersion
+        $this.ExitCode = 11
+    }
+}
+
+# The managed-files tag listing could not be reached or returned nothing
+# usable. Non-terminating by convention: callers warn and continue against the
+# recorded pin, mirroring how AvmGalleryLookupException is handled.
+class AvmManagedFilesLookupException : System.Exception {
+    AvmManagedFilesLookupException([string] $message) : base($message) {}
+    AvmManagedFilesLookupException([string] $message, [Exception] $innerException) : base($message, $innerException) {}
+}

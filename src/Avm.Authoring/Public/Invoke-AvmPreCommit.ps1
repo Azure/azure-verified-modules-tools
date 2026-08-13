@@ -80,15 +80,6 @@ function Invoke-AvmPreCommit {
         Direct local path to the managed-files base folder. Skips the managed
         files git fetch and is forwarded only to the Terraform sync step.
 
-    .PARAMETER FileGroupConfigPath
-        Path within the managed-files repo to the file-group config that
-        declares each group's deleted files. Forwarded only to the Terraform
-        sync step.
-
-    .PARAMETER FileGroupConfigLocalPath
-        Direct local path to the file-group config file. Forwarded only to the
-        Terraform sync step.
-
     .PARAMETER ConfigRepo
         owner/name of the git repo holding the managed-files config folder.
         Forwarded only to the Terraform sync step.
@@ -107,6 +98,16 @@ function Invoke-AvmPreCommit {
     .PARAMETER RepoId
         Repository id used to look up overlays/exclusions in config.json.
         Forwarded only to the Terraform sync step.
+
+    .PARAMETER Upgrade
+        Move the repository to the latest managed-files release and restamp
+        '.avm/managed-files-version.json'. Without it the sync stays on the
+        recorded pin and only warns about newer patch or minor releases.
+        Forwarded only to the Terraform sync step.
+
+    .PARAMETER SkipManagedFilesVersionCheck
+        Skip the managed-files release lookup and sync against whatever ref the
+        normal precedence resolves. Forwarded only to the Terraform sync step.
 
     .OUTPUTS
         pscustomobject with:
@@ -146,15 +147,15 @@ function Invoke-AvmPreCommit {
         [string] $ManagedFilesPath,
         [string] $ManagedFilesLocalPath,
 
-        [string] $FileGroupConfigPath,
-        [string] $FileGroupConfigLocalPath,
-
         [string] $ConfigRepo,
         [string] $ConfigRef,
         [string] $ConfigPath,
         [string] $ConfigLocalPath,
 
         [string] $RepoId,
+
+        [switch] $Upgrade,
+        [switch] $SkipManagedFilesVersionCheck,
 
         [switch] $SkipModuleVersionCheck
     )
@@ -201,13 +202,13 @@ function Invoke-AvmPreCommit {
         'ManagedFilesRef'
         'ManagedFilesPath'
         'ManagedFilesLocalPath'
-        'FileGroupConfigPath'
-        'FileGroupConfigLocalPath'
         'ConfigRepo'
         'ConfigRef'
         'ConfigPath'
         'ConfigLocalPath'
         'RepoId'
+        'Upgrade'
+        'SkipManagedFilesVersionCheck'
     )
 
     foreach ($def in $stepDefs) {
@@ -253,6 +254,13 @@ function Invoke-AvmPreCommit {
             # Verb genuinely does not apply to this ecosystem (e.g. bicep-docs).
             # Continue the chain; do not flip overall status.
             $stepStatus = 'skipped'
+            $stepError = $_.Exception.Message
+        }
+        catch [AvmManagedFilesVersionException] {
+            # A superseded major is an adoption gap, not a broken environment.
+            # Reporting it as fail keeps the message actionable and lets the
+            # caller re-run with -Upgrade, where error would read as a defect.
+            $stepStatus = 'fail'
             $stepError = $_.Exception.Message
         }
         catch [AvmConfigurationException] {

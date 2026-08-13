@@ -127,8 +127,8 @@ function Invoke-AvmPreCommit {
     param(
         [string]$Ecosystem,
         [string]$RepoId,
-        [string]$ManagedFilesLocalPath,
-        [string]$ConfigLocalPath
+        [string]$ConfigLocalPath,
+        [switch]$Upgrade
     )
 
     $script:preCommitInvocationCount++
@@ -147,7 +147,6 @@ function Invoke-AvmPreCommit {
 
 $script:retryParameters = @{
     repoId              = "avm-res-test"
-    managedFilesBaseDir = "../../../azure-verified-modules-managed-files/terraform/files"
     repositoryConfigDir = "../repository-config"
 }
 
@@ -158,7 +157,8 @@ try {
     Assert-Equal -Actual $result.Status -Expected "pass" -Description "pre-commit status after upgrade"
     Assert-Equal -Actual $script:preCommitParameters.Ecosystem -Expected "terraform" -Description "forwarded ecosystem"
     Assert-Equal -Actual $script:preCommitParameters.RepoId -Expected $script:retryParameters.repoId -Description "forwarded repo id"
-    Assert-Equal -Actual $script:preCommitParameters.ManagedFilesLocalPath -Expected $script:retryParameters.managedFilesBaseDir -Description "forwarded managed files path"
+    Assert-Equal -Actual $script:preCommitParameters.ContainsKey("ManagedFilesLocalPath") -Expected $false -Description "managed files local path not forwarded"
+    Assert-Equal -Actual $script:preCommitParameters.ContainsKey("Upgrade") -Expected $false -Description "upgrade switch not forwarded by default"
     Assert-Equal -Actual $script:preCommitParameters.ConfigLocalPath -Expected $script:retryParameters.repositoryConfigDir -Description "forwarded repository config path"
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "pre-commit invocation count"
     Assert-Equal -Actual $script:moduleImportCount -Expected 2 -Description "module import count"
@@ -196,6 +196,16 @@ try {
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "retry failure invocation count"
     Assert-Equal -Actual $script:moduleImportCount -Expected 2 -Description "retry failure import count"
     Assert-Equal -Actual $script:moduleUpdateCount -Expected 1 -Description "retry failure update count"
+
+    $script:moduleImportCount = 0
+    $script:moduleUpdateCount = 0
+    $script:preCommitInvocationCount = 0
+    $script:preCommitErrorCodes = @()
+
+    $null = Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters -upgradeManagedFiles $true
+
+    Assert-Equal -Actual $script:preCommitParameters.ContainsKey("Upgrade") -Expected $true -Description "upgrade switch forwarded when requested"
+    Assert-Equal -Actual $script:preCommitParameters.Upgrade -Expected $true -Description "forwarded upgrade switch value"
 } finally {
     Remove-Item Function:Import-Module
     Remove-Item Function:Update-PSResource

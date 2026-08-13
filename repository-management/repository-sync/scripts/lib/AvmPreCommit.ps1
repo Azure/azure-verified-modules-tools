@@ -65,15 +65,18 @@ function Assert-AvmPreCommitResult {
 function Invoke-AvmPreCommitWithUpgradeRetry {
     param(
         [string]$repoId,
-        [string]$managedFilesBaseDir,
-        [string]$repositoryConfigDir
+        [string]$repositoryConfigDir,
+        [bool]$upgradeManagedFiles = $false
     )
 
     $preCommitParameters = @{
-        Ecosystem             = "terraform"
-        RepoId                = $repoId
-        ManagedFilesLocalPath = $managedFilesBaseDir
-        ConfigLocalPath       = $repositoryConfigDir
+        Ecosystem       = "terraform"
+        RepoId          = $repoId
+        ConfigLocalPath = $repositoryConfigDir
+    }
+
+    if ($upgradeManagedFiles) {
+        $preCommitParameters.Upgrade = $true
     }
 
     Import-Module Avm.Authoring -Force -ErrorAction Stop
@@ -100,7 +103,6 @@ function Invoke-AvmPreCommitForRepository {
     param(
         [string]$orgAndRepoName,
         [string]$repoId,
-        [string]$managedFilesBaseDir,
         [string]$repositoryConfigDir,
         [string]$defaultBranch,
         [bool]$planOnly,
@@ -124,10 +126,15 @@ function Invoke-AvmPreCommitForRepository {
 
         Push-Location $tempDir
         try {
+            $upgradeDecision = Resolve-AvmManagedFilesUpgradeDecision `
+                -orgAndRepoName $orgAndRepoName `
+                -repoRoot $tempDir
+            Write-Host "$modeTag $orgAndRepoName - managed files: $($upgradeDecision.Reason)." -ForegroundColor DarkGray
+
             $preCommitResult = Invoke-AvmPreCommitWithUpgradeRetry `
                 -repoId $repoId `
-                -managedFilesBaseDir $managedFilesBaseDir `
-                -repositoryConfigDir $repositoryConfigDir
+                -repositoryConfigDir $repositoryConfigDir `
+                -upgradeManagedFiles $upgradeDecision.Upgrade
             Assert-AvmPreCommitResult -preCommitResult $preCommitResult
 
             $status = git status --porcelain

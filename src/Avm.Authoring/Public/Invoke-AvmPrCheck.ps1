@@ -34,6 +34,12 @@ function Invoke-AvmPrCheck {
         silently rewritten in CI. For bicep the sync step throws
         AvmConfigurationException and is skipped.
 
+        The sync step also gates on the managed-files release recorded in
+        '.avm/managed-files-version.json': governed files are compared against
+        that pinned release, and a superseded major version is reported as a
+        drift issue so the run fails until the repository adopts it with
+        'avm pre-commit -Upgrade'.
+
         Status semantics (same as Invoke-AvmPreCommit):
           - 'pass'    : step returned Status='pass' (or didn't throw for
                         format).

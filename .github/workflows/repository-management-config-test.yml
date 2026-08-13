@@ -7,8 +7,10 @@ on:
       - .github/workflows/repository-management-config-test.yml
       - repository-management/repository-config/config.json
       - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
+      - repository-management/repository-sync/scripts/lib/ManagedFilesUpgrade.ps1
       - repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1
       - repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
+      - repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
       - repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
   workflow_dispatch:
 
@@ -28,3 +30,4 @@ jobs:
         run: |
           ./repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
           ./repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
+          ./repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1

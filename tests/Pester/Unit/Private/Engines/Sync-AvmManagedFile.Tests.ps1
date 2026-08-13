@@ -34,20 +34,27 @@ BeforeAll {
 
     function script:New-TestFileGroupConfig {
         param(
-            [Parameter(Mandatory)] [string] $Path,
-            [hashtable] $DeletedFilesByGroup = @{}
+            [Parameter(Mandatory)] [string] $BaseDir,
+            [hashtable] $DeletedFilesByGroup = @{},
+            [hashtable] $ManagedLinesByGroup = @{}
         )
 
-        $fileGroups = @(
-            foreach ($name in $DeletedFilesByGroup.Keys) {
-                [ordered]@{ name = $name; deletedFiles = @($DeletedFilesByGroup[$name]) }
+        $names = @(@($DeletedFilesByGroup.Keys) + @($ManagedLinesByGroup.Keys) | Select-Object -Unique)
+
+        foreach ($name in $names) {
+            $config = [ordered]@{ description = "Test file group '$name'." }
+            if ($DeletedFilesByGroup.ContainsKey($name)) {
+                $config['deletedFiles'] = @($DeletedFilesByGroup[$name])
             }
-        )
+            if ($ManagedLinesByGroup.ContainsKey($name)) {
+                $config['managedLines'] = $ManagedLinesByGroup[$name]
+            }
 
-        Set-Content -LiteralPath $Path `
-            -Value (@{ fileGroups = @($fileGroups) } | ConvertTo-Json -Depth 8) -NoNewline
-
-        return $Path
+            $dir = Join-Path $BaseDir $name
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir '_config.json') `
+                -Value ($config | ConvertTo-Json -Depth 8) -NoNewline
+        }
     }
 }
 
@@ -62,8 +69,6 @@ Describe 'Resolve-AvmManagedFilesSetting defaults' {
             'AVM_MANAGED_FILES_REF'
             'AVM_MANAGED_FILES_PATH'
             'AVM_MANAGED_FILES_LOCAL_PATH'
-            'AVM_MANAGED_FILES_GROUP_CONFIG_PATH'
-            'AVM_MANAGED_FILES_GROUP_CONFIG_LOCAL_PATH'
             'AVM_MANAGED_FILES_CONFIG_REPO'
             'AVM_MANAGED_FILES_CONFIG_REF'
             'AVM_MANAGED_FILES_CONFIG_PATH'
@@ -85,8 +90,7 @@ Describe 'Resolve-AvmManagedFilesSetting defaults' {
 
             $settings.ManagedFilesRepo | Should -Be 'Azure/azure-verified-modules-managed-files'
             $settings.ManagedFilesRef | Should -Be 'main'
-            $settings.ManagedFilesPath | Should -Be 'terraform/files'
-            $settings.FileGroupConfigPath | Should -Be 'terraform/config/managed-files.json'
+            $settings.ManagedFilesPath | Should -Be 'terraform'
             $settings.ConfigRepo | Should -Be 'Azure/azure-verified-modules-tools'
             $settings.ConfigRef | Should -Be 'main'
             $settings.ConfigPath | Should -Be 'repository-management/repository-config'
@@ -133,9 +137,6 @@ Describe 'Sync-AvmManagedFile' {
 
         # Repository config, carrying the 'default' group that maps '*' -> root.
         $script:cfgDir = New-TestConfigDirectory -Path (Join-Path $TestDrive ("cfg-" + $unique))
-
-        # File-group config, carrying per-group deletedFiles.
-        $script:fileGroupConfig = New-TestFileGroupConfig -Path (Join-Path $script:cfgDir 'managed-files.json')
 
         # Target module working tree.
         $script:moduleDir = Join-Path $TestDrive ("terraform-azurerm-avm-res-foo-" + $unique)
@@ -308,13 +309,13 @@ Describe 'Sync-AvmManagedFile' {
                 managedFiles = @('canary')
             }
         )
-        $fgc = New-TestFileGroupConfig -Path (Join-Path $cfg 'managed-files.json') -DeletedFilesByGroup @{
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
             canary = @('modules/gamma/_footer.md', 'policies/_all/rule.json')
         }
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg; F = $fgc } {
-            param($C, $B, $Cfg, $F)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F -RepoId 'avm-res-foo'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
         }
 
         $result.Status | Should -Be 'pass'
@@ -354,7 +355,7 @@ Describe 'Sync-AvmManagedFile' {
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'deprecated.txt') -Value "remove`n" -NoNewline
 
         $cfg = New-TestConfigDirectory -Path (Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)))
-        $fgc = New-TestFileGroupConfig -Path (Join-Path $cfg 'managed-files.json') -DeletedFilesByGroup @{
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
             root = @('deprecated.txt')
         }
 
@@ -362,14 +363,12 @@ Describe 'Sync-AvmManagedFile' {
                 C = $script:context
                 B = $script:base
                 G = $cfg
-                F = $fgc
             } {
-                param($C, $B, $G, $F)
+                param($C, $B, $G)
                 Sync-AvmManagedFile `
                     -Context $C `
                     -ManagedFilesLocalPath $B `
                     -ConfigLocalPath $G `
-                    -FileGroupConfigLocalPath $F `
                     -RepoId 'avm-res-foo' `
                     -CheckDrift `
                     -Verbose 4>&1
@@ -471,13 +470,13 @@ Describe 'Sync-AvmManagedFile' {
         $cfg = New-TestConfigDirectory -Path (Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))) -RepositoryGroups @(
             [ordered]@{ name = 'canary'; repositories = @('avm-res-foo'); order = 10; managedFiles = @('canary') }
         )
-        $fgc = New-TestFileGroupConfig -Path (Join-Path $cfg 'managed-files.json') -DeletedFilesByGroup @{
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
             canary = @('excludeme.txt')
         }
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg; F = $fgc } {
-            param($C, $B, $Cfg, $F)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F -RepoId 'avm-res-foo'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
         }
 
         $result.Status  | Should -Be 'pass'
@@ -533,20 +532,42 @@ Describe 'Sync-AvmManagedFile' {
         Test-Path (Join-Path $script:moduleDir '.gitkeep') | Should -BeFalse
     }
 
+    It 'never syncs a group-root _config.json but does sync a nested one' {
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
+            root = @('nothing-to-delete.txt')
+        }
+        $nested = Join-Path $script:root 'nested'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested '_config.json') -Value "{}`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Be @('nested/_config.json')
+
+        # The reserved group-root config is engine metadata, never payload.
+        Test-Path (Join-Path $script:moduleDir '_config.json') | Should -BeFalse
+        # A '_config.json' anywhere below the group root is ordinary content.
+        Test-Path (Join-Path $script:moduleDir 'nested/_config.json') | Should -BeTrue
+    }
+
     It 'removes files listed in deletedFiles for an applicable group' {
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "*.tfstate`n" -NoNewline
 
         $cfg = New-TestConfigDirectory -Path (Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)))
-        $fgc = New-TestFileGroupConfig -Path (Join-Path $cfg 'managed-files.json') -DeletedFilesByGroup @{
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
             root = @('old-thing.txt')
         }
 
         # Pre-seed the deleted file into the working tree.
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'old-thing.txt') -Value "delete me`n" -NoNewline
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg; F = $fgc } {
-            param($C, $B, $Cfg, $F)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F -RepoId 'avm-res-foo'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
         }
 
         $result.Status  | Should -Be 'pass'
@@ -565,13 +586,13 @@ Describe 'Sync-AvmManagedFile' {
             [ordered]@{ name = 'canary'; repositories = @('avm-res-foo'); order = 10; managedFiles = @('canary') }
         )
         # 'root' deletes it, but 'canary' sorts later and supplies it again.
-        $fgc = New-TestFileGroupConfig -Path (Join-Path $cfg 'managed-files.json') -DeletedFilesByGroup @{
+        New-TestFileGroupConfig -BaseDir $script:base -DeletedFilesByGroup @{
             root = @('contested.txt')
         }
 
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg; F = $fgc } {
-            param($C, $B, $Cfg, $F)
-            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -FileGroupConfigLocalPath $F -RepoId 'avm-res-foo'
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $cfg } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -RepoId 'avm-res-foo'
         }
 
         $result.Status  | Should -Be 'pass'
@@ -592,8 +613,12 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'creates a line-managed file when it is missing and classifies it as Added' {
-        $spec = '{ ".gitignore": { "required": ["*.tfstate", ".terraform/"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('*.tfstate', '.terraform/'); removed = @() } }
+        }
+
+        # The working tree has no .gitignore at all: the sync must create it.
+        Test-Path (Join-Path $script:moduleDir '.gitignore') | Should -BeFalse
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
             param($C, $B, $Cfg)
@@ -606,13 +631,30 @@ Describe 'Sync-AvmManagedFile' {
         $onDisk = Get-Content -Raw -LiteralPath (Join-Path $script:moduleDir '.gitignore')
         $onDisk | Should -Match '\*\.tfstate'
         $onDisk | Should -Match '\.terraform/'
-        # The spec sentinel is tooling metadata and must never be synced.
-        Test-Path (Join-Path $script:moduleDir '.avm-managed-lines.json') | Should -BeFalse
+    }
+
+    It 'creates a line-managed file in a nested directory that does not exist yet' {
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.config/nested/ignore.txt' = @{ required = @('first-line') } }
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added  | Should -Contain '.config/nested/ignore.txt'
+
+        $target = Join-Path $script:moduleDir '.config/nested/ignore.txt'
+        Test-Path $target | Should -BeTrue
+        (Get-Content -Raw -LiteralPath $target) | Should -Match 'first-line'
     }
 
     It 'merges required lines into an existing file, preserving the user additions' {
-        $spec = '{ ".gitignore": { "required": ["*.tfstate"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('*.tfstate'); removed = @() } }
+        }
 
         # The consumer already has a hand-authored entry that must survive.
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "my-custom-secret.txt`n" -NoNewline
@@ -632,8 +674,9 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'removes a deprecated line while preserving the rest' {
-        $spec = '{ ".gitignore": { "required": [], "removed": ["obsolete-entry"] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @(); removed = @('obsolete-entry') } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "keep-me`nobsolete-entry`nkeep-me-too`n" -NoNewline
 
@@ -652,8 +695,9 @@ Describe 'Sync-AvmManagedFile' {
     }
 
     It 'reports drift for a line-managed file under -CheckDrift and writes nothing' {
-        $spec = '{ ".gitignore": { "required": [".terraform/"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('.terraform/'); removed = @() } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "existing`n" -NoNewline
 
@@ -674,8 +718,9 @@ Describe 'Sync-AvmManagedFile' {
         # Root ships .gitignore as a whole file, but the line spec claims the same
         # path: the line merge must win so the consumer keeps its own additions.
         Set-Content -LiteralPath (Join-Path $script:root '.gitignore') -Value "whole-file-version`n" -NoNewline
-        $spec = '{ ".gitignore": { "required": ["line-managed-entry"], "removed": [] } }'
-        Set-Content -LiteralPath (Join-Path $script:root '.avm-managed-lines.json') -Value $spec -NoNewline
+        New-TestFileGroupConfig -BaseDir $script:base -ManagedLinesByGroup @{
+            root = @{ '.gitignore' = @{ required = @('line-managed-entry'); removed = @() } }
+        }
 
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.gitignore') -Value "user-line`n" -NoNewline
 
@@ -690,6 +735,119 @@ Describe 'Sync-AvmManagedFile' {
         $onDisk | Should -Match 'user-line'
         $onDisk | Should -Match 'line-managed-entry'
         $onDisk | Should -Not -Match 'whole-file-version'
+    }
+
+    It 'stops the sync when the pinned managed-files major version is superseded' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $err = {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+                param($C, $B, $Cfg)
+
+                Mock Resolve-AvmManagedFilesVersionPlan {
+                    @{
+                        Ref           = 'v1.4.2'
+                        Status        = 'major'
+                        PinnedVersion = [semver]'1.4.2'
+                        LatestVersion = [semver]'2.0.0'
+                        TargetVersion = [semver]'1.4.2'
+                        ShouldStamp   = $false
+                        Message       = 'managed-files major release 2.0.0 is available.'
+                    }
+                }
+
+                Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+            }
+        } | Should -Throw -PassThru
+
+        $err.Exception.Code | Should -Be 'AVM1060'
+        $err.Exception.ExitCode | Should -Be 11
+        $err.Exception.PinnedVersion | Should -Be '1.4.2'
+        $err.Exception.LatestVersion | Should -Be '2.0.0'
+        Test-Path (Join-Path $script:moduleDir 'SECURITY.md') | Should -BeFalse
+    }
+
+    It 'reports a superseded major as a drift issue instead of throwing under -CheckDrift' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v1.4.2'
+                    Status        = 'major'
+                    PinnedVersion = [semver]'1.4.2'
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'1.4.2'
+                    ShouldStamp   = $false
+                    Message       = 'managed-files major release 2.0.0 is available.'
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].File | Should -Be '.avm/managed-files-version.json'
+        $result.Issues[0].Message | Should -Match 'major release 2\.0\.0'
+        Test-Path (Join-Path $script:moduleDir '.avm' 'managed-files-version.json') | Should -BeFalse
+    }
+
+    It 'stamps the version pin when the plan asks for it' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v2.0.0'
+                    Status        = 'unpinned'
+                    PinnedVersion = $null
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'2.0.0'
+                    ShouldStamp   = $true
+                    Message       = $null
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.Added | Should -Contain '.avm/managed-files-version.json'
+
+        $pinPath = Join-Path $script:moduleDir '.avm' 'managed-files-version.json'
+        Test-Path $pinPath | Should -BeTrue
+        $pin = Get-Content -Raw -LiteralPath $pinPath | ConvertFrom-Json
+        $pin.version | Should -Be '2.0.0'
+        $pin.repo | Should -Not -BeNullOrEmpty
+    }
+
+    It 'never stamps the version pin under -CheckDrift' {
+        Set-Content -LiteralPath (Join-Path $script:root 'SECURITY.md') -Value "# Security`n" -NoNewline
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; B = $script:base; Cfg = $script:cfgDir } {
+            param($C, $B, $Cfg)
+
+            Mock Resolve-AvmManagedFilesVersionPlan {
+                @{
+                    Ref           = 'v2.0.0'
+                    Status        = 'unpinned'
+                    PinnedVersion = $null
+                    LatestVersion = [semver]'2.0.0'
+                    TargetVersion = [semver]'2.0.0'
+                    ShouldStamp   = $true
+                    Message       = $null
+                }
+            }
+
+            Sync-AvmManagedFile -Context $C -ManagedFilesLocalPath $B -ConfigLocalPath $Cfg -CheckDrift
+        }
+
+        $result.Status | Should -Be 'fail'
+        Test-Path (Join-Path $script:moduleDir '.avm' 'managed-files-version.json') | Should -BeFalse
     }
 }
 

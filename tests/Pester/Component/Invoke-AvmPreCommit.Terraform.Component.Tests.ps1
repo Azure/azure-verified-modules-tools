@@ -113,13 +113,13 @@ BeforeAll {
     $null = New-Item -ItemType Directory -Path $exDir -Force
     Set-Content -LiteralPath (Join-Path $exDir 'example.rego') -Value "package example`n" -Encoding utf8NoBOM
 
-    # Slice D: materialise the files required by the seven built-in
+    # Slice D: materialise the files required by the built-in
     # convention rules so Invoke-AvmCheckConvention still reports
     # Status=pass against the fixture. AppliesTo='all' rules
     # (terraform-tf-must-exist + header-md-must-exist) require these
     # files at root AND under each immediate examples/* subdir; the
-    # other Slice D rules either fire at root only (gitignore,
-    # examples/, tests/) or trip only when the wrong filename exists
+    # other Slice D rules either fire at root only (examples/, tests/)
+    # or trip only when the wrong filename exists
     # (output.tf / variable.tf) -- so absence here is the pass state.
     $terraformTf = @(
         'terraform {',
@@ -138,35 +138,6 @@ BeforeAll {
         'Set-Content -LiteralPath (Join-Path $PSScriptRoot ''hook-output.txt'') -Value ''staged'' -Encoding utf8NoBOM'
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $exampleDir 'tflint-pre.ps1') -Value $tflintHook -Encoding utf8NoBOM
-
-    # avm.tf.gitignore-essentials requires all 24 canonical globs from
-    # legacy Terraform governance git-ignore policy.
-    $gitignoreGlobs = @(
-        '.DS_Store',
-        '.terraform.lock.hcl',
-        '.terraformrc',
-        '*.md.tmp',
-        '*.mptfbackup',
-        '*.tfstate.*',
-        '*.tfstate',
-        '*.tfvars.json',
-        '*.tfvars',
-        '**/.terraform/*',
-        '*tfplan*',
-        'avm.tflint_example.hcl',
-        'avm.tflint_example.merged.hcl',
-        'avm.tflint_module.hcl',
-        'avm.tflint_module.merged.hcl',
-        'avm.tflint.hcl',
-        'avm.tflint.merged.hcl',
-        'avmmakefile',
-        'crash.*.log',
-        'crash.log',
-        'examples/*/policy',
-        'README-generated.md',
-        'terraform.rc'
-    )
-    Set-Content -LiteralPath (Join-Path $script:fixtureRoot '.gitignore') -Value (($gitignoreGlobs -join "`n") + "`n") -Encoding utf8NoBOM
 
     & git -C $script:fixtureRoot init --quiet
     & git -C $script:fixtureRoot config user.name 'AVM Component Tests'

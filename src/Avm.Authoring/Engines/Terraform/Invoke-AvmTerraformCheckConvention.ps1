@@ -191,9 +191,6 @@ function Invoke-AvmRulePrimitive {
         'DirectoryMustExist' {
             Test-AvmRuleDirectoryMustExist -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
         }
-        'GitignoreMustContain' {
-            Test-AvmRuleGitignoreMustContain -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
-        }
         default {
             throw [AvmConfigurationException]::new(
                 "avm-rule '$($Rule.Id)': no primitive for Kind '$($Rule.Kind)'.")
