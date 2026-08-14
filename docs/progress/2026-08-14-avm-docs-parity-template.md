@@ -1,8 +1,8 @@
 # AVM documentation parity template
 
-**Status**: complete  
-**Started**: 2026-08-14  
-**Updated**: 2026-08-14  
+**Status**: complete
+**Started**: 2026-08-14
+**Updated**: 2026-08-14
 **Branch**: `jaredfholgate-avm-docs-parity-template`
 
 ## Outcome
