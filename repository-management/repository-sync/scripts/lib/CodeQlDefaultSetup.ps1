@@ -47,21 +47,23 @@ function Disable-CodeQlDefaultSetup {
 
     $endpoint = "repos/$orgAndRepoName/code-scanning/default-setup"
 
-    # `gh api` exits non-zero on 4xx. Capture stderr so we can distinguish
-    # the common no-op cases (404 = no default setup; 403 = GHAS not
-    # enabled, which on a public AVM repo just means there is nothing to
-    # disable) from a genuine error.
-    $stderrFile = [System.IO.Path]::GetTempFileName()
     try {
-        $getOutput = gh api $endpoint 2>$stderrFile
-        $exit = $LASTEXITCODE
-        $stderr = ""
-        if (Test-Path $stderrFile) { $stderr = (Get-Content -Path $stderrFile -Raw) }
+        $getResult = Invoke-GitHubCliWithRetry `
+            -commands @(
+                @{
+                    Arguments = @("api", $endpoint)
+                    OutputLog = "gh-codeql-default-setup-get.output.log"
+                }
+            ) `
+            -errorLog "gh-codeql-default-setup-get.error.log" `
+            -maxRetries 5 `
+            -retryDelayIncremental 5 `
+            -returnOutput
 
-        if ($exit -eq 0) {
+        if ($getResult.success) {
             $state = $null
             try {
-                $parsed = $getOutput | ConvertFrom-Json
+                $parsed = $getResult.output | ConvertFrom-Json
                 $state = $parsed.state
             } catch {
                 Write-Warning "$modeTag Could not parse code-scanning default-setup response for $orgAndRepoName : $_"
@@ -80,34 +82,33 @@ function Disable-CodeQlDefaultSetup {
                 return $result
             }
 
-            $patchStderr = [System.IO.Path]::GetTempFileName()
-            try {
-                # `-f` (raw field) passes a literal string body parameter,
-                # avoiding the need to wrangle a JSON payload through stdin
-                # on either Linux or Windows runners. Equivalent payload:
-                # `{"state":"not-configured"}`.
-                $null = gh api $endpoint --method PATCH -f "state=not-configured" 2>$patchStderr
-                $patchExit = $LASTEXITCODE
-                if ($patchExit -ne 0) {
-                    $patchErr = ""
-                    if (Test-Path $patchStderr) { $patchErr = (Get-Content -Path $patchStderr -Raw) }
-                    throw "gh api PATCH $endpoint exited $patchExit : $patchErr"
-                }
-                Write-Host "  Disabled CodeQL default setup on $orgAndRepoName." -ForegroundColor Green
-                $result.Disabled = $true
-            } finally {
-                Remove-Item -Path $patchStderr -Force -ErrorAction SilentlyContinue
+            # `-f` (raw field) passes a literal string body parameter,
+            # avoiding the need to wrangle a JSON payload through stdin.
+            $patchResult = Invoke-GitHubCliWithRetry `
+                -commands @(
+                    @{
+                        Arguments = @("api", $endpoint, "--method", "PATCH", "-f", "state=not-configured")
+                        OutputLog = "gh-codeql-default-setup-patch.output.log"
+                    }
+                ) `
+                -errorLog "gh-codeql-default-setup-patch.error.log" `
+                -maxRetries 5 `
+                -retryDelayIncremental 5
+            if (!$patchResult.success) {
+                throw "gh api PATCH $endpoint exited $($patchResult.exitCode) : $($patchResult.error)"
             }
-        } elseif ($stderr -match "HTTP 404") {
+            Write-Host "  Disabled CodeQL default setup on $orgAndRepoName." -ForegroundColor Green
+            $result.Disabled = $true
+        } elseif ($getResult.error -match "HTTP 404") {
             # Endpoint not present (very old repos / not-yet-onboarded).
             # Nothing to disable.
             Write-Host "$modeTag $orgAndRepoName has no CodeQL default-setup configuration (HTTP 404)."
-        } elseif ($stderr -match "HTTP 403") {
+        } elseif ($getResult.error -match "HTTP 403") {
             # GitHub Advanced Security is not enabled on this repo - so
             # default setup cannot be configured either. No-op.
             Write-Host "$modeTag $orgAndRepoName : code-scanning default-setup endpoint returned 403 (GHAS not enabled); nothing to disable."
         } else {
-            throw "gh api $endpoint exited $exit : $stderr"
+            throw "gh api $endpoint exited $($getResult.exitCode) : $($getResult.error)"
         }
     } catch {
         Write-Warning "  Failed to check/disable CodeQL default setup for $orgAndRepoName : $_"
@@ -117,8 +118,6 @@ function Disable-CodeQlDefaultSetup {
             -message "Failed to check or disable CodeQL default setup on $orgAndRepoName." `
             -data $null `
             -issueLog $result.IssueLog
-    } finally {
-        Remove-Item -Path $stderrFile -Force -ErrorAction SilentlyContinue
     }
 
     return $result

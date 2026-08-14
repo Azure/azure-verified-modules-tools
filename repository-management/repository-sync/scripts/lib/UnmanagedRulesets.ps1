@@ -68,26 +68,31 @@ function Remove-UnmanagedRulesets {
     # cannot parse, and any client-side merge of that shape is fragile.
     $listEndpoint = "repos/$orgAndRepoName/rulesets?includes_parents=false&per_page=100"
 
-    $stderrFile = [System.IO.Path]::GetTempFileName()
     try {
-        $listOutput = gh api $listEndpoint 2>$stderrFile
-        $exit = $LASTEXITCODE
-        $stderr = ""
-        if (Test-Path $stderrFile) { $stderr = (Get-Content -Path $stderrFile -Raw) }
+        $listResult = Invoke-GitHubCliWithRetry `
+            -commands @(
+                @{
+                    Arguments = @("api", $listEndpoint)
+                    OutputLog = "gh-rulesets-list.output.log"
+                }
+            ) `
+            -errorLog "gh-rulesets-list.error.log" `
+            -maxRetries 5 `
+            -retryDelayIncremental 5 `
+            -returnOutput
 
-        if ($exit -ne 0) {
-            throw "gh api $listEndpoint exited $exit : $stderr"
+        if (!$listResult.success) {
+            throw "gh api $listEndpoint exited $($listResult.exitCode) : $($listResult.error)"
         }
 
         $rulesets = @()
-        if (-not [string]::IsNullOrWhiteSpace($listOutput)) {
+        if (-not [string]::IsNullOrWhiteSpace($listResult.output)) {
             try {
                 # `gh api` (no --paginate) returns a single JSON array.
                 # `@(...)` coerces a 1-element result back to an array
                 # because `ConvertFrom-Json` unwraps single-element arrays
                 # to a scalar PSCustomObject by default.
-                $joined = ($listOutput -join "`n").Trim()
-                $rulesets = @($joined | ConvertFrom-Json)
+                $rulesets = @(($listResult.output.Trim()) | ConvertFrom-Json)
             } catch {
                 throw "Failed to parse rulesets response for $orgAndRepoName : $_"
             }
@@ -129,30 +134,27 @@ function Remove-UnmanagedRulesets {
             }
 
             $deleteEndpoint = "repos/$orgAndRepoName/rulesets/$rsId"
-            $deleteStderr = [System.IO.Path]::GetTempFileName()
-            try {
-                $null = gh api $deleteEndpoint --method DELETE 2>$deleteStderr
-                $deleteExit = $LASTEXITCODE
-                if ($deleteExit -ne 0) {
-                    $deleteErr = ""
-                    if (Test-Path $deleteStderr) { $deleteErr = (Get-Content -Path $deleteStderr -Raw) }
-
-                    # A 404 here just means the ruleset disappeared between
-                    # our LIST and DELETE (someone else deleted it, or our
-                    # paginated list returned a stale entry). Treat as a
-                    # successful no-op so we do not raise a spurious issue.
-                    if ($deleteErr -match "HTTP 404") {
-                        Write-Host "  Ruleset '$rsName' (id=$rsId) already gone on $orgAndRepoName (HTTP 404)."
-                        continue
+            $deleteResult = Invoke-GitHubCliWithRetry `
+                -commands @(
+                    @{
+                        Arguments = @("api", $deleteEndpoint, "--method", "DELETE")
+                        OutputLog = "gh-rulesets-delete.output.log"
                     }
-
-                    throw "gh api DELETE $deleteEndpoint exited $deleteExit : $deleteErr"
+                ) `
+                -errorLog "gh-rulesets-delete.error.log" `
+                -maxRetries 5 `
+                -retryDelayIncremental 5
+            if (!$deleteResult.success) {
+                # A 404 here just means the ruleset disappeared between our
+                # LIST and DELETE. Treat it as a successful no-op.
+                if ($deleteResult.error -match "HTTP 404") {
+                    Write-Host "  Ruleset '$rsName' (id=$rsId) already gone on $orgAndRepoName (HTTP 404)."
+                    continue
                 }
-                Write-Host "  Deleted unmanaged ruleset '$rsName' (id=$rsId) on $orgAndRepoName." -ForegroundColor Green
-                $result.RemovedCount++
-            } finally {
-                Remove-Item -Path $deleteStderr -Force -ErrorAction SilentlyContinue
+                throw "gh api DELETE $deleteEndpoint exited $($deleteResult.exitCode) : $($deleteResult.error)"
             }
+            Write-Host "  Deleted unmanaged ruleset '$rsName' (id=$rsId) on $orgAndRepoName." -ForegroundColor Green
+            $result.RemovedCount++
         }
     } catch {
         Write-Warning "  Failed to check/remove unmanaged rulesets for $orgAndRepoName : $_"
@@ -162,8 +164,6 @@ function Remove-UnmanagedRulesets {
             -message "Failed to check or remove unmanaged repository ruleset(s) on $orgAndRepoName." `
             -data "$_" `
             -issueLog $result.IssueLog
-    } finally {
-        Remove-Item -Path $stderrFile -Force -ErrorAction SilentlyContinue
     }
 
     return $result

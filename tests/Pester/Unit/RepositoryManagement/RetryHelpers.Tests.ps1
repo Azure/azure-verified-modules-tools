@@ -173,3 +173,52 @@ Describe "Invoke-TerraformWithRetry transient failures" {
         $global:retryHelpersAttempts | Should -Be 1
     }
 }
+
+Describe "Invoke-GitHubCliWithRetry transient failures" {
+    It "retries an intermittent x509 failure" {
+        $global:retryHelpersAttempts = 0
+        $global:retryHelpersResponses = @(
+            @{
+                ExitCode = 1
+                Output   = ""
+                Error    = "tls: failed to verify certificate: x509: certificate is not valid for any names"
+            }
+            @{ ExitCode = 0; Output = '{"ok":true}'; Error = "" }
+        )
+
+        $result = Invoke-GitHubCliWithRetry `
+            -commands @(@{
+                    Arguments = @("api", "repos/Azure/example")
+                    OutputLog = (Join-Path $TestDrive "gh-output.log")
+                }) `
+            -errorLog (Join-Path $TestDrive "gh-error.log") `
+            -maxRetries 1 `
+            -retryDelayIncremental 0 `
+            -returnOutputParsedFromJson
+
+        $result.success | Should -BeTrue
+        $result.output.ok | Should -BeTrue
+        $global:retryHelpersAttempts | Should -Be 2
+    }
+
+    It "does not retry a deterministic GitHub CLI failure" {
+        $global:retryHelpersAttempts = 0
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 1; Output = ""; Error = "HTTP 404: Not Found" }
+        )
+
+        $result = Invoke-GitHubCliWithRetry `
+            -commands @(@{
+                    Arguments = @("api", "repos/Azure/example")
+                    OutputLog = (Join-Path $TestDrive "gh-output.log")
+                }) `
+            -errorLog (Join-Path $TestDrive "gh-error.log") `
+            -maxRetries 1 `
+            -retryDelayIncremental 0
+
+        $result.success | Should -BeFalse
+        $result.exitCode | Should -Be 1
+        $result.error | Should -Match "HTTP 404"
+        $global:retryHelpersAttempts | Should -Be 1
+    }
+}
