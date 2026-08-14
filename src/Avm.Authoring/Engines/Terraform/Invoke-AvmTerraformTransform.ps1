@@ -102,6 +102,42 @@ function Get-AvmTerraformFile {
     )
 }
 
+function Test-AvmMapotfTransientProviderError {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [AllowEmptyString()]
+        [string] $Output
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    if ([string]::IsNullOrWhiteSpace($Output)) {
+        return $false
+    }
+
+    $normalized = $Output `
+        -replace '\x1B\[[0-?]*[ -/]*[@-~]', '' `
+        -replace '[\r\n│]+', ' ' `
+        -replace '\s+', ' '
+
+    $patterns = @(
+        'context deadline exceeded'
+        'Client\.Timeout exceeded while awaiting headers'
+        'failed to retrieve cryptographic signature for provider'
+        '(?:provider|registry).*(?:500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)'
+    )
+
+    foreach ($pattern in $patterns) {
+        if ($normalized -match $pattern) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Invoke-AvmTerraformTransform {
     <#
     .SYNOPSIS
@@ -145,7 +181,9 @@ function Invoke-AvmTerraformTransform {
         in CI therefore means the author did not run pre-commit, and pr-check
         flags it.
 
-        mapotf exit codes: 0 = success; anything else is surfaced as
+        mapotf exit codes: 0 = success. A transform failure caused by a
+        recognized transient Terraform provider network error is retried twice
+        with incremental delay; other failures and retry exhaustion surface as
         AvmProcessException. A missing mapotf binary (AvmToolException) or a
         missing config bundle (AvmConfigurationException) propagates so the
         composition chain reports the step as 'skipped' on an unconfigured
@@ -236,18 +274,38 @@ function Invoke-AvmTerraformTransform {
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
 
-        $transform = Invoke-AvmProcess `
-            -FilePath $tool.Path `
-            -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
-            -WorkingDirectory $Context.Root `
-            -EnvVars $mapotfEnv `
-            -IgnoreExitCode
-        if ($transform.ExitCode -ne 0) {
-            $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
-            $tail = if ($stderr) { ": $stderr" } else { '.' }
-            throw [AvmProcessException]::new(
-                ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
-        }
+        $maxRetries = 2
+        $attempt = 0
+        do {
+            $transform = Invoke-AvmProcess `
+                -FilePath $tool.Path `
+                -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
+                -WorkingDirectory $Context.Root `
+                -EnvVars $mapotfEnv `
+                -IgnoreExitCode
+            if ($transform.ExitCode -eq 0) {
+                break
+            }
+
+            $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
+            if (
+                $attempt -ge $maxRetries -or
+                -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
+            ) {
+                $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
+                $tail = if ($stderr) { ": $stderr" } else { '.' }
+                throw [AvmProcessException]::new(
+                    ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
+            }
+
+            $attempt++
+            $delaySeconds = $attempt * 5
+            Write-AvmLog (
+                'transform: transient provider download failure; retrying mapotf in {0}s ({1} of {2})' -f
+                $delaySeconds, $attempt, $maxRetries
+            ) -Level Warning | Out-Null
+            Start-Sleep -Seconds $delaySeconds
+        } while ($attempt -le $maxRetries)
         Write-AvmLog 'transform: mapotf transform completed' -Level Verbose | Out-Null
 
         $clean = Invoke-AvmProcess `
