@@ -1,0 +1,84 @@
+{{~ func output_type(output) ~}}
+{{~ if string.contains custom.typelessOutputs ("|" + output.name + "|") ~}}
+{{~ ret "" ~}}
+{{~ end ~}}
+{{~ if output.secure && output.type == "string" ~}}
+{{~ ret "securestring" ~}}
+{{~ end ~}}
+{{~ if output.secure && output.type == "object" ~}}
+{{~ ret "secureObject" ~}}
+{{~ end ~}}
+{{~ if output.type == "any" ~}}
+{{~ ret "" ~}}
+{{~ end ~}}
+{{~ ret output.type ~}}
+{{~ end ~}}
+# {{ module.name }} `[{{ custom.primaryResourceType }}]`
+
+{{ module.description }}
+
+You can reference the module as follows:
+```bicep
+module {{ custom.moduleSymbolName }} 'br/public:{{ custom.moduleReference }}:<version>' = {
+  params: { (...) }
+}
+```
+For examples, please refer to the [Usage Examples](#usage-examples) section.
+
+## Navigation
+
+- [Resource Types](#Resource-Types)
+- [Usage examples](#Usage-examples)
+- [Parameters](#Parameters)
+{{~ if module.exportedFunctions.size > 0 ~}}
+- [Exported functions](#Exported-functions)
+{{~ end ~}}
+- [Outputs](#Outputs)
+{{~ if custom.hasCrossReferences == "true" ~}}
+- [Cross-referenced modules](#Cross-referenced-modules)
+{{~ end ~}}
+{{~ if custom.hasNotes == "true" ~}}
+- [Notes](#Notes)
+{{~ end ~}}
+- [Data Collection](#Data-Collection)
+
+{{ include ".bicep-docs-parity/resource-types.md" }}
+
+{{ include ".bicep-docs-parity/usage-examples.md" }}
+
+{{ include ".bicep-docs-parity/parameters.md" }}
+{{~ if module.exportedFunctions.size > 0 ~}}
+
+## Exported functions
+
+| Function | Description |
+| :-- | :-- |
+{{~ for exported_function in module.exportedFunctions ~}}
+| `{{ exported_function.name }}` | {{ exported_function.description }} |
+{{~ end ~}}
+{{~ end ~}}
+
+## Outputs
+{{~ if module.outputs.size > 0 ~}}
+
+| Output | Type | Description |
+| :-- | :-- | :-- |
+{{~ for output in module.outputs ~}}
+| `{{ output.name }}` | {{ output_type output }} | {{ output.description }} |
+{{~ end ~}}
+{{~ else ~}}
+
+_None_
+{{~ end ~}}
+{{~ if custom.hasCrossReferences == "true" ~}}
+
+{{ include ".bicep-docs-parity/cross-referenced-modules.md" }}
+{{~ end ~}}
+{{~ if custom.hasNotes == "true" ~}}
+
+{{ include ".bicep-docs-parity/notes.md" }}
+{{~ end ~}}
+
+## Data Collection
+
+The software may collect information about you and your use of the software and send it to Microsoft. Microsoft may use this information to provide services and improve our products and services. You may turn off the telemetry as described in the [repository](https://aka.ms/avm/telemetry). There are also some features in the software that may enable you and Microsoft to collect data from users of your applications. If you use these features, you must comply with applicable law, including providing appropriate notices to users of your applications together with a copy of Microsoft's privacy statement. Our privacy statement is located at <https://go.microsoft.com/fwlink/?LinkID=824704>. You can learn more about data collection and use in the help documentation and our privacy statement. Your use of the software operates as your consent to these practices.

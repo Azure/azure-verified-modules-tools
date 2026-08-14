@@ -1,0 +1,17 @@
+{{~ func is_avm_parameter(item) ~}}
+{{~ ret item.description && ((item.description | string.starts_with "Required.") || (item.description | string.starts_with "Conditional.") || (item.description | string.starts_with "Optional.") || (item.description | string.starts_with "Generated.")) ~}}
+{{~ end ~}}
+{{~ func dump_parameters(items, prefix) ~}}
+{{~ for item in items ~}}
+{{~ if is_avm_parameter item ~}}
+P	{{ prefix }}{{ item.name }}
+{{~ dump_parameters item.properties (prefix + item.name + ".") ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ dump_parameters module.parameters "" ~}}
+{{~ for example in module.usageExamples ~}}
+{{~ if (example.path | string.starts_with "tests/e2e/") && (example.path | string.ends_with "main.test.bicep") ~}}
+E	{{ example.name }}
+{{~ end ~}}
+{{~ end ~}}
