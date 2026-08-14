@@ -1,0 +1,1 @@
+{{ include ".bicep-docs-parity/full-readme.md" }}

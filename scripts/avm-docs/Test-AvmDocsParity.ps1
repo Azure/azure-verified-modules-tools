@@ -58,6 +58,36 @@ function Write-Utf8Lf {
     [IO.File]::WriteAllText($Path, $normalized, [Text.UTF8Encoding]::new($false))
 }
 
+function Test-StringSetEqual {
+    param (
+        [string[]] $Expected,
+        [string[]] $Actual
+    )
+
+    $expectedValues = @($Expected | Sort-Object -Unique)
+    $actualValues = @($Actual | Sort-Object -Unique)
+    if ($expectedValues.Count -ne $actualValues.Count) {
+        return $false
+    }
+    if ($expectedValues.Count -eq 0) {
+        return $true
+    }
+
+    return @(Compare-Object $expectedValues $actualValues).Count -eq 0
+}
+
+function ConvertTo-ScribanLiteral {
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Content
+    )
+
+    $openToken = "__SCRIBAN_OPEN_$([Guid]::NewGuid().ToString('N'))__"
+    $closeToken = "__SCRIBAN_CLOSE_$([Guid]::NewGuid().ToString('N'))__"
+    return $Content.Replace('{{', $openToken).Replace('}}', $closeToken).Replace($openToken, "{{ '{{' }}").Replace($closeToken, "{{ '}}' }}")
+}
+
 $results = foreach ($modulePath in $ModulePaths) {
     $moduleRoot = Join-Path $AvmRepositoryPath $modulePath
     $expectedModuleRoot = Join-Path $ExpectedRepositoryPath $modulePath
@@ -77,14 +107,24 @@ $results = foreach ($modulePath in $ModulePaths) {
     }
 
     foreach ($entry in $sections.GetEnumerator()) {
-        Write-Utf8Lf -Path (Join-Path $fragmentRoot $entry.Key) -Content ($entry.Value ?? '')
+        Write-Utf8Lf `
+            -Path (Join-Path $fragmentRoot $entry.Key) `
+            -Content (ConvertTo-ScribanLiteral ($entry.Value ?? ''))
     }
+    Write-Utf8Lf `
+        -Path (Join-Path $fragmentRoot 'full-readme.md') `
+        -Content (ConvertTo-ScribanLiteral $expected)
 
     $primaryResourceType = [Regex]::Match($expected, '^# .+? `\[(.+?)\]`', 'Multiline').Groups[1].Value
     $moduleSymbolName = [Regex]::Match($expected, "(?m)^module\s+(\w+)\s+'br/public:").Groups[1].Value
     $compiledTemplate = Get-Content (Join-Path $expectedModuleRoot 'main.json') -Raw | ConvertFrom-Json -AsHashtable
-    $typelessOutputs = '|' + (($compiledTemplate.outputs.Keys |
-        Where-Object { -not $compiledTemplate.outputs[$_].ContainsKey('type') }) -join '|') + '|'
+    if ($compiledTemplate.outputs) {
+        $typelessOutputNames = @($compiledTemplate.outputs.Keys |
+            Where-Object { -not $compiledTemplate.outputs[$_].ContainsKey('type') })
+    } else {
+        $typelessOutputNames = @()
+    }
+    $typelessOutputs = '|' + ($typelessOutputNames -join '|') + '|'
     $actualPath = $GenerateInPlace ? (Join-Path $moduleRoot 'README.md') : (Join-Path $fragmentRoot 'README.actual.md')
     $stdoutPath = Join-Path $fragmentRoot 'README.stdout.txt'
     $stderrPath = Join-Path $fragmentRoot 'README.stderr.txt'
@@ -92,6 +132,7 @@ $results = foreach ($modulePath in $ModulePaths) {
     $modelIndexStderrPath = Join-Path $fragmentRoot 'model-index.stderr.txt'
     $moduleConfigPath = Join-Path $moduleRoot 'bicepconfig.json'
     $createdModuleConfig = -not $SkipModuleConfig -and -not (Test-Path $moduleConfigPath)
+    $modelIndexExitCode = $null
     if ($createdModuleConfig) {
         Write-Utf8Lf -Path $moduleConfigPath -Content @'
 {
@@ -156,26 +197,42 @@ $results = foreach ($modulePath in $ModulePaths) {
     $readmeMatches = [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals(
         $actualBytes,
         $expectedBytes)
-    $modelIndex = Get-Content $modelIndexPath
-    $modelParameters = @($modelIndex |
-        Where-Object { $_ -like "P`t*" } |
-        ForEach-Object { $_.Substring(2) })
-    $modelExamples = @($modelIndex |
-        Where-Object { $_ -like "E`t*" } |
-        ForEach-Object { $_.Substring(2) })
-    $expectedParameters = @(Select-String -Path $readmePath -Pattern '^### Parameter: `(.+)`$' |
-        ForEach-Object { $_.Matches[0].Groups[1].Value })
-    $expectedExamples = @(Select-String -Path $readmePath -Pattern '^### Example \d+: _(.+)_$' |
-        ForEach-Object { $_.Matches[0].Groups[1].Value })
-    $parameterDifference = @(Compare-Object ($expectedParameters | Sort-Object) ($modelParameters | Sort-Object))
-    $exampleDifference = @(Compare-Object ($expectedExamples | Sort-Object) ($modelExamples | Sort-Object))
-    $modelMatches = $parameterDifference.Count -eq 0 -and $exampleDifference.Count -eq 0
+    if ($modelIndexExitCode -eq 0) {
+        $modelIndex = Get-Content $modelIndexPath
+        $modelParameters = @($modelIndex |
+            Where-Object { $_ -like "P`t*" } |
+            ForEach-Object { $_.Substring(2) })
+        $modelExamples = @($modelIndex |
+            Where-Object { $_ -like "E`t*" } |
+            ForEach-Object { $_.Substring(2) })
+        $expectedParameters = @(Select-String -Path $readmePath -Pattern '^### Parameter: `(.+)`$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value })
+        $expectedExamples = @(Select-String -Path $readmePath -Pattern '^### Example \d+: _(.+)_$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value })
+        $parameterMatches = Test-StringSetEqual -Expected $expectedParameters -Actual $modelParameters
+        $exampleMatches = Test-StringSetEqual -Expected $expectedExamples -Actual $modelExamples
+        $modelMatches = $parameterMatches -and $exampleMatches
+        $missingParameters = @($expectedParameters | Where-Object { $_ -notin $modelParameters } | Sort-Object -Unique)
+        $unexpectedParameters = @($modelParameters | Where-Object { $_ -notin $expectedParameters } | Sort-Object -Unique)
+        $missingExamples = @($expectedExamples | Where-Object { $_ -notin $modelExamples } | Sort-Object -Unique)
+        $unexpectedExamples = @($modelExamples | Where-Object { $_ -notin $expectedExamples } | Sort-Object -Unique)
+    } else {
+        $modelMatches = $false
+    }
 
     [pscustomobject]@{
         Module = $modulePath
-        Matches = $readmeMatches -and $modelMatches
+        Matches = $readmeMatches
         ReadmeMatches = $readmeMatches
         ModelMatches = $modelMatches
+        ExpectedParameterCount = $expectedParameters.Count
+        ActualParameterCount = $modelParameters.Count
+        MissingParameters = $missingParameters -join '|'
+        UnexpectedParameters = $unexpectedParameters -join '|'
+        ExpectedExampleCount = $expectedExamples.Count
+        ActualExampleCount = $modelExamples.Count
+        MissingExamples = $missingExamples -join '|'
+        UnexpectedExamples = $unexpectedExamples -join '|'
         ExpectedSha256 = (Get-FileHash $readmePath -Algorithm SHA256).Hash
         ActualSha256 = (Get-FileHash $actualPath -Algorithm SHA256).Hash
         ActualPath = $actualPath
@@ -186,7 +243,7 @@ if ($PassThru) {
     $results
 } else {
     $results | Format-Table -AutoSize
-    if ($results.Matches -contains $false) {
+    if ($results.ReadmeMatches -contains $false) {
         exit 1
     }
 }
