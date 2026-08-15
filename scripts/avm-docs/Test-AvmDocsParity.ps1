@@ -137,17 +137,17 @@ $results = foreach ($modulePath in $ModulePaths) {
             $TemplatePath
             '--template-root'
             $moduleRoot
-            '--set'
+            '--custom-template-value'
             "primaryResourceType=$primaryResourceType"
-            '--set'
+            '--custom-template-value'
             "moduleSymbolName=$moduleSymbolName"
-            '--set'
+            '--custom-template-value'
             "moduleReference=$($modulePath.Replace('\', '/'))"
-            '--set'
+            '--custom-template-value'
             "typelessOutputs=$typelessOutputs"
-            '--set'
+            '--custom-template-value'
             "hasCrossReferences=$(($null -ne $sections['cross-referenced-modules.md']).ToString().ToLowerInvariant())"
-            '--set'
+            '--custom-template-value'
             "hasNotes=$(($null -ne $sections['notes.md']).ToString().ToLowerInvariant())"
         )
     if ($GenerateInPlace) {

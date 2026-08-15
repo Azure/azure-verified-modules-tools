@@ -2,7 +2,7 @@
 
 **Status**: complete
 **Started**: 2026-08-14
-**Updated**: 2026-08-14
+**Updated**: 2026-08-15
 **Branch**: `jaredfholgate-avm-docs-parity-template`
 
 ## Outcome
@@ -34,6 +34,8 @@ PowerShell verifiers for Bicep AVM README documentation parity.
   referring to the per-module stderr report.
 - The verifier does not create or modify `bicepconfig.json`. All-module reports
   record the Bicep version and executable SHA256 alongside the comparison data.
+- The verifier uses Bicep's renamed `--custom-template-value` CLI option when
+  passing Scriban template values.
 - Of the semantic-model mismatches, 34 involved parameters and 15 involved
   example names.
 - The final templates match their validated source after LF normalization, both
