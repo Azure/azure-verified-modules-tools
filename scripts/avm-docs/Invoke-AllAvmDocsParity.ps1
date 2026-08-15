@@ -159,7 +159,21 @@ $summary = [pscustomobject]@{
     Duration = $stopwatch.Elapsed.ToString()
 }
 $summary | ConvertTo-Json | Set-Content (Join-Path $OutputPath 'summary.json')
-$errorDetails = @($results | Where-Object Error | ForEach-Object { "$($_.Module): $($_.Error)" })
+$errorDetails = @($results | Where-Object Error | ForEach-Object {
+    $module = $_.Module
+    $stderrPath = Join-Path $OutputPath "$module/README.stderr.txt"
+    $diagnostics = if (Test-Path $stderrPath) {
+        @(Get-Content $stderrPath | Where-Object { $_ -match ' : Error ' })
+    } else {
+        @()
+    }
+
+    if ($diagnostics.Count -gt 0) {
+        @("$module`:") + @($diagnostics | ForEach-Object { "  $_" })
+    } else {
+        "$module`: $($_.Error)"
+    }
+})
 @(
     "Repository commit: $($summary.RepositoryCommit)"
     "Total modules compared: $($summary.TotalModules)"

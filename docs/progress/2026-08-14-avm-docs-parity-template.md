@@ -25,11 +25,13 @@ PowerShell verifiers for Bicep AVM README documentation parity.
 ## Validation
 
 - `Test-AvmDocsParity.ps1` parses without PowerShell syntax errors.
-- The finalized full run compared 573 modules in `00:06:13.5504992`: 572
+- The definitive full run compared 573 modules in `00:06:59.1954771`: 572
   generated READMEs matched byte-for-byte, one module had a genuine compilation
   failure, and 49 semantic-model mismatches were retained in detailed reports.
 - The failure was `avm/ptn/app/container-job-toolkit` with BCP426, BCP104,
   BCP287, and BCP036; no README was generated for that module.
+- `validation.txt` includes those captured compiler diagnostics rather than only
+  referring to the per-module stderr report.
 - Of the semantic-model mismatches, 34 involved parameters and 15 involved
   example names.
 - The final templates match their validated source after LF normalization, both
