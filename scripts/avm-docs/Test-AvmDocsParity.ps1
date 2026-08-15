@@ -17,8 +17,6 @@ param (
 
     [string] $ModelIndexTemplatePath = (Join-Path $PSScriptRoot 'model-index.scriban'),
 
-    [switch] $SkipModuleConfig,
-
     [switch] $GenerateInPlace,
 
     [switch] $PassThru
@@ -130,21 +128,8 @@ $results = foreach ($modulePath in $ModulePaths) {
     $stderrPath = Join-Path $fragmentRoot 'README.stderr.txt'
     $modelIndexPath = Join-Path $fragmentRoot 'model-index.tsv'
     $modelIndexStderrPath = Join-Path $fragmentRoot 'model-index.stderr.txt'
-    $moduleConfigPath = Join-Path $moduleRoot 'bicepconfig.json'
-    $createdModuleConfig = -not $SkipModuleConfig -and -not (Test-Path $moduleConfigPath)
     $modelIndexExitCode = $null
-    if ($createdModuleConfig) {
-        Write-Utf8Lf -Path $moduleConfigPath -Content @'
-{
-  "experimentalFeaturesEnabled": {
-    "docsGeneration": true
-  }
-}
-'@
-    }
-
-    try {
-        $commandArguments = @(
+    $commandArguments = @(
             'docs'
             ($GenerateInPlace ? 'generate' : 'output')
             $mainPath
@@ -165,25 +150,20 @@ $results = foreach ($modulePath in $ModulePaths) {
             '--set'
             "hasNotes=$(($null -ne $sections['notes.md']).ToString().ToLowerInvariant())"
         )
-        if ($GenerateInPlace) {
-            $commandArguments += @('--output-file', 'README.md')
-        }
+    if ($GenerateInPlace) {
+        $commandArguments += @('--output-file', 'README.md')
+    }
 
-        & $BicepPath @commandArguments `
-            1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
-            2> $stderrPath
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 0) {
-            & $BicepPath docs output $mainPath `
-                --template-file $ModelIndexTemplatePath `
-                1> $modelIndexPath `
-                2> $modelIndexStderrPath
-            $modelIndexExitCode = $LASTEXITCODE
-        }
-    } finally {
-        if ($createdModuleConfig) {
-            Remove-Item -LiteralPath $moduleConfigPath -Force
-        }
+    & $BicepPath @commandArguments `
+        1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
+        2> $stderrPath
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        & $BicepPath docs output $mainPath `
+            --template-file $ModelIndexTemplatePath `
+            1> $modelIndexPath `
+            2> $modelIndexStderrPath
+        $modelIndexExitCode = $LASTEXITCODE
     }
 
     if ($exitCode -ne 0) {

@@ -32,6 +32,8 @@ PowerShell verifiers for Bicep AVM README documentation parity.
   BCP287, and BCP036; no README was generated for that module.
 - `validation.txt` includes those captured compiler diagnostics rather than only
   referring to the per-module stderr report.
+- The verifier does not create or modify `bicepconfig.json`. All-module reports
+  record the Bicep version and executable SHA256 alongside the comparison data.
 - Of the semantic-model mismatches, 34 involved parameters and 15 involved
   example names.
 - The final templates match their validated source after LF normalization, both

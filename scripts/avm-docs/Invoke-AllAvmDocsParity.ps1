@@ -21,8 +21,6 @@ $ErrorActionPreference = 'Stop'
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $templatePath = Join-Path $PSScriptRoot 'README.byte-parity.scriban'
 $modelIndexTemplatePath = Join-Path $PSScriptRoot 'model-index.scriban'
-$rootConfigPath = Join-Path $WorkingRepositoryPath 'bicepconfig.json'
-$originalRootConfig = [IO.File]::ReadAllText($rootConfigPath)
 $modulePaths = @(Get-ChildItem (Join-Path $SourceRepositoryPath 'avm') -Recurse -Filter main.bicep -File |
     Where-Object {
         (Test-Path (Join-Path $_.DirectoryName 'README.md')) -and
@@ -33,23 +31,7 @@ $modulePaths = @(Get-ChildItem (Join-Path $SourceRepositoryPath 'avm') -Recurse 
 
 New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
 
-try {
-    if ($originalRootConfig -notmatch '"docsGeneration"\s*:\s*true') {
-        $objectStart = $originalRootConfig.IndexOf('{')
-        $featureConfig = @'
-
-  "experimentalFeaturesEnabled": {
-    "docsGeneration": true
-  },
-'@
-        $enabledConfig = $originalRootConfig.Insert($objectStart + 1, $featureConfig)
-        [IO.File]::WriteAllText(
-            $rootConfigPath,
-            $enabledConfig,
-            [Text.UTF8Encoding]::new($false))
-    }
-
-    $results = @($modulePaths | ForEach-Object -Parallel {
+$results = @($modulePaths | ForEach-Object -Parallel {
         $modulePath = $_
         $moduleRoot = Join-Path $using:WorkingRepositoryPath $modulePath
         $moduleOutputPath = Join-Path $using:OutputPath $modulePath
@@ -63,7 +45,6 @@ try {
                 -ModulePaths @($modulePath) `
                 -TemplatePath $using:templatePath `
                 -ModelIndexTemplatePath $using:modelIndexTemplatePath `
-                -SkipModuleConfig `
                 -GenerateInPlace `
                 -PassThru
 
@@ -129,13 +110,7 @@ try {
                 Error = $_.Exception.Message
             }
         }
-    } -ThrottleLimit $ThrottleLimit)
-} finally {
-    [IO.File]::WriteAllText(
-        $rootConfigPath,
-        $originalRootConfig,
-        [Text.UTF8Encoding]::new($false))
-}
+} -ThrottleLimit $ThrottleLimit)
 
 $results = @($results | Sort-Object Module)
 $results | Export-Csv (Join-Path $OutputPath 'comparison.csv') -NoTypeInformation
@@ -145,6 +120,8 @@ $semanticMismatches | Export-Csv (Join-Path $OutputPath 'model-mismatches.csv') 
 
 $stopwatch.Stop()
 $summary = [pscustomobject]@{
+    BicepVersion = (& $BicepPath --version)
+    BicepExecutableSha256 = (Get-FileHash $BicepPath -Algorithm SHA256).Hash
     RepositoryCommit = (git -C $SourceRepositoryPath rev-parse HEAD)
     TotalModules = $results.Count
     GeneratedReadmes = @($results | Where-Object GeneratedReadme).Count
@@ -175,6 +152,8 @@ $errorDetails = @($results | Where-Object Error | ForEach-Object {
     }
 })
 @(
+    "Bicep version: $($summary.BicepVersion)"
+    "Bicep executable SHA256: $($summary.BicepExecutableSha256)"
     "Repository commit: $($summary.RepositoryCommit)"
     "Total modules compared: $($summary.TotalModules)"
     "Generated READMEs: $($summary.GeneratedReadmes)"
