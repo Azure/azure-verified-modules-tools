@@ -17,7 +17,7 @@ param (
 
     [string] $ModelIndexTemplatePath = (Join-Path $PSScriptRoot 'model-index.scriban'),
 
-    [string] $DocsConfigPath = (Join-Path $PSScriptRoot 'bicep-docs.json'),
+    [string] $DocsConfigPath = (Join-Path $PSScriptRoot 'bicepdocsconfig.json'),
 
     [switch] $GenerateInPlace,
 

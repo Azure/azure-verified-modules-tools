@@ -1,4 +1,11 @@
 {
+  "$schema": "https://raw.githubusercontent.com/Azure/bicep/main/src/vscode-bicep/schemas/bicepdocsconfig.schema.json",
+  "input": {
+    "include": [
+      "**/main.bicep"
+    ],
+    "exclude": []
+  },
   "examples": {
     "reassignments": [
       {

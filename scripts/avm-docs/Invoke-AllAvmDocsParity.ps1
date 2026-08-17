@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $templatePath = Join-Path $PSScriptRoot 'README.byte-parity.scriban'
 $modelIndexTemplatePath = Join-Path $PSScriptRoot 'model-index.scriban'
-$docsConfigPath = Join-Path $PSScriptRoot 'bicep-docs.json'
+$docsConfigPath = Join-Path $PSScriptRoot 'bicepdocsconfig.json'
 $modulePaths = @(Get-ChildItem (Join-Path $SourceRepositoryPath 'avm') -Recurse -Filter main.bicep -File |
     Where-Object {
         (Test-Path (Join-Path $_.DirectoryName 'README.md')) -and
