@@ -1,0 +1,30 @@
+{
+  "examples": {
+    "reassignments": [
+      {
+        "from": {
+          "include": [
+            "**/mg-scope.*/**"
+          ]
+        },
+        "to": "mg-scope"
+      },
+      {
+        "from": {
+          "include": [
+            "**/rg-scope.*/**"
+          ]
+        },
+        "to": "rg-scope"
+      },
+      {
+        "from": {
+          "include": [
+            "**/sub-scope.*/**"
+          ]
+        },
+        "to": "sub-scope"
+      }
+    ]
+  }
+}

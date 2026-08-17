@@ -19,3 +19,9 @@ The default modules are `avm/res/storage/storage-account` and
 modules in separate source and working checkouts. It records compiler failures
 and semantic-model mismatches in its output reports; failed compilation does
 not produce a README.
+
+`bicep-docs.json` is passed to every docs invocation. Its example
+reassignments move multi-scope tests from parent stubs to the corresponding
+`mg-scope`, `rg-scope`, and `sub-scope` modules while leaving ordinary modules
+unchanged. The semantic index also flattens structured discriminator cases to
+the parameter paths used by existing AVM READMEs.

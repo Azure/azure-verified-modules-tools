@@ -17,6 +17,8 @@ param (
 
     [string] $ModelIndexTemplatePath = (Join-Path $PSScriptRoot 'model-index.scriban'),
 
+    [string] $DocsConfigPath = (Join-Path $PSScriptRoot 'bicep-docs.json'),
+
     [switch] $GenerateInPlace,
 
     [switch] $PassThru
@@ -133,6 +135,8 @@ $results = foreach ($modulePath in $ModulePaths) {
             'docs'
             ($GenerateInPlace ? 'generate' : 'output')
             $mainPath
+            '--config-file-path'
+            $DocsConfigPath
             '--template-file'
             $TemplatePath
             '--template-root'
@@ -156,6 +160,7 @@ $results = foreach ($modulePath in $ModulePaths) {
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {
         & $BicepPath docs output $mainPath `
+            --config-file-path $DocsConfigPath `
             --template-file $ModelIndexTemplatePath `
             1> $modelIndexPath `
             2> $modelIndexStderrPath
