@@ -150,10 +150,6 @@ $results = foreach ($modulePath in $ModulePaths) {
             '--custom-template-value'
             "hasNotes=$(($null -ne $sections['notes.md']).ToString().ToLowerInvariant())"
         )
-    if ($GenerateInPlace) {
-        $commandArguments += @('--output-file', 'README.md')
-    }
-
     & $BicepPath @commandArguments `
         1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
         2> $stderrPath
