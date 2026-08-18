@@ -34,7 +34,7 @@ function Invoke-AvmTest {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Terraform-only: skip the auto 'terraform init -backend=false' step,
+        Terraform-only: skip the auto 'terraform init -backend=false -upgrade' step,
         which otherwise always runs. Ignored for bicep contexts.
 
     .OUTPUTS

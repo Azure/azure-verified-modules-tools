@@ -21,7 +21,7 @@ function Invoke-AvmTerraformTestSuite {
              tests/<tier>/setup.ps1 hook in an isolated pwsh subprocess; a
              failing hook records an issue and skips that target. Then, unless
              -NoInit was passed, runs
-                 terraform init -backend=false -upgrade=false -input=false
+                 terraform init -backend=false -upgrade -input=false
                                 -test-directory=tests/<tier>
              followed by
                  terraform test -test-directory=tests/<tier> -no-color -json
@@ -29,6 +29,8 @@ function Invoke-AvmTerraformTestSuite {
              test directory when resolving modules declared in a run block, so
              without it a 'run { module { source = ... } }' helper is never
              installed and terraform test dies with 'Module not installed'.
+             Upgrade mode intentionally allows dependency lock selections to
+             move to newer acceptable versions.
           4. Parses each target's newline-delimited JSON stream into the shared
              Issue shape (failing 'test_run' entries and error-level
              'diagnostic' entries), prefixing submodule paths with
@@ -168,7 +170,7 @@ function Invoke-AvmTerraformTestSuite {
         if (-not $NoInit) {
             $initResult = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color', ('-test-directory={0}' -f $testDir)) `
+                -ArgumentList @('init', '-backend=false', '-upgrade', '-input=false', '-no-color', ('-test-directory={0}' -f $testDir)) `
                 -WorkingDirectory $targetDir `
                 -EnvVars $envVars `
                 -StreamOutput `

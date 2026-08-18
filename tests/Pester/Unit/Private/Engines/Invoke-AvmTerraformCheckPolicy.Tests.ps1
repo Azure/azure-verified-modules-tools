@@ -127,7 +127,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Result.Issues.Count | Should -Be 0
         $probe.Calls.Count | Should -Be 7
         $probe.Calls[0].Arguments[-1] | Should -BeLike '*pre.ps1'
-        $probe.Calls[1].Arguments | Should -Be @('init', '-input=false', '-no-color')
+        $probe.Calls[1].Arguments | Should -Be @('init', '-upgrade', '-input=false', '-no-color')
         $probe.Calls[2].Arguments | Should -Be @('plan', '-out=tfplan', '-input=false', '-no-color')
         $probe.Calls[3].Arguments | Should -Be @('show', '-json', 'tfplan')
         foreach ($terraformCall in @($probe.Calls[1], $probe.Calls[2], $probe.Calls[3])) {

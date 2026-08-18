@@ -8,6 +8,7 @@ $script:AvmModuleVersionCheckCompleted = $false
 $script:AvmModuleVersionSkipWarningWritten = $false
 $script:AvmLatestManagedFilesVersion = @{}
 $script:AvmNestedCommandDepth = 0
+$script:AvmPresentedIssues = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 
 # Console encoding (spec open question 2): on Windows, the default console
 # code page is often legacy (1252, 437, ...) which mangles UTF-8 output from
