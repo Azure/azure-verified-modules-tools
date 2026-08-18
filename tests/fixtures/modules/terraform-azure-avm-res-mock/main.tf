@@ -30,7 +30,7 @@ resource "azapi_resource" "example_rg" {
   location  = var.location
   name      = "${local.resource_group_prefix}-${random_string.suffix.result}-${each.value}"
   parent_id = "/subscriptions/${data.azapi_client_config.this.subscription_id}"
-  type      = "Microsoft.Resources/resourceGroups@2024-03-01"
+  type      = var.resource_types.resource_group
   body = {
     tags = local.default_tags
   }
@@ -52,7 +52,7 @@ resource "azapi_resource" "example_rg_singleton" {
   location  = var.location
   name      = "${local.resource_group_prefix}-${random_string.suffix.result}-singleton"
   parent_id = "/subscriptions/${data.azapi_client_config.this.subscription_id}"
-  type      = "Microsoft.Resources/resourceGroups@2024-03-01"
+  type      = var.resource_types.resource_group
   body = {
     tags = local.default_tags
   }

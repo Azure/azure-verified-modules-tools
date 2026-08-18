@@ -240,6 +240,9 @@ function Invoke-AvmTflintScope {
         else {
             'warning'
         }
+        if ($severity -eq 'info') {
+            $severity = 'notice'
+        }
         $code = if ($issue.rule -and $issue.rule.name) {
             [string]$issue.rule.name
         }

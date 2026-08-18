@@ -237,6 +237,6 @@
   // place, and a packaging test cross-checks the two so they cannot drift.
   "tflintPlugins": {
     "terraform": "0.12.0",
-    "avm": "0.18.0"
+    "avm": "0.19.0"
   }
 }

@@ -65,7 +65,7 @@ Describe 'Merge-AvmTflintConfig' {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.18.0"
+  version = "0.19.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -90,7 +90,7 @@ rule "managed_identities" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
-        $merged | Should -Match 'version = "0.18.0"'
+        $merged | Should -Match 'version = "0.19.0"'
         $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
         $merged | Should -Match 'signature = "attestation"'
     }
@@ -129,7 +129,7 @@ rule "diagnostic_settings" {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.18.0"
+  version = "0.19.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -153,7 +153,7 @@ rule "custom_rule" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
-        $merged | Should -Match 'version = "0.18.0"'
+        $merged | Should -Match 'version = "0.19.0"'
         $merged | Should -Match 'signature = "attestation"'
         $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
     }
@@ -689,10 +689,10 @@ rule "managed_identities" {
         $result.Issues[0].Severity | Should -Be 'warning'
     }
 
-    It 'passes when only notice issues exist at the default threshold, fails when threshold is notice' {
+    It 'keeps deprecated interface notices visible while passing at the warning threshold' {
         $ctx = $script:context
         $json = @'
-{ "issues": [ { "rule": { "name": "terraform_comment_syntax", "severity": "notice" }, "message": "note", "range": { "filename": "main.tf", "start": { "line": 1, "column": 1 } } } ] }
+{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "info" }, "message": "lock uses deprecated interface variant 1; migrate to variant 2 by adding notes = optional(string, null).", "range": { "filename": "variables.tf", "start": { "line": 7, "column": 1 } } } ] }
 '@
         $atDefault = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
@@ -709,6 +709,12 @@ rule "managed_identities" {
             Invoke-AvmTerraformLint -Context $C
         }
         $atDefault.Status | Should -Be 'pass'
+        $atDefault.Issues.Count | Should -Be 1
+        $atDefault.Issues[0].Severity | Should -Be 'notice'
+        $atDefault.Issues[0].Code | Should -Be 'deprecated_lock_interface'
+        $atDefault.Issues[0].File | Should -Be 'variables.tf'
+        $atDefault.Issues[0].Line | Should -Be 7
+        $atDefault.Issues[0].Message | Should -Match 'deprecated interface variant 1'
 
         $atNotice = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
