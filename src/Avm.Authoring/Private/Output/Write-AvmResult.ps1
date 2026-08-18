@@ -12,7 +12,7 @@ function Write-AvmResult {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $lines = @(ConvertTo-AvmResultLine -Result $Result -Verb $Verb)
+    $lines = @(ConvertTo-AvmResultLine -Result $Result -Verb $Verb -ExcludePresentedIssues)
     $items = @($Result)
     $singleStatus = if ($items.Count -eq 1) {
         ([string]$items[0].Status).ToLowerInvariant()

@@ -22,6 +22,7 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
 
     It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
         Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop
+        Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop
 
         $requiredRoot = Join-Path $TestDrive 'required-interfaces'
         New-Item -ItemType Directory -Path $requiredRoot -Force | Out-Null
@@ -110,27 +111,51 @@ output "deprecated_lock" {
                 -ArgumentList @('--config', $Config, '--format=json', '--minimum-failure-severity=warning') `
                 -WorkingDirectory $Deprecated `
                 -IgnoreExitCode
-            $deprecatedScope = Invoke-AvmTflintScope `
-                -Scope @{
-                    Dir     = $Deprecated
-                    Config  = $Config
-                    Label   = 'root'
-                    RelPath = '.'
-                } `
-                -Options ([pscustomobject]@{
-                    TflintPath             = $tool.Path
-                    MinimumFailureSeverity = 'warning'
-                    StreamOutput           = $false
-                })
+            $savedActions = $env:GITHUB_ACTIONS
+            try {
+                $env:GITHUB_ACTIONS = ''
+                $deprecatedWarnings = @()
+                $deprecatedResult = Invoke-AvmTerraformLint `
+                    -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $Deprecated
+                        Ecosystem = 'terraform'
+                        Source = 'integration'
+                    }) `
+                    -ThrottleLimit 1 `
+                    -WarningVariable deprecatedWarnings
+                $deprecatedSummary = @(
+                    Write-AvmResult -Result $deprecatedResult -Verb 'lint' 6>&1 |
+                        ForEach-Object { [string]$_.MessageData }
+                )
+
+                $canonicalWarnings = @()
+                $canonicalResult = Invoke-AvmTerraformLint `
+                    -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $Canonical
+                        Ecosystem = 'terraform'
+                        Source = 'integration'
+                    }) `
+                    -ThrottleLimit 1 `
+                    -WarningVariable canonicalWarnings
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $savedActions
+            }
 
             [pscustomobject]@{
-                CanonicalLint   = $canonicalLint
-                DeprecatedLint  = $deprecatedLint
-                DeprecatedScope = $deprecatedScope
-                Init            = $init
-                RequiredLint    = $requiredLint
-                ToolVersion     = $tool.Version
-                Version         = $version
+                CanonicalLint       = $canonicalLint
+                CanonicalResult     = $canonicalResult
+                CanonicalWarnings   = @($canonicalWarnings | ForEach-Object { [string]$_ })
+                DeprecatedLint      = $deprecatedLint
+                DeprecatedResult    = $deprecatedResult
+                DeprecatedSummary   = $deprecatedSummary
+                DeprecatedWarnings  = @($deprecatedWarnings | ForEach-Object { [string]$_ })
+                Init                = $init
+                RequiredLint        = $requiredLint
+                ToolVersion         = $tool.Version
+                Version             = $version
             }
         }
 
@@ -155,11 +180,20 @@ output "deprecated_lock" {
 
         $run.CanonicalLint.ExitCode | Should -Be 0 -Because "$($run.CanonicalLint.StdErr)`n$($run.CanonicalLint.StdOut)"
         $run.DeprecatedLint.ExitCode | Should -Be 0 -Because "$($run.DeprecatedLint.StdErr)`n$($run.DeprecatedLint.StdOut)"
-        $deprecatedIssue = $run.DeprecatedScope.Issues |
+        $run.DeprecatedResult.Status | Should -Be 'pass'
+        $deprecatedIssue = $run.DeprecatedResult.Issues |
             Where-Object Code -eq 'deprecated_lock_interface'
         $deprecatedIssue | Should -Not -BeNullOrEmpty
         $deprecatedIssue.Severity | Should -Be 'notice'
         $deprecatedIssue.File | Should -Be 'variables.tf'
         $deprecatedIssue.Message | Should -Match 'v0\.19\.0 migration window'
+        @($run.DeprecatedWarnings).Count | Should -Be 1
+        $run.DeprecatedWarnings[0] | Should -Match '\[deprecated_lock_interface\].*v0\.19\.0 migration window'
+        ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'deprecated_lock_interface|v0\.19\.0 migration window'
+
+        $run.CanonicalResult.Status | Should -Be 'pass'
+        @($run.CanonicalWarnings) | Should -BeNullOrEmpty
+        @($run.CanonicalResult.Issues | Where-Object Code -like 'deprecated_*_interface') |
+            Should -BeNullOrEmpty
     }
 }

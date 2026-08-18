@@ -79,6 +79,7 @@ Describe 'Invoke-AvmTerraformTest' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'init' -and
                 $ArgumentList -contains '-backend=false' -and
+                $ArgumentList -contains '-upgrade' -and
                 -not [bool]$StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {

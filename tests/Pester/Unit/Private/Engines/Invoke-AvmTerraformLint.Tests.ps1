@@ -226,6 +226,33 @@ Describe 'Get-AvmTflintScope' {
     }
 }
 
+Describe 'Test-AvmDeprecatedInterfaceNotice' {
+    It 'matches only notice-level AVM deprecated-interface rule names' -TestCases @(
+        @{ Code = 'deprecated_lock_interface'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'deprecated_role_assignments_interface'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'deprecated_private_endpoints_interface'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'deprecated_future_stable_interface'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'deprecated_lock_interface'; Severity = 'warning'; Expected = $false }
+        @{ Code = 'terraform_unused_declarations'; Severity = 'notice'; Expected = $false }
+        @{ Code = 'deprecated_interface'; Severity = 'notice'; Expected = $false }
+        @{ Code = 'deprecated_Lock_interface'; Severity = 'notice'; Expected = $false }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            RuleCode = $Code
+            RuleSeverity = $Severity
+            ExpectedResult = $Expected
+        } {
+            param($RuleCode, $RuleSeverity, $ExpectedResult)
+            $issue = [pscustomobject]@{
+                Code = $RuleCode
+                Severity = $RuleSeverity
+            }
+            Test-AvmDeprecatedInterfaceNotice -Issue $issue |
+                Should -Be $ExpectedResult
+        }
+    }
+}
+
 Describe 'Invoke-AvmTerraformLint' {
     BeforeEach {
         $env:RUNNER_DEBUG = ''
@@ -292,9 +319,10 @@ Describe 'Invoke-AvmTerraformLint' {
             $r = Invoke-AvmTerraformLint -Context $C
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList.Count -eq 2 -and
+                $ArgumentList.Count -eq 3 -and
                 $ArgumentList[0] -eq 'init' -and
-                $ArgumentList[1] -eq '-input=false' -and
+                $ArgumentList[1] -eq '-upgrade' -and
+                $ArgumentList[2] -eq '-input=false' -and
                 $WorkingDirectory -ne $C.Root -and
                 -not [bool]$StreamOutput
             }
@@ -761,6 +789,146 @@ rule "managed_identities" {
         $result.Issues[0].Severity | Should -Be 'error'
         $result.Issues[0].Line     | Should -Be 5
         $result.Issues[0].Column   | Should -Be 3
+    }
+
+    It 'emits one located warning for a parsed AVM deprecated-interface notice while retaining a passing issue' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "notice" }, "message": "Replace the legacy lock input with the canonical lock interface.", "range": { "filename": "variables.tf", "start": { "line": 17, "column": 5 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+            }
+            Mock Write-AvmLog
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and
+                $File -eq 'variables.tf' -and
+                $Line -eq 17 -and
+                $Column -eq 5 -and
+                $Message -eq '[deprecated_lock_interface] Replace the legacy lock input with the canonical lock interface.'
+            }
+            [pscustomobject]@{
+                Result = $result
+                Json   = $result | ConvertTo-Json -Depth 10
+            }
+        }
+
+        $probe.Result.Status             | Should -Be 'pass'
+        $probe.Result.Issues.Count       | Should -Be 1
+        $probe.Result.Issues[0].Severity | Should -Be 'notice'
+        $probe.Result.Issues[0].Code     | Should -Be 'deprecated_lock_interface'
+        $probe.Json                      | Should -Not -Match 'Presented|Inline|Reported'
+    }
+
+    It 'leaves an ordinary notice unreported inline and available to the ordinary result renderer' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_unused_declarations", "severity": "notice" }, "message": "Unused declaration.", "range": { "filename": "variables.tf", "start": { "line": 3, "column": 1 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+            }
+            Mock Write-AvmLog
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Level -eq 'Warning' }
+            [pscustomobject]@{
+                Result = $result
+                Lines  = @(ConvertTo-AvmResultLine -Result $result -Verb 'lint')
+            }
+        }
+
+        $probe.Result.Status             | Should -Be 'pass'
+        $probe.Result.Issues[0].Severity | Should -Be 'notice'
+        ($probe.Lines -join "`n")        | Should -Match '\[terraform_unused_declarations\] Unused declaration\.'
+    }
+
+    It 'does not presentation-downgrade a warning-level deprecated-interface rule' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "warning" }, "message": "Warning threshold control.", "range": { "filename": "variables.tf", "start": { "line": 4, "column": 2 } } } ] }
+'@
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { '/cfg' }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+            }
+            Mock Write-AvmLog
+
+            $result = Invoke-AvmTerraformLint -Context $C
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Level -eq 'Warning' }
+            $result
+        }
+
+        $result.Status             | Should -Be 'fail'
+        $result.Issues[0].Severity | Should -Be 'warning'
+    }
+
+    It 'emits a GitHub warning annotation for a deprecated-interface notice without changing pass status' {
+        $ctx = $script:context
+        $json = @'
+{ "issues": [ { "rule": { "name": "deprecated_private_endpoints_interface", "severity": "notice" }, "message": "Use the canonical private endpoints interface.", "range": { "filename": "variables.tf", "start": { "line": 21, "column": 7 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
+            param($C, $J)
+            $savedActions = $env:GITHUB_ACTIONS
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+                }
+
+                $captured = @()
+                $result = Invoke-AvmTerraformLint -Context $C -InformationVariable captured 3>$null
+                [pscustomobject]@{
+                    Result = $result
+                    Info   = @($captured | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $savedActions
+            }
+        }
+
+        $probe.Result.Status | Should -Be 'pass'
+        @($probe.Info) | Should -Contain (
+            '::warning file=variables.tf,line=21,col=7::' +
+            '[deprecated_private_endpoints_interface] Use the canonical private endpoints interface.'
+        )
     }
 
     It 'passes a clean scope with no issues' {

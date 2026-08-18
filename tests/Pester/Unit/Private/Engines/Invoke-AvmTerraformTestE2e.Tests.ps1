@@ -84,6 +84,7 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             # Real backend init: -input=false but NOT -backend=false.
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'init' -and ($ArgumentList -contains '-input=false') -and
+                ($ArgumentList -contains '-upgrade') -and
                 (-not ($ArgumentList -contains '-backend=false')) -and $StreamOutput
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {

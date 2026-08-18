@@ -34,7 +34,7 @@ function Invoke-AvmTestUnit {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Skip the auto 'terraform init -backend=false -test-directory=tests/unit'
+        Skip the auto 'terraform init -backend=false -upgrade -test-directory=tests/unit'
         step, which otherwise always runs.
 
     .OUTPUTS

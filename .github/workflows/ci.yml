@@ -121,7 +121,7 @@ jobs:
       # GITHUB_TOKEN for authenticated downloads (5000/hour).
       GITHUB_TOKEN: ${{ github.token }}
       # OIDC plumbing for `azure/login`. The `test` step today is validate-only
-      # (`terraform init -backend=false` + `terraform validate -json`) so it does
+      # (`terraform init -backend=false -upgrade` + `terraform validate -json`) so it does
       # not actually need Azure auth, but we wire login per the same pattern as
       # the legacy Terraform governance workflow so the chain is ready when test grows to plan.
       ARM_USE_OIDC: 'true'

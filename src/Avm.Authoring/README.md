@@ -111,7 +111,7 @@ avm tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm format          # Invoke-AvmFormat (engine resolved from module context)
 avm lint            # Invoke-AvmLint   (bicep lint; scoped AVM TFLint rulesets for terraform)
 avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json)
-avm test --no-init  # Skip the implicit 'terraform init -backend=false' (it otherwise always runs)
+avm test --no-init  # Skip the implicit 'terraform init -backend=false -upgrade' (it otherwise always runs)
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
 avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
 avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo

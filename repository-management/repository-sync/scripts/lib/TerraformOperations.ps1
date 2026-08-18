@@ -49,7 +49,7 @@ terraform {
         $result = Invoke-TerraformWithRetry `
             -commands @(
                 @{
-                    Arguments = @( "init")
+                    Arguments = @("init", "-upgrade")
                     OutputLog = "init.log"
                 }
             ) `
@@ -61,6 +61,7 @@ terraform {
                 @{
                     Arguments = @(
                         "init",
+                        "-upgrade",
                         "-backend-config=`"resource_group_name=$stateResourceGroupName`"",
                         "-backend-config=`"storage_account_name=$stateStorageAccountName`"",
                         "-backend-config=`"container_name=$stateContainerName`"",

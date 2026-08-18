@@ -40,7 +40,7 @@ function Invoke-AvmTestIntegration {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Skip the auto 'terraform init -backend=false -test-directory=tests/integration'
+        Skip the auto 'terraform init -backend=false -upgrade -test-directory=tests/integration'
         step, which otherwise always runs.
 
     .OUTPUTS
