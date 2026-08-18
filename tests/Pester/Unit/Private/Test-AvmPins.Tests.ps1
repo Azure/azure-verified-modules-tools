@@ -352,7 +352,7 @@ Describe 'Test-AvmPins' {
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
         }
 
-        It 'mirrors the tflint plugin versions that the vendored HCL configs pin' {
+        It 'mirrors plugin versions and enforces attestation-only AVM configs' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
 
@@ -361,10 +361,18 @@ Describe 'Test-AvmPins' {
                 foreach ($plugin in $pins.tflintPlugins.Keys) {
                     $pattern = 'plugin\s+"' + [regex]::Escape($plugin) + '"\s*\{[^}]*?version\s*=\s*"([^"]+)"'
                     $found = [regex]::Match($text, $pattern, 'Singleline')
-                    if ($found.Success) {
-                        $found.Groups[1].Value | Should -Be $pins.tflintPlugins[$plugin] -Because "$($config.Name) must agree with avm.pins.jsonc for plugin '$plugin'"
-                    }
+                    $found.Success | Should -BeTrue -Because "$($config.Name) must declare pinned plugin '$plugin'"
+                    $found.Groups[1].Value | Should -Be $pins.tflintPlugins[$plugin] -Because "$($config.Name) must agree with avm.pins.jsonc for plugin '$plugin'"
                 }
+
+                $avmPlugin = [regex]::Match($text, 'plugin\s+"avm"\s*\{(?<body>[^}]*)\}', 'Singleline')
+                $avmPlugin.Success | Should -BeTrue
+                $avmPlugin.Groups['body'].Value | Should -Match 'signature\s*=\s*"attestation"'
+                $avmPlugin.Groups['body'].Value | Should -Not -Match 'signing_key\s*='
+
+                $configBlock = [regex]::Match($text, 'config\s*\{(?<body>[^}]*)\}', 'Singleline')
+                $configBlock.Success | Should -BeTrue
+                $configBlock.Groups['body'].Value | Should -Match 'disabled_by_default\s*=\s*true'
             }
         }
 

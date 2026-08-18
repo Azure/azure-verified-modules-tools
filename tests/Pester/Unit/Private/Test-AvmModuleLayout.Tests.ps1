@@ -72,11 +72,14 @@ Describe 'Module Resources packaging' {
         }
     }
 
-    It 'pins the AVM tflint ruleset plugin in the vendored configs' {
+    It 'ships attestation-only AVM plugin declarations in the vendored configs' {
         $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
+            $content | Should -Match 'signature\s*=\s*"attestation"'
+            $content | Should -Not -Match 'signing_key\s*='
+            $content | Should -Match 'disabled_by_default\s*=\s*true'
         }
     }
 

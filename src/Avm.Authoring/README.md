@@ -127,7 +127,7 @@ Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The scr
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.64.0 -TerraformDocs 0.20.0
 
 # Refresh just one
 ./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0

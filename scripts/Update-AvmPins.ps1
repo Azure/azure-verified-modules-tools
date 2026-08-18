@@ -41,7 +41,7 @@
     tool when omitted.
 
 .PARAMETER Tflint
-    Tflint version to lock, e.g. '0.55.1' (no leading 'v'). Skip the tflint
+    Tflint version to lock, e.g. '0.64.0' (no leading 'v'). Skip the tflint
     tool when omitted.
 
 .PARAMETER TerraformDocs
