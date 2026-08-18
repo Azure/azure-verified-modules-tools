@@ -17,8 +17,6 @@ param (
 
     [string] $ModelIndexTemplatePath = (Join-Path $PSScriptRoot 'model-index.scriban'),
 
-    [string] $DocsConfigPath = (Join-Path $PSScriptRoot 'bicepdocsconfig.json'),
-
     [switch] $GenerateInPlace,
 
     [switch] $PassThru
@@ -133,10 +131,8 @@ $results = foreach ($modulePath in $ModulePaths) {
     $modelIndexExitCode = $null
     $commandArguments = @(
             'docs'
-            ($GenerateInPlace ? 'generate' : 'output')
+            'generate'
             $mainPath
-            '--config-file-path'
-            $DocsConfigPath
             '--template-file'
             $TemplatePath
             '--template-root'
@@ -154,13 +150,16 @@ $results = foreach ($modulePath in $ModulePaths) {
             '--custom-template-value'
             "hasNotes=$(($null -ne $sections['notes.md']).ToString().ToLowerInvariant())"
         )
+    if (-not $GenerateInPlace) {
+        $commandArguments += '--stdout'
+    }
     & $BicepPath @commandArguments `
         1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
         2> $stderrPath
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {
-        & $BicepPath docs output $mainPath `
-            --config-file-path $DocsConfigPath `
+        & $BicepPath docs generate $mainPath `
+            --stdout `
             --template-file $ModelIndexTemplatePath `
             1> $modelIndexPath `
             2> $modelIndexStderrPath

@@ -33,6 +33,12 @@ For examples, please refer to the [Usage Examples](#usage-examples) section.
 {{~ if module.exportedFunctions.size > 0 ~}}
 - [Exported functions](#Exported-functions)
 {{~ end ~}}
+{{~ if module.exportedTypes.size > 0 ~}}
+- [Exported types](#Exported-types)
+{{~ end ~}}
+{{~ if module.exportedVariables.size > 0 ~}}
+- [Exported variables](#Exported-variables)
+{{~ end ~}}
 - [Outputs](#Outputs)
 {{~ if custom.hasCrossReferences == "true" ~}}
 - [Cross-referenced modules](#Cross-referenced-modules)
@@ -55,6 +61,26 @@ For examples, please refer to the [Usage Examples](#usage-examples) section.
 | :-- | :-- |
 {{~ for exported_function in module.exportedFunctions ~}}
 | `{{ exported_function.name }}` | {{ exported_function.description }} |
+{{~ end ~}}
+{{~ end ~}}
+{{~ if module.exportedTypes.size > 0 ~}}
+
+## Exported types
+
+| Type | Description |
+| :-- | :-- |
+{{~ for exported_type in module.exportedTypes ~}}
+| `{{ exported_type.name }}` | {{ exported_type.description }} |
+{{~ end ~}}
+{{~ end ~}}
+{{~ if module.exportedVariables.size > 0 ~}}
+
+## Exported variables
+
+| Variable | Description |
+| :-- | :-- |
+{{~ for exported_variable in module.exportedVariables ~}}
+| `{{ exported_variable.name }}` | {{ exported_variable.description }} |
 {{~ end ~}}
 {{~ end ~}}
 

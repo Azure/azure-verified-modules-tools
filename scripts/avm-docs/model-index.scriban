@@ -15,6 +15,12 @@ P	{{ prefix }}{{ item.name }}
 {{~ end ~}}
 {{~ end ~}}
 {{~ dump_parameters module.parameters "" ~}}
+{{~ for exported_type in module.exportedTypes ~}}
+T	{{ exported_type.name }}
+{{~ end ~}}
+{{~ for exported_variable in module.exportedVariables ~}}
+V	{{ exported_variable.name }}
+{{~ end ~}}
 {{~ for example in module.usageExamples ~}}
 {{~ if (example.path | string.starts_with "tests/e2e/") || (example.path | string.starts_with "../tests/e2e/") ~}}
 E	{{ example.name }}

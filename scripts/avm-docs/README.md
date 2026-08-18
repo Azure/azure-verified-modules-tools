@@ -20,8 +20,10 @@ modules in separate source and working checkouts. It records compiler failures
 and semantic-model mismatches in its output reports; failed compilation does
 not produce a README.
 
-`bicepdocsconfig.json` is passed to every docs invocation. Its example
-reassignments move multi-scope tests from parent stubs to the corresponding
-`mg-scope`, `rg-scope`, and `sub-scope` modules while leaving ordinary modules
-unchanged. The semantic index also flattens structured discriminator cases to
-the parameter paths used by existing AVM READMEs.
+`bicepconfig.json` is copied to the root of the validation working checkout so
+the Bicep CLI discovers its `documentation` settings for each source file. Its
+example reassignments move multi-scope tests from parent stubs to the
+corresponding `mg-scope`, `rg-scope`, and `sub-scope` modules while leaving
+ordinary modules unchanged. The scripts use `bicep docs generate`; output-mode
+calls add `--stdout`. The semantic index also flattens structured discriminator
+cases and records exported type and variable names.
