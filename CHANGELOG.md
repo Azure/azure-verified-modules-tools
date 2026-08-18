@@ -54,10 +54,12 @@ section when cutting a release.
 
 ### Changed
 
-- TFLint is pinned to 0.64.0 and the AVM ruleset to 0.18.0. The vendored
+- TFLint is pinned to 0.64.0 and the AVM ruleset to 0.19.0. The vendored
   configurations now require GitHub Artifact Attestation and no longer embed a
   legacy PGP signing key; they also disable implicit rules so only their curated
-  rule lists execute after upstream library consolidation.
+  rule lists execute. The v0.19 rules require the canonical AzAPI variables and
+  surface deprecated lock, role-assignment, and private-endpoint interfaces as
+  non-failing notices at the default warning threshold.
 - Managed files now live in `Azure/azure-verified-modules-managed-files` under
   `terraform/files`, and file-group definition moved with them to
   `terraform/config/managed-files.json`. Each file group owns its `deletedFiles`,

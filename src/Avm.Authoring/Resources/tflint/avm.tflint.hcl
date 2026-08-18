@@ -10,7 +10,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.18.0"
+  version   = "0.19.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -144,7 +144,23 @@ rule "customer_managed_key" {
   enabled = true
 }
 
+rule "deprecated_lock_interface" {
+  enabled = true
+}
+
+rule "deprecated_private_endpoints_interface" {
+  enabled = true
+}
+
+rule "deprecated_role_assignments_interface" {
+  enabled = true
+}
+
 rule "diagnostic_settings" {
+  enabled = true
+}
+
+rule "ignore_body_changes" {
   enabled = true
 }
 
@@ -164,11 +180,27 @@ rule "private_endpoints" {
   enabled = true
 }
 
+rule "private_endpoints_manage_dns_zone_group" {
+  enabled = true
+}
+
+rule "resource_types" {
+  enabled = true
+}
+
+rule "retry" {
+  enabled = true
+}
+
 rule "role_assignments" {
   enabled = true
 }
 
 rule "tags" {
+  enabled = true
+}
+
+rule "timeouts" {
   enabled = true
 }
 

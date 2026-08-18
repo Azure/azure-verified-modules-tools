@@ -355,6 +355,16 @@ Describe 'Test-AvmPins' {
         It 'mirrors plugin versions and enforces attestation-only AVM configs' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
+            $v019Rules = @(
+                'deprecated_lock_interface'
+                'deprecated_private_endpoints_interface'
+                'deprecated_role_assignments_interface'
+                'ignore_body_changes'
+                'private_endpoints_manage_dns_zone_group'
+                'resource_types'
+                'retry'
+                'timeouts'
+            )
 
             foreach ($config in (Get-ChildItem -LiteralPath $configDir -Filter '*.hcl' -File)) {
                 $text = [System.IO.File]::ReadAllText($config.FullName)
@@ -373,6 +383,12 @@ Describe 'Test-AvmPins' {
                 $configBlock = [regex]::Match($text, 'config\s*\{(?<body>[^}]*)\}', 'Singleline')
                 $configBlock.Success | Should -BeTrue
                 $configBlock.Groups['body'].Value | Should -Match 'disabled_by_default\s*=\s*true'
+
+                $expectedState = if ($config.Name -eq 'avm.tflint_example.hcl') { 'false' } else { 'true' }
+                foreach ($rule in $v019Rules) {
+                    $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*' + $expectedState
+                    $text | Should -Match $rulePattern -Because "$($config.Name) must explicitly configure v0.19 rule '$rule'"
+                }
             }
         }
 

@@ -34,15 +34,12 @@ at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
 Upstream is MIT-licensed (Azure org). The repo-root `LICENSE` covers the
 copied content; no per-fixture `LICENSE` shipped.
 
-This SHA matches the governance modules verbatim (modulo the curation
-drop-list below and LF/UTF-8-no-BOM normalisation), so the fixtures are
-"the same modules" the upstream pipeline runs against. Relative to the
-prior `651824…` snapshot the refresh added two files that are now part of
-the canonical AVM Terraform surface — `variables.example.tf` and
-`variables.telemetry.tf` (the telemetry/example variables that the
-`mapotf` `pre-commit` configs partition out of `variables.tf`) — and
-refreshed the content of `main.tf`, `main.telemetry.tf`, `outputs.tf`,
-`variables.tf`, the module `README.md`, and `tests/unit/unit.tftest.hcl`.
+The snapshot matched the governance modules verbatim (modulo the curation
+drop-list below and LF/UTF-8-no-BOM normalisation). The Azure fixture now
+has one deliberate local compatibility delta: its AzAPI resource declarations
+use the canonical `resource_types` interface and `variables.tf` carries the
+v0.19 required AzAPI interfaces. The upstream governance fixtures were retired
+after the Avm.Authoring rollout, while the copies here remain authoritative.
 
 ## What was dropped on copy
 
