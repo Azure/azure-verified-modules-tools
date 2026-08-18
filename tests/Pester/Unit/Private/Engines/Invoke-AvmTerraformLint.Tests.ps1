@@ -65,8 +65,9 @@ Describe 'Merge-AvmTflintConfig' {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.16.0"
+  version = "0.18.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
+  signature = "attestation"
 }
 
 rule "managed_identities" {
@@ -89,8 +90,9 @@ rule "managed_identities" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
-        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match 'version = "0.18.0"'
         $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
+        $merged | Should -Match 'signature = "attestation"'
     }
 
     It 'merges attributes into the last duplicate block like pinned hclmerge' {
@@ -127,8 +129,9 @@ rule "diagnostic_settings" {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.16.0"
+  version = "0.18.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
+  signature = "attestation"
 }
 '@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
         @'
@@ -150,7 +153,8 @@ rule "custom_rule" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
-        $merged | Should -Match 'version = "0.16.0"'
+        $merged | Should -Match 'version = "0.18.0"'
+        $merged | Should -Match 'signature = "attestation"'
         $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
     }
 
@@ -273,7 +277,7 @@ Describe 'Invoke-AvmTerraformLint' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'tflint'; Version = '0.55.1'; Platform = 'linux-amd64'
+                    Name = 'tflint'; Version = '0.64.0'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/tflint'
                 }
             }
@@ -318,7 +322,7 @@ Describe 'Invoke-AvmTerraformLint' {
             $r
         }
         $result.Engine         | Should -Be 'terraform'
-        $result.Tool           | Should -Be 'tflint/0.55.1'
+        $result.Tool           | Should -Be 'tflint/0.64.0'
         $result.ToolPath       | Should -Be '/fake/tflint'
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
@@ -431,7 +435,7 @@ rule "managed_identities" {
             $script:capturedConfigPath = $null
             $script:capturedConfigText = $null
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { $Config }
             Mock Get-AvmFolder { $Cache }
@@ -469,7 +473,7 @@ rule "managed_identities" {
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -546,7 +550,7 @@ rule "managed_identities" {
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -585,7 +589,7 @@ rule "managed_identities" {
             param($C, $E)
             $script:sequence = @()
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter {
@@ -640,7 +644,7 @@ rule "managed_identities" {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -670,7 +674,7 @@ rule "managed_identities" {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -693,7 +697,7 @@ rule "managed_identities" {
         $atDefault = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -709,7 +713,7 @@ rule "managed_identities" {
         $atNotice = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -736,7 +740,7 @@ rule "managed_identities" {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -758,7 +762,7 @@ rule "managed_identities" {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
             Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -780,7 +784,7 @@ rule "managed_identities" {
             InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
                 param($C)
                 Mock Resolve-AvmTool {
-                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
                 Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -802,7 +806,7 @@ rule "managed_identities" {
             InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
                 param($C)
                 Mock Resolve-AvmTool {
-                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
                 Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
@@ -827,7 +831,7 @@ rule "managed_identities" {
             InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
                 param($C)
                 Mock Resolve-AvmTool {
-                    [pscustomobject]@{ Name = 'tflint'; Version = '0.55.1'; Source = 'cache'; Path = '/fake/tflint' }
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
                 Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {

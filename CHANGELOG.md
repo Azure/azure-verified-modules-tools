@@ -54,6 +54,10 @@ section when cutting a release.
 
 ### Changed
 
+- TFLint is pinned to 0.64.0 and the AVM ruleset to 0.18.0. The vendored
+  configurations now require GitHub Artifact Attestation and no longer embed a
+  legacy PGP signing key; they also disable implicit rules so only their curated
+  rule lists execute after upstream library consolidation.
 - Managed files now live in `Azure/azure-verified-modules-managed-files` under
   `terraform/files`, and file-group definition moved with them to
   `terraform/config/managed-files.json`. Each file group owns its `deletedFiles`,

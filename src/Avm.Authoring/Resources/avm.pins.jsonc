@@ -176,7 +176,7 @@
     },
     {
       "name": "tflint",
-      "version": "0.55.1",
+      "version": "0.64.0",
       "urlTemplate": "https://github.com/terraform-linters/tflint/releases/download/v{version}/tflint_{os}_{arch}.zip",
       "archive": "zip",
       "entrypoint": "tflint",
@@ -184,11 +184,11 @@
         "windows-arm64"
       ],
       "sha256": {
-        "windows-amd64": "667e8333eed843298ba1fd1120776784c0dacc17de25e253bc8a67b03adbe87d",
-        "linux-amd64": "53379f38bc1e86c18885bfc85dc5fe2cd1f59729ae9a2afa16905189c1d67aa9",
-        "linux-arm64": "3d5d6e1e749ae1d46c153dd6fac358cdfa76df475de8f2660a91ff531021f93b",
-        "darwin-amd64": "98b1c04030f24b98398413a3a82a9646cd607a958d07576f0151773a6ded30fc",
-        "darwin-arm64": "e1f9f843a7bc4cf9631b30e7d65beda6fd5e8013daa91d3a35e23c606a360e50"
+        "windows-amd64": "fb42fb859d844b156a8ea9d3363078c4d8b85ca78782e60876b08c9b8e59f303",
+        "linux-amd64": "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537",
+        "linux-arm64": "560da89aacf59389d4eb029730dd5b109b7288096c32f2726a0d9e783a5ea8eb",
+        "darwin-amd64": "0f3a9fd17526014646a2dfc3f9122f7b4161abe3d6b0f0f03f9014483ddf4d19",
+        "darwin-arm64": "2496e9cb3d24992d553b45e7c87a0fdc9449ca975233876247a9bfeda857e6c0"
       }
     }
   ],
@@ -237,6 +237,6 @@
   // place, and a packaging test cross-checks the two so they cannot drift.
   "tflintPlugins": {
     "terraform": "0.12.0",
-    "avm": "0.16.0"
+    "avm": "0.18.0"
   }
 }
