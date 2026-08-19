@@ -62,6 +62,23 @@ function Assert-AvmPreCommitResult {
     throw "avm pre-commit returned status '$status'.$detail"
 }
 
+function Remove-AvmMetadataFileConflict {
+    param(
+        [string]$repoRoot,
+        [string]$orgAndRepoName,
+        [string]$modeTag
+    )
+
+    $avmPath = Join-Path $repoRoot ".avm"
+    if (-not (Test-Path -LiteralPath $avmPath -PathType Leaf)) {
+        return $false
+    }
+
+    Write-Host "$modeTag $orgAndRepoName - removing the root .avm file so the managed-files metadata directory can be created." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $avmPath -Force
+    return $true
+}
+
 function Invoke-AvmPreCommitWithUpgradeRetry {
     param(
         [string]$repoId,
@@ -106,6 +123,7 @@ function Invoke-AvmPreCommitForRepository {
         [string]$repositoryConfigDir,
         [string]$defaultBranch,
         [bool]$planOnly,
+        [bool]$forceFileUpdate = $false,
         [array]$issueLog
     )
 
@@ -136,11 +154,17 @@ function Invoke-AvmPreCommitForRepository {
             throw "gh repo clone exited $($cloneResult.exitCode): $($cloneResult.error)"
         }
 
+        $null = Remove-AvmMetadataFileConflict `
+            -repoRoot $tempDir `
+            -orgAndRepoName $orgAndRepoName `
+            -modeTag $modeTag
+
         Push-Location $tempDir
         try {
             $upgradeDecision = Resolve-AvmManagedFilesUpgradeDecision `
                 -orgAndRepoName $orgAndRepoName `
-                -repoRoot $tempDir
+                -repoRoot $tempDir `
+                -forceFileUpdate $forceFileUpdate
             Write-Host "$modeTag $orgAndRepoName - managed files: $($upgradeDecision.Reason)." -ForegroundColor DarkGray
 
             $preCommitResult = Invoke-AvmPreCommitWithUpgradeRetry `

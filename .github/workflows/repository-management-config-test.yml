@@ -5,13 +5,18 @@ on:
   pull_request:
     paths:
       - .github/workflows/repository-management-config-test.yml
+      - .github/workflows/repository-management-sync.yml
       - repository-management/repository-config/config.json
+      - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
       - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
       - repository-management/repository-sync/scripts/lib/ManagedFilesUpgrade.ps1
       - repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1
+      - repository-management/repository-sync/scripts/lib/TeamsAndUsers.ps1
       - repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
       - repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
       - repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
+      - repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
+      - repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1
   workflow_dispatch:
 
 permissions:
@@ -31,3 +36,5 @@ jobs:
           ./repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
           ./repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
           ./repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
+          ./repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
+          ./repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1

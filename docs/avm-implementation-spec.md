@@ -783,7 +783,10 @@ The fleet sync in `repository-management/` decides per repo whether to pass
 repo has no open pull request that a managed-file change could conflict with.
 Draft pull requests, bot-authored pull requests, and pull requests untouched for
 more than 14 days are ignored for that purpose. Lookup failures leave the repo on
-its pin rather than guessing.
+its pin rather than guessing. A manual `workflow_dispatch` may set
+`force_file_update` together with the existing repository selector to pass
+`-Upgrade` for that subset regardless of release delta or open pull requests.
+Scheduled and `repository_dispatch` runs cannot enable this override.
 
 ---
 
