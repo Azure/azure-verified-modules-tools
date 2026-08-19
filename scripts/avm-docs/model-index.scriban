@@ -1,0 +1,28 @@
+{{~ func is_avm_parameter(item) ~}}
+{{~ ret item.description && ((item.description | string.starts_with "Required.") || (item.description | string.starts_with "Conditional.") || (item.description | string.starts_with "Condition.") || (item.description | string.starts_with "Optional.") || (item.description | string.starts_with "Optinal.") || (item.description | string.starts_with "Optonal.") || (item.description | string.starts_with "Generated.")) ~}}
+{{~ end ~}}
+{{~ func dump_parameters(items, prefix) ~}}
+{{~ for item in items ~}}
+{{~ if is_avm_parameter item ~}}
+P	{{ prefix }}{{ item.name }}
+{{~ dump_parameters item.properties (prefix + item.name + ".") ~}}
+{{~ if item.discriminator ~}}
+{{~ for discriminator_case in item.discriminator.cases ~}}
+{{~ dump_parameters discriminator_case.properties (prefix + item.name + "." + item.discriminator.propertyName + "-" + discriminator_case.value + ".") ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ end ~}}
+{{~ dump_parameters module.parameters "" ~}}
+{{~ for exported_type in module.exportedTypes ~}}
+T	{{ exported_type.name }}
+{{~ end ~}}
+{{~ for exported_variable in module.exportedVariables ~}}
+V	{{ exported_variable.name }}
+{{~ end ~}}
+{{~ for example in module.usageExamples ~}}
+{{~ if (example.path | string.starts_with "tests/e2e/") || (example.path | string.starts_with "../tests/e2e/") ~}}
+E	{{ example.name }}
+{{~ end ~}}
+{{~ end ~}}
