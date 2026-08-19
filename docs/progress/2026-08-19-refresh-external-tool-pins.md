@@ -40,6 +40,10 @@ and remove duplicated tool versions from test stubs.
 - TFLint installed the AVM `0.19.1` and Terraform `0.15.0` plugins with
   artifact attestation; both appeared in `--version`, and the canonical fixture
   linted with zero issues.
+- The first pull-request integration run completed every real-tool workflow but
+  exposed one remaining assertion pinned to TFLint `0.64.0` and AVM ruleset
+  `0.19.0`. The integration test now derives the tool and both plugin versions
+  from `avm.pins.jsonc`.
 - Release-note review found no incompatible invocation changes in the surfaces
   used here. Terraform ruleset `0.15.0` changes multiline comment enforcement
   and adds Terraform 1.15 support; the canonical fixture passed the new rule.

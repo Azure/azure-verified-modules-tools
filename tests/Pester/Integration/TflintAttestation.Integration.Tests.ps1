@@ -5,6 +5,11 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
         $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $script:moduleManifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
         $script:configPath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'tflint' 'avm.tflint.hcl'
+        $pinsPath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc'
+        $pins = Get-Content -LiteralPath $pinsPath -Raw | ConvertFrom-Json
+        $script:tflintVersion = [string]($pins.tools | Where-Object name -eq 'tflint' | Select-Object -First 1).version
+        $script:avmRulesetVersion = [string]$pins.tflintPlugins.avm
+        $script:terraformRulesetVersion = [string]$pins.tflintPlugins.terraform
         $script:originalAvmHome = $env:AVM_HOME
         $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         Import-Module $script:moduleManifest -Force
@@ -159,11 +164,13 @@ output "deprecated_lock" {
             }
         }
 
-        $run.ToolVersion | Should -Be '0.64.0'
+        $run.ToolVersion | Should -Be $script:tflintVersion
         $run.Init.ExitCode | Should -Be 0 -Because $run.Init.StdErr
         $run.Version.ExitCode | Should -Be 0 -Because $run.Version.StdErr
-        "$($run.Version.StdOut)`n$($run.Version.StdErr)" | Should -Match 'TFLint version 0\.64\.0'
-        "$($run.Version.StdOut)`n$($run.Version.StdErr)" | Should -Match 'ruleset\.avm \(0\.19\.0\)'
+        $versionOutput = "$($run.Version.StdOut)`n$($run.Version.StdErr)"
+        $versionOutput | Should -Match ('TFLint version {0}' -f [regex]::Escape($script:tflintVersion))
+        $versionOutput | Should -Match ('ruleset\.avm \({0}\)' -f [regex]::Escape($script:avmRulesetVersion))
+        $versionOutput | Should -Match ('ruleset\.terraform \({0}\)' -f [regex]::Escape($script:terraformRulesetVersion))
 
         $run.RequiredLint.ExitCode | Should -Be 2 -Because $run.RequiredLint.StdErr
         $requiredPayload = $run.RequiredLint.StdOut | ConvertFrom-Json
