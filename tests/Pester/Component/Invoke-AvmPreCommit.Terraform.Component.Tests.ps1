@@ -56,6 +56,7 @@ BeforeAll {
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
     $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests/unit') -Force
 
+
     # Pre-stage the pinned policy-library cache so
     # Invoke-AvmTerraformCheckPolicy's Resolve-AvmPinnedAsset short-circuits
     # via the cache-hit fast-path without ever calling Invoke-AvmHttp.
@@ -184,6 +185,14 @@ AfterAll {
     Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
 }
 
+# typos ships no windows-arm64 asset, and Resolve-AvmTool's unsupported-platform
+# pre-check fires before the PATH fallback, so the stub launcher is unreachable
+# there. The chain-level tests still pass (the step reports 'skipped'), but the
+# direct-call tests cannot run. Evaluated at discovery time because -Skip: on It
+# is bound during discovery, before any BeforeAll has run.
+$script:typosUnsupported = $IsWindows -and
+([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64')
+
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
 
     It 'pre-commit composes the five-step terraform chain end-to-end (sync first) via launcher-resolved stubs and the in-module check-convention rules' {
@@ -194,8 +203,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 5
-        $expected = @('sync', 'check convention', 'transform', 'format', 'docs')
+        $steps.Count | Should -Be 6
+        $expected = @('sync', 'check convention', 'check spelling', 'transform', 'format', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -281,7 +290,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
     }
 
-    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes nine steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -289,8 +298,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 8
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $steps.Count | Should -Be 9
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'check spelling', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -430,5 +439,55 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $issues[0].Code     | Should -Be 'avmsec'
         $issues[0].File     | Should -Be 'examples/foo/tfplan.json'
         $issues[0].Message  | Should -Match 'public network access'
+    }
+
+    It 'Invoke-AvmCheckSpelling reports no issues against the clean fixture' -Skip:$script:typosUnsupported {
+        $result = Invoke-AvmCheckSpelling -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+
+        $result | Should -Not -BeNullOrEmpty
+        $result.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
+        $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
+        $result.PSObject.Properties['Tool'].Value | Should -Match '^typos/'
+        $result.PSObject.Properties['ToolSource'].Value | Should -Be 'path'
+        @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+    }
+
+    It 'Invoke-AvmCheckSpelling fails and surfaces a misspelling from hand-written source' -Skip:$script:typosUnsupported {
+        # Proves the gate can go red end-to-end. Without this the suite only
+        # ever proves it does nothing quietly.
+        $env:AVM_STUB_TYPOS_OUTPUT = '{"type":"typo","path":"./variables.tf","line_num":12,"byte_offset":8,"typo":"Requries","corrections":["Requires"]}'
+        try {
+            $result = Invoke-AvmCheckSpelling -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback -Severity error
+        }
+        finally {
+            Remove-Item Env:\AVM_STUB_TYPOS_OUTPUT -ErrorAction SilentlyContinue
+        }
+
+        $result.PSObject.Properties['Status'].Value | Should -Be 'fail'
+
+        $issues = @($result.PSObject.Properties['Issues'].Value)
+        $issues.Count | Should -Be 1
+        $issues[0].Severity | Should -Be 'error'
+        $issues[0].Code     | Should -Be 'AVM-SPELL'
+        $issues[0].File     | Should -Be 'variables.tf'
+        $issues[0].Line     | Should -Be 12
+        $issues[0].Column   | Should -Be 9
+        $issues[0].Message  | Should -Match 'Requries'
+        $issues[0].Message  | Should -Match 'Requires'
+    }
+
+    It 'Invoke-AvmCheckSpelling skips hits inside a terraform-docs generated README' -Skip:$script:typosUnsupported {
+        # README.md in the fixture carries BEGIN_TF_DOCS, so a hit there is an
+        # artifact of the generator and fixing it would be erased on regeneration.
+        $env:AVM_STUB_TYPOS_OUTPUT = '{"type":"typo","path":"./README.md","line_num":30,"byte_offset":4,"typo":"Requries","corrections":["Requires"]}'
+        try {
+            $result = Invoke-AvmCheckSpelling -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback -Severity error
+        }
+        finally {
+            Remove-Item Env:\AVM_STUB_TYPOS_OUTPUT -ErrorAction SilentlyContinue
+        }
+
+        $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
+        @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 }

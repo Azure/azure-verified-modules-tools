@@ -113,7 +113,7 @@ avm lint            # Invoke-AvmLint   (bicep lint; tflint --recursive for terra
 avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json)
 avm test --no-init  # Skip the implicit 'terraform init -backend=false' (it otherwise always runs)
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
-avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
+avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> check spelling -> transform -> format -> docs)
 avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring

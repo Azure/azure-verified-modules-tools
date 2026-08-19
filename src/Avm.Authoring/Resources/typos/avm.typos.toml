@@ -1,0 +1,42 @@
+# AVM Terraform spell-check allowlist.
+#
+# Consumed by 'avm check spelling' (Invoke-AvmTerraformCheckSpelling). A repo's
+# own .typos.toml is MERGED over this file rather than replacing it, so modules
+# can add local entries without losing the shared vocabulary.
+#
+# Derivation: full scan of the 188 active Azure/terraform-azurerm-avm-* repos at
+# typos 1.49.0 -- 2,259 hits across 122 unique words. The entries below account
+# for 1,845 of those hits and were confirmed against their source lines. See
+# docs/progress/2026-08-18-terraform-spell-check.md.
+#
+# Adding an entry REMOVES the word from detection everywhere. Prefer a repo-local
+# .typos.toml when the word is a real typo one module cannot yet fix (e.g. a
+# misspelling baked into a published variable name).
+
+[files]
+# Binary document formats whose internal control sequences scan as prose
+# (e.g. RTF '\fswiss\fcharset0' yields 'ba', 'agre', 'ure').
+extend-exclude = ["*.rtf", "*.docx", "*.pdf"]
+
+[default.extend-words]
+# Azure service acronyms.
+caf = "caf"              # Cloud Adoption Framework -> typos suggests 'CALF'
+aks = "aks"              # Azure Kubernetes Service -> 'ask'
+anf = "anf"              # Azure NetApp Files -> 'and'
+aci = "aci"              # Azure Container Instances -> 'acpi'
+hdinsight = "hdinsight"  # Azure HDInsight -> 'hindsight'
+
+# CAF resource-name abbreviations, e.g. name = "snet-private-endpoints".
+snet = "snet"            # subnet -> 'sent'
+nore = "nore"            # norwayeast -> 'nor'
+bse = "bse"              # brazilsoutheast -> 'base'
+
+# Loop variables and third-party literals.
+ot = "ot"                # for ot in var.data_sources.otel_traces
+wel = "wel"              # for wel in var.data_sources.windows_event_logs
+yor = "yor"              # BridgeCrew Yor, the tagging tool -> 'Your'
+ist = "ist"              # India Standard Time, in utc_offset docs -> 'IS'
+ful = "ful"              # SaaSApiConfiguration__FulFillmentAPIBaseURL -> 'Full'
+
+# Accepted English variant rather than a misspelling.
+writeable = "writeable"

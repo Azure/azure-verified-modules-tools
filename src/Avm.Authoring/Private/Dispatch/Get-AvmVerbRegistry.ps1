@@ -110,14 +110,19 @@ function Get-AvmVerbRegistry {
             Summary = 'Run the built-in AVM convention rules against the current module.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('check', 'spelling')
+            Cmdlet  = 'Invoke-AvmCheckSpelling'
+            Summary = 'Spell-check terraform sources with typos (report-only).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, test, docs).'
+            Summary = 'Run the fast pre-commit gauntlet (terraform: sync, check convention, check spelling, transform, format, docs; bicep: format, lint, test, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')
             Cmdlet  = 'Invoke-AvmPrCheck'
-            Summary = 'Run the full PR gauntlet (sync, format, transform, lint, check policy, check convention, test, docs).'
+            Summary = 'Run the full PR gauntlet (sync, format, transform, lint, check policy, check convention, check spelling, test, docs).'
         }
     )
 }

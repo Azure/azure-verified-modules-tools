@@ -190,6 +190,38 @@
         "darwin-amd64": "0f3a9fd17526014646a2dfc3f9122f7b4161abe3d6b0f0f03f9014483ddf4d19",
         "darwin-arm64": "2496e9cb3d24992d553b45e7c87a0fdc9449ca975233876247a9bfeda857e6c0"
       }
+    },
+    {
+      "name": "typos",
+      "version": "1.49.0",
+      "urlTemplate": "https://github.com/crate-ci/typos/releases/download/v{version}/typos-v{version}-{platform}{ext}",
+      "archive": "tar.gz",
+      "entrypoint": "typos",
+      // Upstream ships no aarch64-pc-windows-msvc asset, matching the tflint gap.
+      "unsupportedPlatforms": [
+        "windows-arm64"
+      ],
+      "platformAliases": {
+        "windows-amd64": "x86_64-pc-windows-msvc",
+        "linux-amd64": "x86_64-unknown-linux-musl",
+        "linux-arm64": "aarch64-unknown-linux-musl",
+        "darwin-amd64": "x86_64-apple-darwin",
+        "darwin-arm64": "aarch64-apple-darwin"
+      },
+      "archives": {
+        "windows-amd64": "zip",
+        "linux-amd64": "tar.gz",
+        "linux-arm64": "tar.gz",
+        "darwin-amd64": "tar.gz",
+        "darwin-arm64": "tar.gz"
+      },
+      "sha256": {
+        "windows-amd64": "06d3a1b71c282e021671070696a72696d5c60ea485b47dc4f8f1fbcf90144d02",
+        "linux-amd64": "48bd2d58e02ce713b8c0f1aa239e68ee4f7d8c551013135806e6aed3938d9e10",
+        "linux-arm64": "85c8b87b22a0fb1da130cd4d495e0beba7f1225eb580933184509e146ec4c509",
+        "darwin-amd64": "4cecbf653a9fc45f023abf57f4e2e2f6b138c2d2387b09289beacdd3f0ea7bfd",
+        "darwin-arm64": "8c0e7bd40b2b60c0b0cfe9f74dd814b4d4385c956ce86860f7da9e62d91fdc73"
+      }
     }
   ],
 

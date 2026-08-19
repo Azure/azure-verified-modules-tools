@@ -171,7 +171,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
-    It 'composes all five steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
+    It 'composes all six steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("precommit-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -184,6 +184,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -215,12 +216,13 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 5
+        $result.Steps.Count               | Should -Be 6
         $result.Steps[0].Step             | Should -Be 'sync'
         $result.Steps[1].Step             | Should -Be 'check convention'
-        $result.Steps[2].Step             | Should -Be 'transform'
-        $result.Steps[3].Step             | Should -Be 'format'
-        $result.Steps[4].Step             | Should -Be 'docs'
+        $result.Steps[2].Step             | Should -Be 'check spelling'
+        $result.Steps[3].Step             | Should -Be 'transform'
+        $result.Steps[4].Step             | Should -Be 'format'
+        $result.Steps[5].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -237,6 +239,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -274,7 +277,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status | Should -Be 'pass'
-        $result.Steps.Step | Should -Be @('sync', 'check convention', 'transform', 'format', 'docs')
+        $result.Steps.Step | Should -Be @('sync', 'check convention', 'check spelling', 'transform', 'format', 'docs')
     }
 
     It 'exposes the managed-files version switches the engine understands' {
@@ -298,6 +301,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -330,6 +334,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -360,6 +365,7 @@ Describe 'Invoke-AvmPreCommit' {
                     "managed files are pinned to 1.4.2 but major release 2.0.0 is available; re-run with -Upgrade to adopt it")
             }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -367,13 +373,13 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status            | Should -Be 'fail'
-        $result.Steps.Count       | Should -Be 5
+        $result.Steps.Count       | Should -Be 6
         $result.Steps[0].Step     | Should -Be 'sync'
         $result.Steps[0].Status   | Should -Be 'fail'
         $result.Steps[0].Error    | Should -Match 'major release 2\.0\.0'
         $result.Steps[0].Error    | Should -Match '-Upgrade'
         # An adoption gap must not abort the chain the way 'error' does.
-        ($result.Steps[1..4] | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+        ($result.Steps[1..5] | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
@@ -389,6 +395,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -396,7 +403,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                                                 | Should -Be 'pass'
-        $result.Steps.Count                                            | Should -Be 5
+        $result.Steps.Count                                            | Should -Be 6
         ($result.Steps | Where-Object Status -eq 'skipped').Count      | Should -Be 1
         ($result.Steps | Where-Object Step -eq 'transform').Status     | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Error      | Should -Match 'not wired'
@@ -418,6 +425,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { throw [AvmConfigurationException]::new('managed-files repo id could not be resolved') }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { throw [AvmNotSupportedException]::new('transform engine not wired yet') }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -446,6 +454,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -453,7 +462,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                                          | Should -Be 'fail'
-        $result.Steps.Count                                     | Should -Be 5
+        $result.Steps.Count                                     | Should -Be 6
         ($result.Steps | Where-Object Step -eq 'format').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status   | Should -Be 'pass'
     }
@@ -471,6 +480,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { [pscustomobject]@{ Engine = 'terraform'; Status = 'fail' } }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -478,7 +488,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
@@ -500,6 +510,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
             Mock Invoke-AvmSync            { [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckSpelling   { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTransform       { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmFormat          { throw [System.InvalidOperationException]::new('engine blew up') }
             Mock Invoke-AvmDocs            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
@@ -507,7 +518,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'

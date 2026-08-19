@@ -3,7 +3,7 @@ function Invoke-AvmPreCommit {
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
         bicep:     format -> lint -> validate -> docs.
-        terraform: sync -> check convention -> transform -> format -> docs.
+        terraform: sync -> check convention -> check spelling -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -16,7 +16,7 @@ function Invoke-AvmPreCommit {
         The Terraform chain follows the legacy Terraform governance
         pre-commit.porch.yaml philosophy: after an initial managed-files
         sync it stays fast and fully offline
-        (check convention -> transform -> format -> docs), so it
+        (check convention -> check spelling -> transform -> format -> docs), so it
         never needs `terraform init`. The `sync` step runs FIRST so the
         rest of the chain sees the freshest governed files; it fetches the
         managed-file source (the Azure/azure-verified-modules-tools repo by
@@ -179,6 +179,13 @@ function Invoke-AvmPreCommit {
                 Name      = 'check convention'
                 Cmdlet    = 'Invoke-AvmCheckConvention'
                 ExtraArgs = @{ Fix = $true; FixableOnly = $true }
+            }
+            [pscustomobject]@{
+                # Warning severity while the estate is brought clean; promote to
+                # 'error' once repositories pass. See docs/progress/2026-08-18-terraform-spell-check.md.
+                Name      = 'check spelling'
+                Cmdlet    = 'Invoke-AvmCheckSpelling'
+                ExtraArgs = @{ Severity = 'warning' }
             }
             [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }

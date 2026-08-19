@@ -17,6 +17,7 @@
         'Invoke-Avm',
         'Invoke-AvmCheckConvention',
         'Invoke-AvmCheckPolicy',
+        'Invoke-AvmCheckSpelling',
         'Invoke-AvmDoctor',
         'Invoke-AvmDocs',
         'Invoke-AvmFormat',

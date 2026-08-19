@@ -3,7 +3,7 @@ function Invoke-AvmPrCheck {
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
         sync -> format -> transform -> lint -> check policy ->
-        check convention -> validate -> docs.
+        check convention -> check spelling -> validate -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -136,6 +136,12 @@ function Invoke-AvmPrCheck {
             ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }
         }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
+        [pscustomobject]@{
+            # Warning severity while the estate is brought clean; promote to
+            # 'error' once repositories pass. See docs/progress/2026-08-18-terraform-spell-check.md.
+            Name = 'check spelling'; Cmdlet = 'Invoke-AvmCheckSpelling'
+            ExtraArgs = @{ Severity = 'warning' }
+        }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
     )
