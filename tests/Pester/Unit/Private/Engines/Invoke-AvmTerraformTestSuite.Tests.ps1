@@ -105,7 +105,9 @@ Describe 'Invoke-AvmTerraformTestSuite' {
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'init' -and $ArgumentList -contains '-backend=false'
+                $ArgumentList[0] -eq 'init' -and
+                $ArgumentList -contains '-backend=false' -and
+                $ArgumentList -contains '-upgrade'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'test' -and $ArgumentList -contains '-json' -and

@@ -9,10 +9,6 @@ function Get-AvmLatestManagedFilesVersion {
         API so the lookup needs no credentials and is not subject to anonymous
         rate limits. Only 'vMAJOR.MINOR.PATCH' tags participate; peeled
         annotated-tag entries ('...^{}') and any other ref shape are ignored.
-
-        The result is cached per repository for the lifetime of the module
-        session so a composition chain that syncs several times does not hit
-        the network repeatedly.
     #>
     [CmdletBinding()]
     [OutputType([semver])]
@@ -21,31 +17,11 @@ function Get-AvmLatestManagedFilesVersion {
         [string] $Repo,
 
         [AllowEmptyString()]
-        [string] $GitPath = '',
-
-        [switch] $Refresh
+        [string] $GitPath = ''
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-
-    if ($null -eq $script:AvmLatestManagedFilesVersion) {
-        $script:AvmLatestManagedFilesVersion = @{}
-    }
-
-    if ($Refresh -and $script:AvmLatestManagedFilesVersion.ContainsKey($Repo)) {
-        Write-AvmLog (
-            'managed-files version lookup: refresh requested; discarding cached latest version {0} for {1}' -f
-            $script:AvmLatestManagedFilesVersion[$Repo], $Repo) -Level Verbose
-        $script:AvmLatestManagedFilesVersion.Remove($Repo)
-    }
-
-    if ($script:AvmLatestManagedFilesVersion.ContainsKey($Repo)) {
-        Write-AvmLog (
-            'managed-files version lookup: reusing cached latest version {0} for {1}' -f
-            $script:AvmLatestManagedFilesVersion[$Repo], $Repo) -Level Verbose
-        return $script:AvmLatestManagedFilesVersion[$Repo]
-    }
 
     if ([string]::IsNullOrWhiteSpace($GitPath)) {
         throw [AvmManagedFilesLookupException]::new(
@@ -91,7 +67,6 @@ function Get-AvmLatestManagedFilesVersion {
     }
 
     $latest = $versions[-1]
-    $script:AvmLatestManagedFilesVersion[$Repo] = $latest
     Write-AvmLog (
         'managed-files version lookup: discovered latest release {0} for {1}' -f $latest, $Repo) -Level Verbose
     return $latest

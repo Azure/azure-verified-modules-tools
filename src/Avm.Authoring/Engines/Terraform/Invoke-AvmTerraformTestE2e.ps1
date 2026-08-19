@@ -34,9 +34,11 @@ function Invoke-AvmTerraformTestE2e {
                b. .env sourcing: after pre.ps1, a '.env' file next to the
                   example (if present) is parsed and its values are passed to
                   every terraform subprocess below via -EnvVars.
-               c. terraform init -input=false -no-color
+               c. terraform init -upgrade -input=false -no-color
                   (a REAL backend init - e2e provisions real resources, so this
-                  is NOT the '-backend=false' init the test tiers use).
+                  is NOT the '-backend=false' init the test tiers use). Upgrade
+                  mode intentionally allows dependency lock selections to move
+                  to newer acceptable versions.
                d. terraform apply -auto-approve -input=false -no-color, with
                   up to -MaxRetry retries on a transient failure. e2e deploys
                   real infrastructure, so an apply fails intermittently on
@@ -209,7 +211,7 @@ function Invoke-AvmTerraformTestE2e {
 
             $init = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('init', '-input=false', '-no-color') `
+                -ArgumentList @('init', '-upgrade', '-input=false', '-no-color') `
                 -Label ('{0}: terraform init' -f $rel) `
                 -WorkingDirectory $exampleDir `
                 -EnvVars $envVars `

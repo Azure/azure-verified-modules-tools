@@ -7,7 +7,9 @@ function ConvertTo-AvmResultLine {
         [object[]] $Result,
 
         [Parameter(Mandatory)]
-        [string] $Verb
+        [string] $Verb,
+
+        [switch] $ExcludePresentedIssues
     )
 
     Set-StrictMode -Version 3.0
@@ -25,7 +27,7 @@ function ConvertTo-AvmResultLine {
         $single = $items[0]
         $status = [string]$single.PSObject.Properties['Status'].Value
         $lines.Add(('avm {0}: {1}{2}' -f $Verb, $status, (Format-AvmTimingSuffix -InputObject $single)))
-        foreach ($detail in (ConvertTo-AvmResultDetailLine -Result $single -Indent '  ')) {
+        foreach ($detail in (ConvertTo-AvmResultDetailLine -Result $single -Indent '  ' -ExcludePresentedIssues:$ExcludePresentedIssues)) {
             $lines.Add($detail)
         }
         return $lines.ToArray()
@@ -38,7 +40,7 @@ function ConvertTo-AvmResultLine {
         $identity = Get-AvmResultIdentity -Result $item
         $label = if ([string]::IsNullOrWhiteSpace($identity)) { '' } else { ' ' + $identity }
         $lines.Add(('  [{0}]{1}{2}' -f $status, $label, (Format-AvmTimingSuffix -InputObject $item)))
-        foreach ($detail in (ConvertTo-AvmResultDetailLine -Result $item -Indent '    ')) {
+        foreach ($detail in (ConvertTo-AvmResultDetailLine -Result $item -Indent '    ' -ExcludePresentedIssues:$ExcludePresentedIssues)) {
             $lines.Add($detail)
         }
     }
@@ -71,7 +73,9 @@ function ConvertTo-AvmResultDetailLine {
         [Parameter(Mandatory)]
         [object] $Result,
 
-        [string] $Indent = '  '
+        [string] $Indent = '  ',
+
+        [switch] $ExcludePresentedIssues
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -92,7 +96,7 @@ function ConvertTo-AvmResultDetailLine {
                 foreach ($summaryLine in @(ConvertTo-AvmRunSummaryLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
                     $lines.Add($summaryLine)
                 }
-                foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
+                foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $resultProperty.Value -Indent ($Indent + '  ') -ExcludePresentedIssues:$ExcludePresentedIssues)) {
                     $lines.Add($issueLine)
                 }
             }
@@ -105,7 +109,7 @@ function ConvertTo-AvmResultDetailLine {
         $lines.Add($summaryLine)
     }
 
-    foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $Result -Indent $Indent)) {
+    foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $Result -Indent $Indent -ExcludePresentedIssues:$ExcludePresentedIssues)) {
         $lines.Add($issueLine)
     }
 
@@ -150,7 +154,9 @@ function ConvertTo-AvmIssueLine {
         [Parameter(Mandatory)]
         [object] $Result,
 
-        [string] $Indent = ''
+        [string] $Indent = '',
+
+        [switch] $ExcludePresentedIssues
     )
 
     $issuesProperty = $Result.PSObject.Properties['Issues']
@@ -161,6 +167,9 @@ function ConvertTo-AvmIssueLine {
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($issue in @($issuesProperty.Value)) {
         if ($null -eq $issue) {
+            continue
+        }
+        if ($ExcludePresentedIssues -and (Test-AvmIssuePresented -Issue $issue)) {
             continue
         }
 
@@ -193,4 +202,28 @@ function ConvertTo-AvmIssueLine {
     }
 
     return $lines.ToArray()
+}
+
+function Register-AvmPresentedIssue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object] $Issue
+    )
+
+    if (-not (Test-AvmIssuePresented -Issue $Issue)) {
+        $script:AvmPresentedIssues.Add($Issue, [object]::new())
+    }
+}
+
+function Test-AvmIssuePresented {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [object] $Issue
+    )
+
+    $value = $null
+    return $script:AvmPresentedIssues.TryGetValue($Issue, [ref]$value)
 }

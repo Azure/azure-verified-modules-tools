@@ -111,6 +111,89 @@ Describe 'Invoke-AvmPrCheck' {
         @($observed.DebugInfo) | Should -Contain 'nested lint pass'
     }
 
+    It 'preserves an inline deprecated-interface warning through nested lint and omits its green summary duplicate' {
+        $dir = Join-Path $TestDrive ("prcheck-deprecation-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $savedActions = $env:GITHUB_ACTIONS
+            $savedRunner = $env:RUNNER_DEBUG
+            $savedVerbose = $env:AVM_VERBOSE
+            try {
+                $env:GITHUB_ACTIONS = ''
+                $env:RUNNER_DEBUG = ''
+                $env:AVM_VERBOSE = ''
+                Mock Get-AvmModuleContext {
+                    [pscustomobject]@{
+                        Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                    }
+                }
+                Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmLint {
+                    $issue = [pscustomobject]@{
+                        File = 'variables.tf'; Line = 17; Column = 5
+                        Severity = 'notice'; Code = 'deprecated_lock_interface'
+                        Message = 'Use the canonical lock interface.'
+                    }
+                    if (Test-AvmDeprecatedInterfaceNotice -Issue $issue) {
+                        Write-AvmLog `
+                            -Message ('[{0}] {1}' -f $issue.Code, $issue.Message) `
+                            -Level Warning `
+                            -File $issue.File `
+                            -Line $issue.Line `
+                            -Column $issue.Column
+                        Register-AvmPresentedIssue -Issue $issue
+                    }
+                    [pscustomobject]@{
+                        Engine = 'terraform'; Status = 'pass'; Issues = @($issue)
+                    }
+                }
+                Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+                Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+                $output = @(Invoke-AvmPrCheck -Path $D 3>&1 6>&1)
+                $result = $output |
+                    Where-Object { $null -ne $_.PSObject.Properties['Steps'] } |
+                    Select-Object -Last 1
+                $warnings = @(
+                    $output |
+                        Where-Object { $_ -is [System.Management.Automation.WarningRecord] } |
+                        ForEach-Object { [string]$_ }
+                )
+                $summaryInfo = @()
+                Write-AvmResult `
+                    -Result $result `
+                    -Verb 'pr-check' `
+                    -InformationVariable summaryInfo
+
+                [pscustomobject]@{
+                    Result = $result
+                    Warnings = $warnings
+                    Summary = @($summaryInfo | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $savedActions
+                $env:RUNNER_DEBUG = $savedRunner
+                $env:AVM_VERBOSE = $savedVerbose
+            }
+        }
+
+        $observed.Result.Status | Should -Be 'pass'
+        $lintStep = $observed.Result.Steps | Where-Object Step -eq 'lint'
+        $lintStep.Status | Should -Be 'pass'
+        $lintStep.Result.Issues[0].Severity | Should -Be 'notice'
+        @($observed.Warnings).Count | Should -Be 1
+        $observed.Warnings[0] | Should -Match '\[deprecated_lock_interface\] Use the canonical lock interface\.'
+        ($observed.Summary -join "`n") | Should -Match '\[pass\] lint'
+        ($observed.Summary -join "`n") | Should -Not -Match 'deprecated_lock_interface|canonical lock'
+    }
+
     It 'rejects a dirty working tree before invoking any gauntlet step' {
         $dir = Join-Path $TestDrive ("prcheck-dirty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -396,6 +479,56 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[6].Step             | Should -Be 'validate'
         $result.Steps[7].Step             | Should -Be 'docs'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+    }
+
+    It 'renders deprecated interface notices while lint and pr-check remain pass' {
+        $dir = Join-Path $TestDrive ("prcheck-tf-notice-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmLint {
+                [pscustomobject]@{
+                    Engine = 'terraform'
+                    Status = 'pass'
+                    Issues = @([pscustomobject]@{
+                            Severity = 'notice'
+                            File     = 'variables.tf'
+                            Line     = 7
+                            Column   = 1
+                            Code     = 'deprecated_lock_interface'
+                            Message  = 'lock uses deprecated interface variant 1'
+                        })
+                }
+            }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
+
+            $result = Invoke-AvmPrCheck -Path $D
+            [pscustomobject]@{
+                Result = $result
+                Lines  = @(ConvertTo-AvmResultLine -Result @($result) -Verb 'pr-check')
+            }
+        }
+
+        $observed.Result.Status | Should -Be 'pass'
+        $lintStep = $observed.Result.Steps | Where-Object Step -eq 'lint'
+        $lintStep.Status | Should -Be 'pass'
+        $lintStep.Result.Status | Should -Be 'pass'
+        $lintStep.Result.Issues.Count | Should -Be 1
+        $lintStep.Result.Issues[0].Code | Should -Be 'deprecated_lock_interface'
+        ($observed.Lines -join "`n") | Should -Match 'notice variables\.tf:7:1 \[deprecated_lock_interface\]'
+        ($observed.Lines -join "`n") | Should -Match 'lock uses deprecated interface variant 1'
     }
 
     It 'reports the stub terraform engines (transform/check policy/check convention) as skipped and keeps overall pass; the terraform sync step runs' {

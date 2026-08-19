@@ -40,7 +40,7 @@ Describe 'Invoke-AvmTerraformInit' {
                 $WorkingDirectory -eq $TestDrive -and
                 $Label -eq 'fixture init' -and
                 $StreamOutput -and
-                ($ArgumentList -join ' ') -eq 'init -input=false -no-color'
+                ($ArgumentList -join ' ') -eq 'init -upgrade -input=false -no-color'
             }
 
             [pscustomobject]@{

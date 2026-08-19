@@ -9,9 +9,11 @@ function Invoke-AvmTerraformTest {
         via Resolve-AvmTool, then:
 
           1. Unless -NoInit was passed, runs
-                terraform init -backend=false -upgrade=false -input=false
+               terraform init -backend=false -upgrade -input=false
              so 'validate' can resolve provider requirements without
-             needing real backend credentials.
+             needing real backend credentials. Upgrade mode intentionally
+             allows dependency lock selections to move to newer acceptable
+             versions.
           2. Runs 'terraform validate -no-color -json' against the
              working directory.
           3. Parses the JSON 'diagnostics' array into the shared Issue
@@ -72,7 +74,7 @@ function Invoke-AvmTerraformTest {
     if (-not $NoInit) {
         $initResult = Invoke-AvmProcess `
             -FilePath $tool.Path `
-            -ArgumentList @('init', '-backend=false', '-upgrade=false', '-input=false', '-no-color') `
+            -ArgumentList @('init', '-backend=false', '-upgrade', '-input=false', '-no-color') `
             -WorkingDirectory $Context.Root `
             -StreamOutput:(Test-AvmVerboseEnabled) `
             -Label ('terraform init {0}' -f $Context.Root) `

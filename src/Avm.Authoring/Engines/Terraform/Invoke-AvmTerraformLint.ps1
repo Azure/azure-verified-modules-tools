@@ -240,6 +240,9 @@ function Invoke-AvmTflintScope {
         else {
             'warning'
         }
+        if ($severity -eq 'info') {
+            $severity = 'notice'
+        }
         $code = if ($issue.rule -and $issue.rule.name) {
             [string]$issue.rule.name
         }
@@ -285,6 +288,24 @@ function Invoke-AvmTflintScope {
     }
 }
 
+function Test-AvmDeprecatedInterfaceNotice {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [object] $Issue
+    )
+
+    $severity = $Issue.PSObject.Properties['Severity']
+    $code = $Issue.PSObject.Properties['Code']
+    return (
+        $null -ne $severity -and
+        [string]$severity.Value -eq 'notice' -and
+        $null -ne $code -and
+        [string]$code.Value -cmatch '^deprecated_[a-z0-9]+(?:_[a-z0-9]+)*_interface$'
+    )
+}
+
 function Invoke-AvmTerraformLint {
     <#
     .SYNOPSIS
@@ -303,7 +324,7 @@ function Invoke-AvmTerraformLint {
         parallel phases; each distinct TFLint configuration is initialized once
         between them:
 
-            terraform init -input=false
+            terraform init -upgrade -input=false
             tflint --init   --config <absolute ruleset>          (install plugins)
             tflint --config <absolute ruleset> --format=json \
                    --minimum-failure-severity=<threshold>        (lint)
@@ -323,7 +344,9 @@ function Invoke-AvmTerraformLint {
         passed to tflint (via --minimum-failure-severity, driving its exit code)
         and used to compute Status from the parsed issues, so both agree. All
         issues are still parsed and returned for reporting regardless of the
-        threshold.
+        threshold. AVM-plugin notice rules named 'deprecated_*_interface' are
+        also emitted immediately as non-failing warnings with source locations.
+        They remain notice issues in the returned result.
 
         tflint exit codes for the lint call:
           0  - no issues at or above the threshold
@@ -471,6 +494,18 @@ function Invoke-AvmTerraformLint {
         foreach ($scopeResult in $scopeResults) {
             foreach ($issue in $scopeResult.Issues) {
                 $issues.Add($issue)
+                if (
+                    (Test-AvmDeprecatedInterfaceNotice -Issue $issue) -and
+                    -not (Test-AvmIssuePresented -Issue $issue)
+                ) {
+                    Write-AvmLog `
+                        -Message ('[{0}] {1}' -f $issue.Code, $issue.Message) `
+                        -Level Warning `
+                        -File $issue.File `
+                        -Line $issue.Line `
+                        -Column $issue.Column
+                    Register-AvmPresentedIssue -Issue $issue
+                }
             }
         }
     }

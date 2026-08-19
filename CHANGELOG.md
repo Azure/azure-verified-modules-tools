@@ -54,6 +54,22 @@ section when cutting a release.
 
 ### Changed
 
+- Managed tools now pin Bicep 0.46.1, Conftest 0.69.0, mapotf 0.1.9,
+  and terraform-docs 0.24.0. The Terraform TFLint ruleset moves to 0.15.0
+  for Terraform 1.15 compatibility, and the AVM ruleset moves to 0.19.1.
+  Component-test launchers now inject these versions from `avm.pins.jsonc`
+  instead of duplicating them in stub source.
+- Every production `terraform init` now uses `-upgrade`, including lint,
+  policy, validate, Terraform test tiers, end-to-end examples, and repository
+  management. This intentionally permits Terraform to update dependency lock
+  selections to newer versions allowed by the configuration.
+- TFLint is pinned to 0.64.0, the Terraform ruleset to 0.15.0, and the AVM
+  ruleset to 0.19.1. The vendored
+  configurations now require GitHub Artifact Attestation and no longer embed a
+  legacy PGP signing key; they also disable implicit rules so only their curated
+  rule lists execute. The v0.19 rules require the canonical AzAPI variables and
+  surface deprecated lock, role-assignment, and private-endpoint interfaces as
+  non-failing notices at the default warning threshold.
 - Managed files now live in `Azure/azure-verified-modules-managed-files` under
   `terraform/files`, and file-group definition moved with them to
   `terraform/config/managed-files.json`. Each file group owns its `deletedFiles`,
@@ -100,7 +116,8 @@ section when cutting a release.
 - Pinned `terraform` bumped to 1.15.8 and `mapotf` to 0.1.5 in
   `Resources/avm.pins.jsonc`, with refreshed per-platform SHA256 hashes.
 - `avm lint` now copies the Terraform module to a cleaned temporary tree and
-  runs `terraform init -input=false` in every root, module, and example scope.
+  runs `terraform init -upgrade -input=false` in every root, module, and
+  example scope.
   Example `tflint-pre.ps1` hooks run after Terraform initialization and before
   TFLint plugin initialization, while generated files and hook output remain
   isolated from the source repository.
@@ -147,6 +164,13 @@ section when cutting a release.
 
 ### Fixed
 
+- Managed-file release discovery now refreshes for every operation instead of
+  reusing a module-lifetime cache, so long-running PowerShell sessions report
+  and adopt the actual latest published version.
+- AVM-plugin `deprecated_*_interface` notices now appear inline as yellow
+  warnings, including GitHub workflow annotations, while remaining structured
+  notice issues that do not fail lint or `pr-check`. Final result summaries no
+  longer repeat those already-presented findings as green pass details.
 - Managed-file sources can place a subtree under `<parent>/_all/` to copy it
   into every existing immediate child directory of any named parent. Reserved
   `_all` segments are not written to consumer repositories, so shared files

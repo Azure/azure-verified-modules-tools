@@ -70,6 +70,45 @@ Describe 'Write-AvmResult GitHub summary' {
             $env:CLICOLOR_FORCE = $oldColorForce
         }
     }
+
+    It 'omits an already-presented issue only from final output and keeps it in the result contract' {
+        $probe = InModuleScope 'Avm.Authoring' {
+            $issue = [pscustomobject]@{
+                Severity = 'notice'
+                File     = 'variables.tf'
+                Line     = 17
+                Column   = 5
+                Code     = 'deprecated_lock_interface'
+                Message  = 'Use the canonical lock interface.'
+            }
+            $lint = [pscustomobject]@{
+                Status = 'pass'
+                Issues = @($issue)
+            }
+            $result = [pscustomobject]@{
+                Status = 'pass'
+                Steps  = @([pscustomobject]@{
+                        Step = 'lint'; Status = 'pass'; Result = $lint
+                    })
+            }
+            Register-AvmPresentedIssue -Issue $issue
+            $ordinaryLines = @(ConvertTo-AvmResultLine -Result $result -Verb 'pr-check')
+            Mock Write-AvmLog
+            Write-AvmResult -Result $result -Verb 'pr-check'
+
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter {
+                $Message -match 'deprecated_lock_interface|canonical lock'
+            }
+            [pscustomobject]@{
+                OrdinaryLines = $ordinaryLines
+                Json          = $result | ConvertTo-Json -Depth 10
+            }
+        }
+
+        ($probe.OrdinaryLines -join "`n") | Should -Match 'deprecated_lock_interface'
+        $probe.Json | Should -Match 'deprecated_lock_interface'
+        $probe.Json | Should -Not -Match 'Presented|Inline|Reported'
+    }
 }
 
 Describe 'ConvertTo-AvmResultLine' {

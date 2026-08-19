@@ -230,7 +230,7 @@ Three layers; each runs with its own tag filter.
 
 **Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
 
-**Stub binaries.** `tests/fixtures/bin/*.ps1` (`terraform.ps1`, `tflint.ps1`, `terraform-docs.ps1`, `conftest.ps1`) emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` wires the stub into a temp `$env:PATH` for the Component tier. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
+**Stub binaries.** `tests/fixtures/bin/*.ps1` emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` reads `avm.pins.jsonc`, injects the matching versions, and wires the stubs into a temp `$env:PATH` for the Component tier, so pin updates never require fixture edits. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
 
 **Pre-staging the pinned-asset cache.** Component tests that exercise pinned-asset-backed engines write `<AVM_HOME>/cache/assets/<name>/<sha256>/.verified` (empty file) plus the asset payload, then declare a matching `https://example.invalid/...` source URL with a deterministic-but-fake SHA256 in the fixture's `.avm/config.json`. The cache-hit fast-path in `Resolve-AvmPinnedAsset` short-circuits the entire `Invoke-AvmHttp` download, so no real network is touched and the test stays in the Component tier.
 
@@ -359,7 +359,8 @@ Currently vendored:
 
 **Deliberate deviations from the governance chain** (documented so a future reader doesn't "fix" them as bugs):
 
-- Lint does **not** run `terraform init` per scope. It relies on `tflint --init` (plugin acquisition) only. If real-world provider-schema-dependent rules start erroring, the follow-up is a per-scope `terraform init`, tracked as a new finding rather than assumed here.
+- Lint runs `terraform init -upgrade` in each cleaned temporary scope before
+  `tflint --init` acquires the AVM plugin and TFLint evaluates the scope.
 - No `*.override.hcl` merge and no `AVM_TFLINT_CONFIG_URL`-style remote fetch. The only supported override is `AVM_TFLINT_CONFIG_DIR` pointing at a directory that contains all three configs; otherwise the vendored copies are authoritative.
 
 ## Appendix D. Decision: long-path support on Windows
@@ -618,7 +619,9 @@ Concrete reasoning:
 
 **Orchestration dependencies that come with avmfix:**
 
-- `terraform init -backend=false` runs first (downloads providers + modules, writes `.terraform.lock.hcl`). Behaviours #1–#3 won't fire correctly without it.
+- `terraform init -backend=false -upgrade` runs first (downloads providers +
+  modules, writes `.terraform.lock.hcl`, and may update allowed dependency
+  selections). Behaviours #1–#3 won't fire correctly without it.
 - HTTPS calls to `registry.terraform.io` (provider version lookup when `.terraform.lock.hcl` omits a version) and `registry.opentofu.org` (provider plugin binary download).
 - gRPC subprocess per (namespace, name, version) tuple, holding the provider plugin open for schema queries. Cached in-process; cleaned up at end.
 - Two-pass `AutoFix` (file-relocation requires re-walk).
@@ -641,7 +644,8 @@ Concrete reasoning:
 1. Ecosystem guard (terraform-only).
 2. `terraform fmt -recursive .` (existing — no change).
 3. `Resolve-AvmTool -Name 'avmfix' -AllowPathFallback:$AllowPathFallback`. Missing tool → `AvmConfigurationException` → chain `skipped`.
-4. `Resolve-AvmTool -Name 'terraform'` — required for avmfix's `terraform init -backend=false`. If absent: same skip path.
+4. `Resolve-AvmTool -Name 'terraform'` — required for avmfix's
+   `terraform init -backend=false -upgrade`. If absent: same skip path.
 5. `Invoke-AvmProcess` avmfix with argv `--folder . --exclude <pattern-from-config-if-any>` from `$Context.Root` (matches upstream porch step 8 first invocation).
 6. For each subdir of `<Root>/modules` at `depth=1`: same argv with `--folder modules/<name>`.
 7. For each subdir of `<Root>/examples` at `depth=1`: same argv with `--folder examples/<name>`.
@@ -1242,7 +1246,11 @@ Three upstream facts changed since the 2026-05/2026-06 audits, reported by the u
 1. Fail if `git status --porcelain` is non-empty *(pre-condition; the working tree must be clean before checks)*.
 2. terraform install.
 3. **Lint (parallel):** `tflint` on root/examples/modules (configs downloaded from governance `tflint-configs`, `.override.hcl` merged via `hclmerge`) **+ check-mapotf-drift** (re-run `mapotf transform` + `mapotf clean-backup`, then fail if `git status --porcelain` shows drift) **+ check-docs-drift** (re-run terraform-docs, fail on drift).
-4. **Well-architected (conftest):** per example → `terraform init` → `plan -out=tfplan` → `show -json` → download avmsec exemptions → `conftest` against APRL + `conftest` against avmsec (policies fetched via `go-getter` from `Azure/policy-library-avm`); honours `.e2eignore` skip + `pre/post.{sh,ps1}` hooks.
+4. **Well-architected (conftest):** per example →
+   `terraform init -upgrade` → `plan -out=tfplan` → `show -json` → download
+   avmsec exemptions → `conftest` against APRL + `conftest` against avmsec
+   (policies fetched via `go-getter` from `Azure/policy-library-avm`); honours
+   `.e2eignore` skip + `pre/post.{sh,ps1}` hooks.
 
 ### J.3 The "fix vs flag" model (resolves the long-standing tension)
 

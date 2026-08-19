@@ -4,7 +4,8 @@ function Invoke-AvmTerraformInit {
         Initialize a Terraform working directory safely.
 
     .DESCRIPTION
-        Runs terraform init and serializes calls that share TF_PLUGIN_CACHE_DIR.
+        Runs terraform init -upgrade and serializes calls that share
+        TF_PLUGIN_CACHE_DIR.
         Terraform's provider plugin cache is not concurrency-safe, while working
         directories without a shared cache can initialize independently.
     #>
@@ -33,6 +34,7 @@ function Invoke-AvmTerraformInit {
 
     $arguments = [System.Collections.Generic.List[string]]::new()
     $arguments.Add('init')
+    $arguments.Add('-upgrade')
     $arguments.Add('-input=false')
     if ($NoColor) {
         $arguments.Add('-no-color')

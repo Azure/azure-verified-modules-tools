@@ -1,4 +1,4 @@
-# AVM test-only stub for `tflint`. Pinned to avm.pins version 0.55.1.
+# AVM test-only stub for TFLint with the AVM ruleset.
 # Handles only --version and the Invoke-AvmTerraformLint argv shape:
 #   tflint --init --config <abs ruleset>
 #   tflint --config <abs ruleset> --format=json --minimum-failure-severity=<sev>
@@ -14,7 +14,13 @@ if ($args.Count -eq 0) {
 }
 
 if ($args -contains '--version') {
-    Write-Output 'TFLint version 0.55.1'
+    if ([string]::IsNullOrWhiteSpace($env:AVM_STUB_TOOL_VERSION) -or
+        [string]::IsNullOrWhiteSpace($env:AVM_STUB_TFLINT_AVM_PLUGIN_VERSION)) {
+        Write-Error 'stub tflint: launcher versions are not set'
+        exit 64
+    }
+    Write-Output "TFLint version $env:AVM_STUB_TOOL_VERSION"
+    Write-Output "ruleset.avm ($env:AVM_STUB_TFLINT_AVM_PLUGIN_VERSION)"
     exit 0
 }
 

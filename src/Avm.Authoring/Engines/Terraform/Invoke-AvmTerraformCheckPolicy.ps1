@@ -154,7 +154,7 @@ function Invoke-AvmTerraformCheckPolicy {
           - post.ps1 runs after the example; post.sh is rejected likewise
 
         The staging directory is deliberately beneath the policy bundle cache.
-        Conftest 0.68.2 strips the drive letter from --policy paths on Windows;
+        Conftest strips the drive letter from --policy paths on Windows;
         keeping the working tree and bundles on one volume preserves resolution.
 
         Conftest output is captured as JSON rather than streamed. The legacy

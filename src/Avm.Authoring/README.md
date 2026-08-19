@@ -30,7 +30,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Placeholder for the ARM-JSON walker that replaces `Set-ModuleReadMe.ps1`.          |
 | `Engines/Terraform/Format-AvmTerraformModule.ps1` | Runs `terraform fmt -recursive` over the module root.                              |
-| `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs `tflint --recursive --format=json` and surfaces structured diagnostics.       |
+| `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |
 | `Engines/Terraform/Invoke-AvmTerraformTest.ps1`   | Runs `terraform validate -no-color -json` (with optional auto `terraform init`).   |
 | `Engines/Terraform/Invoke-AvmTerraformDocs.ps1`   | Runs `terraform-docs markdown table` in inject mode against the module README.     |
 | `Private/`                                        | Module-internal helpers organised by feature. Dot-sourced but not exported.        |
@@ -109,9 +109,9 @@ avm doctor --json   # GNU-style flag translates to -Json
 avm context         # Get-AvmModuleContext (current working directory)
 avm tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm format          # Invoke-AvmFormat (engine resolved from module context)
-avm lint            # Invoke-AvmLint   (bicep lint; tflint --recursive for terraform)
+avm lint            # Invoke-AvmLint   (bicep lint; scoped AVM TFLint rulesets for terraform)
 avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json)
-avm test --no-init  # Skip the implicit 'terraform init -backend=false' (it otherwise always runs)
+avm test --no-init  # Skip the implicit 'terraform init -backend=false -upgrade' (it otherwise always runs)
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
 avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
 avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
@@ -121,13 +121,17 @@ Remove-Module Avm.Authoring
 
 The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm`
+0.19.0. All three packaged configurations require GitHub Artifact Attestation;
+there is no PGP signing-key fallback.
+
 ### Refreshing the tools lock
 
 Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The script fetches official checksums (terraform, tflint, terraform-docs) or downloads each per-platform binary and computes SHA256 locally (bicep), validates the result through `Test-AvmPins`, then rewrites `Resources/avm.pins.jsonc` with deterministic formatting.
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.55.1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.64.0 -TerraformDocs 0.20.0
 
 # Refresh just one
 ./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0

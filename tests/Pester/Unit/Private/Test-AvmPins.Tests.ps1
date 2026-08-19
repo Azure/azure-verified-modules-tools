@@ -352,26 +352,47 @@ Describe 'Test-AvmPins' {
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
         }
 
-        It 'mirrors the tflint plugin versions that the vendored HCL configs pin' {
+        It 'mirrors plugin versions and enforces attestation-only AVM configs' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
+            $v019Rules = @(
+                'deprecated_lock_interface'
+                'deprecated_private_endpoints_interface'
+                'deprecated_role_assignments_interface'
+                'ignore_body_changes'
+                'private_endpoints_manage_dns_zone_group'
+                'resource_types'
+                'retry'
+                'timeouts'
+            )
 
             foreach ($config in (Get-ChildItem -LiteralPath $configDir -Filter '*.hcl' -File)) {
                 $text = [System.IO.File]::ReadAllText($config.FullName)
                 foreach ($plugin in $pins.tflintPlugins.Keys) {
                     $pattern = 'plugin\s+"' + [regex]::Escape($plugin) + '"\s*\{[^}]*?version\s*=\s*"([^"]+)"'
                     $found = [regex]::Match($text, $pattern, 'Singleline')
-                    if ($found.Success) {
-                        $found.Groups[1].Value | Should -Be $pins.tflintPlugins[$plugin] -Because "$($config.Name) must agree with avm.pins.jsonc for plugin '$plugin'"
-                    }
+                    $found.Success | Should -BeTrue -Because "$($config.Name) must declare pinned plugin '$plugin'"
+                    $found.Groups[1].Value | Should -Be $pins.tflintPlugins[$plugin] -Because "$($config.Name) must agree with avm.pins.jsonc for plugin '$plugin'"
+                }
+
+                $avmPlugin = [regex]::Match($text, 'plugin\s+"avm"\s*\{(?<body>[^}]*)\}', 'Singleline')
+                $avmPlugin.Success | Should -BeTrue
+                $avmPlugin.Groups['body'].Value | Should -Match 'signature\s*=\s*"attestation"'
+                $avmPlugin.Groups['body'].Value | Should -Not -Match 'signing_key\s*='
+
+                $configBlock = [regex]::Match($text, 'config\s*\{(?<body>[^}]*)\}', 'Singleline')
+                $configBlock.Success | Should -BeTrue
+                $configBlock.Groups['body'].Value | Should -Match 'disabled_by_default\s*=\s*true'
+
+                $expectedState = if ($config.Name -eq 'avm.tflint_example.hcl') { 'false' } else { 'true' }
+                foreach ($rule in $v019Rules) {
+                    $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*' + $expectedState
+                    $text | Should -Match $rulePattern -Because "$($config.Name) must explicitly configure v0.19 rule '$rule'"
                 }
             }
         }
 
-        It 'agrees with the version every test stub binary self-reports' {
-            # Component tests put these stubs on PATH, where Find-AvmToolOnPath
-            # accepts them only on an exact version match against the pins. A
-            # stale stub therefore fails far from its cause; assert here instead.
+        It 'keeps managed tool versions out of test stub source' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $stubDir = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'fixtures' 'bin')
 
@@ -380,15 +401,11 @@ Describe 'Test-AvmPins' {
 
             foreach ($stub in $stubs) {
                 $pin = $pins.tools | Where-Object { $_.name -eq $stub.BaseName } | Select-Object -First 1
-                if (-not $pin) { continue }
+                $pin | Should -Not -BeNullOrEmpty -Because "$($stub.Name) needs a launcher version"
 
-                $reported = & $stub.FullName '--version' 2>&1 |
-                    ForEach-Object { [regex]::Match([string]$_, '\d+\.\d+\.\d+') } |
-                    Where-Object { $_.Success } |
-                    Select-Object -First 1
-
-                $reported | Should -Not -BeNullOrEmpty -Because "$($stub.Name) --version must emit a semver"
-                $reported.Value | Should -Be $pin.version -Because "$($stub.Name) must report the version pinned in avm.pins.jsonc"
+                $source = Get-Content -LiteralPath $stub.FullName -Raw
+                $source | Should -Match '\$env:AVM_STUB_TOOL_VERSION'
+                $source | Should -Not -Match '(?<!\d)v?\d+\.\d+\.\d+(?!\d)'
             }
         }
     }

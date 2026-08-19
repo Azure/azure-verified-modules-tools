@@ -65,9 +65,82 @@ Type: `bool`
 
 Default: `true`
 
+### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
+
+Description: A map of resource body properties to ignore when comparing deployment state.
+
+Type:
+
+```hcl
+object({
+    resource_group = optional(list(string), [])
+  })
+```
+
+Default: `{}`
+
+### <a name="input_private_endpoints_manage_dns_zone_group"></a> [private\_endpoints\_manage\_dns\_zone\_group](#input\_private\_endpoints\_manage\_dns\_zone\_group)
+
+Description: Controls whether private DNS zone groups are managed by the module.
+
+Type: `bool`
+
+Default: `true`
+
+### <a name="input_resource_types"></a> [resource\_types](#input\_resource\_types)
+
+Description: A map of resource type API versions used by the module.
+
+Type:
+
+```hcl
+object({
+    resource_group = optional(string, "Microsoft.Resources/resourceGroups@2024-03-01")
+  })
+```
+
+Default: `{}`
+
+### <a name="input_retry"></a> [retry](#input\_retry)
+
+Description: Controls retry behavior for supported AzAPI resources.
+
+Type:
+
+```hcl
+object({
+    error_message_regex  = optional(list(string))
+    interval_seconds     = optional(number)
+    max_interval_seconds = optional(number)
+  })
+```
+
+Default: `{}`
+
+### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
+
+Description: Controls operation timeouts for supported AzAPI resources.
+
+Type:
+
+```hcl
+object({
+    create = optional(string)
+    read   = optional(string)
+    update = optional(string)
+    delete = optional(string)
+  })
+```
+
+Default: `{}`
+
 ## Outputs
 
 The following outputs are exported:
+
+### <a name="output_required_interface_values"></a> [required\_interface\_values](#output\_required\_interface\_values)
+
+Description: The required AzAPI interface values exposed by this mock module.
 
 ### <a name="output_resource_id"></a> [resource\_id](#output\_resource\_id)
 
