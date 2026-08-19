@@ -28,7 +28,7 @@ param(
         "security",
         "azurecla-write"
     ),
-    [switch]$forceUserRemoval,
+    [switch]$forceFileUpdate,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @()
 )
@@ -150,7 +150,6 @@ if(!$repositoryCreationModeEnabled) {
         -orgAndRepoName $orgAndRepoName `
         -moduleMetaData $moduleMetaData `
         -planOnly $planOnly `
-        -forceUserRemoval $forceUserRemoval.IsPresent `
         -issueLog $issueLog
 
     $issueLog = Remove-UnmanagedRepositoryTeams `
@@ -224,6 +223,7 @@ if(!$repositoryCreationModeEnabled) {
             -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
+            -forceFileUpdate $forceFileUpdate.IsPresent `
             -issueLog $issueLog
         $issueLog = $preCommitResult.IssueLog
     }

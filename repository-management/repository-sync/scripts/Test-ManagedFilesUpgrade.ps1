@@ -90,6 +90,21 @@ try {
     $repoRoots += $unpinnedRoot
     Assert-Equal -Actual (Get-AvmManagedFilesPinnedVersion -repoRoot $unpinnedRoot) -Expected $null -Description "missing pin"
 
+    # A manual force request bypasses pin, release, and pull request checks.
+    $script:gitExitCode = 1
+    $script:ghExitCode = 1
+    $decision = Resolve-AvmManagedFilesUpgradeDecision `
+        -orgAndRepoName "Azure/test-repo" `
+        -repoRoot $unpinnedRoot `
+        -forceFileUpdate $true
+    Assert-Equal -Actual $decision.Upgrade -Expected $true -Description "forced file update"
+    Assert-Equal `
+        -Actual $decision.Reason `
+        -Expected "manual workflow dispatch requested a managed-file update; upgrading regardless of release delta or open pull requests" `
+        -Description "forced file update reason"
+    $script:gitExitCode = 0
+    $script:ghExitCode = 0
+
     # Latest version discovery ignores non-semver tags and unsorted input.
     $script:tags = @("v0.9.0", "latest", "v2.0.0", "v10.1.0", "v2.4.1")
     Assert-Equal -Actual (Get-AvmManagedFilesLatestVersion) -Expected ([semver]"10.1.0") -Description "latest tag"

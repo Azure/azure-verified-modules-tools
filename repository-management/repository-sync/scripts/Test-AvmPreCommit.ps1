@@ -92,6 +92,30 @@ Assert-Throws -MessagePattern "avm pre-commit returned status 'missing'.*" -Acti
     Assert-AvmPreCommitResult -preCommitResult $null
 }
 
+$metadataTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "avm-metadata-conflict-test-$([guid]::NewGuid().ToString('n'))"
+try {
+    $null = New-Item -ItemType Directory -Path $metadataTestRoot -Force
+    $metadataPath = Join-Path $metadataTestRoot ".avm"
+    Set-Content -LiteralPath $metadataPath -Value "legacy metadata" -NoNewline
+
+    $removed = Remove-AvmMetadataFileConflict `
+        -repoRoot $metadataTestRoot `
+        -orgAndRepoName "Azure/test-repo" `
+        -modeTag "[PLAN]"
+    Assert-Equal -Actual $removed -Expected $true -Description "legacy .avm file removal"
+    Assert-Equal -Actual (Test-Path -LiteralPath $metadataPath) -Expected $false -Description "legacy .avm file existence"
+
+    $null = New-Item -ItemType Directory -Path $metadataPath
+    $removed = Remove-AvmMetadataFileConflict `
+        -repoRoot $metadataTestRoot `
+        -orgAndRepoName "Azure/test-repo" `
+        -modeTag "[PLAN]"
+    Assert-Equal -Actual $removed -Expected $false -Description ".avm directory removal"
+    Assert-Equal -Actual (Test-Path -LiteralPath $metadataPath -PathType Container) -Expected $true -Description ".avm directory existence"
+} finally {
+    Remove-Item -LiteralPath $metadataTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $script:moduleImportCount = 0
 $script:moduleUpdateCount = 0
 $script:preCommitInvocationCount = 0

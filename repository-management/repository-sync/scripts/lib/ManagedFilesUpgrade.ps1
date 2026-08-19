@@ -123,7 +123,8 @@ function Resolve-AvmManagedFilesUpgradeDecision {
         [string]$orgAndRepoName,
         [string]$repoRoot,
         [string]$managedFilesRepo = $script:AvmManagedFilesRepo,
-        [int]$stalenessDays = $script:AvmPullRequestStalenessDays
+        [int]$stalenessDays = $script:AvmPullRequestStalenessDays,
+        [bool]$forceFileUpdate = $false
     )
 
     $decision = @{
@@ -132,6 +133,12 @@ function Resolve-AvmManagedFilesUpgradeDecision {
         PinnedVersion            = $null
         LatestVersion            = $null
         BlockingPullRequestCount = 0
+    }
+
+    if ($forceFileUpdate) {
+        $decision.Upgrade = $true
+        $decision.Reason = "manual workflow dispatch requested a managed-file update; upgrading regardless of release delta or open pull requests"
+        return $decision
     }
 
     $pinnedVersion = Get-AvmManagedFilesPinnedVersion -repoRoot $repoRoot

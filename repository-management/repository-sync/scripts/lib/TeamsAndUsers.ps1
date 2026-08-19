@@ -59,13 +59,12 @@ function Resolve-GitHubTeams {
 }
 
 # Removes direct (non-team) collaborators from the repo. Module owners that
-# are JIT-elevated are skipped unless `-forceUserRemoval` is true.
+# are JIT-elevated are skipped.
 function Remove-DirectCollaborators {
     param(
         [string]$orgAndRepoName,
         [object]$moduleMetaData,
         [bool]$planOnly,
-        [bool]$forceUserRemoval,
         [array]$issueLog
     )
 
@@ -99,10 +98,6 @@ function Remove-DirectCollaborators {
 
         if ($allowedUsers -contains $userLogin -and $user.role_name -eq "admin") {
             Write-Warning "User has direct access to $orgAndRepoName, but is an owner or AVM core team member and has admin access. They are likely JIT elevated, so skipping the error: $($userLogin)"
-            if ($forceUserRemoval) {
-                Write-Warning "Force user removal is enabled, removing access now: $($userLogin) - role: $($user.role_name)"
-                $issueLog = Invoke-CollaboratorRemoval -orgAndRepoName $orgAndRepoName -userLogin $userLogin -planOnly $planOnly -issueLog $issueLog
-            }
         } else {
             Write-Warning "User has direct access to $orgAndRepoName, but AVM repos cannot have direct user access outside of JIT, removing access now: $($userLogin) - role: $($user.role_name)"
             $issueLog = Invoke-CollaboratorRemoval -orgAndRepoName $orgAndRepoName -userLogin $userLogin -planOnly $planOnly -issueLog $issueLog
@@ -112,8 +107,7 @@ function Remove-DirectCollaborators {
     return $issueLog
 }
 
-# Helper for `Remove-DirectCollaborators` so both code paths share the same
-# planOnly handling.
+# Helper for `Remove-DirectCollaborators` that applies plan-only handling.
 function Invoke-CollaboratorRemoval {
     param(
         [string]$orgAndRepoName,

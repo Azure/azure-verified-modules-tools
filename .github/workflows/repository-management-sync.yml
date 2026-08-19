@@ -17,8 +17,8 @@ on:
         description: 'Whether to only plan the changes'
         default: true
         type: boolean
-      force_user_removal:
-        description: 'Force removal of users with direct access, even if they are JIT elevated.'
+      force_file_update:
+        description: 'Force the latest managed-file release onto the selected repositories, even without a new major release.'
         default: false
         type: boolean
       sync_project_items:
@@ -137,17 +137,17 @@ jobs:
           $triggerType = "${{ github.event_name }}"
 
           $planOnly = $false
-          $forceUserRemoval = $false
+          $forceFileUpdate = $false
 
           if($triggerType -eq "workflow_dispatch") {
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
-            $forceUserRemoval = "${{ inputs.force_user_removal }}".ToLower() -eq "true"
+            $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
           }
 
           Write-Output "Token: $env:GH_TOKEN"
           Write-Output "Repositories: $repositories"
           Write-Output "Plan Only: $planOnly"
-          Write-Output "Force User Removal: $forceUserRemoval"
+          Write-Output "Force File Update: $forceFileUpdate"
 
           $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
 
@@ -172,7 +172,7 @@ jobs:
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
-            -forceUserRemoval:$forceUserRemoval
+            -forceFileUpdate:$forceFileUpdate
 
         shell: pwsh
         env:
