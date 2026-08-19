@@ -2,6 +2,7 @@ moduleId,providerNamespace,providerResourceType,moduleDisplayName,alternativeNam
 avm-ptn-aca-lza-hosting-environment,,,Azure Container Apps LZA Hosting Environment,,sam-cogan,Sam Cogan,,,false
 avm-ptn-ai-foundry-enterprise,,,AI Foundry Enterprise,,,,,,true
 avm-ptn-aiml-ai-foundry,,,Azure AI Foundry Pattern,,mikestiers,Mike Stiers,,,false
+avm-ptn-aiml-ai-gateway,,,AI-ML - Gateway,,mbilalamjad,Bilal Amjad,,,false
 avm-ptn-aiml-landing-zone,,,Azure AI and ML Landing Zone,,mbilalamjad,Bilal Amjad,,,false
 avm-ptn-aks-dev,,,AKS dev,,ms-henglu,Heng Lu,,,false
 avm-ptn-aks-economy,,,AKS economy,,ms-henglu,Heng Lu,,,false
@@ -48,7 +49,6 @@ avm-ptn-network-routeserver,,,Azure Route Server,,jchancellor-ms,Jon Chancellor,
 avm-ptn-odaa,,,Oracle Exedata Workload,,terrymandin,Terry Mandin,,,false
 avm-ptn-odaa-identity,,,Oracle Identity,,terrymandin,Terry Mandin,,,false
 avm-ptn-openai-cognitivesearch,,,Corporate Line of Business (LoB) ChatBot ,,mikestiers,Mike Stiers,,,false
-avm-ptn-pipeline-agent-container-job,,,This module will be used to deploy self hosted Azure Pipeline Agent in Azure Container Apps with autoscaling capabilities,,mathewsg,Mathews George,,,false
 avm-ptn-policyassignment,,,Policy assignment,,bjornhofer,Bjorn Hofer,,,false
 avm-ptn-subnets-nsgs-routes,,,Network Security Groups,NSG,swathialuganti,Swathi Aluganti Narasimhulu,,,false
 avm-ptn-subscription-service-health-alerts,,,Subscription Service Health Alerts,,ASHR4,Rhys Ash,,,false
@@ -131,11 +131,11 @@ avm-res-insights-datacollectionrule,Microsoft.Insights,dataCollectionRules,Data 
 avm-res-insights-logprofile,Microsoft.Insights,logProfiles,Log profile,,sharmilamusunuru,Sharmila Musunuru,,,false
 avm-res-insights-metricalert,Microsoft.Insights,metricAlerts,Insights Metric Alert,,arjenhuitema,Arjen Huitema,Brunoga-MS,Bruno Gabrielli,false
 avm-res-insights-privatelinkscope,Microsoft.Insights,privateLinkScopes,avm-res-insights-privatelinkscope,,Vasikaran6,Vasikaran Veerappan,,,false
-avm-res-insights-privatelinkscope,Microsoft.Insights,privateLinkScopes,Managed Services Registration Definition,,sharmilamusunuru,Sharmila Musunuru,,,false
 avm-res-insights-scheduledqueryrule,Microsoft.Insights,scheduledQueryRules,Scheduled Query Rule,,,,,,false
 avm-res-iotoperations-instance,Microsoft.IoTOperations,instances,IOT Operations Instance,,agreaves-ms,Allen Greaves,,,false
 avm-res-keyvault-managedhsm,Microsoft.KeyVault,managedHSMs,Managed HSM,"Key Vault Managed HSM, MHSM",benvbr,Benjamin Van Brussel,,,false
 avm-res-keyvault-vault,Microsoft.KeyVault,vaults,Key Vault,KV,matt-FFFFFF,Matt White,,,false
+avm-res-kubernetes-connectedcluster,Microsoft.Kubernetes,connectedClusters,Kubernetes Connected Cluster,,,,,,true
 avm-res-kubernetesconfiguration-extension,Microsoft.KubernetesConfiguration,extensions,Kubernetes Configuration Extension,,lonegunmanb,Zijie He,,,false
 avm-res-kusto-cluster,Microsoft.Kusto,clusters,Kusto Clusters,,LaurentLesle,Laurent Lesle,,,false
 avm-res-loadtestservice-loadtest,Microsoft.LoadTestService,loadTests,Load Testing Service,,LaurentLesle,Laurent Lesle,,,false
@@ -146,7 +146,6 @@ avm-res-managedidentity-userassignedidentity,Microsoft.ManagedIdentity,userAssig
 avm-res-managedservices-registrationdefinition,Microsoft.ManagedServices,registrationDefinitions,Managed Services Registration Definition,,,,,,false
 avm-res-management-managementgroup,Microsoft.Management,managementGroups,Management Groups,,herms14,Hermes Miraflor II,,,false
 avm-res-management-servicegroup,Microsoft.Management,serviceGroups,Service Group,,haflidif,Haflidi Fridthjofsson,,,false
-avm-res-migrate,azurerem,azurerem,Provide Azure Migrate and Azure Local Migrate services and commands through Terraform modules,"avm-azure-migrate,avm-azre-stack-migrae,avm-azure-local-migrate",saifaldin14,Saif Al-Din Ali,,,false
 avm-res-mission-community,Microsoft.Mission,communities,Azure Enclave Community,,SvenAelterman,Sven Aelterman,,,false
 avm-res-netapp-netappaccount,Microsoft.NetApp,netAppAccounts,Azure NetApp File,,jtracey93,Jack Tracey,,,false
 avm-res-network-applicationgateway,Microsoft.Network,applicationGateways,Application Gateway,App GW,mofaizal,Mohamed Faizal,,,false
@@ -157,7 +156,6 @@ avm-res-network-bastionhost,Microsoft.Network,bastionHosts,Bastion Host,,humanas
 avm-res-network-connection,Microsoft.Network,connections,Virtual Network Gateway Connection,,jchancellor-ms,Jon Chancellor,,,false
 avm-res-network-ddosprotectionplan,Microsoft.Network,ddosProtectionPlans,DDoS Protection,,sitarant,Simona Tarantola,jtracey93,Jack Tracey,false
 avm-res-network-dnsforwardingruleset,Microsoft.Network,dnsForwardingRulesets,DNS Forwarding Ruleset,,sharmilamusunuru,Sharmila Musunuru,,,false
-avm-res-network-dnsforwardingrulesets,Microsoft.Network,dnsForwardingRulesets,DNS Forwarding Rulesets,,sharmilamusunuru,Sharmila Musunuru,,,false
 avm-res-network-dnsresolver,Microsoft.Network,dnsResolvers,DNS Resolver,,humanascode,Itamar Hirosh,,,false
 avm-res-network-dnszone,Microsoft.Network,dnsZones,Public DNS Zone,,sharmilamusunuru,Sharmila Musunuru,,,false
 avm-res-network-expressroutecircuit,Microsoft.Network,expressRouteCircuits,ExpressRoute Circuit,ER,khushal08,Khush Kaviraj,adammontlake,Adam Montlake,false
@@ -203,6 +201,7 @@ avm-res-sql-server,Microsoft.Sql,servers,Azure SQL Server,,mbilalamjad,Bilal Amj
 avm-res-sqlvirtualmachine-sqlvirtualmachine,Microsoft.SqlVirtualMachine,sqlVirtualMachines,Sql Virtual Machine,SQL VM,timchapman,Tim Chapman,,,false
 avm-res-storage-storageaccount,Microsoft.Storage,storageAccounts,Storage Account,,chinthakaru,Chinthaka Rupasinghe,,,false
 avm-res-synapse-workspace,Microsoft.Synapse,workspaces,Synapse Workspace,,Karni-G,Karni Gupta,,,false
+avm-res-test-repo5,,,Test Repository 5,,,,,,true
 avm-res-virtualmachineimages-imagetemplate,Microsoft.Compute,virtualMachineImages/imageTemplates,Virtual Machine Image Template,"ImageTemplate, VMImageBuilder, AVDImageBuilder, AzureImageBuilder",travishankins,Travis Hankins,,,false
 avm-res-web-connection,Microsoft.Web,connection,API Connection,,donovm4,Donovan McCoy,,,false
 avm-res-web-hostingenvironment,Microsoft.Web,hostingEnvironments,App Service Environment,ASE,ibersanoMS,Isabelle Bersano,,,false
@@ -213,7 +212,6 @@ avm-utl-compute-linuxvirtualmachine-azapi-replicator,,,utl module that helps use
 avm-utl-compute-orchestratedvirtualmachinescaleset-azapi-replicator,,,utl module that helps users to migrate azurerm_orchestrated_virtual_machine_scale_set resource into azapi_resource,,lonegunmanb,lonegunmanb,,,true
 avm-utl-compute-windowsvirtualmachine-azapi-replicator,,,utl module that helps users to migrate azurerm_windows_virtual_machine into azapi_resource,,lonegunmanb,lonegunmanb,,,true
 avm-utl-containerregistry-containerregistry-azapi-replicator,,,utl module that helps users to migrate azurerm_container_registry into azapi_resource,,lonegunmanb,lonegunmanb,,,true
-avm-utl-ephemeral-credential,,,AVM ephemeral credentials,,lonegunmanb,Zijie He,,,false
 avm-utl-interfaces,,,AVM Interfaces,,matt-FFFFFF,Matt White,,,false
 avm-utl-naming,,,AVM Naming,,Nepomuceno,Gabriel Monteiro Nepomuceno,,,false
 avm-utl-network-ip-addresses,,,AVM Network IP Addresses,IPv4 CIDR,jaredfholgate,Jared Holgate,,,false
