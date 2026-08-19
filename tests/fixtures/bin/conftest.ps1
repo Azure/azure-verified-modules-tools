@@ -1,6 +1,4 @@
-# AVM test-only stub for `conftest`. Pinned to avm.pins version 0.68.2 so
-# Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
-#
+# AVM test-only stub for `conftest`.
 # Handles only `--version` and the plan-JSON `test` invocation used by the
 # Terraform policy engine.
 # Set $env:AVM_STUB_CONFTEST_OUTPUT to a JSON document to drive any other shape;
@@ -14,7 +12,11 @@ if ($args.Count -eq 0) {
 
 switch ($args[0]) {
     '--version' {
-        Write-Output 'Version: 0.68.2'
+        if ([string]::IsNullOrWhiteSpace($env:AVM_STUB_TOOL_VERSION)) {
+            Write-Error 'stub conftest: AVM_STUB_TOOL_VERSION is not set'
+            exit 64
+        }
+        Write-Output "Version: $env:AVM_STUB_TOOL_VERSION"
         exit 0
     }
     'test' {

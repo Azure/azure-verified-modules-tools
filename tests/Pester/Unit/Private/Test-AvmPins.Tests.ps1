@@ -392,10 +392,7 @@ Describe 'Test-AvmPins' {
             }
         }
 
-        It 'agrees with the version every test stub binary self-reports' {
-            # Component tests put these stubs on PATH, where Find-AvmToolOnPath
-            # accepts them only on an exact version match against the pins. A
-            # stale stub therefore fails far from its cause; assert here instead.
+        It 'keeps managed tool versions out of test stub source' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $stubDir = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'fixtures' 'bin')
 
@@ -404,15 +401,11 @@ Describe 'Test-AvmPins' {
 
             foreach ($stub in $stubs) {
                 $pin = $pins.tools | Where-Object { $_.name -eq $stub.BaseName } | Select-Object -First 1
-                if (-not $pin) { continue }
+                $pin | Should -Not -BeNullOrEmpty -Because "$($stub.Name) needs a launcher version"
 
-                $reported = & $stub.FullName '--version' 2>&1 |
-                    ForEach-Object { [regex]::Match([string]$_, '\d+\.\d+\.\d+') } |
-                    Where-Object { $_.Success } |
-                    Select-Object -First 1
-
-                $reported | Should -Not -BeNullOrEmpty -Because "$($stub.Name) --version must emit a semver"
-                $reported.Value | Should -Be $pin.version -Because "$($stub.Name) must report the version pinned in avm.pins.jsonc"
+                $source = Get-Content -LiteralPath $stub.FullName -Raw
+                $source | Should -Match '\$env:AVM_STUB_TOOL_VERSION'
+                $source | Should -Not -Match '(?<!\d)v?\d+\.\d+\.\d+(?!\d)'
             }
         }
     }

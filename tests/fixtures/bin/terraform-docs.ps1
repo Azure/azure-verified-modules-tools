@@ -1,4 +1,4 @@
-# AVM test-only stub for `terraform-docs`. Pinned to avm.pins 0.20.0.
+# AVM test-only stub for `terraform-docs`.
 # Handles only --version and the Invoke-AvmTerraformDocs argv shape
 # (markdown table --output-file README.md --output-mode inject .).
 # The stub does NOT mutate README so the engine reports Changed=@().
@@ -9,7 +9,11 @@ if ($args.Count -eq 0) {
 }
 
 if ($args -contains '--version') {
-    Write-Output 'terraform-docs version v0.20.0 darwin/amd64'
+    if ([string]::IsNullOrWhiteSpace($env:AVM_STUB_TOOL_VERSION)) {
+        Write-Error 'stub terraform-docs: AVM_STUB_TOOL_VERSION is not set'
+        exit 64
+    }
+    Write-Output "terraform-docs version v$env:AVM_STUB_TOOL_VERSION darwin/amd64"
     exit 0
 }
 

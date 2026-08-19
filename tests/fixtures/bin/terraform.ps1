@@ -1,9 +1,12 @@
-# AVM test-only stub for `terraform`. Pinned to the version recorded in
-# src/Avm.Authoring/Resources/avm.pins.jsonc (terraform 1.15.8) so
-# Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
-#
+# AVM test-only stub for `terraform`.
 # This stub handles only the verbs the Terraform engine wrappers invoke.
 # Anything else is a bug — fail loudly so the test surfaces the gap.
+
+$toolVersion = $env:AVM_STUB_TOOL_VERSION
+if ([string]::IsNullOrWhiteSpace($toolVersion)) {
+    Write-Error 'stub terraform: AVM_STUB_TOOL_VERSION is not set'
+    exit 64
+}
 
 if ($args.Count -eq 0) {
     Write-Error 'stub terraform: no arguments'
@@ -12,7 +15,7 @@ if ($args.Count -eq 0) {
 
 switch ($args[0]) {
     '--version' {
-        Write-Output 'Terraform v1.15.8'
+        Write-Output "Terraform v$toolVersion"
         Write-Output 'on linux_amd64'
         exit 0
     }
@@ -54,7 +57,7 @@ switch ($args[0]) {
         exit 0
     }
     'show' {
-        Write-Output '{"format_version":"1.2","terraform_version":"1.15.8","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'
+        Write-Output '{"format_version":"1.2","terraform_version":"__VERSION__","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'.Replace('__VERSION__', $toolVersion)
         exit 0
     }
     'destroy' {
