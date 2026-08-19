@@ -17,6 +17,22 @@ function Get-GitHubTransientRetryPatterns {
     )
 }
 
+function Test-CommandResultsSucceeded {
+    param([object[]]$results)
+
+    if (!$results) {
+        return $false
+    }
+
+    foreach ($result in $results) {
+        if (!$result.success) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Invoke-TerraformWithRetry {
     param(
         [hashtable[]]$commands,

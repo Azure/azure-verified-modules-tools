@@ -1,7 +1,7 @@
 locals {
   module_type                   = split("-", var.module_id)[1]
   module_type_name              = local.module_type == "res" ? "Resource" : (local.module_type == "ptn" ? "Pattern" : "Utility")
-  github_repository_description = "Terraform Azure Verified ${local.module_type_name} Module for ${var.module_name}"
+  github_repository_description = substr("Terraform Azure Verified ${local.module_type_name} Module for ${var.module_name}", 0, 350)
 }
 
 resource "github_repository" "this" {

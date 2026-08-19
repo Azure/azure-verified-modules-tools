@@ -77,7 +77,7 @@ terraform {
             -printOutput
     }
 
-    if (!$result.success) {
+    if (!(Test-CommandResultsSucceeded -results $result)) {
         Write-Warning "Terraform init failed for $orgAndRepoName. Exiting."
         $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "init-failed" -message "Terraform init failed for $orgAndRepoName." -data $null -issueLog $issueLog
         exit 1
@@ -114,7 +114,7 @@ function Invoke-TerraformPlanAndApply {
         -stateBlobName "$($repoId).tfstate" `
         -printOutput
 
-    if (!$result.success) {
+    if (!(Test-CommandResultsSucceeded -results $result)) {
         Write-Warning "Terraform plan failed for $orgAndRepoName. Exiting."
         $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "plan-failed" -message "Terraform plan failed for $orgAndRepoName." -data $null -issueLog $issueLog
         exit 1
@@ -167,7 +167,7 @@ function Invoke-TerraformPlanAndApply {
             -printOutput `
             -maxRetries 0
 
-        if (!$result.success) {
+        if (!(Test-CommandResultsSucceeded -results $result)) {
             Write-Warning "Terraform apply first attempt failed for $orgAndRepoName. Entering plan apply retry loop..."
             $result = Invoke-TerraformWithRetry `
                 -commands @(
@@ -187,7 +187,7 @@ function Invoke-TerraformPlanAndApply {
                 -printOutput
         }
 
-        if (!$result.success) {
+        if (!(Test-CommandResultsSucceeded -results $result)) {
             Write-Warning "Terraform apply failed for $orgAndRepoName. Exiting."
             $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "apply-failed" -message "Terraform apply failed for $orgAndRepoName." -data $null -issueLog $issueLog
             exit 1

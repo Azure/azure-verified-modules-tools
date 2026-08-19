@@ -29,7 +29,7 @@ avm-ptn-bcdr-vm-replication,,,BCDR VM Replication,,ns-github-design,Nasreen Sara
 avm-ptn-cicd-agents-and-runners,,,CI CD Agents and Runners,,jaredfholgate,Jared Holgate,,,false
 avm-ptn-cicd-bootstrap,,,CI CD bootstrap,,luke-taylor,Luke Taylor,,,false
 avm-ptn-cloudshell-vnet,,,Cloud Shell with vNET Integration,"CloudShell VNet, Cloud Shell VNET, Cloud Shell in Virtual Network",travishankins,Travis Hankins,,,false
-avm-ptn-commercial-marketplace,,,"This AVM pattern module deploys the core infrastructure for Commercial Marketplace SaaS Accelerator on Azure (network, SQL, Key Vault, App Service, app registrations). It is intended for partners deploying a production-like SaaS landing zone with optional app code deployment. It does not manage CI/CD pipelines, custom domain/TLS lifecycle, or downstream business app code beyond bootstrap deployment.",,ethanjenkins1,Ethan Jenkins,ShironB,Shiron Babi,false
+avm-ptn-commercial-marketplace,,,Commercial Marketplace SaaS Accelerator Infrastructure,,ethanjenkins1,Ethan Jenkins,ShironB,Shiron Babi,false
 avm-ptn-confidential-compute,,,Confidential Compute,,bjornhofer,Björn Höfer,,,false
 avm-ptn-dev-center-dev-box,,,Microsoft Dev Center Dev Box,,autocloudarc,Preston Parsard,,,false
 avm-ptn-enterprise-rag,,,Enterprise RAG,,,,,,true

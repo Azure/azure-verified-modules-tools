@@ -117,6 +117,26 @@ Describe "ConvertTo-FlatErrorText" {
     }
 }
 
+Describe "Test-CommandResultsSucceeded" {
+    It "reports failure when a later command in a sequence fails" {
+        $result = Test-CommandResultsSucceeded -results @(
+            [pscustomobject]@{ success = $true }
+            [pscustomobject]@{ success = $false }
+        )
+
+        $result | Should -BeFalse
+    }
+
+    It "reports success when every command in a sequence succeeds" {
+        $result = Test-CommandResultsSucceeded -results @(
+            [pscustomobject]@{ success = $true }
+            [pscustomobject]@{ success = $true }
+        )
+
+        $result | Should -BeTrue
+    }
+}
+
 Describe "Get-ErrorOutputMatch" {
     BeforeEach {
         $script:errorOutput = Remove-AnsiEscapeCode -text (New-ProviderInstallFailure)
