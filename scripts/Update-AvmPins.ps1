@@ -23,21 +23,24 @@
                         naming, mixed archives (tar.gz for darwin/linux, zip
                         for windows) - first lock entry that needs
                         platformAliases AND archives together.
+      - mapotf        : uses 'checksums.txt' published on the Azure/mapotf
+                        GitHub release page. Mixed archives (tar.gz for
+                        darwin/linux, zip for windows).
       - bicep         : downloads each of the six per-platform binaries from
                         https://github.com/Azure/bicep/releases/download/v<v>/.
                         Each binary is ~10-20 MB, so the whole pass needs
                         ~80-120 MB of network. Cancellable.
 
-    The script never publishes anything; it only mutates a single .psd1
+    The script never publishes anything; it only mutates a single .jsonc
     file under source control. The resulting lock is then validated via
     Test-AvmPins by importing the Avm.Authoring module.
 
 .PARAMETER Terraform
-    Terraform version to lock, e.g. '1.9.5'. Skip the terraform tool when
+    Terraform version to lock, e.g. '1.15.8'. Skip the terraform tool when
     omitted.
 
 .PARAMETER Bicep
-    Bicep version to lock, e.g. '0.30.3' (no leading 'v'). Skip the bicep
+    Bicep version to lock, e.g. '0.46.1' (no leading 'v'). Skip the bicep
     tool when omitted.
 
 .PARAMETER Tflint
@@ -45,12 +48,16 @@
     tool when omitted.
 
 .PARAMETER TerraformDocs
-    terraform-docs version to lock, e.g. '0.20.0' (no leading 'v'). Skip
+    terraform-docs version to lock, e.g. '0.24.0' (no leading 'v'). Skip
     the terraform-docs tool when omitted.
 
 .PARAMETER Conftest
-    conftest version to lock, e.g. '0.68.2' (no leading 'v'). Skip the
+    conftest version to lock, e.g. '0.69.0' (no leading 'v'). Skip the
     conftest tool when omitted.
+
+.PARAMETER Mapotf
+    mapotf version to lock, e.g. '0.1.9' (no leading 'v'). Skip the mapotf
+    tool when omitted.
 
 .PARAMETER PolicyLibrary
     Azure/policy-library-avm tag to pin, e.g. 'v1.0.0' (leading 'v' required).
@@ -70,13 +77,13 @@
     Show what would change without writing the file.
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Terraform 1.9.5 -Bicep 0.30.3
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.46.1
 
 .EXAMPLE
     ./scripts/Update-AvmPins.ps1 -Terraform 1.9.8
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Conftest 0.68.2
+    ./scripts/Update-AvmPins.ps1 -Conftest 0.69.0 -Mapotf 0.1.9
 
 .NOTES
     Intended for maintainers and CI 'refresh tools' workflows. Not part

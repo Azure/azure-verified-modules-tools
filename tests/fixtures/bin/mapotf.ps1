@@ -1,6 +1,4 @@
-# AVM test-only stub for `mapotf`. Pinned to avm.pins version 0.1.8 so
-# Find-AvmToolOnPath's version match succeeds when the launcher is on PATH.
-#
+# AVM test-only stub for `mapotf`.
 # Handles only the verbs Invoke-AvmTerraformTransform actually invokes:
 # `--version` (so Resolve-AvmTool -AllowPathFallback succeeds), `transform`
 # (driven as `transform --mptf-dir <configs> --tf-dir <root>`) and
@@ -17,7 +15,11 @@ if ($args.Count -eq 0) {
 
 switch ($args[0]) {
     '--version' {
-        Write-Output 'Version: 0.1.8'
+        if ([string]::IsNullOrWhiteSpace($env:AVM_STUB_TOOL_VERSION)) {
+            Write-Error 'stub mapotf: AVM_STUB_TOOL_VERSION is not set'
+            exit 64
+        }
+        Write-Output "Version: $env:AVM_STUB_TOOL_VERSION"
         exit 0
     }
     'transform' {

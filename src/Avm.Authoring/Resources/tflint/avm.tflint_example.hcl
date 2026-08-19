@@ -4,13 +4,13 @@ config {
 
 plugin "terraform" {
   enabled = true
-  version = "0.12.0"
+  version = "0.15.0"
   source  = "github.com/terraform-linters/tflint-ruleset-terraform"
 }
 
 plugin "avm" {
   enabled   = true
-  version   = "0.19.0"
+  version   = "0.19.1"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }

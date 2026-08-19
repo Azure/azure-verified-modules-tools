@@ -54,11 +54,17 @@ section when cutting a release.
 
 ### Changed
 
+- Managed tools now pin Bicep 0.46.1, Conftest 0.69.0, mapotf 0.1.9,
+  and terraform-docs 0.24.0. The Terraform TFLint ruleset moves to 0.15.0
+  for Terraform 1.15 compatibility, and the AVM ruleset moves to 0.19.1.
+  Component-test launchers now inject these versions from `avm.pins.jsonc`
+  instead of duplicating them in stub source.
 - Every production `terraform init` now uses `-upgrade`, including lint,
   policy, validate, Terraform test tiers, end-to-end examples, and repository
   management. This intentionally permits Terraform to update dependency lock
   selections to newer versions allowed by the configuration.
-- TFLint is pinned to 0.64.0 and the AVM ruleset to 0.19.0. The vendored
+- TFLint is pinned to 0.64.0, the Terraform ruleset to 0.15.0, and the AVM
+  ruleset to 0.19.1. The vendored
   configurations now require GitHub Artifact Attestation and no longer embed a
   legacy PGP signing key; they also disable implicit rules so only their curated
   rule lists execute. The v0.19 rules require the canonical AzAPI variables and

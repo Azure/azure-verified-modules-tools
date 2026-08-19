@@ -27,7 +27,8 @@ BeforeAll {
 
     $script:launcherDir = Install-AvmStubLauncher `
         -StubDir $stubDir `
-        -LauncherDir (Join-Path $TestDrive 'bin')
+        -LauncherDir (Join-Path $TestDrive 'bin') `
+        -PinsPath (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc')
 
     $script:originalPath = $env:PATH
     $script:originalAvmHome = $env:AVM_HOME

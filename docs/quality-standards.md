@@ -230,7 +230,7 @@ Three layers; each runs with its own tag filter.
 
 **Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
 
-**Stub binaries.** `tests/fixtures/bin/*.ps1` (`terraform.ps1`, `tflint.ps1`, `terraform-docs.ps1`, `conftest.ps1`) emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` wires the stub into a temp `$env:PATH` for the Component tier. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
+**Stub binaries.** `tests/fixtures/bin/*.ps1` emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` reads `avm.pins.jsonc`, injects the matching versions, and wires the stubs into a temp `$env:PATH` for the Component tier, so pin updates never require fixture edits. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
 
 **Pre-staging the pinned-asset cache.** Component tests that exercise pinned-asset-backed engines write `<AVM_HOME>/cache/assets/<name>/<sha256>/.verified` (empty file) plus the asset payload, then declare a matching `https://example.invalid/...` source URL with a deterministic-but-fake SHA256 in the fixture's `.avm/config.json`. The cache-hit fast-path in `Resolve-AvmPinnedAsset` short-circuits the entire `Invoke-AvmHttp` download, so no real network is touched and the test stays in the Component tier.
 
