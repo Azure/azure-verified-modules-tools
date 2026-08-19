@@ -11,12 +11,6 @@ Describe 'Get-AvmLatestManagedFilesVersion' {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
-    BeforeEach {
-        InModuleScope 'Avm.Authoring' {
-            $script:AvmLatestManagedFilesVersion = @{}
-        }
-    }
-
     It 'selects the highest semver tag and ignores peeled and non-semver refs' {
         InModuleScope 'Avm.Authoring' {
             Mock Invoke-AvmProcess {
@@ -71,21 +65,25 @@ Describe 'Get-AvmLatestManagedFilesVersion' {
         }
     }
 
-    It 'caches the lookup per repository and refreshes on demand' {
+    It 'queries again so a later command observes newly published tags' {
         InModuleScope 'Avm.Authoring' {
+            $script:managedFilesLookupCount = 0
             Mock Invoke-AvmProcess {
-                [pscustomobject]@{ ExitCode = 0; StdErr = ''; StdOut = "aaa`trefs/tags/v1.0.0" }
+                $script:managedFilesLookupCount++
+                $version = if ($script:managedFilesLookupCount -eq 1) { '1.0.8' } else { '1.0.10' }
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdErr   = ''
+                    StdOut   = "aaa`trefs/tags/v$version"
+                }
             }
 
-            Get-AvmLatestManagedFilesVersion -Repo 'o/r' -GitPath 'git' | Out-Null
-            Get-AvmLatestManagedFilesVersion -Repo 'o/r' -GitPath 'git' | Out-Null
-            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly
+            $first = Get-AvmLatestManagedFilesVersion -Repo 'o/r' -GitPath 'git'
+            $second = Get-AvmLatestManagedFilesVersion -Repo 'o/r' -GitPath 'git'
 
-            Get-AvmLatestManagedFilesVersion -Repo 'other/repo' -GitPath 'git' | Out-Null
+            $first.ToString() | Should -Be '1.0.8'
+            $second.ToString() | Should -Be '1.0.10'
             Should -Invoke Invoke-AvmProcess -Times 2 -Exactly
-
-            Get-AvmLatestManagedFilesVersion -Repo 'o/r' -GitPath 'git' -Refresh | Out-Null
-            Should -Invoke Invoke-AvmProcess -Times 3 -Exactly
         }
     }
 

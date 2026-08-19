@@ -32,8 +32,7 @@ Describe 'Integration: managed-files version pin against the real repository' -T
             if (-not $git) { throw 'git is required for the managed-files version integration test.' }
             Get-AvmLatestManagedFilesVersion `
                 -Repo 'Azure/azure-verified-modules-managed-files' `
-                -GitPath $git `
-                -Refresh
+                -GitPath $git
         }
 
         $latest | Should -Not -BeNullOrEmpty

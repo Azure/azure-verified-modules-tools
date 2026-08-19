@@ -158,6 +158,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Managed-file release discovery now refreshes for every operation instead of
+  reusing a module-lifetime cache, so long-running PowerShell sessions report
+  and adopt the actual latest published version.
 - AVM-plugin `deprecated_*_interface` notices now appear inline as yellow
   warnings, including GitHub workflow annotations, while remaining structured
   notice issues that do not fail lint or `pr-check`. Final result summaries no

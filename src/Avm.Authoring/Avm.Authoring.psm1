@@ -6,7 +6,6 @@ $ErrorActionPreference = 'Stop'
 $script:AvmLatestModuleVersion = $null
 $script:AvmModuleVersionCheckCompleted = $false
 $script:AvmModuleVersionSkipWarningWritten = $false
-$script:AvmLatestManagedFilesVersion = @{}
 $script:AvmNestedCommandDepth = 0
 $script:AvmPresentedIssues = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 
