@@ -23,8 +23,6 @@ The slice also enforces AVM's one-layer module and example scope convention.
 - [x] Update direct user documentation for TFLint defaults and overrides.
 - [x] Reject nested Terraform module and example roots through the built-in
       convention framework while allowing nested non-Terraform assets.
-- [x] Add the AVM-owned, generic TFLint schema snapshot cache consumer with a
-      disabled placeholder pin and TFLint-process-only propagation.
 - [x] Publish the branch and open
       [pull request #78](https://github.com/Azure/azure-verified-modules-tools/pull/78).
 - [ ] After the attested v0.20.0 AVM ruleset release, update the pin and run

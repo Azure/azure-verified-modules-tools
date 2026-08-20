@@ -198,7 +198,6 @@ function Invoke-AvmTflintScope {
         -FilePath $Options.TflintPath `
         -ArgumentList $lintArgs `
         -WorkingDirectory $Scope.Dir `
-        -EnvVars $Options.TflintEnvironment `
         -IgnoreExitCode `
         -StreamOutput:$Options.StreamOutput `
         -Label ('{0}: tflint' -f $Scope.Label)
@@ -412,10 +411,6 @@ function Invoke-AvmTerraformLint {
     $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
     $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
-    $schemaSnapshot = Resolve-AvmTflintAvmSchemaSnapshot
-    $tflintEnvironment = @{
-        TFLINT_AVM_SCHEMA_PATH = if ($schemaSnapshot) { $schemaSnapshot.Path } else { $null }
-    }
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
     )
@@ -487,7 +482,6 @@ function Invoke-AvmTerraformLint {
                 -FilePath $tool.Path `
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
-                -EnvVars $tflintEnvironment `
                 -IgnoreExitCode `
                 -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
@@ -503,7 +497,6 @@ function Invoke-AvmTerraformLint {
             TflintPath             = $tool.Path
             MinimumFailureSeverity = $MinimumFailureSeverity
             StreamOutput           = $streamOutput
-            TflintEnvironment      = $tflintEnvironment
         }
         $scopeResults = @(
             Invoke-AvmParallel `

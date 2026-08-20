@@ -283,42 +283,6 @@ function Test-AvmPins {
             }
         }
 
-        if ($Pins.ContainsKey('tflintAvmSchemaSnapshot')) {
-            $snapshot = $Pins.tflintAvmSchemaSnapshot
-            if ($snapshot -isnot [hashtable]) {
-                throw [System.Data.DataException]::new(
-                    "avm.pins: 'tflintAvmSchemaSnapshot' must be an object.")
-            }
-            foreach ($key in 'enabled', 'placeholder', 'version', 'url', 'sha256') {
-                if (-not $snapshot.ContainsKey($key)) {
-                    throw [System.Data.DataException]::new(
-                        "avm.pins: tflintAvmSchemaSnapshot is missing required key '$key'.")
-                }
-            }
-            if ($snapshot.enabled -isnot [bool] -or $snapshot.placeholder -isnot [bool]) {
-                throw [System.Data.DataException]::new(
-                    'avm.pins: tflintAvmSchemaSnapshot.enabled and .placeholder must be booleans.')
-            }
-            if ([string]$snapshot.version -notmatch $semverRegex) {
-                throw [System.Data.DataException]::new(
-                    "avm.pins: tflintAvmSchemaSnapshot.version '$($snapshot.version)' is not semver.")
-            }
-            if (-not ([string]$snapshot.url).StartsWith('https://')) {
-                if (-not ($AllowFileUrls -and ([string]$snapshot.url).StartsWith('file://'))) {
-                    throw [System.Data.DataException]::new(
-                        "avm.pins: tflintAvmSchemaSnapshot.url must start with 'https://'.")
-                }
-            }
-            if ([string]$snapshot.sha256 -notmatch $sha256Regex) {
-                throw [System.Data.DataException]::new(
-                    'avm.pins: tflintAvmSchemaSnapshot.sha256 is not 64-char lowercase hex.')
-            }
-            if ([bool]$snapshot.enabled -and [bool]$snapshot.placeholder) {
-                throw [System.Data.DataException]::new(
-                    'avm.pins: tflintAvmSchemaSnapshot cannot be enabled while placeholder is true.')
-            }
-        }
-
         return $true
     }
 }

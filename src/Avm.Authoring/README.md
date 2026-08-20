@@ -152,19 +152,6 @@ all-scope override, then matching per-scope override. Per-scope paths are
 validated and staged under a hash-named config, so they cannot escape the
 repository root or collide with another scope.
 
-### TFLint AVM schema snapshot
-
-The AVM ruleset independently accepts an optional schema snapshot through
-`TFLINT_AVM_SCHEMA_PATH`. When the `tflintAvmSchemaSnapshot` pin is enabled,
-Avm.Authoring downloads the immutable JSON file, verifies its SHA-256, caches
-the exact content at `<AVM_HOME>/cache/tflint-avm-schema/<sha256>/snapshot.json`,
-and supplies the variable only to TFLint child processes. It never falls back to
-an older snapshot.
-
-The current manifest entry is a disabled placeholder pending the first published
-artifact. Once a real pin is enabled, an offline cache miss fails before TFLint
-starts. Preload it by running `avm lint` once with `AVM_OFFLINE` unset.
-
 ### Refreshing the tools lock
 
 Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The script fetches official checksums (terraform, tflint, terraform-docs) or downloads each per-platform binary and computes SHA256 locally (bicep), validates the result through `Test-AvmPins`, then rewrites `Resources/avm.pins.jsonc` with deterministic formatting.
