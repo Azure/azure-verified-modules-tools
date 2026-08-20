@@ -1,7 +1,3 @@
-config {
-  disabled_by_default = true
-}
-
 plugin "terraform" {
   enabled = true
   version = "0.15.0"
@@ -10,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.19.1"
+  version   = "0.20.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -97,6 +93,14 @@ rule "terraform_sensitive_variable_no_default" {
 }
 
 rule "azapi_resource_tag" {
+  enabled = false
+}
+
+rule "azapi_replace_triggers_refs" {
+  enabled = false
+}
+
+rule "azapi_response_export_values" {
   enabled = false
 }
 

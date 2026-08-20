@@ -5,3 +5,8 @@ transform "reorder_attributes" "block_layout" {
   foot_attributes          = ["required_providers"]
   sort_body_alphabetically = true
 }
+
+transform "reorder_attributes" "required_providers_entries" {
+  target_block_address = "terraform"
+  nested_block_path    = ["required_providers"]
+}

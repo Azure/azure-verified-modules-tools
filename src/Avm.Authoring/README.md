@@ -126,7 +126,8 @@ All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AVM rules are enabled by default in the ruleset, so
 the packaged configurations declare only scope-specific disables. The root and
 submodule configurations are strict; examples retain only the deliberate
-interface and module-only exemptions.
+interface and module-only exemptions. The standard Terraform rules remain
+explicitly curated by their existing rule blocks.
 
 ### Terraform TFLint overrides
 

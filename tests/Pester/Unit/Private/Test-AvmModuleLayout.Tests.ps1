@@ -79,7 +79,7 @@ Describe 'Module Resources packaging' {
             $content | Should -Match 'plugin\s+"avm"'
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
-            $content | Should -Match 'disabled_by_default\s*=\s*true'
+            $content | Should -Not -Match 'disabled_by_default\s*='
         }
     }
 
@@ -113,6 +113,8 @@ Describe 'Module Resources packaging' {
                 'terraform_module_provider_declaration',
                 'terraform_sensitive_variable_no_default',
                 'azapi_resource_tag',
+                'azapi_replace_triggers_refs',
+                'azapi_response_export_values',
                 'terraform_tf_file',
                 'required_module_source_tffr1',
                 'required_output_rmfr7'
@@ -127,6 +129,8 @@ Describe 'Module Resources packaging' {
                 'terraform_module_provider_declaration',
                 'terraform_sensitive_variable_no_default',
                 'azapi_resource_tag',
+                'azapi_replace_triggers_refs',
+                'azapi_response_export_values',
                 'terraform_tf_file',
                 'required_module_source_tffr1',
                 'required_output_rmfr7',
@@ -171,6 +175,7 @@ Describe 'Module Resources packaging' {
         $content | Should -Match 'head_attributes\s*=\s*\["required_version"\]'
         $content | Should -Match 'body_attributes\s*=\s*\["experiments", "backend", "cloud", "provider_meta"\]'
         $content | Should -Match 'foot_attributes\s*=\s*\["required_providers"\]'
+        $content | Should -Match 'nested_block_path\s*=\s*\["required_providers"\]'
     }
 
     It 'ships the consolidated pin manifest and no legacy tools lock' {

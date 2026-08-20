@@ -368,6 +368,8 @@ Describe 'Test-AvmPins' {
                 'terraform_module_provider_declaration'
                 'terraform_sensitive_variable_no_default'
                 'azapi_resource_tag'
+                'azapi_replace_triggers_refs'
+                'azapi_response_export_values'
                 'terraform_tf_file'
             )
 
@@ -385,9 +387,7 @@ Describe 'Test-AvmPins' {
                 $avmPlugin.Groups['body'].Value | Should -Match 'signature\s*=\s*"attestation"'
                 $avmPlugin.Groups['body'].Value | Should -Not -Match 'signing_key\s*='
 
-                $configBlock = [regex]::Match($text, 'config\s*\{(?<body>[^}]*)\}', 'Singleline')
-                $configBlock.Success | Should -BeTrue
-                $configBlock.Groups['body'].Value | Should -Match 'disabled_by_default\s*=\s*true'
+                $text | Should -Not -Match 'disabled_by_default\s*='
 
                 foreach ($rule in $exampleOnlyRules) {
                     $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*false'

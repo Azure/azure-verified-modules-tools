@@ -35,12 +35,6 @@ The integration tier is the canary that catches:
 - Real-binary composition drift — a wired engine that passes against the
   stub launchers (Component tier) but breaks against the actual tool.
 
-When a branch intentionally packages configuration for a not-yet-released
-TFLint ruleset, real-plugin tests that cannot parse those names skip only until
-the corresponding attested version is pinned in `avm.pins.jsonc`. Unit and
-component tests must continue to validate the packaged configuration structure
-and the wrapper behavior. The release follow-up removes the skip by updating
-the pin, then restores real-plugin validation automatically.
 
 ## How they run
 

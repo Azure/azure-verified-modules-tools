@@ -1,7 +1,3 @@
-config {
-  disabled_by_default = true
-}
-
 plugin "terraform" {
   enabled = true
   version = "0.15.0"
@@ -10,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.19.1"
+  version   = "0.20.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }

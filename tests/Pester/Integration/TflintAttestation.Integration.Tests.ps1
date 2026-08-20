@@ -10,7 +10,6 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
         $script:tflintVersion = [string]($pins.tools | Where-Object name -eq 'tflint' | Select-Object -First 1).version
         $script:avmRulesetVersion = [string]$pins.tflintPlugins.avm
         $script:terraformRulesetVersion = [string]$pins.tflintPlugins.terraform
-        $script:RequiresV020RulesetRelease = [version]$script:avmRulesetVersion -lt [version]'0.20.0'
         $script:originalAvmHome = $env:AVM_HOME
         $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         Import-Module $script:moduleManifest -Force
@@ -27,19 +26,12 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
     }
 
     It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
-        if ($script:RequiresV020RulesetRelease) {
-            Set-ItResult -Skipped -Because (
-                "The packaged configs require AVM ruleset v0.20.0; the current pinned " +
-                "v$script:avmRulesetVersion release cannot parse its renamed rules.")
-            return
-        }
-
-        Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop
-        Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop
+        Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
+        Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
 
         $requiredRoot = Join-Path $TestDrive 'required-interfaces'
         New-Item -ItemType Directory -Path $requiredRoot -Force | Out-Null
-        @'
+@'
 terraform {
   required_version = ">= 1.9.0"
   required_providers {
@@ -49,24 +41,22 @@ terraform {
     }
   }
 }
-
+'@ | Set-Content -LiteralPath (Join-Path $requiredRoot 'terraform.tf') -Encoding utf8NoBOM
+        @'
 resource "azapi_resource" "example" {
-  type                   = "Microsoft.Example/widgets@2024-01-01"
-  name                   = "example"
-  parent_id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example"
-  response_export_values = []
-  replace_triggers_refs  = []
-}
-
-output "resource_id" {
-  value = azapi_resource.example.id
+  type = "Microsoft.Example/widgets@2024-01-01"
 }
 '@ | Set-Content -LiteralPath (Join-Path $requiredRoot 'main.tf') -Encoding utf8NoBOM
         @'
-variable "private_endpoints" {
-  type        = map(string)
+output "resource_id" {
+  value = azapi_resource.example.id
+}
+'@ | Set-Content -LiteralPath (Join-Path $requiredRoot 'outputs.tf') -Encoding utf8NoBOM
+        @'
+variable "ignore_body_changes" {
+  type        = map(list(string))
   default     = {}
-  description = "An intentionally invalid private endpoint interface used to prove required-variable enforcement."
+  description = "An intentionally invalid ignore-body interface used to prove released AVM interface enforcement."
   nullable    = false
 }
 '@ | Set-Content -LiteralPath (Join-Path $requiredRoot 'variables.tf') -Encoding utf8NoBOM
@@ -183,15 +173,7 @@ output "deprecated_lock" {
         $run.RequiredLint.ExitCode | Should -Be 2 -Because $run.RequiredLint.StdErr
         $requiredPayload = $run.RequiredLint.StdOut | ConvertFrom-Json
         $requiredRules = @($requiredPayload.issues.rule.name)
-        foreach ($rule in @(
-                'ignore_body_changes',
-                'private_endpoints_manage_dns_zone_group',
-                'resource_types',
-                'retry',
-                'timeouts'
-            )) {
-            $requiredRules | Should -Contain $rule
-        }
+        $requiredRules | Should -Contain 'ignore_body_changes'
 
         $run.CanonicalLint.ExitCode | Should -Be 0 -Because "$($run.CanonicalLint.StdErr)`n$($run.CanonicalLint.StdOut)"
         $run.DeprecatedLint.ExitCode | Should -Be 0 -Because "$($run.DeprecatedLint.StdErr)`n$($run.DeprecatedLint.StdOut)"

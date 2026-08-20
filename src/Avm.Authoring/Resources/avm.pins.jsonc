@@ -115,7 +115,7 @@
     },
     {
       "name": "mapotf",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "urlTemplate": "https://github.com/Azure/mapotf/releases/download/v{version}/mapotf_{version}_{os}_{arch}{ext}",
       "archive": "tar.gz",
       "entrypoint": "mapotf",
@@ -128,12 +128,12 @@
         "darwin-arm64": "tar.gz"
       },
       "sha256": {
-        "windows-amd64": "6e68d9d1e18977122535cb97d3351e5dfaaae8e62ac05c84c873b7ec6acf4798",
-        "windows-arm64": "bf7627db03df3ae86e35fc7385465899d9c574614eaa0622d2a4b367eca320b8",
-        "linux-amd64": "e61e26cdd1f72ce768878e422e058df96695b9221c184e1c965112612d828581",
-        "linux-arm64": "e597965024ebc416da3196300c5bdeb4c6f54a6d17539ed3e49b0f1659e472d6",
-        "darwin-amd64": "4538edae8d7d63cfecfc8cab7ee1d6db1a03f48a9111dac893f019efb4563f9d",
-        "darwin-arm64": "8c8da3a4759dce4d24e9a4a28e8df3a97b49ae3019e9a710ae9c0b0a582e13c3"
+        "windows-amd64": "f28a44f93ce61a88e931a79cb3a69f280d8ea715120204986583362d4b00a3e1",
+        "windows-arm64": "708baf795f002e26a1eef95242850a1e8b890bdaca7eb779ce760cd9118a9a96",
+        "linux-amd64": "9a49c168091598358a84dda5f897bf9e363e4f6d951fefdab137e7d25729ea0b",
+        "linux-arm64": "1bef217978fc99031e9d0981785e1a183d3ebe2a76bfc961a7acc2a8e718e670",
+        "darwin-amd64": "9e339852a1c95a0f10c1f9ea7bd57cb085e7ebf9e726137b78786a087e3e7291",
+        "darwin-arm64": "c4661704066d6915a8708b3cc933370fae99d429b8519ff99e791b6c2ed50eac"
       }
     },
     {
@@ -237,6 +237,6 @@
   // place, and a packaging test cross-checks the two so they cannot drift.
   "tflintPlugins": {
     "terraform": "0.15.0",
-    "avm": "0.19.1"
+    "avm": "0.20.0"
   }
 }

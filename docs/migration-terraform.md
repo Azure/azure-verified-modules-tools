@@ -302,7 +302,7 @@ The AVM TFLint ruleset enables its AVM rules by default. The packaged root and
 module configurations therefore retain only their deliberate exceptions; the
 example configuration disables module-only and interface rules that do not apply
 to example callers. Standard `tflint-ruleset-terraform` rules remain explicitly
-curated because the package uses `disabled_by_default = true`.
+curated by their existing explicit rule blocks.
 
 Use the existing repository-root files to apply an override to every scope of a
 kind:
