@@ -45,6 +45,9 @@ provenance.
 - `./build.ps1 integration`: 21 passed, 3 fixture-applicability skips, 0 failed.
   The real TFLint test installed and ran the released `v0.21.0` AVM plugin via
   GitHub Artifact Attestation.
+- The full [CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/32427241247)
+  passed all build and real integration matrix legs, aggregate test-results
+  publishing, and coverage upload.
 
 ## Dependencies
 
