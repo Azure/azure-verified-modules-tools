@@ -168,8 +168,6 @@ Describe 'Module Resources packaging' {
             (Join-Path 'Resources' (Join-Path 'mapotf' (Join-Path 'pre-commit' 'order_terraform.mptf.hcl')))
         $content = Get-Content -LiteralPath $path -Raw
 
-        $content | Should -Match 'sort\(keys\(data\.terraform\.for_order\.required_providers\)\)'
-        $content | Should -Match 'required_providers\s*=\s*\$\{jsonencode\(local\.ordered_required_providers\)\}'
         $content | Should -Match 'head_attributes\s*=\s*\["required_version"\]'
         $content | Should -Match 'body_attributes\s*=\s*\["experiments", "backend", "cloud", "provider_meta"\]'
         $content | Should -Match 'foot_attributes\s*=\s*\["required_providers"\]'

@@ -46,3 +46,10 @@ The slice also enforces AVM's one-layer module and example scope convention.
   its AVM plugin pin or run real TFLint validation. This branch deliberately
   retains the current 0.19.1 pin and is not independently releasable until
   that dependency is complete.
+- Until the pin moves to v0.20.0, only integration tests that invoke the real
+  TFLint plugin skip; the unit and component suites continue to validate the
+  packaged configuration and wrapper behavior.
+- MAPOTF 0.1.9 cannot safely rewrite nested `required_providers` attributes:
+  its dynamic patch decoder iterates attributes through an unordered map. The
+  package retains deterministic `required_version`-first ordering; provider
+  object ordering needs an upstream MAPOTF primitive before it can be restored.

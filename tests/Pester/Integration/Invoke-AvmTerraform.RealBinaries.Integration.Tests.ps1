@@ -85,6 +85,11 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         $script:OrigAvmHome = $env:AVM_HOME
         $script:OrigPluginCache = $env:TF_PLUGIN_CACHE_DIR
         $script:OrigManagedFilesLocal = $env:AVM_MANAGED_FILES_LOCAL_PATH
+        $pinsPath = Join-Path $script:RepoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc'
+        $pins = Get-Content -LiteralPath $pinsPath -Raw | ConvertFrom-Json
+        $script:RequiresV020RulesetRelease = (
+            [version]$pins.tflintPlugins.avm -lt [version]'0.20.0'
+        )
 
         $script:Offline = ((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1'))
         $script:SkipReason = $null
@@ -252,6 +257,12 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($script:RequiresV020RulesetRelease) {
+                Set-ItResult -Skipped -Because (
+                    'pr-check invokes real TFLint; wait for the attested v0.20.0 AVM ruleset release before ' +
+                    'validating the renamed packaged rules.')
+                return
+            }
 
             $policyViolation = Join-Path $script:StagedModule 'examples' 'second_example' 'policy-violation.tf'
             if (Test-Path -LiteralPath $policyViolation -PathType Leaf) {

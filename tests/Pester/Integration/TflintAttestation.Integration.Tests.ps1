@@ -10,6 +10,7 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
         $script:tflintVersion = [string]($pins.tools | Where-Object name -eq 'tflint' | Select-Object -First 1).version
         $script:avmRulesetVersion = [string]$pins.tflintPlugins.avm
         $script:terraformRulesetVersion = [string]$pins.tflintPlugins.terraform
+        $script:RequiresV020RulesetRelease = [version]$script:avmRulesetVersion -lt [version]'0.20.0'
         $script:originalAvmHome = $env:AVM_HOME
         $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         Import-Module $script:moduleManifest -Force
@@ -26,6 +27,13 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
     }
 
     It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
+        if ($script:RequiresV020RulesetRelease) {
+            Set-ItResult -Skipped -Because (
+                "The packaged configs require AVM ruleset v0.20.0; the current pinned " +
+                "v$script:avmRulesetVersion release cannot parse its renamed rules.")
+            return
+        }
+
         Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop
         Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop
 
