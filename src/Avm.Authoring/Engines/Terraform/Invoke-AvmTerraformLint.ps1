@@ -318,11 +318,12 @@ function Invoke-AvmTerraformLint {
         vendored AVM rulesets via Resolve-AvmTflintConfigDir. Repository-root
         avm.tflint.override.hcl, avm.tflint_example.override.hcl, and
         avm.tflint_module.override.hcl files are merged over those immutable
-        bases in an isolated cache directory. The repository is copied to a
-        clean temporary tree before every scope produced by Get-AvmTflintScope
-        is evaluated. Terraform initialization and lint execution are bounded
-        parallel phases; each distinct TFLint configuration is initialized once
-        between them:
+        bases in an isolated cache directory. A direct module or example scope
+        can add a final avm.tflint.override.hcl file in its own directory. The
+        repository is copied to a clean temporary tree before every scope
+        produced by Get-AvmTflintScope is evaluated. Terraform initialization
+        and lint execution are bounded parallel phases; each distinct TFLint
+        configuration is initialized once between them:
 
             terraform init -upgrade -input=false
             tflint --init   --config <absolute ruleset>          (install plugins)
@@ -410,7 +411,13 @@ function Invoke-AvmTerraformLint {
     $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
     $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
-    $configSet = New-AvmTflintConfigSet -Root $Context.Root -BaseConfigDir $baseConfigDir
+    $sourceScopes = @(
+        Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
+    )
+    $configSet = New-AvmTflintConfigSet `
+        -Root $Context.Root `
+        -BaseConfigDir $baseConfigDir `
+        -Scopes $sourceScopes
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'
     $stageRoot = Join-Path $stageParent ('avm-lint-' + [guid]::NewGuid().ToString('N'))
 
@@ -431,6 +438,13 @@ function Invoke-AvmTerraformLint {
         Write-AvmLog ("lint: staging terraform module at {0}" -f $stageRoot) -Level Verbose | Out-Null
         Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
         $scopes = @(Get-AvmTflintScope -Root $stageRoot -ConfigDir $configSet.ConfigDir)
+        foreach ($scope in $scopes) {
+            if ($configSet.ScopeConfigNames.ContainsKey($scope.RelPath)) {
+                $scope.Config = Join-Path `
+                    $configSet.ConfigDir `
+                    $configSet.ScopeConfigNames[$scope.RelPath]
+            }
+        }
         Write-AvmLog ("lint: discovered {0} terraform scope(s); failure threshold = {1}" -f $scopes.Count, $MinimumFailureSeverity) -Level Info | Out-Null
         Write-AvmLog ("lint: processing scopes with {0} worker(s)" -f $effectiveThrottle) -Level Verbose | Out-Null
 

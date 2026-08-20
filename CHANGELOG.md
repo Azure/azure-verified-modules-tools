@@ -21,6 +21,9 @@ section when cutting a release.
 
 ### Added
 
+- Per-module and per-example `avm.tflint.override.hcl` files. They layer after
+  the corresponding all-scope override and use validated, collision-free staged
+  config paths.
 - `avm sync` and `avm pre-commit` now expose `-FileGroupConfigPath` and
   `-FileGroupConfigLocalPath`, closing the last gap between the engine's
   managed-file options and the public CLI surface. Both verbs now derive that
@@ -54,6 +57,10 @@ section when cutting a release.
 
 ### Changed
 
+- Packaged TFLint configurations now rely on the AVM ruleset's default-enabled
+  policy, retain only deliberate scope disables, and replace legacy resource-tag
+  and Terraform-file rule names. MAPOTF now deterministically orders
+  `terraform` declarations and `required_providers`.
 - Managed tools now pin Bicep 0.46.1, Conftest 0.69.0, mapotf 0.1.9,
   and terraform-docs 0.24.0. The Terraform TFLint ruleset moves to 0.15.0
   for Terraform 1.15 compatibility, and the AVM ruleset moves to 0.19.1.

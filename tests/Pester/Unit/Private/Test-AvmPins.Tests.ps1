@@ -352,10 +352,10 @@ Describe 'Test-AvmPins' {
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
         }
 
-        It 'mirrors plugin versions and enforces attestation-only AVM configs' {
+        It 'mirrors plugin versions and preserves AVM scope exemptions' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
-            $v019Rules = @(
+            $exampleOnlyRules = @(
                 'deprecated_lock_interface'
                 'deprecated_private_endpoints_interface'
                 'deprecated_role_assignments_interface'
@@ -364,6 +364,11 @@ Describe 'Test-AvmPins' {
                 'resource_types'
                 'retry'
                 'timeouts'
+                'terraform_heredoc_usage'
+                'terraform_module_provider_declaration'
+                'terraform_sensitive_variable_no_default'
+                'azapi_resource_tag'
+                'terraform_tf_file'
             )
 
             foreach ($config in (Get-ChildItem -LiteralPath $configDir -Filter '*.hcl' -File)) {
@@ -384,10 +389,14 @@ Describe 'Test-AvmPins' {
                 $configBlock.Success | Should -BeTrue
                 $configBlock.Groups['body'].Value | Should -Match 'disabled_by_default\s*=\s*true'
 
-                $expectedState = if ($config.Name -eq 'avm.tflint_example.hcl') { 'false' } else { 'true' }
-                foreach ($rule in $v019Rules) {
-                    $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*' + $expectedState
-                    $text | Should -Match $rulePattern -Because "$($config.Name) must explicitly configure v0.19 rule '$rule'"
+                foreach ($rule in $exampleOnlyRules) {
+                    $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*false'
+                    if ($config.Name -eq 'avm.tflint_example.hcl') {
+                        $text | Should -Match $rulePattern -Because "$($config.Name) must disable example-only rule '$rule'"
+                    }
+                    else {
+                        $text | Should -Not -Match ('rule\s+"' + [regex]::Escape($rule) + '"') -Because "$($config.Name) relies on the AVM default for '$rule'"
+                    }
                 }
             }
         }

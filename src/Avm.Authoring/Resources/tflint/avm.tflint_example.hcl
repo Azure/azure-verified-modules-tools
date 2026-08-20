@@ -92,37 +92,17 @@ rule "terraform_module_provider_declaration" {
   enabled = false
 }
 
-rule "terraform_output_separate" {
-  enabled = false
-}
-
-rule "terraform_required_providers_declaration" {
-  enabled = true
-}
-
-rule "terraform_required_version_declaration" {
-  enabled = true
-}
-
 rule "terraform_sensitive_variable_no_default" {
   enabled = false
 }
 
-rule "terraform_variable_nullable_false" {
-  enabled = true
-}
-
-rule "terraform_variable_separate" {
-  enabled = false
-}
-
-rule "azurerm_resource_tag" {
+rule "azapi_resource_tag" {
   enabled = false
 }
 
 # AVM Provider Rules
 
-rule "tfnfr26" {
+rule "terraform_tf_file" {
   enabled = false
 }
 

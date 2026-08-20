@@ -83,6 +83,62 @@ Describe 'Module Resources packaging' {
         }
     }
 
+    It 'relies on default-enabled AVM rules and preserves only scope exemptions' {
+        $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        $root = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint.hcl') -Raw
+        $module = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint_module.hcl') -Raw
+        $example = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint_example.hcl') -Raw
+
+        foreach ($content in @($root, $module, $example)) {
+            foreach ($removedRule in @(
+                    'azurerm_arg_order',
+                    'azurerm_resource_tag',
+                    'terraform_count_index_usage',
+                    'terraform_locals_order',
+                    'terraform_output_separate',
+                    'terraform_required_providers_declaration',
+                    'terraform_required_version_declaration',
+                    'terraform_resource_data_arg_layout',
+                    'terraform_variable_nullable_false',
+                    'terraform_variable_separate',
+                    'terraform_versions_file',
+                    'tfnfr26'
+                )) {
+                $content | Should -Not -Match ('rule\s+"{0}"' -f $removedRule)
+            }
+        }
+
+        foreach ($defaultEnabledRule in @(
+                'terraform_heredoc_usage',
+                'terraform_module_provider_declaration',
+                'terraform_sensitive_variable_no_default',
+                'azapi_resource_tag',
+                'terraform_tf_file',
+                'required_module_source_tffr1',
+                'required_output_rmfr7'
+            )) {
+            $root | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
+            $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
+        }
+
+        $module | Should -Match '(?s)rule\s+"provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
+        foreach ($exampleRule in @(
+                'terraform_heredoc_usage',
+                'terraform_module_provider_declaration',
+                'terraform_sensitive_variable_no_default',
+                'azapi_resource_tag',
+                'terraform_tf_file',
+                'required_module_source_tffr1',
+                'required_output_rmfr7',
+                'provider_modtm_version_constraint'
+            )) {
+            $example | Should -Match (
+                '(?s)rule\s+"{0}"\s*\{{\s*enabled\s*=\s*false\s*\}}' -f $exampleRule)
+        }
+        $example | Should -Match '(?s)rule\s+"terraform_required_providers"\s*\{\s*enabled\s*=\s*true\s*\}'
+        $example | Should -Match '(?s)rule\s+"terraform_required_version"\s*\{\s*enabled\s*=\s*true\s*\}'
+    }
+
     It 'ships the mapotf pre-commit config bundle under Resources/mapotf/pre-commit' {
         $mapotfDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))
         $mapotfDir | Should -Exist
@@ -93,6 +149,7 @@ Describe 'Module Resources packaging' {
             'order_module_attrs.mptf.hcl'
             'order_resource_attrs.mptf.hcl'
             'order_resource_meta.mptf.hcl'
+            'order_terraform.mptf.hcl'
             'required_provider_versions.mptf.hcl'
             'sort_outputs.mptf.hcl'
             'sort_variables.mptf.hcl'
@@ -103,6 +160,19 @@ Describe 'Module Resources packaging' {
             (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
         }
         @(Get-ChildItem -LiteralPath $mapotfDir -Filter '*.mptf.hcl' -File).Count | Should -Be $expected.Count
+    }
+
+    It 'ships a deterministic Terraform declaration ordering transform' {
+        $path = Join-Path `
+            $script:moduleRoot `
+            (Join-Path 'Resources' (Join-Path 'mapotf' (Join-Path 'pre-commit' 'order_terraform.mptf.hcl')))
+        $content = Get-Content -LiteralPath $path -Raw
+
+        $content | Should -Match 'sort\(keys\(data\.terraform\.for_order\.required_providers\)\)'
+        $content | Should -Match 'required_providers\s*=\s*\$\{jsonencode\(local\.ordered_required_providers\)\}'
+        $content | Should -Match 'head_attributes\s*=\s*\["required_version"\]'
+        $content | Should -Match 'body_attributes\s*=\s*\["experiments", "backend", "cloud", "provider_meta"\]'
+        $content | Should -Match 'foot_attributes\s*=\s*\["required_providers"\]'
     }
 
     It 'ships the consolidated pin manifest and no legacy tools lock' {
