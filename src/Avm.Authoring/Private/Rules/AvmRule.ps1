@@ -131,8 +131,9 @@ function Test-AvmRule {
         Schema:
           - Id          : required, lowercase kebab/dot identifier
                           (^[a-z][a-z0-9.-]*$), unique within the loaded set.
-          - Kind        : required, one of the three primitive kinds:
-                          FileMustNotExist, FileMustExist, DirectoryMustExist.
+                          - Kind        : required, one of the four primitive kinds:
+                          FileMustNotExist, FileMustExist, DirectoryMustExist,
+                          TerraformScopesMustBeDirectChildren.
           - Description : required, non-empty string.
           - Severity    : optional, 'error' | 'warning' (default 'error').
           - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all',
@@ -143,6 +144,8 @@ function Test-AvmRule {
               FileMustExist        : Path (string). Optional: FixContentTemplate (string).
               DirectoryMustExist   : Path (string). Optional: MinimumChildDirectories
                                      (positive integer), FixCreateFile (leaf file name).
+              TerraformScopesMustBeDirectChildren : ScopeDirectories (non-empty
+                                     array containing modules and/or examples).
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -160,6 +163,7 @@ function Test-AvmRule {
             'FileMustNotExist'
             'FileMustExist'
             'DirectoryMustExist'
+            'TerraformScopesMustBeDirectChildren'
         )
         $validSeverities = @('error', 'warning')
         $validAppliesTo = @('root', 'examples', 'modules', 'all')
@@ -281,6 +285,18 @@ function Test-AvmRule {
                         "avm-rule '$id': DirectoryMustExist cannot combine MinimumChildDirectories with FixCreateFile.")
                 }
             }
+            'TerraformScopesMustBeDirectChildren' {
+                if (-not $params.ContainsKey('ScopeDirectories')) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': TerraformScopesMustBeDirectChildren requires Parameters.ScopeDirectories.")
+                }
+                $scopeDirectories = @($params.ScopeDirectories | ForEach-Object { [string]$_ })
+                if ($scopeDirectories.Count -eq 0 -or
+                    @($scopeDirectories | Where-Object { $_ -notin @('modules', 'examples') }).Count -gt 0) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': TerraformScopesMustBeDirectChildren ScopeDirectories must contain only modules and/or examples.")
+                }
+            }
         }
 
         return $true
@@ -311,6 +327,9 @@ function Test-AvmRuleFixable {
         }
         'DirectoryMustExist' {
             return $Rule.Parameters.ContainsKey('FixCreateFile')
+        }
+        'TerraformScopesMustBeDirectChildren' {
+            return $false
         }
         default {
             return $false

@@ -142,7 +142,7 @@ function Get-AvmTflintScopeOverridePath {
 
     $segments = @($RelPath -split '[\\/]')
     if (
-        $segments.Count -lt 2 -or
+        $segments.Count -ne 2 -or
         $segments[0] -notin @('modules', 'examples') -or
         ($segments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -in @('.', '..') })
     ) {

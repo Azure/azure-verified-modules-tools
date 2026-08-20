@@ -10,6 +10,7 @@
 Align the packaged AVM TFLint configurations with the ruleset's default-enabled
 policy, preserve intentional scope-specific exemptions, complete the MAPOTF
 replacement transforms, and add safe per-scope customer TFLint overrides.
+The slice also enforces AVM's one-layer module and example scope convention.
 
 ## Checklist
 
@@ -20,6 +21,8 @@ replacement transforms, and add safe per-scope customer TFLint overrides.
 - [x] Support all-scope and safe per-example/per-submodule TFLint overrides with
       documented precedence and regression coverage.
 - [x] Update direct user documentation for TFLint defaults and overrides.
+- [x] Reject nested Terraform module and example roots through the built-in
+      convention framework while allowing nested non-Terraform assets.
 - [x] Publish the branch and open
       [pull request #78](https://github.com/Azure/azure-verified-modules-tools/pull/78).
 - [ ] After the attested v0.20.0 AVM ruleset release, update the pin and run

@@ -141,16 +141,16 @@ avm.tflint_example.override.hcl  # every direct examples/* scope
 To override one direct scope without changing siblings, add:
 
 ```text
-modules/<module-path>/avm.tflint.override.hcl
-examples/<example-path>/avm.tflint.override.hcl
+modules/<name>/avm.tflint.override.hcl
+examples/<name>/avm.tflint.override.hcl
 ```
 
-For example, `modules/network/private` uses
-`modules/network/private/avm.tflint.override.hcl`. Overrides merge by
-attributes, in this order: packaged config, matching all-scope override, then
-matching per-scope override. Per-scope paths are derived from validated
-`modules/` or `examples/` segments and staged under a hash-named config, so they
-cannot escape the repository root or collide with another scope.
+AVM permits only one module or example child layer, so
+`modules/network/avm.tflint.override.hcl` applies to `modules/network`.
+Overrides merge by attributes, in this order: packaged config, matching
+all-scope override, then matching per-scope override. Per-scope paths are
+validated and staged under a hash-named config, so they cannot escape the
+repository root or collide with another scope.
 
 ### Refreshing the tools lock
 

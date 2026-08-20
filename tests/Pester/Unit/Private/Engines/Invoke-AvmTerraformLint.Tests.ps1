@@ -227,9 +227,9 @@ Describe 'Get-AvmTflintScope' {
 }
 
 Describe 'Get-AvmTflintScopeOverridePath' {
-    It 'maps nested module and example scopes to their target-directory overrides' {
+    It 'maps direct module and example scopes to their target-directory overrides' {
         $root = Join-Path $TestDrive 'override-root'
-        $moduleOverride = Join-Path $root 'modules/network/private/avm.tflint.override.hcl'
+        $moduleOverride = Join-Path $root 'modules/network/avm.tflint.override.hcl'
         $exampleOverride = Join-Path $root 'examples/default/avm.tflint.override.hcl'
         New-Item -ItemType Directory -Path (Split-Path -Parent $moduleOverride), (Split-Path -Parent $exampleOverride) -Force | Out-Null
         Set-Content -LiteralPath $moduleOverride, $exampleOverride -Value 'rule "x" { enabled = false }' -Encoding utf8
@@ -239,7 +239,7 @@ Describe 'Get-AvmTflintScopeOverridePath' {
         } {
             param($R)
             @(
-                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/network/private'
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/network'
                 Get-AvmTflintScopeOverridePath -Root $R -RelPath 'examples/default'
             )
         }
@@ -248,7 +248,13 @@ Describe 'Get-AvmTflintScopeOverridePath' {
         $resolved[1] | Should -Be $exampleOverride
     }
 
-    It 'rejects scope paths that could escape the override root' {
+    It 'rejects nested or escaping scope paths' {
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
+                param($R)
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/network/private'
+            }
+        } | Should -Throw '*cannot be mapped*'
         {
             InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
                 param($R)

@@ -133,6 +133,10 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                         Id = 'avm.test.required-directory'; Kind = 'DirectoryMustExist'; Description = 'd'
                         Parameters = @{ Path = 'examples'; MinimumChildDirectories = 1 }; Expected = $false
                     }
+                    @{
+                        Id = 'avm.test.direct-terraform-scopes'; Kind = 'TerraformScopesMustBeDirectChildren'; Description = 'd'
+                        Parameters = @{ ScopeDirectories = @('modules', 'examples') }; Expected = $false
+                    }
                 )
 
                 foreach ($definition in $definitions) {
@@ -374,6 +378,20 @@ Describe 'Test-AvmRule + New-AvmRule schema' {
                 $err = $null
                 try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
                 $err.Message | Should -Match 'cannot combine'
+            }
+        }
+
+        It 'rejects an invalid TerraformScopesMustBeDirectChildren scope directory' {
+            InModuleScope 'Avm.Authoring' {
+                $def = @{
+                    Id          = 'avm.test.invalid-scope-directory'
+                    Kind        = 'TerraformScopesMustBeDirectChildren'
+                    Description = 'd'
+                    Parameters  = @{ ScopeDirectories = @('modules', 'invalid') }
+                }
+                $err = $null
+                try { Test-AvmRule -Definition $def } catch { $err = $_.Exception }
+                $err.Message | Should -Match 'ScopeDirectories must contain only'
             }
         }
     }

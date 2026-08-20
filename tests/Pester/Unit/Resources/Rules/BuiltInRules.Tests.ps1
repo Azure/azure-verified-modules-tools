@@ -126,6 +126,16 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             [string]$r.Parameters.FixCreateFile | Should -Be '.gitkeep'
         }
 
+        It 'ships avm.tf.terraform-scopes-must-be-direct-children' {
+            $r = $script:rulesById['avm.tf.terraform-scopes-must-be-direct-children']
+            $r | Should -Not -BeNullOrEmpty
+            $r.Kind | Should -Be 'TerraformScopesMustBeDirectChildren'
+            $r.Severity | Should -Be 'error'
+            $r.AppliesTo | Should -Be 'root'
+            @($r.Parameters.ScopeDirectories) | Should -Be @('modules', 'examples')
+            (& $script:mod { param($Rule) Test-AvmRuleFixable -Rule $Rule } $r) | Should -BeFalse
+        }
+
     }
 
     Context 'Every shipped rule passes the schema validator' {
