@@ -325,6 +325,23 @@ that contain Terraform `.tf` source.
 
 ---
 
+### TFLint AVM schema snapshot
+
+The ruleset has no Azure SDK or AzAPI dependency. Its optional schema input is
+the generic `TFLINT_AVM_SCHEMA_PATH` environment variable. When this module's
+immutable `tflintAvmSchemaSnapshot` pin is enabled, `avm lint` materialises the
+exact checksum-verified JSON snapshot under
+`$AVM_HOME/cache/tflint-avm-schema/<sha256>/snapshot.json` and sets the variable
+only for TFLint processes. No other command receives it, and no older cached
+snapshot is used as a fallback.
+
+The checked-in entry is intentionally disabled until the initial immutable
+artifact URL and checksum are published. After it is enabled, `AVM_OFFLINE=1`
+with a cache miss fails before TFLint starts; preload the exact pin by running
+`avm lint` once while online.
+
+---
+
 ## 6. What's not migrated yet
 
 These items are sequenced in

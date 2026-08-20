@@ -395,6 +395,78 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.FilesProcessed | Should -Be 2
     }
 
+    It 'passes the verified schema path only to TFLint child processes' {
+        $ctx = $script:context
+        $original = $env:TFLINT_AVM_SCHEMA_PATH
+        try {
+            $env:TFLINT_AVM_SCHEMA_PATH = 'caller-value'
+            $observed = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                $script:schemaProcessEnvironments = [System.Collections.Generic.List[hashtable]]::new()
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Resolve-AvmTflintAvmSchemaSnapshot {
+                    [pscustomobject]@{ Path = '/cache/verified-schema.json' }
+                }
+                Mock Invoke-AvmProcess {
+                    if ($FilePath -eq '/fake/tflint') {
+                        $script:schemaProcessEnvironments.Add($EnvVars)
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+
+                $null = Invoke-AvmTerraformLint -Context $C
+                return $script:schemaProcessEnvironments.ToArray()
+            }
+
+            @($observed).Count | Should -Be 2
+            foreach ($environment in $observed) {
+                $environment['TFLINT_AVM_SCHEMA_PATH'] | Should -Be '/cache/verified-schema.json'
+            }
+            $env:TFLINT_AVM_SCHEMA_PATH | Should -Be 'caller-value'
+        }
+        finally {
+            $env:TFLINT_AVM_SCHEMA_PATH = $original
+        }
+    }
+
+    It 'removes an inherited schema path when no snapshot pin is enabled' {
+        $ctx = $script:context
+        $original = $env:TFLINT_AVM_SCHEMA_PATH
+        try {
+            $env:TFLINT_AVM_SCHEMA_PATH = 'caller-value'
+            $observed = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                $script:schemaProcessEnvironments = [System.Collections.Generic.List[hashtable]]::new()
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Resolve-AvmTflintAvmSchemaSnapshot { $null }
+                Mock Invoke-AvmProcess {
+                    if ($FilePath -eq '/fake/tflint') {
+                        $script:schemaProcessEnvironments.Add($EnvVars)
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+
+                $null = Invoke-AvmTerraformLint -Context $C
+                return $script:schemaProcessEnvironments.ToArray()
+            }
+
+            foreach ($environment in $observed) {
+                $environment.ContainsKey('TFLINT_AVM_SCHEMA_PATH') | Should -BeTrue
+                $environment['TFLINT_AVM_SCHEMA_PATH'] | Should -BeNullOrEmpty
+            }
+            $env:TFLINT_AVM_SCHEMA_PATH | Should -Be 'caller-value'
+        }
+        finally {
+            $env:TFLINT_AVM_SCHEMA_PATH = $original
+        }
+    }
+
     It 'streams subprocess output when <Mode> enables verbose logging' -TestCases @(
         @{ Mode = '-Verbose'; RunnerDebug = ''; UseVerbose = $true }
         @{ Mode = 'GitHub Actions debug mode'; RunnerDebug = '1'; UseVerbose = $false }

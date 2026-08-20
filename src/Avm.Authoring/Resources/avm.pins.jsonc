@@ -238,5 +238,24 @@
   "tflintPlugins": {
     "terraform": "0.15.0",
     "avm": "0.19.1"
+  },
+
+  // ===========================================================================
+  // tflintAvmSchemaSnapshot -- optional AVM-owned input for the AVM TFLint rule
+  // ===========================================================================
+  //
+  // When enabled, Avm.Authoring downloads this exact JSON snapshot, verifies its
+  // SHA256, caches it at <AVM_HOME>/cache/tflint-avm-schema/<sha256>/snapshot.json,
+  // and sets TFLINT_AVM_SCHEMA_PATH only for TFLint child processes.
+  //
+  // The initial immutable artifact location is pending. Do not enable this
+  // placeholder; replace version, url, and sha256 together with the published
+  // snapshot before setting enabled=true.
+  "tflintAvmSchemaSnapshot": {
+    "enabled": false,
+    "placeholder": true,
+    "version": "0.0.0-placeholder",
+    "url": "https://example.invalid/avm/tflint-avm-schema-0.0.0-placeholder.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   }
 }

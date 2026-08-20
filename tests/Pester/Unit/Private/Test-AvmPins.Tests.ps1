@@ -350,6 +350,24 @@ Describe 'Test-AvmPins' {
             $pins.policyLibrary.sha256     | Should -Match '^[0-9a-f]{64}$'
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-aprl'
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
+            $pins.tflintAvmSchemaSnapshot.enabled | Should -BeFalse
+            $pins.tflintAvmSchemaSnapshot.placeholder | Should -BeTrue
+            $pins.tflintAvmSchemaSnapshot.sha256 | Should -Match '^[0-9a-f]{64}$'
+        }
+
+        It 'rejects an enabled placeholder TFLint AVM schema snapshot' {
+            $pins = script:NewValidLock
+            $pins.tflintAvmSchemaSnapshot = @{
+                enabled = $true
+                placeholder = $true
+                version = '1.2.3'
+                url = 'https://example.test/snapshot.json'
+                sha256 = ('a' * 64)
+            }
+            InModuleScope 'Avm.Authoring' -Parameters @{ P = $pins } {
+                param($P)
+                { Test-AvmPins -Pins $P } | Should -Throw '*cannot be enabled while placeholder*'
+            }
         }
 
         It 'mirrors plugin versions and preserves AVM scope exemptions' {

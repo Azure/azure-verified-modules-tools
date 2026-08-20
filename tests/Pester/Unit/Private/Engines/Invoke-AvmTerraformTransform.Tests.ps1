@@ -80,6 +80,30 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
+    It 'does not resolve or propagate a TFLint AVM schema snapshot' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = $Name; Version = 'test'; Platform = 'test'
+                    Source = 'cache'; Path = "/fake/$Name"
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Resolve-AvmTflintAvmSchemaSnapshot { throw 'snapshot resolver must not run for transform' }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+
+            $result = Invoke-AvmTerraformTransform -Context $C
+
+            $result.Status | Should -Be 'pass'
+            Should -Invoke Resolve-AvmTflintAvmSchemaSnapshot -Exactly 0
+            Should -Invoke Invoke-AvmProcess -ParameterFilter {
+                $EnvVars -and $EnvVars.ContainsKey('TFLINT_AVM_SCHEMA_PATH')
+            } -Exactly 0
+        }
+    }
+
     It 'removes competing terraform binaries from the child PATH without mutating the caller PATH' {
         $ctx = $script:context
         $entrypoint = if ([OperatingSystem]::IsWindows()) { 'terraform.exe' } else { 'terraform' }
