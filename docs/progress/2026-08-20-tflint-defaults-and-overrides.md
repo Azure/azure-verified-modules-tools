@@ -38,6 +38,9 @@ The slice also enforces AVM's one-layer module and example scope convention.
   transform bundle against `tests/fixtures/modules/terraform-azure-avm-res-mock`,
   including the new deterministic `terraform` declaration plan.
 - `git diff --check`: passed.
+- The full [CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/32379042260)
+  passed: all three build legs, all six real-binary Terraform integration legs,
+  the aggregate test-results job, and coverage upload completed successfully.
 
 ## Blockers or dependencies
 
