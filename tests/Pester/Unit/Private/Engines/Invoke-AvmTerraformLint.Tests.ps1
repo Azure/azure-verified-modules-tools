@@ -65,7 +65,7 @@ Describe 'Merge-AvmTflintConfig' {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.19.0"
+  version = "0.21.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -90,7 +90,7 @@ rule "managed_identities" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
-        $merged | Should -Match 'version = "0.19.0"'
+        $merged | Should -Match 'version = "0.21.0"'
         $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
         $merged | Should -Match 'signature = "attestation"'
     }
@@ -129,7 +129,7 @@ rule "diagnostic_settings" {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.19.0"
+  version = "0.21.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -153,7 +153,7 @@ rule "custom_rule" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
-        $merged | Should -Match 'version = "0.19.0"'
+        $merged | Should -Match 'version = "0.21.0"'
         $merged | Should -Match 'signature = "attestation"'
         $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
     }

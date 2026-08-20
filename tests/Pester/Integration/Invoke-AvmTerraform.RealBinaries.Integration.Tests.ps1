@@ -127,6 +127,10 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         $script:WorkRoot = Join-Path $script:RunRoot 'work'
         $null = New-Item -ItemType Directory -Path $script:WorkRoot -Force
 
+        $pinsPath = Join-Path $script:RepoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc'
+        $pins = Get-Content -LiteralPath $pinsPath -Raw | ConvertFrom-Json
+        $script:AvmRulesetReleaseStatus = [string]$pins.tflintPluginReleaseStatus.avm
+
         if ($script:Offline) {
             $script:SkipReason = 'AVM_OFFLINE=1 - real-binary integration needs network to download tools and providers.'
         }
@@ -315,6 +319,10 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($script:AvmRulesetReleaseStatus -eq 'unreleased') {
+                Set-ItResult -Skipped -Because 'tflint-ruleset-avm v0.21.0 has not been released or attested.'
+                return
+            }
             $policyViolation = Join-Path $script:StagedModule 'examples' 'second_example' 'policy-violation.tf'
             if (Test-Path -LiteralPath $policyViolation -PathType Leaf) {
                 $compliantPolicyFixture = (Get-Content -LiteralPath $policyViolation -Raw).

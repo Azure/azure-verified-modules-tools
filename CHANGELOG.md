@@ -57,6 +57,11 @@ section when cutting a release.
 
 ### Changed
 
+- The packaged AVM TFLint plugin is prepared for the assumed 0.21.0 release.
+  `azapi_replace_triggers_refs` remains default-enabled, while empty fixture
+  declarations are omitted. Real plugin download and artifact-attestation
+  integration remains blocked until the release assets and provenance are
+  available.
 - Packaged TFLint configurations now rely on the AVM ruleset's default-enabled
   policy, retain only deliberate scope disables, and replace legacy resource-tag
   and Terraform-file rule names. The v0.20.0 AVM ruleset embeds its AzAPI tag

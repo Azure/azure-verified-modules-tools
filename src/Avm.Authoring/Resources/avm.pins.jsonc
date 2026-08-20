@@ -235,8 +235,18 @@
   // itself reads (Resources/tflint/*.hcl), because TFLint cannot read this
   // manifest. They are mirrored here so every pinned version is visible in one
   // place, and a packaging test cross-checks the two so they cannot drift.
+  //
+  // tflintPluginReleaseStatus declares whether a plugin version has released
+  // assets whose TFLint artifact attestation can be verified. TFLint resolves
+  // plugin assets directly, so there are no AVM-managed checksums to record
+  // here. Keep an assumed version as "unreleased" until its release assets and
+  // attestation are available; then set it to "released" after verification.
   "tflintPlugins": {
     "terraform": "0.15.0",
-    "avm": "0.20.0"
+    "avm": "0.21.0"
+  },
+  "tflintPluginReleaseStatus": {
+    "avm": "unreleased",
+    "terraform": "released"
   }
 }

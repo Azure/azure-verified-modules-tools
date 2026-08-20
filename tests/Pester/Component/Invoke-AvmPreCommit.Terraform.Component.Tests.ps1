@@ -186,6 +186,19 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
+    It 'uses the assumed AVM ruleset config and omits empty replacement triggers' {
+        $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
+        $configDir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
+        $config = Get-Content -LiteralPath (Join-Path $configDir 'avm.tflint.hcl') -Raw
+        $tflint = Get-Command tflint -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+
+        $pins.tflintPlugins.avm | Should -Be '0.21.0'
+        $pins.tflintPluginReleaseStatus.avm | Should -Be 'unreleased'
+        $config | Should -Match 'version\s*=\s*"0\.21\.0"'
+        $config | Should -Not -Match 'replace_triggers_refs\s*='
+        (& $tflint.Source --version) | Should -Contain 'ruleset.avm (0.21.0)'
+    }
 
     It 'pre-commit composes the five-step terraform chain end-to-end (sync first) via launcher-resolved stubs and the in-module check-convention rules' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback

@@ -77,6 +77,7 @@ Describe 'Module Resources packaging' {
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
+            $content | Should -Match 'version\s*=\s*"0\.21\.0"'
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
             $content | Should -Not -Match 'disabled_by_default\s*='
@@ -141,6 +142,16 @@ Describe 'Module Resources packaging' {
         }
         $example | Should -Match '(?s)rule\s+"terraform_required_providers"\s*\{\s*enabled\s*=\s*true\s*\}'
         $example | Should -Match '(?s)rule\s+"terraform_required_version"\s*\{\s*enabled\s*=\s*true\s*\}'
+    }
+
+    It 'omits empty AzAPI replacement triggers from the canonical fixture' {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $script:moduleRoot)
+        $fixturePath = Join-Path `
+            $repoRoot `
+            (Join-Path 'tests' (Join-Path 'fixtures' (Join-Path 'modules' (Join-Path 'terraform-azure-avm-res-mock' 'main.tf'))))
+
+        $fixture = Get-Content -LiteralPath $fixturePath -Raw
+        $fixture | Should -Not -Match 'replace_triggers_refs\s*='
     }
 
     It 'ships the mapotf pre-commit config bundle under Resources/mapotf/pre-commit' {
