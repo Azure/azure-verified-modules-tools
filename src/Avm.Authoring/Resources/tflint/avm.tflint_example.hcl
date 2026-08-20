@@ -1,7 +1,3 @@
-config {
-  disabled_by_default = true
-}
-
 plugin "terraform" {
   enabled = true
   version = "0.15.0"
@@ -10,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.19.1"
+  version   = "0.20.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -92,37 +88,25 @@ rule "terraform_module_provider_declaration" {
   enabled = false
 }
 
-rule "terraform_output_separate" {
-  enabled = false
-}
-
-rule "terraform_required_providers_declaration" {
-  enabled = true
-}
-
-rule "terraform_required_version_declaration" {
-  enabled = true
-}
-
 rule "terraform_sensitive_variable_no_default" {
   enabled = false
 }
 
-rule "terraform_variable_nullable_false" {
-  enabled = true
-}
-
-rule "terraform_variable_separate" {
+rule "azapi_resource_tag" {
   enabled = false
 }
 
-rule "azurerm_resource_tag" {
+rule "azapi_replace_triggers_refs" {
+  enabled = false
+}
+
+rule "azapi_response_export_values" {
   enabled = false
 }
 
 # AVM Provider Rules
 
-rule "tfnfr26" {
+rule "terraform_tf_file" {
   enabled = false
 }
 

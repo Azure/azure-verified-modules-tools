@@ -226,6 +226,44 @@ Describe 'Get-AvmTflintScope' {
     }
 }
 
+Describe 'Get-AvmTflintScopeOverridePath' {
+    It 'maps direct module and example scopes to their target-directory overrides' {
+        $root = Join-Path $TestDrive 'override-root'
+        $moduleOverride = Join-Path $root 'modules/network/avm.tflint.override.hcl'
+        $exampleOverride = Join-Path $root 'examples/default/avm.tflint.override.hcl'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $moduleOverride), (Split-Path -Parent $exampleOverride) -Force | Out-Null
+        Set-Content -LiteralPath $moduleOverride, $exampleOverride -Value 'rule "x" { enabled = false }' -Encoding utf8
+
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{
+            R = $root
+        } {
+            param($R)
+            @(
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/network'
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'examples/default'
+            )
+        }
+
+        $resolved[0] | Should -Be $moduleOverride
+        $resolved[1] | Should -Be $exampleOverride
+    }
+
+    It 'rejects nested or escaping scope paths' {
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
+                param($R)
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/network/private'
+            }
+        } | Should -Throw '*cannot be mapped*'
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
+                param($R)
+                Get-AvmTflintScopeOverridePath -Root $R -RelPath 'modules/../../outside'
+            }
+        } | Should -Throw '*cannot be mapped*'
+    }
+}
+
 Describe 'Test-AvmDeprecatedInterfaceNotice' {
     It 'matches only notice-level AVM deprecated-interface rule names' -TestCases @(
         @{ Code = 'deprecated_lock_interface'; Severity = 'notice'; Expected = $true }
@@ -489,6 +527,79 @@ rule "managed_identities" {
         $capture.ConfigText | Should -Match 'enabled = false'
         $capture.ConfigPath | Should -Not -BeLike "$configDir*"
         $capture.ConfigPath | Should -Not -Exist
+    }
+
+    It 'applies individual module and example overrides after their all-scope overrides' {
+        $ctx = $script:context
+        $configDir = Join-Path $TestDrive 'scope-override-configs'
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        foreach ($name in @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')) {
+            @'
+rule "scope_rule" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
+        }
+        foreach ($scope in @('modules/foo', 'modules/bar', 'examples/default', 'examples/alt')) {
+            $scopeDir = Join-Path $script:moduleDir $scope
+            New-Item -ItemType Directory -Path $scopeDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $scopeDir 'main.tf') -Value 'output "value" { value = 1 }' -Encoding utf8
+        }
+        @'
+rule "scope_rule" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint_module.override.hcl') -Encoding utf8
+        @'
+rule "scope_rule" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint_example.override.hcl') -Encoding utf8
+        $moduleOverride = Join-Path $script:moduleDir 'modules/foo/avm.tflint.override.hcl'
+        $exampleOverride = Join-Path $script:moduleDir 'examples/default/avm.tflint.override.hcl'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $moduleOverride), (Split-Path -Parent $exampleOverride) -Force | Out-Null
+        @'
+rule "scope_rule" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $moduleOverride, $exampleOverride -Encoding utf8
+
+        $configs = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Config = $configDir } {
+            param($C, $Config)
+            $script:capturedScopeConfigs = [System.Collections.Generic.List[object]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { $Config }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                $configIndex = [array]::IndexOf($ArgumentList, '--config') + 1
+                $script:capturedScopeConfigs.Add([pscustomobject]@{
+                        Path = $ArgumentList[$configIndex]
+                        Text = Get-Content -LiteralPath $ArgumentList[$configIndex] -Raw
+                    })
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $null = Invoke-AvmTerraformLint -Context $C
+            return $script:capturedScopeConfigs.ToArray()
+        }
+
+        @($configs).Count | Should -Be 5
+        @($configs | Where-Object {
+                $_.Path -like '*avm.tflint_module.hcl' -and $_.Text -match 'enabled = false'
+            }).Count | Should -Be 1
+        @($configs | Where-Object {
+                $_.Path -like '*avm.tflint_example.hcl' -and $_.Text -match 'enabled = false'
+            }).Count | Should -Be 1
+        @($configs | Where-Object {
+                $_.Path -like '*avm.tflint_module.scope-*' -and $_.Text -match 'enabled = true'
+            }).Count | Should -Be 1
+        @($configs | Where-Object {
+                $_.Path -like '*avm.tflint_example.scope-*' -and $_.Text -match 'enabled = true'
+            }).Count | Should -Be 1
     }
 
     It 'applies the module and example rulesets to nested scopes' {

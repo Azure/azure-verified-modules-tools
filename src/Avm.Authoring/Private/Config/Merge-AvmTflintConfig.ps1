@@ -129,6 +129,52 @@ function Merge-AvmTflintConfig {
         [System.Text.UTF8Encoding]::new($false))
 }
 
+function Get-AvmTflintScopeOverridePath {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [string] $RelPath
+    )
+
+    $segments = @($RelPath -split '[\\/]')
+    if (
+        $segments.Count -ne 2 -or
+        $segments[0] -notin @('modules', 'examples') -or
+        ($segments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -in @('.', '..') })
+    ) {
+        throw [AvmConfigurationException]::new(
+            "TFLint scope '$RelPath' cannot be mapped to a per-scope override path.")
+    }
+
+    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    $candidate = $rootFull
+    foreach ($segment in $segments) {
+        $candidate = Join-Path $candidate $segment
+    }
+    $candidate = [System.IO.Path]::GetFullPath(
+        (Join-Path $candidate 'avm.tflint.override.hcl'))
+    $relativeCandidate = [System.IO.Path]::GetRelativePath($rootFull, $candidate)
+    $relativeSegments = @($relativeCandidate -split '[\\/]')
+    $outsideRoot = (
+        [System.IO.Path]::IsPathRooted($relativeCandidate) -or
+        @($relativeSegments | Where-Object { $_ -eq '..' }).Count -gt 0
+    )
+    if ($outsideRoot) {
+        throw [AvmConfigurationException]::new(
+            "TFLint scope '$RelPath' resolves outside the repository root.")
+    }
+
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+
+    return $null
+}
+
 function New-AvmTflintConfigSet {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -137,7 +183,9 @@ function New-AvmTflintConfigSet {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [string] $BaseConfigDir
+        [string] $BaseConfigDir,
+
+        [object[]] $Scopes = @()
     )
 
     $names = @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')
@@ -150,10 +198,27 @@ function New-AvmTflintConfigSet {
         }
     }
 
-    if ($overrides.Count -eq 0) {
+    $scopeOverrides = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::Ordinal)
+    $scopeByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($scope in $Scopes) {
+        $relPath = [string]$scope.RelPath
+        $scopeByPath.Add($relPath, $scope)
+        if ($relPath -eq '.') {
+            continue
+        }
+        $overridePath = Get-AvmTflintScopeOverridePath -Root $Root -RelPath $relPath
+        if ($overridePath) {
+            $scopeOverrides.Add($relPath, $overridePath)
+        }
+    }
+
+    if ($overrides.Count -eq 0 -and $scopeOverrides.Count -eq 0) {
         return [pscustomobject]@{
-            ConfigDir = $BaseConfigDir
-            StageDir  = $null
+            ConfigDir        = $BaseConfigDir
+            ScopeConfigNames = @{}
+            StageDir         = $null
         }
     }
 
@@ -179,9 +244,29 @@ function New-AvmTflintConfigSet {
             }
         }
 
+        $scopeConfigNames = [System.Collections.Generic.Dictionary[string, string]]::new(
+            [System.StringComparer]::Ordinal)
+        foreach ($relPath in ($scopeOverrides.Keys | Sort-Object)) {
+            $scope = $scopeByPath[$relPath]
+            $baseName = [System.IO.Path]::GetFileName([string]$scope.Config)
+            $scopeHash = [Convert]::ToHexString(
+                [System.Security.Cryptography.SHA256]::HashData(
+                    [System.Text.Encoding]::UTF8.GetBytes($relPath))).ToLowerInvariant()
+            $scopeConfigName = (
+                '{0}.scope-{1}.hcl' -f
+                [System.IO.Path]::GetFileNameWithoutExtension($baseName),
+                $scopeHash.Substring(0, 16))
+            Merge-AvmTflintConfig `
+                -BasePath (Join-Path $stageDir $baseName) `
+                -OverridePath $scopeOverrides[$relPath] `
+                -DestinationPath (Join-Path $stageDir $scopeConfigName)
+            $scopeConfigNames.Add($relPath, $scopeConfigName)
+        }
+
         return [pscustomobject]@{
-            ConfigDir = $stageDir
-            StageDir  = $stageDir
+            ConfigDir        = $stageDir
+            ScopeConfigNames = $scopeConfigNames
+            StageDir         = $stageDir
         }
     }
     catch {

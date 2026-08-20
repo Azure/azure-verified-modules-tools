@@ -39,6 +39,12 @@ variable "retry" {
   description = "Controls retry behavior for supported AzAPI resources."
 }
 
+variable "tags" {
+  type        = map(string)
+  default     = null
+  description = "A map of tags to apply to taggable resources."
+}
+
 variable "timeouts" {
   type = object({
     create = optional(string)

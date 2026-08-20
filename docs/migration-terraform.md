@@ -279,7 +279,7 @@ exactly this status today.
 | Verb                  | Engine binary           | Argv contract                                                                                                                | Wired? | Notes                                                                                                                                            |
 | --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `avm format`          | `terraform fmt`         | `fmt -recursive -list=true -write=true <root>`                                                                               |   ✅   | Returns `Changed` list of rewritten files.                                                                                                       |
-| `avm lint`            | `terraform` + `tflint`  | in a cleaned temporary copy, per root / direct `modules/*` / direct `examples/*`: `terraform init -upgrade -input=false`, optional `tflint-pre.ps1` for examples, `tflint --init`, then `--config <scope-config> --format=json --minimum-failure-severity=warning` |   ✅   | Repository-root `avm.tflint*.override.hcl` files merge over the corresponding vendored config before any scope runs. Hooks and generated Terraform files cannot mutate the source repository. Deprecated-interface notices are emitted inline as non-failing warnings. `tflint-pre.sh` is rejected with PowerShell migration guidance. Exit `2` means findings. |
+| `avm lint`            | `terraform` + `tflint`  | in a cleaned temporary copy, per root / direct `modules/*` / direct `examples/*`: `terraform init -upgrade -input=false`, optional `tflint-pre.ps1` for examples, `tflint --init`, then `--config <scope-config> --format=json --minimum-failure-severity=warning` |   ✅   | AVM rules are default-enabled; packaged configs contain only deliberate scope disables. Root `avm.tflint.override.hcl`, all-module `avm.tflint_module.override.hcl`, all-example `avm.tflint_example.override.hcl`, and per-target `modules/<name>/avm.tflint.override.hcl` or `examples/<name>/avm.tflint.override.hcl` files merge in increasing specificity. A convention rule rejects nested Terraform module or example roots. Hooks and generated Terraform files cannot mutate the source repository. Deprecated-interface notices are emitted inline as non-failing warnings. `tflint-pre.sh` is rejected with PowerShell migration guidance. Exit `2` means findings. |
 | `avm test`            | `terraform validate`    | `init -backend=false -upgrade -input=false -no-color` then `validate -no-color -json` from `cwd=<root>`                |   ✅   | Bare `avm test` is validate-only and is the step wired into `pre-commit` / `pr-check`. Upgrade mode may update dependency lock selections.                                                            |
 | `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess. `setup.sh` / `teardown.sh` hooks are rejected. |
 | `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented). `setup.sh` / `teardown.sh` hooks are rejected.                            |
@@ -293,6 +293,35 @@ The pinned tool versions live in
 `src/Avm.Authoring/Resources/avm.pins.jsonc`. Today: `terraform`,
 `tflint`, `terraform-docs`, `conftest` (and `bicep` for the unrelated
 Bicep engine).
+
+---
+
+### Terraform TFLint defaults and overrides
+
+The AVM TFLint ruleset enables its AVM rules by default. The packaged root and
+module configurations therefore retain only their deliberate exceptions; the
+example configuration disables module-only and interface rules that do not apply
+to example callers. Standard `tflint-ruleset-terraform` rules remain explicitly
+curated by their existing explicit rule blocks.
+
+Use the existing repository-root files to apply an override to every scope of a
+kind:
+
+```text
+avm.tflint.override.hcl          # root
+avm.tflint_module.override.hcl   # every direct modules/* scope
+avm.tflint_example.override.hcl  # every direct examples/* scope
+```
+
+Use `modules/<name>/avm.tflint.override.hcl` or
+`examples/<name>/avm.tflint.override.hcl` to override one direct scope. For
+example, the override for `examples/default` is
+`examples/default/avm.tflint.override.hcl`. The final value for an attribute
+comes from the packaged config, then the all-scope override, then the matching
+per-scope override. Scope paths are validated and converted to unique hash-named
+staged configs, preventing traversal and sibling collisions. AVM allows only
+this one direct child layer; `avm check convention` rejects nested directories
+that contain Terraform `.tf` source.
 
 ---
 

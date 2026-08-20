@@ -117,6 +117,14 @@ object({
 
 Default: `{}`
 
+### <a name="input_tags"></a> [tags](#input\_tags)
+
+Description: A map of tags to apply to taggable resources.
+
+Type: `map(string)`
+
+Default: `null`
+
 ### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
 
 Description: Controls operation timeouts for supported AzAPI resources.

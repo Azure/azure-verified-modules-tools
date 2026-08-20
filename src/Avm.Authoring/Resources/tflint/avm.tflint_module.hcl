@@ -1,7 +1,3 @@
-config {
-  disabled_by_default = true
-}
-
 plugin "terraform" {
   enabled = true
   version = "0.15.0"
@@ -10,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.19.1"
+  version   = "0.20.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -82,126 +78,6 @@ rule "terraform_unused_required_providers" {
 }
 
 rule "terraform_workspace_remote" {
-  enabled = true
-}
-
-rule "terraform_heredoc_usage" {
-  enabled = true
-}
-
-rule "terraform_module_provider_declaration" {
-  enabled = true
-}
-
-rule "terraform_output_separate" {
-  enabled = true
-}
-
-rule "terraform_required_providers_declaration" {
-  enabled = true
-}
-
-rule "terraform_required_version_declaration" {
-  enabled = true
-}
-
-rule "terraform_sensitive_variable_no_default" {
-  enabled = true
-}
-
-rule "terraform_variable_nullable_false" {
-  enabled = true
-}
-
-rule "terraform_variable_separate" {
-  enabled = true
-}
-
-rule "azurerm_resource_tag" {
-  enabled = true
-}
-
-# AVM Provider Rules
-
-rule "tfnfr26" {
-  enabled = true
-}
-
-# AVM Module Rules
-
-rule "required_module_source_tffr1" {
-  enabled = true
-}
-
-# AVM Output Rules
-
-rule "required_output_rmfr7" {
-  enabled = true
-}
-
-# AVM Variable Interface Rules
-
-rule "customer_managed_key" {
-  enabled = true
-}
-
-rule "deprecated_lock_interface" {
-  enabled = true
-}
-
-rule "deprecated_private_endpoints_interface" {
-  enabled = true
-}
-
-rule "deprecated_role_assignments_interface" {
-  enabled = true
-}
-
-rule "diagnostic_settings" {
-  enabled = true
-}
-
-rule "ignore_body_changes" {
-  enabled = true
-}
-
-rule "location" {
-  enabled = true
-}
-
-rule "lock" {
-  enabled = true
-}
-
-rule "managed_identities" {
-  enabled = true
-}
-
-rule "private_endpoints" {
-  enabled = true
-}
-
-rule "private_endpoints_manage_dns_zone_group" {
-  enabled = true
-}
-
-rule "resource_types" {
-  enabled = true
-}
-
-rule "retry" {
-  enabled = true
-}
-
-rule "role_assignments" {
-  enabled = true
-}
-
-rule "tags" {
-  enabled = true
-}
-
-rule "timeouts" {
   enabled = true
 }
 

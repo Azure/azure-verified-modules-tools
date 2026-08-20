@@ -191,6 +191,9 @@ function Invoke-AvmRulePrimitive {
         'DirectoryMustExist' {
             Test-AvmRuleDirectoryMustExist -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
         }
+        'TerraformScopesMustBeDirectChildren' {
+            Test-AvmRuleTerraformScopesMustBeDirectChildren -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
+        }
         default {
             throw [AvmConfigurationException]::new(
                 "avm-rule '$($Rule.Id)': no primitive for Kind '$($Rule.Kind)'.")

@@ -56,7 +56,7 @@
     conftest tool when omitted.
 
 .PARAMETER Mapotf
-    mapotf version to lock, e.g. '0.1.9' (no leading 'v'). Skip the mapotf
+    mapotf version to lock, e.g. '0.1.10' (no leading 'v'). Skip the mapotf
     tool when omitted.
 
 .PARAMETER PolicyLibrary
@@ -83,7 +83,7 @@
     ./scripts/Update-AvmPins.ps1 -Terraform 1.9.8
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Conftest 0.69.0 -Mapotf 0.1.9
+    ./scripts/Update-AvmPins.ps1 -Conftest 0.69.0 -Mapotf 0.1.10
 
 .NOTES
     Intended for maintainers and CI 'refresh tools' workflows. Not part

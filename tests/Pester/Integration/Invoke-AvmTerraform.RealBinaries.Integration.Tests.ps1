@@ -250,9 +250,71 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
+        It 'sorts required provider entries with released MAPOTF nested-block ordering' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only one fixture needs to prove released MAPOTF provider ordering'
+                return
+            }
+
+            $ordered = Join-Path $script:WorkRoot "$name-provider-order"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $ordered -Recurse -Force
+            $terraformPath = Join-Path $ordered 'terraform.tf'
+            $text = Get-Content -LiteralPath $terraformPath -Raw
+            $unordered = @'
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+'@
+            $canonical = @'
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+'@
+            $text = $text.Replace($canonical, $unordered)
+            Set-Content -LiteralPath $terraformPath -Value $text -Encoding utf8NoBOM -NoNewline
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $ordered } {
+                param($R)
+                Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $R
+                        Ecosystem = 'terraform'
+                        Source = 'integration'
+                    })
+            }
+
+            $result.Status | Should -Be 'pass'
+            $result.Tool | Should -Be 'mapotf/0.1.10'
+            $transformed = Get-Content -LiteralPath $terraformPath -Raw
+            $azapiIndex = $transformed.IndexOf('    azapi = {')
+            $modtmIndex = $transformed.IndexOf('    modtm = {')
+            $randomIndex = $transformed.IndexOf('    random = {')
+            $azapiIndex | Should -BeGreaterThan -1
+            $modtmIndex | Should -BeGreaterThan $azapiIndex
+            $randomIndex | Should -BeGreaterThan $modtmIndex
+        }
+
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
-
             $policyViolation = Join-Path $script:StagedModule 'examples' 'second_example' 'policy-violation.tf'
             if (Test-Path -LiteralPath $policyViolation -PathType Leaf) {
                 $compliantPolicyFixture = (Get-Content -LiteralPath $policyViolation -Raw).

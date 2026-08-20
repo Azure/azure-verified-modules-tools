@@ -107,6 +107,34 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         ($result.Issues | Where-Object Code -eq 'avm.err.requires-terraform-tf') | Should -Not -BeNullOrEmpty
     }
 
+    It 'rejects nested Terraform scope roots without rejecting nested asset directories' {
+        $root = script:NewBaselineRoot
+        foreach ($path in @(
+                'modules/network/private/main.tf',
+                'examples/default/secondary/main.tf',
+                'modules/network/scripts/generate.ps1',
+                'examples/default/assets/template.json'
+            )) {
+            $file = Join-Path $root $path
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+            [System.IO.File]::WriteAllText($file, '# fixture', [System.Text.UTF8Encoding]::new($false))
+        }
+
+        $ctx = script:NewTerraformContext $root
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmTerraformCheckConvention -Context $C
+        }
+
+        $nestedIssues = @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-scopes-must-be-direct-children')
+        $nestedIssues.Count | Should -Be 2
+        @($nestedIssues.File | Sort-Object) | Should -Be @(
+            'examples/default/secondary/main.tf'
+            'modules/network/private/main.tf'
+        )
+        $result.Status | Should -Be 'fail'
+    }
+
     It 'expands AppliesTo=examples into each examples/{name} subdirectory' {
         $root = script:NewRoot
         New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null

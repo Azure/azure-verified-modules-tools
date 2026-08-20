@@ -35,6 +35,7 @@ The integration tier is the canary that catches:
 - Real-binary composition drift — a wired engine that passes against the
   stub launchers (Component tier) but breaks against the actual tool.
 
+
 ## How they run
 
 Every integration test **must** be tagged `-Tag 'Integration'`. The

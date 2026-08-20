@@ -121,9 +121,37 @@ Remove-Module Avm.Authoring
 
 The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm`
-0.19.0. All three packaged configurations require GitHub Artifact Attestation;
-there is no PGP signing-key fallback.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm`.
+All three packaged configurations require GitHub Artifact Attestation; there is
+no PGP signing-key fallback. AVM rules are enabled by default in the ruleset, so
+the packaged configurations declare only scope-specific disables. The root and
+submodule configurations are strict; examples retain only the deliberate
+interface and module-only exemptions. The standard Terraform rules remain
+explicitly curated by their existing rule blocks.
+
+### Terraform TFLint overrides
+
+Repository-root override files remain supported:
+
+```text
+avm.tflint.override.hcl          # root scope
+avm.tflint_module.override.hcl   # every direct modules/* scope
+avm.tflint_example.override.hcl  # every direct examples/* scope
+```
+
+To override one direct scope without changing siblings, add:
+
+```text
+modules/<name>/avm.tflint.override.hcl
+examples/<name>/avm.tflint.override.hcl
+```
+
+AVM permits only one module or example child layer, so
+`modules/network/avm.tflint.override.hcl` applies to `modules/network`.
+Overrides merge by attributes, in this order: packaged config, matching
+all-scope override, then matching per-scope override. Per-scope paths are
+validated and staged under a hash-named config, so they cannot escape the
+repository root or collide with another scope.
 
 ### Refreshing the tools lock
 
