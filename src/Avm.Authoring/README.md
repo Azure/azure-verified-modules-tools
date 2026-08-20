@@ -133,8 +133,7 @@ For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
 non-empty list of unique, nonblank JMESPath expressions that resolve against the
 resource body; do not include the redundant `name` or `location` paths. The
-assumed 0.21.0 ruleset remains marked unreleased in `avm.pins.jsonc` until its
-release assets and GitHub Artifact Attestation are verified.
+released 0.21.0 ruleset is installed with GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 

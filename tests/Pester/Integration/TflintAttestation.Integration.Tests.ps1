@@ -1,12 +1,5 @@
 #Requires -Module @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-$script:attestationRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
-$script:attestationPinsPath = Join-Path `
-    $script:attestationRepoRoot `
-    (Join-Path 'src' (Join-Path 'Avm.Authoring' (Join-Path 'Resources' 'avm.pins.jsonc')))
-$script:attestationPins = Get-Content -LiteralPath $script:attestationPinsPath -Raw | ConvertFrom-Json
-$script:avmRulesetReleaseStatus = [string]$script:attestationPins.tflintPluginReleaseStatus.avm
-
 Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
     BeforeAll {
         $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
@@ -32,10 +25,7 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
-    It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:(
-        ((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) -or
-        ($script:avmRulesetReleaseStatus -ne 'released')
-    ) {
+    It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
         Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
         Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
 

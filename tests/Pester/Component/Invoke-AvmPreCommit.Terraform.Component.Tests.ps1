@@ -186,7 +186,7 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
-    It 'uses the assumed AVM ruleset config and omits empty replacement triggers' {
+    It 'uses the released AVM ruleset config and omits empty replacement triggers' {
         $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
         $configDir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
         $config = Get-Content -LiteralPath (Join-Path $configDir 'avm.tflint.hcl') -Raw
@@ -194,7 +194,6 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             Select-Object -First 1
 
         $pins.tflintPlugins.avm | Should -Be '0.21.0'
-        $pins.tflintPluginReleaseStatus.avm | Should -Be 'unreleased'
         $config | Should -Match 'version\s*=\s*"0\.21\.0"'
         $config | Should -Not -Match 'replace_triggers_refs\s*='
         (& $tflint.Source --version) | Should -Contain 'ruleset.avm (0.21.0)'

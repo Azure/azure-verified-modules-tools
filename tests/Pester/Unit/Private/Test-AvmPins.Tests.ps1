@@ -401,12 +401,10 @@ Describe 'Test-AvmPins' {
             }
         }
 
-        It 'marks the assumed AVM ruleset pin as unreleased until attestation is available' {
+        It 'pins the released AVM ruleset version' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
 
             $pins.tflintPlugins.avm | Should -Be '0.21.0'
-            $pins.tflintPluginReleaseStatus.avm | Should -Be 'unreleased'
-            $pins.tflintPluginReleaseStatus.terraform | Should -Be 'released'
         }
 
         It 'keeps managed tool versions out of test stub source' {
@@ -426,30 +424,5 @@ Describe 'Test-AvmPins' {
             }
         }
 
-        Context 'TFLint plugin release status' {
-            It 'rejects a release status for an unknown plugin' {
-                $pins = script:NewValidLock
-                $pins.tflintPlugins = @{ avm = '0.21.0' }
-                $pins.tflintPluginReleaseStatus = @{ other = 'released' }
-
-                InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
-                    param($L)
-                    { Test-AvmPins -Pins $L } |
-                        Should -Throw -ExceptionType ([System.Data.DataException])
-                }
-            }
-
-            It 'rejects an unsupported plugin release status' {
-                $pins = script:NewValidLock
-                $pins.tflintPlugins = @{ avm = '0.21.0' }
-                $pins.tflintPluginReleaseStatus = @{ avm = 'pending' }
-
-                InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
-                    param($L)
-                    { Test-AvmPins -Pins $L } |
-                        Should -Throw -ExceptionType ([System.Data.DataException])
-                }
-            }
-        }
     }
 }

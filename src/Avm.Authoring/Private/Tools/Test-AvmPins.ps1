@@ -282,38 +282,6 @@ function Test-AvmPins {
                 }
             }
         }
-        if ($Pins.ContainsKey('tflintPluginReleaseStatus')) {
-            if (-not $Pins.ContainsKey('tflintPlugins')) {
-                throw [System.Data.DataException]::new(
-                    "avm.pins: 'tflintPluginReleaseStatus' requires 'tflintPlugins'.")
-            }
-
-            $statuses = $Pins.tflintPluginReleaseStatus
-            if ($statuses -isnot [hashtable]) {
-                throw [System.Data.DataException]::new(
-                    "avm.pins: 'tflintPluginReleaseStatus' must be an object.")
-            }
-
-            $plugins = $Pins.tflintPlugins
-            foreach ($name in $plugins.Keys) {
-                if (-not $statuses.ContainsKey($name)) {
-                    throw [System.Data.DataException]::new(
-                        "avm.pins: tflintPluginReleaseStatus is missing plugin '$name'.")
-                }
-                if ($statuses[$name] -notin @('released', 'unreleased')) {
-                    throw [System.Data.DataException]::new(
-                        "avm.pins: tflintPluginReleaseStatus['$name'] must be 'released' or 'unreleased'.")
-                }
-            }
-
-            foreach ($name in $statuses.Keys) {
-                if (-not $plugins.ContainsKey($name)) {
-                    throw [System.Data.DataException]::new(
-                        "avm.pins: tflintPluginReleaseStatus declares unknown plugin '$name'.")
-                }
-            }
-        }
-
         return $true
     }
 }
