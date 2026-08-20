@@ -44,6 +44,9 @@ The slice also enforces AVM's one-layer module and example scope convention.
   and completed released TFLint plugin attestation/config validation.
 - `./build.ps1 pre-commit`: 991 unit tests passed, 8 skipped, and all 28
   component tests passed.
+- The released-pin [CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/32410893017)
+  passed all three build legs, all six real-binary integration legs, aggregate
+  test-results publishing, and coverage upload.
 - The full [CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/32379042260)
   passed: all three build legs, all six real-binary Terraform integration legs,
   the aggregate test-results job, and coverage upload completed successfully.
