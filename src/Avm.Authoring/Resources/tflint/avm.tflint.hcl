@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.20.0"
+  version   = "0.21.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }

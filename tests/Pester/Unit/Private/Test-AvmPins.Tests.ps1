@@ -401,6 +401,12 @@ Describe 'Test-AvmPins' {
             }
         }
 
+        It 'pins the released AVM ruleset version' {
+            $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
+
+            $pins.tflintPlugins.avm | Should -Be '0.21.0'
+        }
+
         It 'keeps managed tool versions out of test stub source' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $stubDir = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'fixtures' 'bin')
@@ -417,5 +423,6 @@ Describe 'Test-AvmPins' {
                 $source | Should -Not -Match '(?<!\d)v?\d+\.\d+\.\d+(?!\d)'
             }
         }
+
     }
 }

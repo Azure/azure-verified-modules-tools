@@ -282,7 +282,6 @@ function Test-AvmPins {
                 }
             }
         }
-
         return $true
     }
 }

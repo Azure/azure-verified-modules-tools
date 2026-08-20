@@ -121,13 +121,19 @@ Remove-Module Avm.Authoring
 
 The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm`.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 0.21.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AVM rules are enabled by default in the ruleset, so
 the packaged configurations declare only scope-specific disables. The root and
 submodule configurations are strict; examples retain only the deliberate
 interface and module-only exemptions. The standard Terraform rules remain
 explicitly curated by their existing rule blocks.
+
+For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
+property requires replacement. When it is declared, it must be a static,
+non-empty list of unique, nonblank JMESPath expressions that resolve against the
+resource body; do not include the redundant `name` or `location` paths. The
+released 0.21.0 ruleset is installed with GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 
