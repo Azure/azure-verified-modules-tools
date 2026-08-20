@@ -20,7 +20,8 @@ replacement transforms, and add safe per-scope customer TFLint overrides.
 - [x] Support all-scope and safe per-example/per-submodule TFLint overrides with
       documented precedence and regression coverage.
 - [x] Update direct user documentation for TFLint defaults and overrides.
-- [ ] Publish the branch and open a dependency-blocked pull request.
+- [x] Publish the branch and open
+      [pull request #78](https://github.com/Azure/azure-verified-modules-tools/pull/78).
 - [ ] After the attested v0.20.0 AVM ruleset release, update the pin and run
       real TFLint configuration validation.
 
