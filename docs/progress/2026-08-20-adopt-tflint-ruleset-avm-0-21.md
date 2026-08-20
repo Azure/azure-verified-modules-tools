@@ -19,7 +19,8 @@ provenance before the release exists.
 - [x] Cover version generation, fixture omission, and the unreleased attestation
       gate in structural, unit, component, and integration tests.
 - [x] Run the local build and applicable integration validation.
-- [ ] Publish the branch and open a blocked pull request.
+- [x] Publish the branch and open blocked
+      [pull request #79](https://github.com/Azure/azure-verified-modules-tools/pull/79).
 
 ## Validation
 
@@ -30,6 +31,9 @@ provenance before the release exists.
   returns the expected `404 Not Found`. The affected real `pr-check` cases and
   dedicated plugin-attestation case are now explicitly skipped while the pin is
   `unreleased`; independent real-binary integration coverage remains enabled.
+- Published commit `ad066bd05494aa19d22d2af3decab1a99e8b9ed5` on
+  `jaredfholgate-adopt-tflint-0-21` and opened
+  [pull request #79](https://github.com/Azure/azure-verified-modules-tools/pull/79).
 
 ## Blockers or dependencies
 
