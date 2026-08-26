@@ -260,6 +260,12 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.10.2] - 2026-08-26
+
+### Changed
+
+- The Terraform lint engine now demotes two AzAPI rule families from `error` to `notice` instead of failing on them. `provider_azurerm_disallowed` and the TFFR6/7/8 interface rules `resource_types`, `retry`, `timeouts`, `ignore_body_changes`, and `azapi_response_export_values` became active fleet-wide in 0.10.0 when `disabled_by_default` was dropped, and together they failed `avm pr-check` at the `lint` step in 180 of 188 AVM Terraform module repositories, blocking effectively every pull request. The rules stay enabled and every finding is still reported with file and line, so the outstanding work stays visible and new violations still surface — they just no longer fail the gate. The list lives in `Get-AvmDeferredAzapiRule` and every touchpoint is tagged `AVM-DEFERRED-AZAPI`; deleting a name restores enforcement for that rule. See [#80](https://github.com/Azure/azure-verified-modules-tools/issues/80) for the re-enable path, which returns the TFFR6/7/8 family first once the variable burn-down lands and holds `provider_azurerm_disallowed` until the per-module AzureRM-to-AzAPI migrations complete.
+
 ## [0.1.8] - 2026-08-03
 
 Log-fidelity round from post-release failure-path testing of `0.1.7` against the

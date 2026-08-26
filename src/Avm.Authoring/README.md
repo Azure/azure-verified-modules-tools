@@ -123,11 +123,11 @@ The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terra
 
 The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 0.21.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
-no PGP signing-key fallback. AVM rules are enabled by default in the ruleset, so
-the packaged configurations declare only scope-specific disables. The root and
-submodule configurations are strict; examples retain only the deliberate
-interface and module-only exemptions. The standard Terraform rules remain
-explicitly curated by their existing rule blocks.
+no PGP signing-key fallback.
+
+AVM rules are enabled by default in the ruleset, so the packaged configurations declare only scope-specific disables. The root and submodule configurations are strict; examples retain only the deliberate interface and module-only exemptions. The standard Terraform rules remain explicitly curated by their existing rule blocks.
+
+Two AzAPI rule families stay enabled but are **demoted to `notice`** by the lint engine, so they are reported on every run, with file and line, without failing the gate: `provider_azurerm_disallowed`, whose AzureRM-to-AzAPI migration is tracked per module, and the TFFR6/7/8 interface rules `resource_types`, `retry`, `timeouts`, `ignore_body_changes`, and `azapi_response_export_values`. Together these failed `avm pr-check` in 180 of 188 AVM Terraform module repositories once `disabled_by_default` was dropped in 0.10.0. Demoting rather than disabling keeps the outstanding work visible and still catches new violations. The list lives in `Get-AvmDeferredAzapiRule`; deleting a name from it restores enforcement for that rule and nothing else has to change. Every touchpoint is tagged `AVM-DEFERRED-AZAPI`. See [Azure/azure-verified-modules-tools#80](https://github.com/Azure/azure-verified-modules-tools/issues/80) for the re-enable path.
 
 For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
