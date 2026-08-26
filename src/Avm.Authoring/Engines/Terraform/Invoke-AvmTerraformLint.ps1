@@ -249,6 +249,14 @@ function Invoke-AvmTflintScope {
         else {
             ''
         }
+
+        # AVM-DEFERRED-AZAPI: report the finding, but not at a severity that fails
+        # the gate. Demoting here, at parse time, keeps Status, the emitted
+        # warnings and the returned Issues agreeing on one severity.
+        if ((Test-AvmDeferredAzapiRule -Code $code) -and $severity -ne 'notice') {
+            $severity = 'notice'
+        }
+
         $message = if ($issue.message) { [string]$issue.message } else { '' }
         $file = ''
         $line = 0
@@ -306,6 +314,94 @@ function Test-AvmDeprecatedInterfaceNotice {
     )
 }
 
+function Get-AvmDeferredAzapiRule {
+    <#
+    .SYNOPSIS
+        Rule names reported but demoted to 'notice' instead of failing the gate.
+
+    .DESCRIPTION
+        AVM-DEFERRED-AZAPI. These rules became active fleet-wide in 0.10.0, when
+        'disabled_by_default' was dropped from the packaged configurations, and
+        together they failed 'avm pr-check' at the lint step in 180 of 188 AVM
+        Terraform module repositories. They stay enabled so every run still
+        reports them with source locations; Invoke-AvmTerraformLint demotes them
+        so they do not fail the run.
+
+        To restore enforcement, delete names from this function:
+
+          - one rule    -> delete its entry
+          - one family  -> delete that array and its term in the return
+          - everything  -> return an empty array, or delete this function,
+                           Test-AvmDeferredAzapiRule, and the two call sites
+                           tagged AVM-DEFERRED-AZAPI
+
+        Nothing else needs to change: an empty list makes the demotion a no-op.
+        The guard test in
+        tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1 pins this
+        list, so any change is deliberate and reviewed.
+
+        Tracked in https://github.com/Azure/azure-verified-modules-tools/issues/80.
+
+    .OUTPUTS
+        [string[]] deferred rule names.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+
+    Set-StrictMode -Version 3.0
+
+    # TFFR6/7/8 AzAPI interface requirements. Mechanical to satisfy - declare the
+    # variables with the documented shapes - so this family returns first.
+    $interface = @(
+        'azapi_response_export_values'
+        'ignore_body_changes'
+        'resource_types'
+        'retry'
+        'timeouts'
+    )
+
+    # TFFR3 AzureRM-to-AzAPI migration. Returns once the per-module migrations land.
+    $provider = @(
+        'provider_azurerm_disallowed'
+    )
+
+    return @($interface + $provider)
+}
+
+function Test-AvmDeferredAzapiRule {
+    <#
+    .SYNOPSIS
+        Is this tflint rule name currently deferred to 'notice' severity?
+
+    .DESCRIPTION
+        AVM-DEFERRED-AZAPI. Case-sensitive match against Get-AvmDeferredAzapiRule.
+        tflint rule names are lowercase and stable, so a case-sensitive compare
+        avoids demoting a differently-cased rule that happens to collide.
+
+    .PARAMETER Code
+        The tflint rule name from a parsed issue. May be empty.
+
+    .OUTPUTS
+        [bool]
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Code
+    )
+
+    Set-StrictMode -Version 3.0
+
+    if ([string]::IsNullOrWhiteSpace($Code)) {
+        return $false
+    }
+
+    return (Get-AvmDeferredAzapiRule) -ccontains $Code
+}
+
 function Invoke-AvmTerraformLint {
     <#
     .SYNOPSIS
@@ -348,6 +444,13 @@ function Invoke-AvmTerraformLint {
         threshold. AVM-plugin notice rules named 'deprecated_*_interface' are
         also emitted immediately as non-failing warnings with source locations.
         They remain notice issues in the returned result.
+
+        The rules listed by Get-AvmDeferredAzapiRule (AVM-DEFERRED-AZAPI) stay
+        enabled in the packaged configurations but are demoted from 'error' to
+        'notice' at parse time, then emitted as non-failing warnings the same
+        way. They therefore appear on every run, with file and line, without
+        failing the gate. Deleting a name from that list restores enforcement
+        for it; nothing else has to change.
 
         tflint exit codes for the lint call:
           0  - no issues at or above the threshold
@@ -509,7 +612,12 @@ function Invoke-AvmTerraformLint {
             foreach ($issue in $scopeResult.Issues) {
                 $issues.Add($issue)
                 if (
-                    (Test-AvmDeprecatedInterfaceNotice -Issue $issue) -and
+                    (
+                        (Test-AvmDeprecatedInterfaceNotice -Issue $issue) -or
+                        # AVM-DEFERRED-AZAPI: surface the deferred rules the same
+                        # way, so the debt stays visible on every run.
+                        (Test-AvmDeferredAzapiRule -Code ([string]$issue.Code))
+                    ) -and
                     -not (Test-AvmIssuePresented -Issue $issue)
                 ) {
                     Write-AvmLog `
