@@ -260,6 +260,12 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.10.3] - 2026-08-26
+
+### Changed
+
+- `azapi_data_response_export_values` joins the deferred TFFR6/7/8 family in `Get-AvmDeferredAzapiRule`. It is the `data`-block twin of the already-deferred `azapi_response_export_values`, carries the same ERROR severity, and was equally absent from the pre-0.10.0 allow-list, so deferring only the `resource` variant still blocked module repositories — observed in `Azure/terraform-azurerm-avm-res-communication-emailservice`. At least 26 AVM Terraform module repositories declare a `data "azapi_resource"`, `data "azapi_resource_action"`, or `data "azapi_resource_list"` block and are therefore exposed. See [#80](https://github.com/Azure/azure-verified-modules-tools/issues/80).
+
 ## [0.10.2] - 2026-08-26
 
 ### Changed

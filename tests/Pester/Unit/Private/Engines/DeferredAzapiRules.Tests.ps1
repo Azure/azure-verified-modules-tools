@@ -23,6 +23,7 @@ AfterAll {
 Describe 'Get-AvmDeferredAzapiRule' {
     It 'pins exactly the rules currently deferred' {
         $expected = @(
+            'azapi_data_response_export_values'
             'azapi_response_export_values'
             'ignore_body_changes'
             'provider_azurerm_disallowed'
