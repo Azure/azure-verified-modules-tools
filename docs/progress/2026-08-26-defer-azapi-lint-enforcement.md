@@ -33,6 +33,7 @@ These deferrals are temporary, so restoring enforcement is deliberately cheap:
 - [x] Document the behaviour and the removal procedure in the `Invoke-AvmTerraformLint` help block and `src/Avm.Authoring/README.md`.
 - [x] Add `tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1`.
 - [x] Cut the `## [0.10.2] - 2026-08-26` section in `CHANGELOG.md`.
+- [x] Add `azapi_data_response_export_values` to the deferred TFFR6/7/8 family and cut `## [0.10.3] - 2026-08-26`. See the follow-up section below.
 
 ## Validation
 
@@ -42,6 +43,18 @@ These deferrals are temporary, so restoring enforcement is deliberately cheap:
 - Because the rules stay enabled, `tests/Pester/Integration/TflintAttestation.Integration.Tests.ps1` needs no change. Its probe asserts that a bare `azapi_resource` trips `ignore_body_changes`, and it invokes tflint directly rather than through `Invoke-AvmTerraformLint`, so engine-side demotion does not affect it. The earlier disable-based implementation had required `--enable-rule` flags there; that workaround is gone.
 - The canonical fixture `terraform-azure-avm-res-mock` declares all four interface variables and contains no `azurerm_*` blocks, so it trips none of the six rules. `CanonicalResult.Status | Should -Be 'pass'` and `CanonicalWarnings | Should -BeNullOrEmpty` therefore remain valid.
 - Integration tests cannot run on the authoring host: `avm.pins.jsonc` declares `unsupportedPlatforms: ["windows-arm64"]` for tflint, so the Component leg throws `AvmToolException` locally. Integration coverage was verified in CI.
+
+## Follow-up: `azapi_data_response_export_values` (0.10.3)
+
+Two module repositories were re-checked against the released 0.10.2 to confirm the demotion reached CI. It had: in [`terraform-azurerm-avm-res-network-connection`](https://github.com/Azure/terraform-azurerm-avm-res-network-connection/actions/runs/32796194846/job/98363427447) and [`terraform-azurerm-avm-res-communication-emailservice`](https://github.com/Azure/terraform-azurerm-avm-res-communication-emailservice/actions/runs/32998561580/job/98363262684) all six deferred rules were reported as non-failing warnings and excluded from the failure summary, exactly as designed.
+
+Both still failed, on other rules. `network-connection` failed only on `terraform_module_version`, which was `enabled = true` with `exact = true` well before #78 and is a genuine repository-side fix. `emailservice` failed on three ERROR-severity rules, one of which is a gap in the deferral: `azapi_data_response_export_values`.
+
+That rule is the `data`-block twin of the deferred `azapi_response_export_values` — the ruleset registers the pair separately, covering `data` blocks of type `azapi_resource`, `azapi_resource_action`, and `azapi_resource_list`. Both are ERROR severity, both default-enabled, and neither appeared in the pre-#78 allow-list, so both became active for the first time in 0.10.0. Deferring one and not the other was an oversight in the original list rather than a deliberate distinction, so the data variant was added to the same family.
+
+Measured exposure: at least 26 non-archived `Azure/terraform-azurerm-avm-*` repositories declare such a data block. That is a lower bound — GitHub code search caps at 100 results per query, and `emailservice` itself did not appear in the result set despite failing on the rule.
+
+The other two `emailservice` failures were left enforced, deliberately. `no_entire_resource_output_tffr2` was also absent from the pre-#78 allow-list and is worth a fleet measurement before any decision. `azapi_resource_tag` is different in kind: the pre-#78 allow-list carried its former name `azurerm_resource_tag` with `enabled = true`, and #78 renamed it, so enforcement there is continuous rather than newly introduced.
 
 ## Blockers or dependencies
 

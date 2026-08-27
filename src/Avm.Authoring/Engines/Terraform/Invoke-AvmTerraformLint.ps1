@@ -353,7 +353,11 @@ function Get-AvmDeferredAzapiRule {
 
     # TFFR6/7/8 AzAPI interface requirements. Mechanical to satisfy - declare the
     # variables with the documented shapes - so this family returns first.
+    # 'azapi_data_response_export_values' is the data-source twin of
+    # 'azapi_response_export_values'; both were absent from the pre-0.10.0
+    # allow-list, so deferring only the resource variant would still block repos.
     $interface = @(
+        'azapi_data_response_export_values'
         'azapi_response_export_values'
         'ignore_body_changes'
         'resource_types'
