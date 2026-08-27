@@ -322,10 +322,14 @@ function Get-AvmDeferredAzapiRule {
     .DESCRIPTION
         AVM-DEFERRED-AZAPI. These rules became active fleet-wide in 0.10.0, when
         'disabled_by_default' was dropped from the packaged configurations, and
-        together they failed 'avm pr-check' at the lint step in 180 of 188 AVM
+        together they failed 'avm pr-check' at the lint step in most AVM
         Terraform module repositories. They stay enabled so every run still
         reports them with source locations; Invoke-AvmTerraformLint demotes them
         so they do not fail the run.
+
+        The name says AzAPI because the first two families were AzAPI rules. The
+        third family is not, and renaming this function and the AVM-DEFERRED-AZAPI
+        tag is deferred to avoid churn across the tagged sites.
 
         To restore enforcement, delete names from this function:
 
@@ -370,7 +374,19 @@ function Get-AvmDeferredAzapiRule {
         'provider_azurerm_disallowed'
     )
 
-    return @($interface + $provider)
+    # TFFR2 output shape. Not an AzAPI rule, and it re-enables on a different
+    # trigger than the two families above: an output burn-down rather than the
+    # AzAPI migration epics. It is a separate family so it neither parks behind
+    # AzAPI work nor returns before the burn-down completes. The spec point is
+    # tagged Severity-SHOULD, but the ruleset has no severity model - almost
+    # every rule inherits tflint.DefaultRule, which is ERROR - so a SHOULD was
+    # hard-failing the gate in about 38% of the fleet. Satisfying it means
+    # removing public outputs, which is a breaking change per module.
+    $output = @(
+        'no_entire_resource_output_tffr2'
+    )
+
+    return @($interface + $provider + $output)
 }
 
 function Test-AvmDeferredAzapiRule {
@@ -453,8 +469,10 @@ function Invoke-AvmTerraformLint {
         enabled in the packaged configurations but are demoted from 'error' to
         'notice' at parse time, then emitted as non-failing warnings the same
         way. They therefore appear on every run, with file and line, without
-        failing the gate. Deleting a name from that list restores enforcement
-        for it; nothing else has to change.
+        failing the gate. That list covers three families: the TFFR6/7/8 AzAPI
+        interface rules, the TFFR3 provider rule, and the TFFR2 output-shape
+        rule. Deleting a name from that list restores enforcement for it;
+        nothing else has to change.
 
         tflint exit codes for the lint call:
           0  - no issues at or above the threshold

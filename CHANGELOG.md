@@ -260,6 +260,12 @@ section when cutting a release.
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
 
+## [0.10.4] - 2026-08-27
+
+### Changed
+
+- `no_entire_resource_output_tffr2` joins `Get-AvmDeferredAzapiRule` as a third family, so it is reported as a non-failing notice with file and line instead of failing the lint gate. Like the AzAPI families, it was dormant until 0.10.0 dropped `disabled_by_default` and flipped TFLint from allow-list to deny-list semantics. A scan of 205 non-archived AVM Terraform module repositories found 79 with at least one whole-resource output and only 2 suppressing the rule locally, so it blocks 77 repositories — roughly 38% of the fleet — across at least 123 individual violations. 61 of those violations are a single output named `resource`, which is a copy-pasted convention rather than scattered mistakes. The spec point, TFFR2, is tagged `Severity-SHOULD`, but the ruleset reports it as an error because almost every rule inherits `tflint.DefaultRule`; satisfying it means removing public outputs, which is a breaking change per module. The rule stays enabled, so new violations still surface. See [#80](https://github.com/Azure/azure-verified-modules-tools/issues/80); enforcement returns once the output burn-down lands, independently of the AzAPI migrations.
+
 ## [0.10.3] - 2026-08-26
 
 ### Changed

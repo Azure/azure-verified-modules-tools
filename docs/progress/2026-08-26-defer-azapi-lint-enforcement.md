@@ -2,7 +2,7 @@
 
 **Status**: complete
 **Started**: 2026-08-26
-**Updated**: 2026-08-26
+**Updated**: 2026-08-27
 **Branch**: `defer-azapi-lint-enforcement`
 
 ## Outcome
@@ -21,7 +21,7 @@ TFLint cannot do this itself. Severity is an immutable property of each rule and
 
 These deferrals are temporary, so restoring enforcement is deliberately cheap:
 
-- The rule names live in exactly one place, `Get-AvmDeferredAzapiRule`, split into the two families so either can return independently.
+- The rule names live in exactly one place, `Get-AvmDeferredAzapiRule`, split into families so each can return independently.
 - Deleting a name restores enforcement for that rule. Deleting an array restores a whole family. An empty list makes the demotion a no-op, so the mechanism can be left in place or removed wholesale.
 - Every touchpoint is tagged `AVM-DEFERRED-AZAPI`, so `git grep AVM-DEFERRED-AZAPI` finds the list, the predicate, the parse-time demotion and the warning emission.
 - `tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1` pins the list exactly, so any change is a reviewed one rather than silent drift.
@@ -36,10 +36,11 @@ These deferrals are temporary, so restoring enforcement is deliberately cheap:
 - [x] Add `tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1`.
 - [x] Cut the `## [0.10.2] - 2026-08-26` section in `CHANGELOG.md`.
 - [x] Add `azapi_data_response_export_values` to the deferred TFFR6/7/8 family and cut `## [0.10.3] - 2026-08-26`. See the follow-up section below.
+- [x] Add `no_entire_resource_output_tffr2` as a third, non-AzAPI family and cut `## [0.10.4] - 2026-08-27`. See the follow-up section below.
 
 ## Validation
 
-- `tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1`: 7 passed. The behavioural case feeds a synthetic tflint JSON payload in which `provider_azurerm_disallowed` and `terraform_unused_declarations` are both reported as `error`, and asserts the first comes back as `notice` while the second stays `error`. That proves the finding is demoted rather than dropped, and that unrelated rules still fail the gate.
+- `tests/Pester/Unit/Private/Engines/DeferredAzapiRules.Tests.ps1`: 7 passed. The behavioural case feeds a synthetic tflint JSON payload in which `provider_azurerm_disallowed` and `terraform_unused_declarations` are both reported as `error`, and asserts the first comes back as `notice` while the second stays `error`. That proves the finding is demoted rather than dropped, and that unrelated rules still fail the gate. 0.10.4 added a second behavioural case pairing `no_entire_resource_output_tffr2` against `azapi_resource_tag`, which was enforced before #78 and must keep failing.
 - `tests/Pester/Unit/Changelog/ChangelogContract.Tests.ps1`: 5 passed. The ADO release pipeline parses `CHANGELOG.md` to build the manifest `ReleaseNotes` and the GitHub release body, so a malformed heading would surface as empty release notes only after the tag was cut.
 - `./build.ps1 pre-commit`: layout, lint and unit legs green.
 - Because the rules stay enabled, `tests/Pester/Integration/TflintAttestation.Integration.Tests.ps1` needs no change. Its probe asserts that a bare `azapi_resource` trips `ignore_body_changes`, and it invokes tflint directly rather than through `Invoke-AvmTerraformLint`, so engine-side demotion does not affect it. The earlier disable-based implementation had required `--enable-rule` flags there; that workaround is gone.
@@ -56,7 +57,25 @@ That rule is the `data`-block twin of the deferred `azapi_response_export_values
 
 Measured exposure: at least 26 non-archived `Azure/terraform-azurerm-avm-*` repositories declare such a data block. That is a lower bound — GitHub code search caps at 100 results per query, and `emailservice` itself did not appear in the result set despite failing on the rule.
 
-The other two `emailservice` failures were left enforced, deliberately. `no_entire_resource_output_tffr2` was also absent from the pre-#78 allow-list and is worth a fleet measurement before any decision. `azapi_resource_tag` is different in kind: the pre-#78 allow-list carried its former name `azurerm_resource_tag` with `enabled = true`, and #78 renamed it, so enforcement there is continuous rather than newly introduced.
+The other two `emailservice` failures were left enforced at the time. `no_entire_resource_output_tffr2` was also absent from the pre-#78 allow-list and was flagged as worth a fleet measurement before any decision; that measurement was done and the rule was deferred in 0.10.4, recorded in the section below. `azapi_resource_tag` is different in kind: the pre-#78 allow-list carried its former name `azurerm_resource_tag` with `enabled = true`, and #78 renamed it, so enforcement there is continuous rather than newly introduced.
+
+## Follow-up: `no_entire_resource_output_tffr2` (0.10.4)
+
+This closes the open question the 0.10.3 note left. The rule was measured across the fleet, found to block roughly 38% of it, and demoted to `notice` as a third family in `Get-AvmDeferredAzapiRule`.
+
+**Measurement.** 205 non-archived `Azure/terraform-az(urerm|ure)-avm-(res|ptn|utl)-*` repositories were scanned. 79 have at least one output matching the pattern the rule flags: 72 in a root `outputs.tf` and 7 in submodules only. Two already suppress the rule locally — `terraform-azurerm-avm-res-compute-virtualmachine` via `avm.tflint.override.hcl`, `terraform-azurerm-avm-res-web-site` via an inline `tflint-ignore`. That leaves **77 repositories still blocked**, across at least 123 individual violations. Worst offenders by root-output violations: `cdn-profile` (11), `servicebus-namespace` (9), `network-loadbalancer` (5), `network-dnsresolver` (4), `compute-virtualmachine` (3), `cache-redisenterprise` (3). 61 of the violations are an output literally named `resource` and 12 are named `private_endpoints`, so this is one copy-pasted convention repeated fleet-wide rather than scattered one-off mistakes.
+
+**Caveats on those numbers.** The scan was a static regex over `outputs.tf` files looking for `value = <resource>.<name>` with no attribute narrowing, excluding `var`, `local`, `module`, `data`, `each`, `path`, `terraform`, `self` and `count` prefixes. It only catches single-line `value =` assignments, so multi-line, `try()` and ternary forms are missed. Submodules were only scanned in repositories that were already clean at root. The repository count of 77 is solid; the violation count is a lower bound. Two independent CI observations confirm the rule fires as ERROR in practice: `terraform-azurerm-avm-res-storage-storageaccount` (14 errors, log inspected directly) and `terraform-azurerm-avm-res-communication-emailservice` (cited in the 0.10.3 section above).
+
+**Why demotion rather than a fix.** The rule flags an output whose `value` is a bare resource reference; `azapi_resource.this` fails, `azapi_resource.this.id` passes, and a trailing `[*]` or `[0]` still counts as whole. The flagged outputs are not required by any spec — RMFR7 mandates only `name`, `resource_id`, and `system_assigned_mi_principal_id` — so they are an unbacked convention. Removing them is a breaking public-API change across about 72 repositories, which is not something a tooling release can land.
+
+**Why the rule fails at all.** TFFR2 is tagged `Severity-SHOULD` in `Azure/Azure-Verified-Modules`, and its text reads "authors SHOULD NOT output entire resource objects". A survey of all 54 non-test `.go` rule files in `Azure/tflint-ruleset-avm` found only two that declare a `Severity()` at all; every other rule inherits `tflint.DefaultRule`, which returns ERROR. The ruleset has no severity model, so MUST-rules and SHOULD-rules fail identically. This demotion compensates for that defect rather than fixing it. Adding a severity model upstream was considered and deliberately deferred; it belongs in `Azure/tflint-ruleset-avm`, not here.
+
+**Why a third family.** The rule is not an AzAPI rule, and it re-enables on a different trigger. Families 1 and 2 return when the AzAPI migration epics land; this one returns when the output burn-down completes. Folding it into either existing family would park it behind AzAPI work indefinitely or drag it back prematurely. It therefore has its own array in `Get-AvmDeferredAzapiRule`, which can be deleted independently.
+
+**Naming tension, accepted knowingly.** `Get-AvmDeferredAzapiRule` and the `AVM-DEFERRED-AZAPI` tag now cover a rule that has nothing to do with AzAPI. Renaming to `Get-AvmDeferredRule` and `AVM-DEFERRED` would be more honest but touches every tagged site across source, tests, README, CHANGELOG and this document, which is churn without behaviour change. The misnomer is noted in the function's help block and the rename is left as a follow-up.
+
+**Re-enablement trigger.** Delete the `$output` array once the fleet-wide output burn-down lands. That burn-down is a breaking change per module and is independent of the AzAPI epics that gate the other two families.
 
 ## Blockers or dependencies
 
