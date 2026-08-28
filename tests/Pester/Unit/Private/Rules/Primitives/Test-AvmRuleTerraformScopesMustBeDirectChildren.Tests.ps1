@@ -61,4 +61,46 @@ Describe 'Test-AvmRuleTerraformScopesMustBeDirectChildren primitive' {
         @($result.Issues.Code | Select-Object -Unique) | Should -Be @('avm.test.terraform-scopes-direct')
         $result.FilesChanged | Should -Be 0
     }
+
+    It 'ignores .terraform, .git and node_modules build artifacts' {
+        # Regression: https://github.com/Azure/azure-verified-modules-tools/issues/85
+        foreach ($path in @(
+                'modules/network/.terraform/modules/avm_interfaces/main.tf',
+                'modules/network/.terraform/modules/avm_interfaces/nested/main.tf',
+                'examples/default/.terraform/modules/foo/main.tf',
+                'examples/default/.git/modules/bar/main.tf',
+                'examples/default/node_modules/baz/main.tf'
+            )) {
+            $file = Join-Path $script:root $path
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+            Set-Content -LiteralPath $file -Value '# downloaded' -Encoding utf8
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $script:rule; T = $script:root } {
+            param($R, $T)
+            Test-AvmRuleTerraformScopesMustBeDirectChildren -Rule $R -TargetRoot $T
+        }
+
+        $result.Status | Should -Be 'pass'
+        @($result.Issues).Count | Should -Be 0
+    }
+
+    It 'still reports an authored nested scope alongside ignored build artifacts' {
+        foreach ($path in @(
+                'modules/network/private/main.tf',
+                'modules/network/.terraform/modules/avm_interfaces/main.tf'
+            )) {
+            $file = Join-Path $script:root $path
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+            Set-Content -LiteralPath $file -Value '# fixture' -Encoding utf8
+        }
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $script:rule; T = $script:root } {
+            param($R, $T)
+            Test-AvmRuleTerraformScopesMustBeDirectChildren -Rule $R -TargetRoot $T
+        }
+
+        $result.Status | Should -Be 'fail'
+        @($result.Issues.File) | Should -Be @('modules/network/private/main.tf')
+    }
 }

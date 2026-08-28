@@ -177,6 +177,17 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm check convention` no longer reports
+  `avm.tf.terraform-scopes-must-be-direct-children` against `.terraform`
+  directories. `terraform init` — including the one `avm test unit` runs —
+  populates `.terraform/modules/` with copies of external modules, which the
+  scope walk read as nested Terraform roots the author had to move. Those
+  copies are gitignored build output and were never fixable, and stale ones
+  survive across sessions, so the failure surfaced days later against an
+  unrelated change. Scope discovery now prunes any path segment starting with
+  `.` or named `node_modules`, and the same exclusion applies when `AppliesTo`
+  expands into `examples/*` and `modules/*` targets. See
+  [#85](https://github.com/Azure/azure-verified-modules-tools/issues/85).
 - Managed-file release discovery now refreshes for every operation instead of
   reusing a module-lifetime cache, so long-running PowerShell sessions report
   and adopt the actual latest published version.

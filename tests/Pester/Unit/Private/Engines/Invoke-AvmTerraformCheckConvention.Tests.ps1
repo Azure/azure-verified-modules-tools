@@ -135,6 +135,38 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $result.Status | Should -Be 'fail'
     }
 
+    It 'ignores .terraform build artifacts when discovering nested scopes' {
+        # Regression: https://github.com/Azure/azure-verified-modules-tools/issues/85
+        # 'terraform init' populates .terraform/modules/ with copies of external
+        # modules. They are gitignored build output, so a stale one must not be
+        # reported as a nested scope the author has to move.
+        $root = script:NewBaselineRoot
+        New-Item -ItemType Directory -Path (Join-Path $root 'modules/slot') -Force | Out-Null
+        foreach ($stub in @('modules/slot/terraform.tf', 'modules/slot/_header.md')) {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root $stub), '# stub', [System.Text.UTF8Encoding]::new($false))
+        }
+        foreach ($path in @(
+                'modules/slot/.terraform/modules/avm_interfaces/main.tf',
+                'modules/slot/.terraform/modules/avm_interfaces/nested/outputs.tf',
+                'examples/default/.terraform/modules/foo/main.tf'
+            )) {
+            $file = Join-Path $root $path
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+            [System.IO.File]::WriteAllText($file, '# downloaded', [System.Text.UTF8Encoding]::new($false))
+        }
+
+        $ctx = script:NewTerraformContext $root
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmTerraformCheckConvention -Context $C
+        }
+
+        @($result.Issues | Where-Object Code -eq 'avm.tf.terraform-scopes-must-be-direct-children') |
+            Should -BeNullOrEmpty
+        $result.Status | Should -Be 'pass'
+    }
+
     It 'expands AppliesTo=examples into each examples/{name} subdirectory' {
         $root = script:NewRoot
         New-Item -ItemType Directory -Path (Join-Path $root 'examples/default') -Force | Out-Null
@@ -182,6 +214,42 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $modIssues = @($result.Issues | Where-Object Code -eq 'avm.modules.terraform-tf')
         $modIssues.Count | Should -Be 1
         $modIssues[0].File | Should -Be 'modules/private-endpoint/terraform.tf'
+    }
+
+    It 'excludes .terraform from the expanded examples and modules targets' {
+        # Regression: https://github.com/Azure/azure-verified-modules-tools/issues/85
+        # 'terraform init' run directly in examples/ or modules/ leaves a
+        # .terraform directory there. It is not a scope, so no rule targets it.
+        $root = script:NewRoot
+        foreach ($dir in @(
+                'examples/default',
+                'examples/.terraform/modules',
+                'modules/private-endpoint',
+                'modules/.terraform/modules'
+            )) {
+            New-Item -ItemType Directory -Path (Join-Path $root $dir) -Force | Out-Null
+        }
+
+        $repoDir = Join-Path (Join-Path $root '.avm') 'rules'
+        New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+        script:WriteRuleFile (Join-Path $repoDir 'each-scope.psd1') @'
+@{
+    Id          = 'avm.scopes.terraform-tf'
+    Kind        = 'FileMustExist'
+    Description = 'each scope needs terraform.tf'
+    AppliesTo   = @('examples', 'modules')
+    Parameters  = @{ Path = 'terraform.tf' }
+}
+'@
+        $ctx = script:NewTerraformContext $root
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C) Invoke-AvmTerraformCheckConvention -Context $C
+        }
+        $scopeIssues = @($result.Issues | Where-Object Code -eq 'avm.scopes.terraform-tf')
+        ($scopeIssues.File | Sort-Object) | Should -Be @(
+            'examples/default/terraform.tf'
+            'modules/private-endpoint/terraform.tf'
+        )
     }
 
     It 'AppliesTo=all walks root + examples/* + modules/*' {
