@@ -1,4 +1,32 @@
 function Test-AvmRuleTerraformScopesMustBeDirectChildren {
+    <#
+    .SYNOPSIS
+        Primitive: assert that Terraform scopes sit exactly one level below
+        each declared scope directory.
+
+    .DESCRIPTION
+        Walks every directory below the scope directories named in
+        Rule.Parameters.ScopeDirectories (typically 'modules' and 'examples')
+        and reports any '*.tf' file found more than one level down.
+
+        Build artifacts are skipped via Get-AvmDescendantDirectory, which prunes
+        any subtree Test-AvmIgnoredPath rejects: 'terraform init' populates
+        '.terraform/modules/' with copies of external modules, which are
+        gitignored, not authored, and cannot be fixed by moving them.
+
+    .PARAMETER Rule
+        AvmRule pscustomobject (typically produced by New-AvmRule).
+
+    .PARAMETER TargetRoot
+        Absolute path to the module root the rule applies to.
+
+    .PARAMETER Fix
+        Accepted for primitive signature compatibility; this rule declares no
+        fix, because relocating a scope is an authoring decision.
+
+    .OUTPUTS
+        [pscustomobject] with Status, Issues, FilesChanged.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -18,7 +46,7 @@ function Test-AvmRuleTerraformScopesMustBeDirectChildren {
             continue
         }
 
-        foreach ($directory in Get-ChildItem -LiteralPath $scopeRoot -Directory -Recurse -ErrorAction SilentlyContinue) {
+        foreach ($directory in (Get-AvmDescendantDirectory -Root $scopeRoot)) {
             $relativeDirectory = [System.IO.Path]::GetRelativePath($scopeRoot, $directory.FullName)
             if (@($relativeDirectory -split '[\\/]').Count -lt 2) {
                 continue

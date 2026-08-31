@@ -20,6 +20,10 @@ function Invoke-AvmTerraformCheckConvention {
                          <Context.Root>/modules (NOT the root itself).
           - 'all'      : root + examples + modules.
 
+        Build-artifact directories such as '.terraform' are excluded from the
+        expanded targets (see Test-AvmIgnoredPath); they are gitignored output,
+        not authored scopes.
+
         Per-primitive Issues are re-based from "relative to target root"
         to "relative to Context.Root" (with forward-slash separators) so
         downstream callers can address files unambiguously.
@@ -148,6 +152,7 @@ function Get-AvmRuleTargetRoot {
         $examplesDir = Join-Path $ContextRoot 'examples'
         if (Test-Path -LiteralPath $examplesDir -PathType Container) {
             foreach ($d in Get-ChildItem -LiteralPath $examplesDir -Directory -ErrorAction SilentlyContinue) {
+                if (Test-AvmIgnoredPath -Root $examplesDir -Path $d.FullName) { continue }
                 $targets.Add($d.FullName)
             }
         }
@@ -157,6 +162,7 @@ function Get-AvmRuleTargetRoot {
         $modulesDir = Join-Path $ContextRoot 'modules'
         if (Test-Path -LiteralPath $modulesDir -PathType Container) {
             foreach ($d in Get-ChildItem -LiteralPath $modulesDir -Directory -ErrorAction SilentlyContinue) {
+                if (Test-AvmIgnoredPath -Root $modulesDir -Path $d.FullName) { continue }
                 $targets.Add($d.FullName)
             }
         }
