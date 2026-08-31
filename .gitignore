@@ -429,3 +429,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Rebuilt from the GitHub API on every dashboard run; never committed.
+repository-management/release-dashboard/site/data/release-status.json
