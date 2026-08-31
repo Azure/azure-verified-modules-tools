@@ -177,17 +177,6 @@ section when cutting a release.
 
 ### Fixed
 
-- `avm check convention` no longer reports
-  `avm.tf.terraform-scopes-must-be-direct-children` against `.terraform`
-  directories. `terraform init` — including the one `avm test unit` runs —
-  populates `.terraform/modules/` with copies of external modules, which the
-  scope walk read as nested Terraform roots the author had to move. Those
-  copies are gitignored build output and were never fixable, and stale ones
-  survive across sessions, so the failure surfaced days later against an
-  unrelated change. Scope discovery now prunes any path segment starting with
-  `.` or named `node_modules`, and the same exclusion applies when `AppliesTo`
-  expands into `examples/*` and `modules/*` targets. See
-  [#85](https://github.com/Azure/azure-verified-modules-tools/issues/85).
 - Managed-file release discovery now refreshes for every operation instead of
   reusing a module-lifetime cache, so long-running PowerShell sessions report
   and adopt the actual latest published version.
@@ -270,6 +259,16 @@ section when cutting a release.
 - Confirmed the spec §19 pre-commit Pester suite is ghost-complete (no
   additional test work required to satisfy that line item).
 - `AVM_NO_CONSOLE_CONFIG` documented in the host shim README/inline help.
+
+## [0.10.5] - 2026-08-31
+
+### Fixed
+
+- `avm check convention` no longer reports `avm.tf.terraform-scopes-must-be-direct-children` against `.terraform` directories. `terraform init` populates `.terraform/modules/` with copies of external modules, and the scope walk read each copy as an authored Terraform root nested below `modules/` or `examples/`. Running `avm test unit` before `avm pr-check` in the same worktree was enough to fail the `check convention` step on gitignored build output the author did not write and could not move, and because the directories are correctly gitignored they never appear in `git status`. Stale ones persist across sessions, so the failure could surface days later against an unrelated change — it hit three different directories in one afternoon on `Azure/terraform-azurerm-avm-res-web-site`, reporting 9, 47 and roughly 19 errors. Scope discovery now prunes any path segment starting with `.` or named `node_modules`, which is the same exclusion `Get-AvmTerraformFile` and `Invoke-AvmTerraformTest` already applied, and the same rule now governs the `examples/*` and `modules/*` targets that `AppliesTo` expands into. See [#85](https://github.com/Azure/azure-verified-modules-tools/issues/85).
+
+### Security
+
+- Every GitHub Actions dependency is now pinned to a full-length commit SHA rather than a mutable tag, so a retagged upstream action cannot silently change what runs in the workflows that build, test and publish this module. Dependabot keeps the pins current and now waits 7 days before proposing an update, which shortens the window in which a compromised release would be adopted automatically. Thanks to @danfiedler-msft in [#87](https://github.com/Azure/azure-verified-modules-tools/pull/87).
 
 ## [0.10.4] - 2026-08-27
 
