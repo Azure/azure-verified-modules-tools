@@ -319,11 +319,10 @@ function Invoke-AvmProcess {
 
     if (-not $IgnoreExitCode -and $exitCode -ne 0) {
         $argDisplay = if ($ArgumentList.Count -gt 0) { ' ' + ($ArgumentList -join ' ') } else { '' }
-        $message = "Process exited with code $exitCode`: $FilePath$argDisplay"
-        $diagnostic = Get-AvmProcessFailureDetail -StdOut $stdOut -StdErr $stdErr
-        if (-not [string]::IsNullOrWhiteSpace($diagnostic)) {
-            $message = $message + [Environment]::NewLine + $diagnostic
-        }
+        $message = Add-AvmProcessFailureDetail `
+            -Message "Process exited with code $exitCode`: $FilePath$argDisplay" `
+            -StdOut $stdOut `
+            -StdErr $stdErr
         throw [AvmProcessException]::new($message, $FilePath, $ArgumentList, $exitCode, $stdOut, $stdErr)
     }
 
@@ -424,4 +423,39 @@ function Get-AvmProcessFailureDetail {
     }
 
     return ''
+}
+
+function Add-AvmProcessFailureDetail {
+    <#
+    .SYNOPSIS
+        Append a captured subprocess diagnostic to a terminating error message.
+
+    .DESCRIPTION
+        Keeps every manual exit-code handler on the same stderr-first,
+        stdout-fallback path as Invoke-AvmProcess. The original message is
+        returned unchanged when the process produced no diagnostic.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Message,
+
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $StdOut = '',
+
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string] $StdErr = ''
+    )
+
+    Set-StrictMode -Version 3.0
+
+    $diagnostic = Get-AvmProcessFailureDetail -StdOut $StdOut -StdErr $StdErr
+    if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+        return $Message
+    }
+
+    return $Message + [Environment]::NewLine + $diagnostic
 }

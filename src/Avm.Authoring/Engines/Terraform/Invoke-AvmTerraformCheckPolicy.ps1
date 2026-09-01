@@ -338,26 +338,30 @@ function ConvertFrom-AvmPolicyResult {
     )
 
     if ($Result.ExitCode -notin @(0, 1)) {
-        $detail = if ([string]::IsNullOrWhiteSpace($Result.StdErr)) {
-            'conftest produced no diagnostic.'
-        }
-        else {
-            $Result.StdErr.Trim()
+        $summary = "conftest $PolicyName exited with code $($Result.ExitCode)."
+        $message = Add-AvmProcessFailureDetail `
+            -Message $summary `
+            -StdOut $Result.StdOut `
+            -StdErr $Result.StdErr
+        if ($message -ceq $summary) {
+            $message += [Environment]::NewLine + '  conftest produced no diagnostic.'
         }
         throw [AvmProcessException]::new(
-            "conftest $PolicyName exited with code $($Result.ExitCode): $detail")
+            $message)
     }
 
     $payload = if ($Result.StdOut) { $Result.StdOut.Trim() } else { '' }
     if ($Result.ExitCode -eq 1 -and [string]::IsNullOrWhiteSpace($payload)) {
-        $detail = if ([string]::IsNullOrWhiteSpace($Result.StdErr)) {
-            'conftest produced no result.'
-        }
-        else {
-            $Result.StdErr.Trim()
+        $summary = "conftest $PolicyName exited before evaluating a policy."
+        $message = Add-AvmProcessFailureDetail `
+            -Message $summary `
+            -StdOut $Result.StdOut `
+            -StdErr $Result.StdErr
+        if ($message -ceq $summary) {
+            $message += [Environment]::NewLine + '  conftest produced no result.'
         }
         throw [AvmProcessException]::new(
-            "conftest $PolicyName exited before evaluating a policy: $detail")
+            $message)
     }
 
     $records = @()

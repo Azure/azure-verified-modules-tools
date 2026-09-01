@@ -529,3 +529,28 @@ Describe 'Get-AvmProcessFailureDetail' {
         $text | Should -Not -Match 'line 21\b'
     }
 }
+
+Describe 'Add-AvmProcessFailureDetail' {
+    It 'appends a stdout-only diagnostic to a terminating error summary' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Add-AvmProcessFailureDetail `
+                -Message 'tool exited with code 1.' `
+                -StdOut 'Rule not found: made_up_rule' `
+                -StdErr ''
+        }
+
+        $text | Should -Match '^tool exited with code 1\.'
+        $text | Should -Match 'Rule not found: made_up_rule'
+    }
+
+    It 'leaves the summary unchanged when the process produced no diagnostic' {
+        $text = InModuleScope 'Avm.Authoring' {
+            Add-AvmProcessFailureDetail `
+                -Message 'tool exited with code 1.' `
+                -StdOut '' `
+                -StdErr ''
+        }
+
+        $text | Should -BeExactly 'tool exited with code 1.'
+    }
+}

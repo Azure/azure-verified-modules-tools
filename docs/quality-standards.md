@@ -67,7 +67,7 @@ The module is **Tier 1** on Windows, Linux, and macOS. PS 7.4+ Core only — no 
 - Takes `-FilePath` (the binary) and `-ArgumentList` (the argv array, **not** a string).
 - Splits stdout and stderr; returns a `pscustomobject` with `ExitCode`, `StdOut`, `StdErr`, `Duration`.
 - Supports `-WorkingDirectory`, `-EnvVars` (override env for the child only), `-Timeout`, `-IgnoreExitCode` (return the record on non-zero rather than throwing), and `-StreamOutput` (emit both streams live while retaining capture).
-- On non-zero exit and no `-IgnoreExitCode`, throws `AvmProcessException` carrying the captured stderr in the message.
+- On non-zero exit and no `-IgnoreExitCode`, throws `AvmProcessException` carrying the captured stderr in the message, or stdout when stderr is empty. Manual exit-code handlers use the same shared diagnostic path.
 
 **Pattern.** Every wired engine follows this shape; copy it:
 

@@ -292,10 +292,12 @@ function Invoke-AvmTerraformTransform {
                 $attempt -ge $maxRetries -or
                 -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
             ) {
-                $stderr = if ($transform.StdErr) { $transform.StdErr.Trim() } else { '' }
-                $tail = if ($stderr) { ": $stderr" } else { '.' }
+                $message = Add-AvmProcessFailureDetail `
+                    -Message ('mapotf transform exited with code {0}.' -f $transform.ExitCode) `
+                    -StdOut $transform.StdOut `
+                    -StdErr $transform.StdErr
                 throw [AvmProcessException]::new(
-                    ('mapotf transform exited with code {0}{1}' -f $transform.ExitCode, $tail))
+                    $message)
             }
 
             $attempt++
@@ -315,10 +317,12 @@ function Invoke-AvmTerraformTransform {
             -EnvVars $mapotfEnv `
             -IgnoreExitCode
         if ($clean.ExitCode -ne 0) {
-            $stderr = if ($clean.StdErr) { $clean.StdErr.Trim() } else { '' }
-            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            $message = Add-AvmProcessFailureDetail `
+                -Message ('mapotf clean-backup exited with code {0}.' -f $clean.ExitCode) `
+                -StdOut $clean.StdOut `
+                -StdErr $clean.StdErr
             throw [AvmProcessException]::new(
-                ('mapotf clean-backup exited with code {0}{1}' -f $clean.ExitCode, $tail))
+                $message)
         }
         Write-AvmLog 'transform: mapotf clean-backup completed' -Level Verbose | Out-Null
 
