@@ -155,7 +155,11 @@ function Resolve-AvmPinnedAsset {
 
     if ($Force -and (Test-Path -LiteralPath $versionDir)) {
         Write-AvmLog ("asset: force removing {0}" -f $versionDir) -Level Verbose | Out-Null
-        Remove-Item -LiteralPath $versionDir -Recurse -Force
+        Remove-Item `
+            -LiteralPath $versionDir `
+            -Recurse `
+            -Force `
+            -ProgressAction SilentlyContinue
     }
 
     if (-not (Test-Path -LiteralPath $assetDir)) {
@@ -237,7 +241,12 @@ function Resolve-AvmPinnedAsset {
             catch [System.IO.IOException] {
                 if (Test-Path -LiteralPath $verified) {
                     Write-AvmLog ("asset: rename race lost for {0}; using completed cache entry" -f $Name) -Level Verbose | Out-Null
-                    Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item `
+                        -LiteralPath $stagingDir `
+                        -Recurse `
+                        -Force `
+                        -ErrorAction SilentlyContinue `
+                        -ProgressAction SilentlyContinue
                     return [pscustomobject][ordered]@{
                         Name   = $Name
                         Sha256 = $sha
@@ -262,7 +271,12 @@ function Resolve-AvmPinnedAsset {
         }
         finally {
             if (Test-Path -LiteralPath $stagingDir) {
-                Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item `
+                    -LiteralPath $stagingDir `
+                    -Recurse `
+                    -Force `
+                    -ErrorAction SilentlyContinue `
+                    -ProgressAction SilentlyContinue
             }
         }
     }

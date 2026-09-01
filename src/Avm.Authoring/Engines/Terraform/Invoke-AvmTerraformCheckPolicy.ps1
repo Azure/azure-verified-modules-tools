@@ -307,7 +307,12 @@ function Invoke-AvmTerraformCheckPolicy {
     }
     finally {
         if (Test-Path -LiteralPath $stageRoot) {
-            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item `
+                -LiteralPath $stageRoot `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue `
+                -ProgressAction SilentlyContinue
         }
     }
 

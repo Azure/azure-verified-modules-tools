@@ -66,7 +66,11 @@ function Install-AvmToolFromPins {
 
     if ($Force -and (Test-Path -LiteralPath $versionDir)) {
         Write-AvmLog ("install: force removing {0}" -f $versionDir) -Level Verbose | Out-Null
-        Remove-Item -LiteralPath $versionDir -Recurse -Force
+        Remove-Item `
+            -LiteralPath $versionDir `
+            -Recurse `
+            -Force `
+            -ProgressAction SilentlyContinue
     }
 
     if (-not (Test-Path -LiteralPath $toolDir)) {
@@ -152,7 +156,12 @@ function Install-AvmToolFromPins {
             catch [System.IO.IOException] {
                 if (Test-Path -LiteralPath $verified) {
                     Write-AvmLog ("install: rename race lost for {0}/{1}; using completed cache entry" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
-                    Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item `
+                        -LiteralPath $stagingDir `
+                        -Recurse `
+                        -Force `
+                        -ErrorAction SilentlyContinue `
+                        -ProgressAction SilentlyContinue
                     return [pscustomobject]@{
                         Name     = $Tool.name
                         Version  = $Tool.version
@@ -177,7 +186,12 @@ function Install-AvmToolFromPins {
         }
         finally {
             if (Test-Path -LiteralPath $stagingDir) {
-                Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item `
+                    -LiteralPath $stagingDir `
+                    -Recurse `
+                    -Force `
+                    -ErrorAction SilentlyContinue `
+                    -ProgressAction SilentlyContinue
             }
         }
     }

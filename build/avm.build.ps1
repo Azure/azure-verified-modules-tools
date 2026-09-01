@@ -39,6 +39,7 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
 $script:repoRoot     = Split-Path -Parent $PSScriptRoot
 $script:moduleRoot   = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
@@ -374,13 +375,18 @@ task coverage {
 
 task build layout, {
     if (Test-Path -LiteralPath $script:outRoot) {
-        Remove-Item -LiteralPath $script:outRoot -Recurse -Force
+        Remove-Item -LiteralPath $script:outRoot -Recurse -Force -ProgressAction SilentlyContinue
     }
     $stage = Join-Path $script:outRoot 'Avm.Authoring'
     $null = New-Item -ItemType Directory -Path $stage -Force
 
     # Copy everything except scratch and test scaffolding into the staged tree.
-    Copy-Item -Path (Join-Path $script:moduleRoot '*') -Destination $stage -Recurse -Force
+    Copy-Item `
+        -Path (Join-Path $script:moduleRoot '*') `
+        -Destination $stage `
+        -Recurse `
+        -Force `
+        -ProgressAction SilentlyContinue
 
     $stagedManifest = Join-Path $stage 'Avm.Authoring.psd1'
 
@@ -400,7 +406,7 @@ task build layout, {
 
 task clean {
     if (Test-Path -LiteralPath $script:outRoot) {
-        Remove-Item -LiteralPath $script:outRoot -Recurse -Force
+        Remove-Item -LiteralPath $script:outRoot -Recurse -Force -ProgressAction SilentlyContinue
     }
     Write-Build Green '  clean OK'
 }
