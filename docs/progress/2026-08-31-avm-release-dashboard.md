@@ -27,6 +27,12 @@ Two details carry that result. Descriptions are excluded from the comparison, be
 
 Removing a declaration, or adding a variable with no `default`, is marked breaking. That distinction only changes the suggested version at 1.0.0 and above, where a breaking change bumps the major. Not every AVM module is pre-1.0 — `avm-res-web-hostingenvironment` is already at 2.0.1 — so the version selects the rule rather than the rule being assumed.
 
+**Ranking each altered declaration, and the false positive that ranking first produced.** Comparing whole declarations said only that something moved, which left a maintainer to open the diff to learn what. Splitting each one into `type`, `default`, `nullable`, `sensitive`, `value` and its validation rules produces four verdicts: `breaking`, `behaviour`, `relaxed`, and `unclear` for whatever a comparison cannot rank. Of 79 field-level changes measured across the modules waiting on a release, 64 ranked and 15 did not — 13 object types whose attributes moved and 2 rewritten validation rules.
+
+The first version of that ranking judged each field alone, and was wrong. On `avm-res-storage-storageaccount`, `private_endpoints.subresource_name` moved from `string` to `optional(string, null)` while a new validation rule required it to be non-null. Those cancel: the same input is accepted as before, and only the error message differs. The classifier saw `validationCount 0 -> 1`, asserted "breaks callers", separately marked the type change "needs reading", and never connected them. Three declarations were affected — `private_endpoints` here, `os_disk` on the virtual machine, and `compute_gallery_image_definitions` on the image builder — and the count of modules asserted breaking fell from 11 to 9 once fixed. A validation rule added while the type is unchanged is still breaking, because nothing can be compensating for it.
+
+A false "breaks callers" is worse than an honest "needs reading". The first is acted on, the second is checked.
+
 **History is committed; the snapshot is not.** `release-status.json` is rebuilt from the API on every run and reproduces exactly, so it is gitignored. `history.json` cannot be rebuilt, because the API reports only the present. The workflow commits it back with `GITHUB_TOKEN`, which does not trigger new runs, and the `push` trigger lists only hand-edited paths because a workflow may not combine `paths` with `paths-ignore`.
 
 ## Checklist
@@ -38,6 +44,7 @@ Removing a declaration, or adding a variable with no `default`, is marked breaki
 - [x] Gitignore the derived snapshot, commit the history.
 - [x] Document the decisions in `repository-management/release-dashboard/README.md`.
 - [x] Suggest the next version by comparing the declared interface at the tag against the default branch.
+- [x] Rank each altered declaration field by field, so the page names what a change means for callers.
 - [ ] Repository admin enables Pages once (see below).
 
 ## Blockers and dependencies
@@ -57,4 +64,5 @@ Until then the collector, the history step and the artifact upload all succeed, 
 - Live output verified field by field against the GitHub API: 188 repositories, 38 with unreleased work, 96 unreleased pull requests, 5 issues labelled `Status: Awaiting Release To Be Cut :scissors:`, and no null `latestTag` on any repository not classified `never-released`.
 - Version suggestion scored against ten historical bumps across five repositories: 8 of 10 agree with what shipped, 10 of 10 agree with SNFR17. Both breaking calls in today's data are corroborated by the pull request titles that produced them — `avm-res-web-site` removed three outputs under `fix!: remove unused whole-resource outputs`, and `avm-res-compute-virtualmachine` renamed `enable_automatic_updates` to `automatic_updates_enabled`.
 - The block parser was cross-checked against a naive top-level regex on four repositories and agreed on every count, confirming the brace walker does not miss or invent declarations.
+- Field-level verdicts spot-checked against the repositories that produced them. `avm-res-web-site` drops `sensitive = true` from four outputs, which is PR #371, titled `fix!: correct sensitivity markers on site outputs`. `avm-ptn-aks-economy` adds `nullable = false` to `enable_telemetry`, so configurations passing null now fail. Both were found without reading a commit message.
 - `./build.ps1 pre-commit`: layout, lint and unit legs green. The component leg reports the same two pre-existing failures on this branch and on a clean `main` — `pr-check composes eight steps` and `pr-check rejects a shell hook`, both raising `AvmToolException: Tool 'tflint' does not ship a release for 'windows-arm64'`. That is an authoring-machine architecture limit, not a regression; this slice adds no files under `src/` or `tests/`.

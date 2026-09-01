@@ -22,6 +22,14 @@ const STATE_RANK = {
 const AGED_DAYS = 90;
 const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
 
+// What a field-level change means for someone already using the module.
+const VERDICT_LABEL = {
+  breaking: 'breaks callers',
+  behaviour: 'changes behaviour',
+  relaxed: 'accepts more',
+  unclear: 'needs reading'
+};
+
 // One series counts repositories and one counts issues, so each label names its
 // unit. They share an axis, which would otherwise read as though 38 repos and 5
 // issues were the same kind of quantity.
@@ -391,24 +399,37 @@ function suggestionBlock(m, delta) {
   block.appendChild(head);
 
   const reasons = delta.reasons || [];
+  const fieldChanges = delta.fieldChanges || [];
+
   if (reasons.length) {
     const list = el('ul', 'suggestion-reasons');
     reasons.forEach(r => list.appendChild(el('li', null, r)));
     block.appendChild(list);
-  } else {
+  }
+
+  if (fieldChanges.length) {
+    const list = el('ul', 'field-changes');
+    fieldChanges.forEach(fc => {
+      const li = el('li');
+      li.appendChild(el('span', 'verdict ' + fc.verdict, VERDICT_LABEL[fc.verdict] || fc.verdict));
+      li.appendChild(el('code', 'decl', fc.declaration));
+      li.appendChild(el('span', 'detail', fc.detail));
+      list.appendChild(li);
+    });
+    block.appendChild(list);
+  }
+
+  if (!reasons.length && !fieldChanges.length) {
     block.appendChild(el('p', 'fine', 'No variable or output changed, so the interface is unchanged.'));
   }
 
   const why = el('p', 'fine method-note');
-  if (delta.breaking) {
-    const removedCount = (delta.outputsRemoved || []).length + (delta.variablesRemoved || []).length;
-    const requiredCount = (delta.requiredAdded || []).length;
-    const bits = [];
-    if (removedCount) bits.push(removedCount + ' declaration' + (removedCount === 1 ? '' : 's') + ' removed');
-    if (requiredCount) bits.push(requiredCount + ' required input' + (requiredCount === 1 ? '' : 's') + ' added');
-    why.textContent = 'Existing callers break: ' + bits.join(', ') + '. ';
+  const unclear = delta.unclearCount || 0;
+  if (unclear) {
+    why.textContent = unclear + (unclear === 1 ? ' change is' : ' changes are') +
+      ' marked needs reading: the declaration moved in a way a comparison cannot rank. ';
   }
-  why.textContent += 'Compares every variable and output at the tag against the default branch. It cannot see behaviour that changed without the interface changing, so read the pull requests below before tagging.';
+  why.textContent += 'Compares every variable and output at the tag against the default branch, field by field. It cannot see behaviour that changed without the interface changing, so read the pull requests below before tagging.';
   block.appendChild(why);
 
   return block;

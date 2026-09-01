@@ -101,18 +101,75 @@ function Get-NewestVersion {
     return [pscustomobject]@{ Tag = $newest.Name; Published = $published }
 }
 
+function Get-AvmHclBalance {
+    # Net bracket depth contributed by one line, ignoring quoted strings and comments.
+    param([string]$Line)
+    $scan = $Line -replace '"(\\.|[^"\\])*"', '' -replace '#.*$', ''
+    return ([regex]::Matches($scan, '[\{\[\(]')).Count - ([regex]::Matches($scan, '[\}\]\)]')).Count
+}
+
+function Get-AvmHclField {
+    <#
+        Splits the interior of a variable or output block into named fields.
+
+        Comparing whole blocks says only that something moved. Comparing fields says
+        which one, and for `nullable`, `default` and `validation` that is enough to
+        state whether existing callers break rather than merely that they might.
+    #>
+    param([string[]]$Lines)
+
+    $fields = @{}
+    $validations = [System.Collections.Generic.List[string]]::new()
+    $index = 0
+
+    while ($index -lt $Lines.Count) {
+        $line = $Lines[$index]
+
+        if ($line -match '^\s*validation\s*\{') {
+            $buffer = [System.Collections.Generic.List[string]]::new()
+            $buffer.Add($line)
+            $balance = Get-AvmHclBalance -Line $line
+            while ($balance -gt 0 -and ($index + 1) -lt $Lines.Count) {
+                $index++
+                $buffer.Add($Lines[$index])
+                $balance += Get-AvmHclBalance -Line $Lines[$index]
+            }
+            # error_message is prose. Only the condition decides whether the rule
+            # accepts more or less than it used to.
+            $text = ($buffer -join ' ') -replace 'error_message\s*=\s*"(\\.|[^"\\])*"', ''
+            $validations.Add((($text -replace '\s+', ' ').Trim()))
+        }
+        elseif ($line -match '^\s*(type|default|nullable|sensitive|value|ephemeral)\s*=(.*)$') {
+            $name = $Matches[1]
+            $buffer = [System.Collections.Generic.List[string]]::new()
+            $buffer.Add($Matches[2])
+            $balance = Get-AvmHclBalance -Line $Matches[2]
+            while ($balance -gt 0 -and ($index + 1) -lt $Lines.Count) {
+                $index++
+                $buffer.Add($Lines[$index])
+                $balance += Get-AvmHclBalance -Line $Lines[$index]
+            }
+            $fields[$name] = ((($buffer -join ' ') -replace '\s+', ' ').Trim())
+        }
+        $index++
+    }
+
+    $fields['validation'] = ($validations -join ' ;; ')
+    $fields['validationCount'] = $validations.Count
+    return $fields
+}
+
 function Get-AvmHclBlock {
     <#
-        Parses top-level HCL blocks of one kind into a map of name to structural
-        signature.
+        Parses top-level HCL blocks of one kind into a map of name to field set.
 
         Brace depth is counted rather than the file being split on a regex, because
         AVM descriptions embed worked Terraform examples: a naive split treats
         `variable "foo"` inside a heredoc as a real declaration.
 
-        The signature omits `description` on purpose. Those descriptions are long,
-        carry examples, and change on their own schedule, so including them reports
-        a documentation edit as an interface change.
+        Descriptions are dropped on purpose. They are long, carry examples, and
+        change on their own schedule, so including them reports a documentation
+        edit as an interface change.
     #>
     param([string]$Text, [string]$Kind)
 
@@ -133,10 +190,9 @@ function Get-AvmHclBlock {
             if ($line -match "^\s*$Kind\s+`"([^`"]+)`"\s*\{") {
                 $current = $Matches[1]
                 $buffer = [System.Collections.Generic.List[string]]::new()
-                $depth = 0
-            } else {
-                continue
+                $depth = 1
             }
+            continue
         }
 
         $isDescription = $line -match '^\s*description\s*='
@@ -147,22 +203,126 @@ function Get-AvmHclBlock {
             continue
         }
 
-        if (-not $isDescription) { [void]$buffer.Add($line) }
-
-        # Quoted strings are stripped before counting, so a brace inside a string
-        # literal cannot close the block early.
-        $scan = $line -replace '"(\\.|[^"\\])*"', '' -replace '#.*$', ''
-        $depth += ([regex]::Matches($scan, '\{')).Count
-        $depth -= ([regex]::Matches($scan, '\}')).Count
-
+        $depth += Get-AvmHclBalance -Line $line
         if ($depth -le 0) {
-            $body = ($buffer -join "`n") -replace '(?m)^\s*#.*$', ''
-            $result[$current] = ($body -replace '\s+', ' ').Trim()
+            $result[$current] = Get-AvmHclField -Lines @($buffer)
             $current = $null
             $buffer = $null
+            continue
         }
+
+        if (-not $isDescription) { [void]$buffer.Add($line) }
     }
     return $result
+}
+
+function Compare-AvmHclField {
+    <#
+        Names what moved inside one declaration and which way.
+
+        Four verdicts are possible. `breaking` means an input that used to be
+        accepted now is not. `behaviour` means deployed infrastructure can change
+        without anyone editing a configuration. `relaxed` means strictly more is
+        accepted than before. `unclear` means the field moved in a way set
+        comparison cannot rank, which is the honest limit of this approach.
+    #>
+    param([hashtable]$Before, [hashtable]$After, [string]$Name)
+
+    $changes = [System.Collections.Generic.List[object]]::new()
+    $get = { param($map, $key) if ($map.ContainsKey($key)) { [string]$map[$key] } else { $null } }
+
+    $beforeType = & $get $Before 'type'
+    $afterType = & $get $After 'type'
+    $typeChanged = $beforeType -ne $afterType
+    $typeIsShort = ($null -ne $beforeType -and $null -ne $afterType -and $beforeType.Length -le 40 -and $afterType.Length -le 40)
+
+    $beforeCount = [int](& $get $Before 'validationCount')
+    $afterCount = [int](& $get $After 'validationCount')
+    $validationAdded = $afterCount -gt $beforeCount
+
+    $beforeNullable = & $get $Before 'nullable'
+    $afterNullable = & $get $After 'nullable'
+    if ($beforeNullable -ne $afterNullable) {
+        # Terraform defaults `nullable` to true, so absent and "true" mean the same.
+        $wasNullable = ($null -eq $beforeNullable) -or ($beforeNullable -eq 'true')
+        $isNullable = ($null -eq $afterNullable) -or ($afterNullable -eq 'true')
+        if ($wasNullable -and -not $isNullable) {
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'breaking'; detail = 'null is no longer accepted' })
+        } elseif (-not $wasNullable -and $isNullable) {
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'relaxed'; detail = 'null is now accepted' })
+        }
+    }
+
+    if ($typeChanged -and $validationAdded) {
+        # A rule added beside a loosened type usually restores what the type stopped
+        # enforcing, so the pair cannot be ranked from counts alone. AVM's storage
+        # account did exactly this: `subresource_name` moved from `string` to
+        # `optional(string, null)` and a rule now requires it to be non-null, which
+        # accepts precisely the same input as before and only changes the error text.
+        # Judging the rule on its own reported that as breaking, which it is not.
+        $n = $afterCount - $beforeCount
+        $changes.Add([pscustomobject]@{
+                declaration = $Name
+                verdict     = 'unclear'
+                detail      = "the type changed and $n validation rule$(if ($n -ne 1) { 's were' } else { ' was' }) added, which often compensate for each other, so the pair needs reading together"
+            })
+    }
+    elseif ($validationAdded) {
+        $n = $afterCount - $beforeCount
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'breaking'; detail = "$n validation rule$(if ($n -ne 1) { 's' }) added with no type change, so input that used to pass may now fail" })
+    }
+    elseif ($afterCount -lt $beforeCount) {
+        $n = $beforeCount - $afterCount
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'relaxed'; detail = "$n validation rule$(if ($n -ne 1) { 's' }) removed" })
+    }
+    elseif ((& $get $Before 'validation') -ne (& $get $After 'validation')) {
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'unclear'; detail = 'a validation rule was rewritten, so whether it accepts more or less needs reading' })
+    }
+
+    $beforeDefault = & $get $Before 'default'
+    $afterDefault = & $get $After 'default'
+    if ($beforeDefault -ne $afterDefault) {
+        if ($null -eq $beforeDefault) {
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'relaxed'; detail = 'gained a default, so it is no longer required' })
+        } elseif ($null -eq $afterDefault) {
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'breaking'; detail = 'lost its default, so it is now required' })
+        } else {
+            $short = ($beforeDefault.Length -le 30 -and $afterDefault.Length -le 30)
+            $detail = if ($short) { "default changed from $beforeDefault to $afterDefault" } else { 'default changed' }
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'behaviour'; detail = "$detail, which can alter deployed infrastructure with no configuration edit" })
+        }
+    }
+
+    # Reported only when no validation rule was added, because the combined case
+    # above already names the type change and saying it twice adds noise.
+    if ($typeChanged -and -not $validationAdded) {
+        if ($typeIsShort) {
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'breaking'; detail = "type changed from $beforeType to $afterType" })
+        } else {
+            # Object types run to thousands of characters. Adding an optional
+            # attribute and removing a required one look identical at this level.
+            $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'unclear'; detail = 'the object type changed, so which attributes moved needs reading' })
+        }
+    }
+
+    $beforeSensitive = & $get $Before 'sensitive'
+    $afterSensitive = & $get $After 'sensitive'
+    if ($beforeSensitive -ne $afterSensitive) {
+        $verdict = if ($afterSensitive -eq 'true') { 'behaviour' } else { 'breaking' }
+        $detail = if ($afterSensitive -eq 'true') { 'is now sensitive, so it is redacted in output' } else { 'is no longer sensitive, so a previously redacted value is now shown' }
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = $verdict; detail = $detail })
+    }
+
+    $beforeValue = & $get $Before 'value'
+    $afterValue = & $get $After 'value'
+    if ($beforeValue -ne $afterValue) {
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'behaviour'; detail = 'the value expression changed, so consumers may read something different' })
+    }
+
+    if ($changes.Count -eq 0) {
+        $changes.Add([pscustomobject]@{ declaration = $Name; verdict = 'unclear'; detail = 'the declaration changed in a way this comparison does not name' })
+    }
+    return @($changes)
 }
 
 function Get-AvmModuleInterface {
@@ -233,24 +393,36 @@ function Compare-AvmModuleInterface {
     if ($before.Count -eq 0 -and $after.Count -eq 0) { return $null }
 
     $shortName = { param($key) ($key -split '\.', 2)[1] }
+    $signature = { param($fields) (($fields.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '|') }
 
     $removed = @($before.Keys | Where-Object { $_ -notin $after.Keys } | Sort-Object)
     $added = @($after.Keys | Where-Object { $_ -notin $before.Keys } | Sort-Object)
-    $altered = @($before.Keys | Where-Object { $_ -in $after.Keys -and $before[$_] -ne $after[$_] } | Sort-Object)
+    $altered = @($before.Keys | Where-Object {
+            $_ -in $after.Keys -and (& $signature $before[$_]) -ne (& $signature $after[$_])
+        } | Sort-Object)
 
     # A variable with no `default` is required, so adding one breaks every existing
     # caller rather than merely extending the interface.
     $requiredAdded = @($added | Where-Object {
-            $_ -like 'variable.*' -and $after[$_] -notmatch '\bdefault\s*='
+            $_ -like 'variable.*' -and -not $after[$_].ContainsKey('default')
         })
+
+    # Naming the direction of each altered declaration is what separates "something
+    # moved" from "callers break". Whatever this cannot rank stays `unclear`, which
+    # is the measured size of the gap rather than a hidden guess.
+    $fieldChanges = [System.Collections.Generic.List[object]]::new()
+    foreach ($key in $altered) {
+        foreach ($change in (Compare-AvmHclField -Before $before[$key] -After $after[$key] -Name (& $shortName $key))) {
+            $fieldChanges.Add($change)
+        }
+    }
 
     $reasons = [System.Collections.Generic.List[string]]::new()
     foreach ($group in @(
             @{ items = @($removed | Where-Object { $_ -like 'variable.*' }); verb = 'removed'; noun = 'variable' },
             @{ items = @($removed | Where-Object { $_ -like 'output.*' }); verb = 'removed'; noun = 'output' },
             @{ items = @($added | Where-Object { $_ -like 'variable.*' }); verb = 'added'; noun = 'variable' },
-            @{ items = @($added | Where-Object { $_ -like 'output.*' }); verb = 'added'; noun = 'output' },
-            @{ items = @($altered); verb = 'changed'; noun = 'declaration' }
+            @{ items = @($added | Where-Object { $_ -like 'output.*' }); verb = 'added'; noun = 'output' }
         )) {
         $count = $group.items.Count
         if ($count -eq 0) { continue }
@@ -261,21 +433,25 @@ function Compare-AvmModuleInterface {
     }
 
     $changed = ($removed.Count + $added.Count + $altered.Count) -gt 0
-    $breaking = ($removed.Count + $requiredAdded.Count) -gt 0
+    $breakingFields = @($fieldChanges | Where-Object { $_.verdict -eq 'breaking' })
+    $unclearFields = @($fieldChanges | Where-Object { $_.verdict -eq 'unclear' })
+    $breaking = ($removed.Count + $requiredAdded.Count + $breakingFields.Count) -gt 0
     $next = Get-AvmNextVersion -Tag $Tag -Changed:$changed -Breaking:$breaking
 
     return [pscustomobject]@{
-        comparedAgainst   = $Tag
-        variablesAdded    = @($added | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
-        variablesRemoved  = @($removed | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
-        outputsAdded      = @($added | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
-        outputsRemoved    = @($removed | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
+        comparedAgainst     = $Tag
+        variablesAdded      = @($added | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
+        variablesRemoved    = @($removed | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
+        outputsAdded        = @($added | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
+        outputsRemoved      = @($removed | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
         declarationsAltered = @($altered | ForEach-Object { & $shortName $_ })
-        requiredAdded     = @($requiredAdded | ForEach-Object { & $shortName $_ })
-        breaking          = $breaking
-        suggestedBump     = if ($next) { $next.Bump } else { $null }
-        suggestedVersion  = if ($next) { $next.Version } else { $null }
-        reasons           = @($reasons)
+        fieldChanges        = @($fieldChanges)
+        unclearCount        = $unclearFields.Count
+        requiredAdded       = @($requiredAdded | ForEach-Object { & $shortName $_ })
+        breaking            = $breaking
+        suggestedBump       = if ($next) { $next.Bump } else { $null }
+        suggestedVersion    = if ($next) { $next.Version } else { $null }
+        reasons             = @($reasons)
     }
 }
 
