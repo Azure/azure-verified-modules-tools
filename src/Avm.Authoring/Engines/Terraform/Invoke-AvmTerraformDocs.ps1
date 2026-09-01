@@ -230,10 +230,12 @@ function Invoke-AvmTerraformDocs {
                 -IgnoreExitCode
 
             if ($result.ExitCode -ne 0) {
-                $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
-                $tail = if ($stderr) { ": $stderr" } else { '.' }
+                $message = Add-AvmProcessFailureDetail `
+                    -Message ('terraform-docs exited with code {0} for {1}.' -f $result.ExitCode, $positional) `
+                    -StdOut $result.StdOut `
+                    -StdErr $result.StdErr
                 throw [AvmProcessException]::new(
-                    ('terraform-docs exited with code {0} for {1}{2}' -f $result.ExitCode, $positional, $tail))
+                    $message)
             }
 
             $afterHash = if (Test-Path -LiteralPath $readmePath) {

@@ -178,9 +178,12 @@ function Invoke-AvmTerraformTestSuite {
                 -IgnoreExitCode
 
             if ($initResult.ExitCode -ne 0) {
-                $detail = if ($initResult.StdErr) { $initResult.StdErr.Trim() } else { $initResult.StdOut.Trim() }
+                $message = Add-AvmProcessFailureDetail `
+                    -Message ('terraform init failed with exit code {0}.' -f $initResult.ExitCode) `
+                    -StdOut $initResult.StdOut `
+                    -StdErr $initResult.StdErr
                 throw [AvmProcessException]::new(
-                    ('terraform init failed with exit code {0}: {1}' -f $initResult.ExitCode, $detail))
+                    $message)
             }
         }
 
@@ -226,10 +229,12 @@ function Invoke-AvmTerraformTestSuite {
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
         # or errored runs. Anything else is a terraform-internal failure -> rethrow.
         if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 1) {
-            $stderr = if ($result.StdErr) { $result.StdErr.Trim() } else { '' }
-            $tail = if ($stderr) { ": $stderr" } else { '.' }
+            $message = Add-AvmProcessFailureDetail `
+                -Message ('terraform test exited with code {0}.' -f $result.ExitCode) `
+                -StdOut $result.StdOut `
+                -StdErr $result.StdErr
             throw [AvmProcessException]::new(
-                ('terraform test exited with code {0}{1}' -f $result.ExitCode, $tail))
+                $message)
         }
         if ($result.ExitCode -ne 0) { $anyFail = $true }
 
