@@ -366,7 +366,11 @@ function Sync-AvmManagedFile {
                 foreach ($p in $toRemove) {
                     $full = Join-Path $root ($p.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
                     if (Test-Path -LiteralPath $full) {
-                        Remove-Item -LiteralPath $full -Recurse -Force
+                        Remove-Item `
+                            -LiteralPath $full `
+                            -Recurse `
+                            -Force `
+                            -ProgressAction SilentlyContinue
                     }
                     Write-AvmLog 'sync: managed-file plan applied' -Level Verbose | Out-Null
                 }
@@ -903,7 +907,11 @@ function Get-AvmManagedFilesCheckout {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
         }
         if (Test-Path -LiteralPath $cacheRoot) {
-            Remove-Item -LiteralPath $cacheRoot -Recurse -Force
+            Remove-Item `
+                -LiteralPath $cacheRoot `
+                -Recurse `
+                -Force `
+                -ProgressAction SilentlyContinue
         }
         Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) | Out-Null
     }

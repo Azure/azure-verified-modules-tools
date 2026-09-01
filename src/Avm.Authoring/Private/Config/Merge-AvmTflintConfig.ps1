@@ -270,7 +270,12 @@ function New-AvmTflintConfigSet {
         }
     }
     catch {
-        Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item `
+            -LiteralPath $stageDir `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue `
+            -ProgressAction SilentlyContinue
         throw
     }
 }

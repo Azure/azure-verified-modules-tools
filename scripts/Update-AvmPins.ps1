@@ -480,7 +480,12 @@ function script:Get-BicepEntry {
         }
     }
     finally {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item `
+            -LiteralPath $tempRoot `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue `
+            -ProgressAction SilentlyContinue
     }
 }
 

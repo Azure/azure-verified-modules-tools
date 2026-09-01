@@ -532,10 +532,20 @@ function Invoke-AvmTerraformLint {
     }
     finally {
         if (Test-Path -LiteralPath $stageRoot) {
-            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item `
+                -LiteralPath $stageRoot `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue `
+                -ProgressAction SilentlyContinue
         }
         if ($configSet.StageDir -and (Test-Path -LiteralPath $configSet.StageDir)) {
-            Remove-Item -LiteralPath $configSet.StageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item `
+                -LiteralPath $configSet.StageDir `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue `
+                -ProgressAction SilentlyContinue
         }
     }
 

@@ -208,6 +208,11 @@ try {
 }
 finally {
     if (Test-Path -LiteralPath $temporaryRoot) {
-        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -WhatIf:$false
+        Remove-Item `
+            -LiteralPath $temporaryRoot `
+            -Recurse `
+            -Force `
+            -WhatIf:$false `
+            -ProgressAction SilentlyContinue
     }
 }
