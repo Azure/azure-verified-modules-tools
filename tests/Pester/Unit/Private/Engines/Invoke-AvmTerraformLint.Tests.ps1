@@ -1084,6 +1084,33 @@ rule "scope_rule" {
         $err.Message        | Should -Match 'plugin download failed'
     }
 
+    It 'includes a stdout-only tflint diagnostic when init fails' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{
+                        ExitCode = 1
+                        StdOut   = 'plugin installation failed'
+                        StdErr   = ''
+                    }
+                }
+                Invoke-AvmTerraformLint -Context $C
+            }
+        }
+        catch { $err = $_.Exception }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'plugin installation failed'
+    }
+
     It 'throws AvmProcessException on unexpected tflint lint exit codes' {
         $ctx = $script:context
         $err = $null
@@ -1107,6 +1134,36 @@ rule "scope_rule" {
         $err                | Should -Not -BeNullOrEmpty
         $err.GetType().Name | Should -Be 'AvmProcessException'
         $err.Message        | Should -Match 'tflint blew up'
+    }
+
+    It 'includes a stdout-only tflint configuration error from the lint call' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
+                }
+                Mock Resolve-AvmTflintConfigDir { '/cfg' }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{
+                        ExitCode = 1
+                        StdOut   = '{"issues":[],"errors":[{"message":"Failed to check rule config; Rule not found: made_up_rule","severity":"error"}]}'
+                        StdErr   = ''
+                    }
+                }
+                Invoke-AvmTerraformLint -Context $C
+            }
+        }
+        catch { $err = $_.Exception }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'Failed to check rule config; Rule not found: made_up_rule'
     }
 
     It 'throws AvmProcessException on malformed tflint JSON' {

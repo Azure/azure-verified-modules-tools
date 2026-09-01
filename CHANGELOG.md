@@ -177,6 +177,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Terminating subprocess errors now include captured stderr, or stdout when
+  stderr is empty, across every manual exit-code handler. TFLint override
+  failures such as unknown rule names therefore show their reason without
+  requiring verbose mode.
 - Managed-file release discovery now refreshes for every operation instead of
   reusing a module-lifetime cache, so long-running PowerShell sessions report
   and adopt the actual latest published version.

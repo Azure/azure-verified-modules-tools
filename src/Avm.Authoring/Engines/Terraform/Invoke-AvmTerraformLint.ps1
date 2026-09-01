@@ -203,10 +203,12 @@ function Invoke-AvmTflintScope {
         -Label ('{0}: tflint' -f $Scope.Label)
 
     if ($run.ExitCode -ne 0 -and $run.ExitCode -ne 2) {
-        $stderr = if ($run.StdErr) { $run.StdErr.Trim() } else { '' }
-        $tail = if ($stderr) { ": $stderr" } else { '.' }
+        $message = Add-AvmProcessFailureDetail `
+            -Message ("tflint for scope '{0}' exited with code {1}." -f $Scope.Label, $run.ExitCode) `
+            -StdOut $run.StdOut `
+            -StdErr $run.StdErr
         throw [AvmProcessException]::new(
-            ("tflint for scope '{0}' exited with code {1}{2}" -f $Scope.Label, $run.ExitCode, $tail))
+            $message)
     }
 
     $issues = [System.Collections.Generic.List[object]]::new()
@@ -611,10 +613,12 @@ function Invoke-AvmTerraformLint {
                 -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {
-                $stderr = if ($init.StdErr) { $init.StdErr.Trim() } else { '' }
-                $tail = if ($stderr) { ": $stderr" } else { '.' }
+                $message = Add-AvmProcessFailureDetail `
+                    -Message ("tflint --init for config '{0}' exited with code {1}." -f $scope.Config, $init.ExitCode) `
+                    -StdOut $init.StdOut `
+                    -StdErr $init.StdErr
                 throw [AvmProcessException]::new(
-                    ("tflint --init for config '{0}' exited with code {1}{2}" -f $scope.Config, $init.ExitCode, $tail))
+                    $message)
             }
         }
 

@@ -44,9 +44,12 @@ function Get-AvmLatestManagedFilesVersion {
     }
 
     if ($result.ExitCode -ne 0) {
-        $detail = if ([string]::IsNullOrWhiteSpace($result.StdErr)) { '' } else { " $($result.StdErr.Trim())" }
+        $message = Add-AvmProcessFailureDetail `
+            -Message "git ls-remote for '$Repo' exited with code $($result.ExitCode)." `
+            -StdOut $result.StdOut `
+            -StdErr $result.StdErr
         throw [AvmManagedFilesLookupException]::new(
-            "git ls-remote for '$Repo' exited with code $($result.ExitCode).$detail")
+            $message)
     }
 
     $versions = @(
