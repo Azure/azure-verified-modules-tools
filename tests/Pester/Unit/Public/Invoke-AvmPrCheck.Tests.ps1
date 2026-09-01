@@ -135,10 +135,10 @@ Describe 'Invoke-AvmPrCheck' {
                 Mock Invoke-AvmLint {
                     $issue = [pscustomobject]@{
                         File = 'variables.tf'; Line = 17; Column = 5
-                        Severity = 'notice'; Code = 'deprecated_lock_interface'
+                        Severity = 'notice'; Code = 'avm_interface_lock_deprecated'
                         Message = 'Use the canonical lock interface.'
                     }
-                    if (Test-AvmDeprecatedInterfaceNotice -Issue $issue) {
+                    if (Test-AvmInlineAvmNotice -Issue $issue) {
                         Write-AvmLog `
                             -Message ('[{0}] {1}' -f $issue.Code, $issue.Message) `
                             -Level Warning `
@@ -189,9 +189,9 @@ Describe 'Invoke-AvmPrCheck' {
         $lintStep.Status | Should -Be 'pass'
         $lintStep.Result.Issues[0].Severity | Should -Be 'notice'
         @($observed.Warnings).Count | Should -Be 1
-        $observed.Warnings[0] | Should -Match '\[deprecated_lock_interface\] Use the canonical lock interface\.'
+        $observed.Warnings[0] | Should -Match '\[avm_interface_lock_deprecated\] Use the canonical lock interface\.'
         ($observed.Summary -join "`n") | Should -Match '\[pass\] lint'
-        ($observed.Summary -join "`n") | Should -Not -Match 'deprecated_lock_interface|canonical lock'
+        ($observed.Summary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|canonical lock'
     }
 
     It 'rejects a dirty working tree before invoking any gauntlet step' {
@@ -504,7 +504,7 @@ Describe 'Invoke-AvmPrCheck' {
                             File     = 'variables.tf'
                             Line     = 7
                             Column   = 1
-                            Code     = 'deprecated_lock_interface'
+                            Code     = 'avm_interface_lock_deprecated'
                             Message  = 'lock uses deprecated interface variant 1'
                         })
                 }
@@ -526,8 +526,8 @@ Describe 'Invoke-AvmPrCheck' {
         $lintStep.Status | Should -Be 'pass'
         $lintStep.Result.Status | Should -Be 'pass'
         $lintStep.Result.Issues.Count | Should -Be 1
-        $lintStep.Result.Issues[0].Code | Should -Be 'deprecated_lock_interface'
-        ($observed.Lines -join "`n") | Should -Match 'notice variables\.tf:7:1 \[deprecated_lock_interface\]'
+        $lintStep.Result.Issues[0].Code | Should -Be 'avm_interface_lock_deprecated'
+        ($observed.Lines -join "`n") | Should -Match 'notice variables\.tf:7:1 \[avm_interface_lock_deprecated\]'
         ($observed.Lines -join "`n") | Should -Match 'lock uses deprecated interface variant 1'
     }
 

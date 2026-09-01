@@ -101,7 +101,12 @@ output "deprecated_lock" {
                 -IgnoreExitCode
             $requiredLint = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('--config', $Config, '--format=json', '--minimum-failure-severity=warning') `
+                -ArgumentList @(
+                    '--config', $Config,
+                    '--format=json',
+                    '--minimum-failure-severity=warning',
+                    '--only=avm_interface_ignore_body_changes'
+                ) `
                 -WorkingDirectory $Required `
                 -IgnoreExitCode
             $canonicalLint = Invoke-AvmProcess `
@@ -170,27 +175,29 @@ output "deprecated_lock" {
         $versionOutput | Should -Match ('ruleset\.avm \({0}\)' -f [regex]::Escape($script:avmRulesetVersion))
         $versionOutput | Should -Match ('ruleset\.terraform \({0}\)' -f [regex]::Escape($script:terraformRulesetVersion))
 
-        $run.RequiredLint.ExitCode | Should -Be 2 -Because $run.RequiredLint.StdErr
+        $run.RequiredLint.ExitCode | Should -Be 0 -Because $run.RequiredLint.StdErr
         $requiredPayload = $run.RequiredLint.StdOut | ConvertFrom-Json
-        $requiredRules = @($requiredPayload.issues.rule.name)
-        $requiredRules | Should -Contain 'ignore_body_changes'
+        $requiredIssue = @($requiredPayload.issues) |
+            Where-Object { $_.rule.name -eq 'avm_interface_ignore_body_changes' }
+        $requiredIssue | Should -Not -BeNullOrEmpty
+        $requiredIssue.rule.severity | Should -Be 'info'
 
         $run.CanonicalLint.ExitCode | Should -Be 0 -Because "$($run.CanonicalLint.StdErr)`n$($run.CanonicalLint.StdOut)"
         $run.DeprecatedLint.ExitCode | Should -Be 0 -Because "$($run.DeprecatedLint.StdErr)`n$($run.DeprecatedLint.StdOut)"
         $run.DeprecatedResult.Status | Should -Be 'pass'
         $deprecatedIssue = $run.DeprecatedResult.Issues |
-            Where-Object Code -eq 'deprecated_lock_interface'
+            Where-Object Code -eq 'avm_interface_lock_deprecated'
         $deprecatedIssue | Should -Not -BeNullOrEmpty
         $deprecatedIssue.Severity | Should -Be 'notice'
         $deprecatedIssue.File | Should -Be 'variables.tf'
         $deprecatedIssue.Message | Should -Match 'v0\.19\.0 migration window'
         @($run.DeprecatedWarnings).Count | Should -Be 1
-        $run.DeprecatedWarnings[0] | Should -Match '\[deprecated_lock_interface\].*v0\.19\.0 migration window'
-        ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'deprecated_lock_interface|v0\.19\.0 migration window'
+        $run.DeprecatedWarnings[0] | Should -Match '\[avm_interface_lock_deprecated\].*v0\.19\.0 migration window'
+        ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|v0\.19\.0 migration window'
 
         $run.CanonicalResult.Status | Should -Be 'pass'
         @($run.CanonicalWarnings) | Should -BeNullOrEmpty
-        @($run.CanonicalResult.Issues | Where-Object Code -like 'deprecated_*_interface') |
+        @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty
     }
 }

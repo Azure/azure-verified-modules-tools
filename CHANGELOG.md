@@ -57,32 +57,25 @@ section when cutting a release.
 
 ### Changed
 
-- The packaged AVM TFLint plugin now pins released 0.21.0.
-  `azapi_replace_triggers_refs` remains default-enabled, while empty fixture
-  declarations are omitted. Real plugin download and artifact-attestation
-  integration verify the released assets and provenance.
-- Packaged TFLint configurations now rely on the AVM ruleset's default-enabled
-  policy, retain only deliberate scope disables, and replace legacy resource-tag
-  and Terraform-file rule names. The v0.20.0 AVM ruleset embeds its AzAPI tag
-  capability snapshot and is validated with its GitHub Artifact Attestation.
-  MAPOTF v0.1.10 deterministically orders Terraform declarations with
+- The packaged AVM TFLint plugin now pins 1.0.0 and every AVM rule reference
+  uses its canonical `avm_*` name. Built-in Terraform rule names remain
+  unchanged. The previously deferred rule families now receive native
+  `severity = "notice"` configuration, and the lint engine preserves the
+  plugin's reported severity instead of applying a hard-coded demotion list.
+- MAPOTF v0.1.10 deterministically orders Terraform declarations with
   `required_version` first, `required_providers` last, and provider entries
   alphabetically.
 - Managed tools now pin Bicep 0.46.1, Conftest 0.69.0, mapotf 0.1.10,
   and terraform-docs 0.24.0. The Terraform TFLint ruleset moves to 0.15.0
-  for Terraform 1.15 compatibility, and the AVM ruleset moves to 0.20.0.
-  Component-test launchers now inject these versions from `avm.pins.jsonc`
-  instead of duplicating them in stub source.
+  for Terraform 1.15 compatibility. Component-test launchers inject these
+  versions from `avm.pins.jsonc` instead of duplicating them in stub source.
 - Every production `terraform init` now uses `-upgrade`, including lint,
   policy, validate, Terraform test tiers, end-to-end examples, and repository
   management. This intentionally permits Terraform to update dependency lock
   selections to newer versions allowed by the configuration.
-- TFLint is pinned to 0.64.0, the Terraform ruleset to 0.15.0, and the AVM
-  ruleset to 0.20.0. The vendored
-  configurations now require GitHub Artifact Attestation and no longer embed a
-  legacy PGP signing key. The v0.20 rules require the canonical AzAPI variables and
-  surface deprecated lock, role-assignment, and private-endpoint interfaces as
-  non-failing notices at the default warning threshold.
+- TFLint is pinned to 0.64.0 and the Terraform ruleset to 0.15.0. The vendored
+  configurations require GitHub Artifact Attestation and do not embed a legacy
+  PGP signing key.
 - Managed files now live in `Azure/azure-verified-modules-managed-files` under
   `terraform/files`, and file-group definition moved with them to
   `terraform/config/managed-files.json`. Each file group owns its `deletedFiles`,
@@ -184,7 +177,7 @@ section when cutting a release.
 - Managed-file release discovery now refreshes for every operation instead of
   reusing a module-lifetime cache, so long-running PowerShell sessions report
   and adopt the actual latest published version.
-- AVM-plugin `deprecated_*_interface` notices now appear inline as yellow
+- AVM-plugin `avm_interface_*_deprecated` notices now appear inline as yellow
   warnings, including GitHub workflow annotations, while remaining structured
   notice issues that do not fail lint or `pr-check`. Final result summaries no
   longer repeat those already-presented findings as green pass details.
