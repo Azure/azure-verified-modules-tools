@@ -1892,3 +1892,15 @@ Both are the L.9 shape stated positively: an assertion can pass for a reason
 unrelated to the behaviour under test. The check is to **mutate the thing you
 believe you are measuring and confirm the test goes red.** If it stays green,
 the assertion is reading a different channel than you think it is.
+
+### L.15 TFLint rule severity belongs in HCL, not result post-processing
+
+The AVM ruleset v1 accepts per-rule `severity` configuration. Use that native
+input for intentional `notice` findings and keep `Invoke-AvmTerraformLint`
+free of rule-name lists or severity rewrites. This keeps direct TFLint runs,
+the module result, and the failure threshold under one configuration contract.
+
+TFLint serializes a configured `notice` as `info` in JSON. The module's generic
+parser normalization maps `info` to its public `notice` severity; that
+compatibility mapping must remain rule-agnostic. Integration tests should
+assert the direct JSON value and the normalized module result separately.

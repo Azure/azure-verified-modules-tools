@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.21.0"
+  version   = "1.0.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -80,114 +80,134 @@ rule "terraform_workspace_remote" {
   enabled = true
 }
 
-rule "terraform_heredoc_usage" {
+rule "avm_terraform_literal_heredoc_disallowed" {
   enabled = false
 }
 
-rule "terraform_module_provider_declaration" {
+rule "avm_terraform_provider_block_disallowed" {
   enabled = false
 }
 
-rule "terraform_sensitive_variable_no_default" {
+rule "avm_terraform_sensitive_variable_default_disallowed" {
   enabled = false
 }
 
-rule "azapi_resource_tag" {
+rule "avm_azapi_resource_tags_required" {
   enabled = false
 }
 
-rule "azapi_replace_triggers_refs" {
+rule "avm_azapi_replace_triggers_refs_valid" {
   enabled = false
 }
 
-rule "azapi_response_export_values" {
-  enabled = false
+rule "avm_azapi_response_export_values_required" {
+  enabled  = false
+  severity = "notice"
+}
+
+rule "avm_azapi_data_response_export_values_required" {
+  enabled  = true
+  severity = "notice"
 }
 
 # AVM Provider Rules
 
-rule "terraform_tf_file" {
+rule "avm_terraform_configuration_file_required" {
   enabled = false
 }
 
 # AVM Module Rules
 
-rule "required_module_source_tffr1" {
+rule "avm_terraform_module_source_required" {
   enabled = false
 }
 
 # AVM Output Rules
 
-rule "required_output_rmfr7" {
+rule "avm_output_resource_id_required" {
   enabled = false
+}
+
+rule "avm_output_entire_resource_disallowed" {
+  enabled  = true
+  severity = "notice"
 }
 
 # AVM Variable Interface Rules
 
-rule "customer_managed_key" {
+rule "avm_interface_customer_managed_key" {
   enabled = false
 }
 
-rule "deprecated_lock_interface" {
+rule "avm_interface_lock_deprecated" {
   enabled = false
 }
 
-rule "deprecated_private_endpoints_interface" {
+rule "avm_interface_private_endpoints_deprecated" {
   enabled = false
 }
 
-rule "deprecated_role_assignments_interface" {
+rule "avm_interface_role_assignments_deprecated" {
   enabled = false
 }
 
-rule "diagnostic_settings" {
+rule "avm_interface_diagnostic_settings" {
   enabled = false
 }
 
-rule "ignore_body_changes" {
+rule "avm_interface_ignore_body_changes" {
+  enabled  = false
+  severity = "notice"
+}
+
+rule "avm_interface_location" {
   enabled = false
 }
 
-rule "location" {
+rule "avm_interface_lock" {
   enabled = false
 }
 
-rule "lock" {
+rule "avm_interface_managed_identities" {
   enabled = false
 }
 
-rule "managed_identities" {
+rule "avm_interface_private_endpoints" {
   enabled = false
 }
 
-rule "private_endpoints" {
+rule "avm_interface_private_endpoints_manage_dns_zone_group" {
   enabled = false
 }
 
-rule "private_endpoints_manage_dns_zone_group" {
+rule "avm_interface_resource_types" {
+  enabled  = false
+  severity = "notice"
+}
+
+rule "avm_interface_retry" {
+  enabled  = false
+  severity = "notice"
+}
+
+rule "avm_interface_role_assignments" {
   enabled = false
 }
 
-rule "resource_types" {
+rule "avm_interface_tags" {
   enabled = false
 }
 
-rule "retry" {
+rule "avm_interface_timeouts" {
+  enabled  = false
+  severity = "notice"
+}
+
+rule "avm_provider_modtm_version_constraint" {
   enabled = false
 }
 
-rule "role_assignments" {
-  enabled = false
-}
-
-rule "tags" {
-  enabled = false
-}
-
-rule "timeouts" {
-  enabled = false
-}
-
-rule "provider_modtm_version_constraint" {
-  enabled = false
+rule "avm_provider_azurerm_disallowed" {
+  enabled  = true
+  severity = "notice"
 }

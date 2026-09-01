@@ -121,19 +121,34 @@ Remove-Module Avm.Authoring
 
 The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 0.21.0.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.0.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback.
 
-AVM rules are enabled by default in the ruleset, so the packaged configurations declare only scope-specific disables. The root and submodule configurations are strict; examples retain only the deliberate interface and module-only exemptions. The standard Terraform rules remain explicitly curated by their existing rule blocks.
+AVM rules use the canonical `avm_*` names and are enabled by default in the
+ruleset. The packaged configurations declare scope-specific disables plus native
+severity overrides. The root and submodule configurations are strict; examples
+retain only the deliberate interface and module-only exemptions. The standard
+Terraform rules remain explicitly curated under their unchanged names.
 
-Three rule families stay enabled but are **demoted to `notice`** by the lint engine, so they are reported on every run, with file and line, without failing the gate: the TFFR6/7/8 AzAPI interface rules `resource_types`, `retry`, `timeouts`, `ignore_body_changes`, `azapi_response_export_values`, and `azapi_data_response_export_values`; the TFFR3 provider rule `provider_azurerm_disallowed`, whose AzureRM-to-AzAPI migration is tracked per module; and the TFFR2 output-shape rule `no_entire_resource_output_tffr2`. The first two families failed `avm pr-check` in 180 of 188 AVM Terraform module repositories once `disabled_by_default` was dropped in 0.10.0. `no_entire_resource_output_tffr2` blocks a further 77 of 205 repositories, roughly 38% of the fleet; its spec point, TFFR2, is tagged `Severity-SHOULD`, but the ruleset reports it as an error because almost every rule inherits `tflint.DefaultRule`. Demoting rather than disabling keeps the outstanding work visible and still catches new violations. The list lives in `Get-AvmDeferredAzapiRule`; deleting a name from it restores enforcement for that rule and nothing else has to change. Every touchpoint is tagged `AVM-DEFERRED-AZAPI`. See [Azure/azure-verified-modules-tools#80](https://github.com/Azure/azure-verified-modules-tools/issues/80) for the re-enable path.
+Three rule families stay enabled with native `severity = "notice"` configuration,
+so TFLint reports them on every run with file and line while the default warning
+threshold still passes: the TFFR6/7/8 rules
+`avm_interface_resource_types`, `avm_interface_retry`,
+`avm_interface_timeouts`, `avm_interface_ignore_body_changes`,
+`avm_azapi_response_export_values_required`, and
+`avm_azapi_data_response_export_values_required`; the TFFR3 rule
+`avm_provider_azurerm_disallowed`; and the TFFR2 rule
+`avm_output_entire_resource_disallowed`. Avm.Authoring no longer carries a
+hard-coded demotion list or rewrites plugin severities. See
+[Azure/azure-verified-modules-tools#80](https://github.com/Azure/azure-verified-modules-tools/issues/80)
+for the enforcement burn-down.
 
 For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
 non-empty list of unique, nonblank JMESPath expressions that resolve against the
 resource body; do not include the redundant `name` or `location` paths. The
-released 0.21.0 ruleset is installed with GitHub Artifact Attestation.
+1.0.0 ruleset is installed with GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 

@@ -78,7 +78,7 @@ Describe 'Write-AvmResult GitHub summary' {
                 File     = 'variables.tf'
                 Line     = 17
                 Column   = 5
-                Code     = 'deprecated_lock_interface'
+                Code     = 'avm_interface_lock_deprecated'
                 Message  = 'Use the canonical lock interface.'
             }
             $lint = [pscustomobject]@{
@@ -97,7 +97,7 @@ Describe 'Write-AvmResult GitHub summary' {
             Write-AvmResult -Result $result -Verb 'pr-check'
 
             Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter {
-                $Message -match 'deprecated_lock_interface|canonical lock'
+                $Message -match 'avm_interface_lock_deprecated|canonical lock'
             }
             [pscustomobject]@{
                 OrdinaryLines = $ordinaryLines
@@ -105,8 +105,8 @@ Describe 'Write-AvmResult GitHub summary' {
             }
         }
 
-        ($probe.OrdinaryLines -join "`n") | Should -Match 'deprecated_lock_interface'
-        $probe.Json | Should -Match 'deprecated_lock_interface'
+        ($probe.OrdinaryLines -join "`n") | Should -Match 'avm_interface_lock_deprecated'
+        $probe.Json | Should -Match 'avm_interface_lock_deprecated'
         $probe.Json | Should -Not -Match 'Presented|Inline|Reported'
     }
 }

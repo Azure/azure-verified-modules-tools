@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "0.21.0"
+  version   = "1.0.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -81,6 +81,46 @@ rule "terraform_workspace_remote" {
   enabled = true
 }
 
-rule "provider_modtm_version_constraint" {
+rule "avm_provider_modtm_version_constraint" {
   enabled = false
+}
+
+rule "avm_azapi_data_response_export_values_required" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_azapi_response_export_values_required" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_interface_ignore_body_changes" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_interface_resource_types" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_interface_retry" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_interface_timeouts" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_output_entire_resource_disallowed" {
+  enabled  = true
+  severity = "notice"
+}
+
+rule "avm_provider_azurerm_disallowed" {
+  enabled  = true
+  severity = "notice"
 }

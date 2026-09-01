@@ -65,18 +65,18 @@ Describe 'Merge-AvmTflintConfig' {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.21.0"
+  version = "1.0.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
 
-rule "managed_identities" {
+rule "avm_interface_managed_identities" {
   enabled = true
 }
 '@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
         @'
 # Used by terraform-azurerm-avm-res-containerservice-managedcluster.
-rule "managed_identities" {
+rule "avm_interface_managed_identities" {
   enabled = false
 }
 '@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
@@ -89,24 +89,24 @@ rule "managed_identities" {
         }
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
-        $merged | Should -Match '(?s)rule "managed_identities"\s*\{\s*enabled = false\s*\}'
-        $merged | Should -Match 'version = "0.21.0"'
+        $merged | Should -Match '(?s)rule "avm_interface_managed_identities"\s*\{\s*enabled = false\s*\}'
+        $merged | Should -Match 'version = "1.0.0"'
         $merged | Should -Match 'source\s+= "github.com/Azure/tflint-ruleset-avm"'
         $merged | Should -Match 'signature = "attestation"'
     }
 
     It 'merges attributes into the last duplicate block like pinned hclmerge' {
         @'
-rule "diagnostic_settings" {
+rule "avm_interface_diagnostic_settings" {
   enabled = true
 }
 
-rule "diagnostic_settings" {
+rule "avm_interface_diagnostic_settings" {
   enabled = true
 }
 '@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
         @'
-rule "diagnostic_settings" {
+rule "avm_interface_diagnostic_settings" {
   enabled = false
 }
 '@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
@@ -119,7 +119,7 @@ rule "diagnostic_settings" {
         }
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
-        $blocks = [regex]::Matches($merged, '(?s)rule "diagnostic_settings"\s*\{(?<body>[^{}]*)\}')
+        $blocks = [regex]::Matches($merged, '(?s)rule "avm_interface_diagnostic_settings"\s*\{(?<body>[^{}]*)\}')
         $blocks.Count | Should -Be 2
         $blocks[0].Groups['body'].Value | Should -Match 'enabled = true'
         $blocks[1].Groups['body'].Value | Should -Match 'enabled = false'
@@ -129,7 +129,7 @@ rule "diagnostic_settings" {
         @'
 plugin "avm" {
   enabled = true
-  version = "0.21.0"
+  version = "1.0.0"
   source  = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -153,7 +153,7 @@ rule "custom_rule" {
 
         $merged = Get-Content -LiteralPath $script:destinationPath -Raw
         $merged | Should -Match '(?s)plugin "avm"\s*\{[^{}]*enabled = false'
-        $merged | Should -Match 'version = "0.21.0"'
+        $merged | Should -Match 'version = "1.0.0"'
         $merged | Should -Match 'signature = "attestation"'
         $merged | Should -Match '(?s)rule "custom_rule"\s*\{\s*enabled = false\s*\}'
     }
@@ -264,16 +264,16 @@ Describe 'Get-AvmTflintScopeOverridePath' {
     }
 }
 
-Describe 'Test-AvmDeprecatedInterfaceNotice' {
-    It 'matches only notice-level AVM deprecated-interface rule names' -TestCases @(
-        @{ Code = 'deprecated_lock_interface'; Severity = 'notice'; Expected = $true }
-        @{ Code = 'deprecated_role_assignments_interface'; Severity = 'notice'; Expected = $true }
-        @{ Code = 'deprecated_private_endpoints_interface'; Severity = 'notice'; Expected = $true }
-        @{ Code = 'deprecated_future_stable_interface'; Severity = 'notice'; Expected = $true }
-        @{ Code = 'deprecated_lock_interface'; Severity = 'warning'; Expected = $false }
+Describe 'Test-AvmInlineAvmNotice' {
+    It 'matches only notice-level canonical AVM rule names' -TestCases @(
+        @{ Code = 'avm_interface_lock_deprecated'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'avm_interface_role_assignments_deprecated'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'avm_interface_private_endpoints_deprecated'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'avm_provider_azurerm_disallowed'; Severity = 'notice'; Expected = $true }
+        @{ Code = 'avm_interface_lock_deprecated'; Severity = 'warning'; Expected = $false }
         @{ Code = 'terraform_unused_declarations'; Severity = 'notice'; Expected = $false }
-        @{ Code = 'deprecated_interface'; Severity = 'notice'; Expected = $false }
-        @{ Code = 'deprecated_Lock_interface'; Severity = 'notice'; Expected = $false }
+        @{ Code = 'avm-interface-lock-deprecated'; Severity = 'notice'; Expected = $false }
+        @{ Code = 'avm_interface_Lock_deprecated'; Severity = 'notice'; Expected = $false }
     ) {
         InModuleScope 'Avm.Authoring' -Parameters @{
             RuleCode = $Code
@@ -285,7 +285,7 @@ Describe 'Test-AvmDeprecatedInterfaceNotice' {
                 Code = $RuleCode
                 Severity = $RuleSeverity
             }
-            Test-AvmDeprecatedInterfaceNotice -Issue $issue |
+            Test-AvmInlineAvmNotice -Issue $issue |
                 Should -Be $ExpectedResult
         }
     }
@@ -485,13 +485,13 @@ Describe 'Invoke-AvmTerraformLint' {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         foreach ($name in @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')) {
             @'
-rule "managed_identities" {
+rule "avm_interface_managed_identities" {
   enabled = true
 }
 '@ | Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
         }
         @'
-rule "managed_identities" {
+rule "avm_interface_managed_identities" {
   enabled = false
 }
 '@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint.override.hcl') -Encoding utf8
@@ -828,10 +828,10 @@ rule "scope_rule" {
         $result.Issues[0].Severity | Should -Be 'warning'
     }
 
-    It 'keeps deprecated interface notices visible while passing at the warning threshold' {
+    It 'keeps canonical deprecated interface notices visible while passing at the warning threshold' {
         $ctx = $script:context
         $json = @'
-{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "info" }, "message": "lock uses deprecated interface variant 1; migrate to variant 2 by adding notes = optional(string, null).", "range": { "filename": "variables.tf", "start": { "line": 7, "column": 1 } } } ] }
+{ "issues": [ { "rule": { "name": "avm_interface_lock_deprecated", "severity": "notice" }, "message": "lock uses deprecated interface variant 1; migrate to variant 2 by adding notes = optional(string, null).", "range": { "filename": "variables.tf", "start": { "line": 7, "column": 1 } } } ] }
 '@
         $atDefault = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
@@ -850,7 +850,7 @@ rule "scope_rule" {
         $atDefault.Status | Should -Be 'pass'
         $atDefault.Issues.Count | Should -Be 1
         $atDefault.Issues[0].Severity | Should -Be 'notice'
-        $atDefault.Issues[0].Code | Should -Be 'deprecated_lock_interface'
+        $atDefault.Issues[0].Code | Should -Be 'avm_interface_lock_deprecated'
         $atDefault.Issues[0].File | Should -Be 'variables.tf'
         $atDefault.Issues[0].Line | Should -Be 7
         $atDefault.Issues[0].Message | Should -Match 'deprecated interface variant 1'
@@ -905,7 +905,7 @@ rule "scope_rule" {
     It 'emits one located warning for a parsed AVM deprecated-interface notice while retaining a passing issue' {
         $ctx = $script:context
         $json = @'
-{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "notice" }, "message": "Replace the legacy lock input with the canonical lock interface.", "range": { "filename": "variables.tf", "start": { "line": 17, "column": 5 } } } ] }
+{ "issues": [ { "rule": { "name": "avm_interface_lock_deprecated", "severity": "notice" }, "message": "Replace the legacy lock input with the canonical lock interface.", "range": { "filename": "variables.tf", "start": { "line": 17, "column": 5 } } } ] }
 '@
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
@@ -927,7 +927,7 @@ rule "scope_rule" {
                 $File -eq 'variables.tf' -and
                 $Line -eq 17 -and
                 $Column -eq 5 -and
-                $Message -eq '[deprecated_lock_interface] Replace the legacy lock input with the canonical lock interface.'
+                $Message -eq '[avm_interface_lock_deprecated] Replace the legacy lock input with the canonical lock interface.'
             }
             [pscustomobject]@{
                 Result = $result
@@ -938,7 +938,7 @@ rule "scope_rule" {
         $probe.Result.Status             | Should -Be 'pass'
         $probe.Result.Issues.Count       | Should -Be 1
         $probe.Result.Issues[0].Severity | Should -Be 'notice'
-        $probe.Result.Issues[0].Code     | Should -Be 'deprecated_lock_interface'
+        $probe.Result.Issues[0].Code     | Should -Be 'avm_interface_lock_deprecated'
         $probe.Json                      | Should -Not -Match 'Presented|Inline|Reported'
     }
 
@@ -977,7 +977,7 @@ rule "scope_rule" {
     It 'does not presentation-downgrade a warning-level deprecated-interface rule' {
         $ctx = $script:context
         $json = @'
-{ "issues": [ { "rule": { "name": "deprecated_lock_interface", "severity": "warning" }, "message": "Warning threshold control.", "range": { "filename": "variables.tf", "start": { "line": 4, "column": 2 } } } ] }
+{ "issues": [ { "rule": { "name": "avm_interface_lock_deprecated", "severity": "warning" }, "message": "Warning threshold control.", "range": { "filename": "variables.tf", "start": { "line": 4, "column": 2 } } } ] }
 '@
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
@@ -1005,7 +1005,7 @@ rule "scope_rule" {
     It 'emits a GitHub warning annotation for a deprecated-interface notice without changing pass status' {
         $ctx = $script:context
         $json = @'
-{ "issues": [ { "rule": { "name": "deprecated_private_endpoints_interface", "severity": "notice" }, "message": "Use the canonical private endpoints interface.", "range": { "filename": "variables.tf", "start": { "line": 21, "column": 7 } } } ] }
+{ "issues": [ { "rule": { "name": "avm_interface_private_endpoints_deprecated", "severity": "notice" }, "message": "Use the canonical private endpoints interface.", "range": { "filename": "variables.tf", "start": { "line": 21, "column": 7 } } } ] }
 '@
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
@@ -1038,7 +1038,7 @@ rule "scope_rule" {
         $probe.Result.Status | Should -Be 'pass'
         @($probe.Info) | Should -Contain (
             '::warning file=variables.tf,line=21,col=7::' +
-            '[deprecated_private_endpoints_interface] Use the canonical private endpoints interface.'
+            '[avm_interface_private_endpoints_deprecated] Use the canonical private endpoints interface.'
         )
     }
 

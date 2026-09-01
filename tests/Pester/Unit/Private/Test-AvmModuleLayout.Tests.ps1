@@ -77,7 +77,7 @@ Describe 'Module Resources packaging' {
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
-            $content | Should -Match 'version\s*=\s*"0\.21\.0"'
+            $content | Should -Match 'version\s*=\s*"1\.0\.0"'
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
             $content | Should -Not -Match 'disabled_by_default\s*='
@@ -110,35 +110,34 @@ Describe 'Module Resources packaging' {
         }
 
         foreach ($defaultEnabledRule in @(
-                'terraform_heredoc_usage',
-                'terraform_module_provider_declaration',
-                'terraform_sensitive_variable_no_default',
-                'azapi_resource_tag',
-                'azapi_replace_triggers_refs',
-                'azapi_response_export_values',
-                'terraform_tf_file',
-                'required_module_source_tffr1',
-                'required_output_rmfr7'
+                'avm_terraform_literal_heredoc_disallowed',
+                'avm_terraform_provider_block_disallowed',
+                'avm_terraform_sensitive_variable_default_disallowed',
+                'avm_azapi_resource_tags_required',
+                'avm_azapi_replace_triggers_refs_valid',
+                'avm_terraform_configuration_file_required',
+                'avm_terraform_module_source_required',
+                'avm_output_resource_id_required'
             )) {
             $root | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
             $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
         }
 
-        $module | Should -Match '(?s)rule\s+"provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
+        $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(
-                'terraform_heredoc_usage',
-                'terraform_module_provider_declaration',
-                'terraform_sensitive_variable_no_default',
-                'azapi_resource_tag',
-                'azapi_replace_triggers_refs',
-                'azapi_response_export_values',
-                'terraform_tf_file',
-                'required_module_source_tffr1',
-                'required_output_rmfr7',
-                'provider_modtm_version_constraint'
+                'avm_terraform_literal_heredoc_disallowed',
+                'avm_terraform_provider_block_disallowed',
+                'avm_terraform_sensitive_variable_default_disallowed',
+                'avm_azapi_resource_tags_required',
+                'avm_azapi_replace_triggers_refs_valid',
+                'avm_azapi_response_export_values_required',
+                'avm_terraform_configuration_file_required',
+                'avm_terraform_module_source_required',
+                'avm_output_resource_id_required',
+                'avm_provider_modtm_version_constraint'
             )) {
             $example | Should -Match (
-                '(?s)rule\s+"{0}"\s*\{{\s*enabled\s*=\s*false\s*\}}' -f $exampleRule)
+                '(?s)rule\s+"{0}"\s*\{{[^}}]*enabled\s*=\s*false[^}}]*\}}' -f $exampleRule)
         }
         $example | Should -Match '(?s)rule\s+"terraform_required_providers"\s*\{\s*enabled\s*=\s*true\s*\}'
         $example | Should -Match '(?s)rule\s+"terraform_required_version"\s*\{\s*enabled\s*=\s*true\s*\}'

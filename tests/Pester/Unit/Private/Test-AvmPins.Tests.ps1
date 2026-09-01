@@ -352,25 +352,30 @@ Describe 'Test-AvmPins' {
             $pins.policyLibrary.bundles.Keys | Should -Contain 'avm-policy-avmsec'
         }
 
-        It 'mirrors plugin versions and preserves AVM scope exemptions' {
+        It 'mirrors plugin versions, native severities, and AVM scope exemptions' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
             $configDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
             $exampleOnlyRules = @(
-                'deprecated_lock_interface'
-                'deprecated_private_endpoints_interface'
-                'deprecated_role_assignments_interface'
-                'ignore_body_changes'
-                'private_endpoints_manage_dns_zone_group'
-                'resource_types'
-                'retry'
-                'timeouts'
-                'terraform_heredoc_usage'
-                'terraform_module_provider_declaration'
-                'terraform_sensitive_variable_no_default'
-                'azapi_resource_tag'
-                'azapi_replace_triggers_refs'
-                'azapi_response_export_values'
-                'terraform_tf_file'
+                'avm_interface_lock_deprecated'
+                'avm_interface_private_endpoints_deprecated'
+                'avm_interface_role_assignments_deprecated'
+                'avm_interface_private_endpoints_manage_dns_zone_group'
+                'avm_terraform_literal_heredoc_disallowed'
+                'avm_terraform_provider_block_disallowed'
+                'avm_terraform_sensitive_variable_default_disallowed'
+                'avm_azapi_resource_tags_required'
+                'avm_azapi_replace_triggers_refs_valid'
+                'avm_terraform_configuration_file_required'
+            )
+            $noticeRules = @(
+                'avm_azapi_data_response_export_values_required'
+                'avm_azapi_response_export_values_required'
+                'avm_interface_ignore_body_changes'
+                'avm_interface_resource_types'
+                'avm_interface_retry'
+                'avm_interface_timeouts'
+                'avm_output_entire_resource_disallowed'
+                'avm_provider_azurerm_disallowed'
             )
 
             foreach ($config in (Get-ChildItem -LiteralPath $configDir -Filter '*.hcl' -File)) {
@@ -389,6 +394,11 @@ Describe 'Test-AvmPins' {
 
                 $text | Should -Not -Match 'disabled_by_default\s*='
 
+                foreach ($rule in $noticeRules) {
+                    $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?severity\s*=\s*"notice"'
+                    $text | Should -Match $rulePattern -Because "$($config.Name) must source '$rule' severity from the AVM plugin"
+                }
+
                 foreach ($rule in $exampleOnlyRules) {
                     $rulePattern = 'rule\s+"' + [regex]::Escape($rule) + '"\s*\{[^}]*?enabled\s*=\s*false'
                     if ($config.Name -eq 'avm.tflint_example.hcl') {
@@ -404,7 +414,7 @@ Describe 'Test-AvmPins' {
         It 'pins the released AVM ruleset version' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
 
-            $pins.tflintPlugins.avm | Should -Be '0.21.0'
+            $pins.tflintPlugins.avm | Should -Be '1.0.0'
         }
 
         It 'keeps managed tool versions out of test stub source' {
