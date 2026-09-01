@@ -21,7 +21,11 @@ Prototyped and proven at [`myaschmitz/avm-release-dashboard`](https://github.com
 
 **Pull requests come from the commit subject.** A squash merge creates a new commit, so the `merge_commit_sha` recorded on a pull request is frequently not the commit that reached the default branch — observed on `netapp-netappaccount`, where PR #31's recorded SHA is absent from `main` and the work landed under PR #32's commit. The trailing `(#123)` that squashing writes into the subject survives. Extraction matched 38 of 38 repositories with unreleased work, with no misses.
 
-**No suggested version.** SNFR17 requires a minor bump for a breaking change or a feature and a patch bump for a backward-compatible fix. Computing that from commit subjects was tested against ten real bumps and matched five. `feat: add retry variable to all azapi resources` shipped as a patch, so even a correct label did not predict the release. 25 of 90 unreleased pull requests carry no conventional-commit prefix at all, including `Support TrustedLaunch on the image definition`. A wrong suggestion would invite a breaking change to ship as a patch, so the page links to GitHub's new-release page with the tag left blank.
+**No suggested version.** SNFR17 requires a minor bump for a breaking change or a feature and a patch bump for a backward-compatible fix. Deciding that from commit subjects fails: a computed bump matched history in only 5 of 10 cases tested, and 25 of 90 unreleased pull requests carry no conventional-commit prefix at all. Comparing the module's declared interface instead — every `variable` and `output` at the tag against the default branch — matched 8 of 10, and both disagreements were cases where a maintainer added a variable and shipped it as a patch, which SNFR17 calls a minor bump. Against the specification the comparison is right in all ten. The page therefore shows a suggested version beside the evidence that produced it, and links to GitHub's new-release page with the tag left blank.
+
+Two details carry that result. Descriptions are excluded from the comparison, because AVM descriptions are long and change on their own schedule, so a documentation edit would otherwise read as an interface change. And the parser counts brace depth rather than splitting on a regex, because those same descriptions embed worked Terraform examples containing `variable "foo"`, which a naive split counts as a real declaration.
+
+Removing a declaration, or adding a variable with no `default`, is marked breaking. That distinction only changes the suggested version at 1.0.0 and above, where a breaking change bumps the major. Not every AVM module is pre-1.0 — `avm-res-web-hostingenvironment` is already at 2.0.1 — so the version selects the rule rather than the rule being assumed.
 
 **History is committed; the snapshot is not.** `release-status.json` is rebuilt from the API on every run and reproduces exactly, so it is gitignored. `history.json` cannot be rebuilt, because the API reports only the present. The workflow commits it back with `GITHUB_TOKEN`, which does not trigger new runs, and the `push` trigger lists only hand-edited paths because a workflow may not combine `paths` with `paths-ignore`.
 
@@ -33,6 +37,7 @@ Prototyped and proven at [`myaschmitz/avm-release-dashboard`](https://github.com
 - [x] Add `.github/workflows/repository-management-dashboard.yml`, following the `repository-management-*` naming already in use.
 - [x] Gitignore the derived snapshot, commit the history.
 - [x] Document the decisions in `repository-management/release-dashboard/README.md`.
+- [x] Suggest the next version by comparing the declared interface at the tag against the default branch.
 - [ ] Repository admin enables Pages once (see below).
 
 ## Blockers and dependencies
@@ -50,4 +55,6 @@ Until then the collector, the history step and the artifact upload all succeed, 
 - Four consecutive scheduled runs on the prototype repository, 28 to 31 August, each publishing successfully.
 - API budget measured on the runner before and after each sweep: `core limit=5000 remaining=5000`. The sweep issues roughly 900 calls across 188 repositories in about six minutes, so the hourly allowance is not a constraint.
 - Live output verified field by field against the GitHub API: 188 repositories, 38 with unreleased work, 96 unreleased pull requests, 5 issues labelled `Status: Awaiting Release To Be Cut :scissors:`, and no null `latestTag` on any repository not classified `never-released`.
+- Version suggestion scored against ten historical bumps across five repositories: 8 of 10 agree with what shipped, 10 of 10 agree with SNFR17. Both breaking calls in today's data are corroborated by the pull request titles that produced them — `avm-res-web-site` removed three outputs under `fix!: remove unused whole-resource outputs`, and `avm-res-compute-virtualmachine` renamed `enable_automatic_updates` to `automatic_updates_enabled`.
+- The block parser was cross-checked against a naive top-level regex on four repositories and agreed on every count, confirming the brace walker does not miss or invent declarations.
 - `./build.ps1 pre-commit`: layout, lint and unit legs green. The component leg reports the same two pre-existing failures on this branch and on a clean `main` — `pr-check composes eight steps` and `pr-check rejects a shell hook`, both raising `AvmToolException: Tool 'tflint' does not ship a release for 'windows-arm64'`. That is an authoring-machine architecture limit, not a regression; this slice adds no files under `src/` or `tests/`.

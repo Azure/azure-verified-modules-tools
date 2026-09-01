@@ -101,6 +101,184 @@ function Get-NewestVersion {
     return [pscustomobject]@{ Tag = $newest.Name; Published = $published }
 }
 
+function Get-AvmHclBlock {
+    <#
+        Parses top-level HCL blocks of one kind into a map of name to structural
+        signature.
+
+        Brace depth is counted rather than the file being split on a regex, because
+        AVM descriptions embed worked Terraform examples: a naive split treats
+        `variable "foo"` inside a heredoc as a real declaration.
+
+        The signature omits `description` on purpose. Those descriptions are long,
+        carry examples, and change on their own schedule, so including them reports
+        a documentation edit as an interface change.
+    #>
+    param([string]$Text, [string]$Kind)
+
+    $result = @{}
+    $lines = $Text -split "`r?`n"
+    $current = $null
+    $buffer = $null
+    $depth = 0
+    $heredoc = $null
+
+    foreach ($line in $lines) {
+        if ($heredoc) {
+            if ($line.Trim() -eq $heredoc) { $heredoc = $null }
+            continue
+        }
+
+        if ($null -eq $current) {
+            if ($line -match "^\s*$Kind\s+`"([^`"]+)`"\s*\{") {
+                $current = $Matches[1]
+                $buffer = [System.Collections.Generic.List[string]]::new()
+                $depth = 0
+            } else {
+                continue
+            }
+        }
+
+        $isDescription = $line -match '^\s*description\s*='
+
+        if ($line -match '<<-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*$') {
+            $heredoc = $Matches[1]
+            if (-not $isDescription) { [void]$buffer.Add($line) }
+            continue
+        }
+
+        if (-not $isDescription) { [void]$buffer.Add($line) }
+
+        # Quoted strings are stripped before counting, so a brace inside a string
+        # literal cannot close the block early.
+        $scan = $line -replace '"(\\.|[^"\\])*"', '' -replace '#.*$', ''
+        $depth += ([regex]::Matches($scan, '\{')).Count
+        $depth -= ([regex]::Matches($scan, '\}')).Count
+
+        if ($depth -le 0) {
+            $body = ($buffer -join "`n") -replace '(?m)^\s*#.*$', ''
+            $result[$current] = ($body -replace '\s+', ' ').Trim()
+            $current = $null
+            $buffer = $null
+        }
+    }
+    return $result
+}
+
+function Get-AvmModuleInterface {
+    <#
+        Returns the public interface of a module at one ref: every root variable and
+        output, keyed `variable.<name>` or `output.<name>`.
+    #>
+    param([string]$Repo, [string]$Ref)
+
+    $interface = @{}
+    foreach ($pair in @(@('variables.tf', 'variable'), @('outputs.tf', 'output'))) {
+        $raw = & gh api "repos/$Repo/contents/$($pair[0])?ref=$Ref" -H 'Accept: application/vnd.github.raw' 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { continue }
+        $blocks = Get-AvmHclBlock -Text (($raw -join "`n")) -Kind $pair[1]
+        foreach ($entry in $blocks.GetEnumerator()) {
+            $interface["$($pair[1]).$($entry.Key)"] = $entry.Value
+        }
+    }
+    return $interface
+}
+
+function Get-AvmNextVersion {
+    <#
+        Applies SNFR17 to a tag.
+
+        Before 1.0.0 the major version never moves: a breaking change and a feature
+        both bump the minor, and only a backward-compatible fix bumps the patch.
+        That rule stops at 1.0.0, after which ordinary semantic versioning applies
+        and a breaking change bumps the major. Not every AVM module is pre-1.0 —
+        `avm-res-web-hostingenvironment` is already at 2.0.1 — so the version itself
+        selects which rule to use.
+    #>
+    param([string]$Tag, [switch]$Changed, [switch]$Breaking)
+
+    $prefix = if ($Tag.StartsWith('v')) { 'v' } else { '' }
+    $parts = ($Tag -replace '^v', '') -split '\.'
+    if ($parts.Count -ne 3) { return $null }
+
+    $major = [int]$parts[0]; $minor = [int]$parts[1]; $patch = [int]$parts[2]
+
+    $bump = if (-not $Changed) { 'patch' }
+    elseif ($Breaking -and $major -ge 1) { 'major' }
+    else { 'minor' }
+
+    switch ($bump) {
+        'major' { $major++; $minor = 0; $patch = 0 }
+        'minor' { $minor++; $patch = 0 }
+        default { $patch++ }
+    }
+
+    return [pscustomobject]@{
+        Bump    = $bump
+        Version = "$prefix$major.$minor.$patch"
+    }
+}
+
+function Compare-AvmModuleInterface {
+    <#
+        Compares the interface at the newest tag against the default branch and
+        recommends a bump. Under SNFR17 any interface change is a minor bump before
+        1.0.0, whether it breaks callers or merely adds to them, so the two are
+        reported separately for the day a module reaches 1.0.0 and they diverge.
+    #>
+    param([string]$Repo, [string]$Tag, [string]$Branch)
+
+    $before = Get-AvmModuleInterface -Repo $Repo -Ref $Tag
+    $after = Get-AvmModuleInterface -Repo $Repo -Ref $Branch
+    if ($before.Count -eq 0 -and $after.Count -eq 0) { return $null }
+
+    $shortName = { param($key) ($key -split '\.', 2)[1] }
+
+    $removed = @($before.Keys | Where-Object { $_ -notin $after.Keys } | Sort-Object)
+    $added = @($after.Keys | Where-Object { $_ -notin $before.Keys } | Sort-Object)
+    $altered = @($before.Keys | Where-Object { $_ -in $after.Keys -and $before[$_] -ne $after[$_] } | Sort-Object)
+
+    # A variable with no `default` is required, so adding one breaks every existing
+    # caller rather than merely extending the interface.
+    $requiredAdded = @($added | Where-Object {
+            $_ -like 'variable.*' -and $after[$_] -notmatch '\bdefault\s*='
+        })
+
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    foreach ($group in @(
+            @{ items = @($removed | Where-Object { $_ -like 'variable.*' }); verb = 'removed'; noun = 'variable' },
+            @{ items = @($removed | Where-Object { $_ -like 'output.*' }); verb = 'removed'; noun = 'output' },
+            @{ items = @($added | Where-Object { $_ -like 'variable.*' }); verb = 'added'; noun = 'variable' },
+            @{ items = @($added | Where-Object { $_ -like 'output.*' }); verb = 'added'; noun = 'output' },
+            @{ items = @($altered); verb = 'changed'; noun = 'declaration' }
+        )) {
+        $count = $group.items.Count
+        if ($count -eq 0) { continue }
+        $plural = if ($count -eq 1) { $group.noun } else { "$($group.noun)s" }
+        $names = @($group.items | Select-Object -First 3 | ForEach-Object { & $shortName $_ })
+        $tail = if ($count -gt 3) { ", and $($count - 3) more" } else { '' }
+        $reasons.Add("$count $plural $($group.verb): $($names -join ', ')$tail")
+    }
+
+    $changed = ($removed.Count + $added.Count + $altered.Count) -gt 0
+    $breaking = ($removed.Count + $requiredAdded.Count) -gt 0
+    $next = Get-AvmNextVersion -Tag $Tag -Changed:$changed -Breaking:$breaking
+
+    return [pscustomobject]@{
+        comparedAgainst   = $Tag
+        variablesAdded    = @($added | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
+        variablesRemoved  = @($removed | Where-Object { $_ -like 'variable.*' } | ForEach-Object { & $shortName $_ })
+        outputsAdded      = @($added | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
+        outputsRemoved    = @($removed | Where-Object { $_ -like 'output.*' } | ForEach-Object { & $shortName $_ })
+        declarationsAltered = @($altered | ForEach-Object { & $shortName $_ })
+        requiredAdded     = @($requiredAdded | ForEach-Object { & $shortName $_ })
+        breaking          = $breaking
+        suggestedBump     = if ($next) { $next.Bump } else { $null }
+        suggestedVersion  = if ($next) { $next.Version } else { $null }
+        reasons           = @($reasons)
+    }
+}
+
 function Get-AwaitingReleaseIssue {
     <#
         AVM defines "Status: Awaiting Release To Be Cut :scissors:" to mean a fix has
@@ -161,6 +339,7 @@ foreach ($name in $repoNames) {
         oldestHumanDays        = $null
         unreleasedPrs          = @()
         awaitingReleaseIssues  = @(if ($awaitingByRepo.ContainsKey($name)) { $awaitingByRepo[$name] } else { })
+        interfaceDelta         = $null
         state                  = 'unknown'
     }
 
@@ -227,6 +406,12 @@ foreach ($name in $repoNames) {
     $record.state = if ($record.humanAhead -gt 0) { 'unreleased-work' }
     elseif ($record.aheadBy -gt 0) { 'automation-only' }
     else { 'current' }
+
+    # Four extra API calls per repository, so this runs only where a release is
+    # actually pending. Nothing is waiting on the other 150.
+    if ($record.state -eq 'unreleased-work') {
+        $record.interfaceDelta = Compare-AvmModuleInterface -Repo $repo -Tag $release.Tag -Branch $defaultBranch
+    }
 
     $records.Add([pscustomobject]$record)
 }

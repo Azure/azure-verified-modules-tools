@@ -17,6 +17,7 @@ For every non-archived `Azure/terraform-azurerm-avm-*` repository:
 | Unreleased commits | commits on the default branch past that tag, authored by a person |
 | Oldest days | age of the oldest such commit |
 | Managed files | `version` in `.avm/managed-files-version.json` |
+| Suggested next version | interface comparison at the tag against the default branch |
 
 Rows with unreleased pull requests or issues labelled `Status: Awaiting Release To Be Cut :scissors:` expand to list them.
 
@@ -28,8 +29,13 @@ Rows with unreleased pull requests or issues labelled `Status: Awaiting Release 
 
 **Pull requests come from the commit subject.** A squash merge writes `(#123)` into the subject and creates a new commit, so the `merge_commit_sha` recorded on a pull request is often not the commit that reached the default branch. The subject is the reliable link back.
 
-**No suggested version.** SNFR17 requires a minor bump for a breaking change or a feature and a patch bump for a backward-compatible fix. Deciding that from commit subjects fails: a computed bump matched history in only 5 of 10 cases tested, and 25 of 90 unreleased pull requests carry no conventional-commit prefix at all. The page links to GitHub's new-release page with the tag left blank.
+**The suggested version compares declarations, not commit messages.** Every `variable` and `output` at the newest tag is compared against the default branch. Under SNFR17 any interface change is a minor bump before 1.0.0, whether it breaks callers or merely extends them, so the two are reported separately for the day a module reaches 1.0.0 and they diverge. Scored against ten historical bumps the comparison agrees with what shipped 8 times, and with SNFR17 all 10 — its two disagreements are both cases where a maintainer added a variable and released it as a patch.
 
+Reading commit subjects was tried first and rejected: it agreed 5 times out of 10, and 25 of 90 unreleased pull requests carry no conventional-commit prefix at all.
+
+Descriptions are excluded from the comparison, because AVM descriptions are long and change on their own schedule, so a documentation edit would otherwise read as an interface change. The parser counts brace depth rather than splitting on a regex, because those same descriptions embed worked Terraform examples containing `variable "foo"`.
+
+The suggestion is never shown alone. The declarations that produced it render beside it, because the comparison is blind to behaviour that changes without the interface changing, and a maintainer needs to see what it looked at.
 ## Data files
 
 `site/data/release-status.json` is rebuilt from the API on every run and is **not** committed. Run the collector before serving locally.

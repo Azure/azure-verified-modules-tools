@@ -376,12 +376,55 @@ function detailBlock(heading, items) {
   return block;
 }
 
+// The suggestion always ships with the evidence that produced it. A bare verdict
+// cannot be checked, and a maintainer who cannot check it will either follow a
+// wrong answer or ignore a right one.
+function suggestionBlock(m, delta) {
+  const block = el('div', 'suggestion' + (delta.breaking ? ' is-breaking' : ''));
+
+  const head = el('div', 'suggestion-head');
+  head.appendChild(el('span', 'from', delta.comparedAgainst));
+  head.appendChild(el('span', 'arrow', '→'));
+  head.appendChild(el('span', 'to', delta.suggestedVersion));
+  head.appendChild(el('span', 'bump ' + delta.suggestedBump, delta.suggestedBump));
+  if (delta.breaking) head.appendChild(el('span', 'bump breaking', 'breaking'));
+  block.appendChild(head);
+
+  const reasons = delta.reasons || [];
+  if (reasons.length) {
+    const list = el('ul', 'suggestion-reasons');
+    reasons.forEach(r => list.appendChild(el('li', null, r)));
+    block.appendChild(list);
+  } else {
+    block.appendChild(el('p', 'fine', 'No variable or output changed, so the interface is unchanged.'));
+  }
+
+  const why = el('p', 'fine method-note');
+  if (delta.breaking) {
+    const removedCount = (delta.outputsRemoved || []).length + (delta.variablesRemoved || []).length;
+    const requiredCount = (delta.requiredAdded || []).length;
+    const bits = [];
+    if (removedCount) bits.push(removedCount + ' declaration' + (removedCount === 1 ? '' : 's') + ' removed');
+    if (requiredCount) bits.push(requiredCount + ' required input' + (requiredCount === 1 ? '' : 's') + ' added');
+    why.textContent = 'Existing callers break: ' + bits.join(', ') + '. ';
+  }
+  why.textContent += 'Compares every variable and output at the tag against the default branch. It cannot see behaviour that changed without the interface changing, so read the pull requests below before tagging.';
+  block.appendChild(why);
+
+  return block;
+}
+
 function detailRow(m, prs, issues) {
   const row = el('tr', 'detail');
   const holder = el('td');
-  holder.colSpan = 7;
+  holder.colSpan = 8;
 
   const box = el('div', 'detail-box');
+
+  const delta = m.interfaceDelta;
+  if (delta && delta.suggestedVersion) {
+    box.appendChild(suggestionBlock(m, delta));
+  }
 
   if (prs.length) {
     box.appendChild(detailBlock(
@@ -398,8 +441,8 @@ function detailRow(m, prs, issues) {
   }
 
   if (prs.length) {
-    // No tag is prefilled. Commit subjects do not reliably say whether a change is
-    // breaking, so the version stays a human decision under SNFR17.
+    // No tag is prefilled. The suggestion above is evidence for a maintainer to
+    // weigh, not a decision to hand to GitHub.
     const actions = el('div', 'detail-actions');
     const draft = el('a', 'button', 'Draft a release');
     draft.href = m.url + '/releases/new';
@@ -440,6 +483,17 @@ function buildRow(m, body) {
     days === null || days === undefined ? '—' : String(days)));
 
   tr.appendChild(cell('Managed files', m.pinnedVersion ? null : 'dim', m.pinnedVersion || 'none'));
+
+  const suggestCell = cell('Suggested');
+  const delta = m.interfaceDelta;
+  if (delta && delta.suggestedVersion) {
+    suggestCell.appendChild(el('span', 'sugg', delta.suggestedVersion));
+    suggestCell.appendChild(el('span', 'bump ' + delta.suggestedBump, delta.suggestedBump));
+  } else {
+    suggestCell.className = 'dim';
+    suggestCell.textContent = '—';
+  }
+  tr.appendChild(suggestCell);
 
   const prs = m.unreleasedPrs || [];
   const issues = m.awaitingReleaseIssues || [];
@@ -539,5 +593,5 @@ Promise.all([
   })
   .catch(err => {
     document.getElementById('rows').innerHTML =
-      '<tr><td colspan="7" class="dim">Could not load data/release-status.json — ' + err.message + '</td></tr>';
+      '<tr><td colspan="8" class="dim">Could not load data/release-status.json — ' + err.message + '</td></tr>';
   });

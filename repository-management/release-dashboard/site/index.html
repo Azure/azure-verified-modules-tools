@@ -107,6 +107,7 @@
             <th data-sort="humanAhead" class="num">Unreleased<br><span class="th-sub">commits</span></th>
             <th data-sort="oldestHumanDays" class="num">Oldest<br><span class="th-sub">days</span></th>
             <th data-sort="pinnedVersion">Managed files</th>
+            <th>Suggested<br><span class="th-sub">next version</span></th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -132,6 +133,7 @@
             <th class="num">Unreleased<br><span class="th-sub">commits</span></th>
             <th class="num">Oldest<br><span class="th-sub">days</span></th>
             <th>Managed files</th>
+            <th>Suggested<br><span class="th-sub">next version</span></th>
           </tr>
         </thead>
         <tbody id="restRows"></tbody>
@@ -147,7 +149,9 @@
       <li><b>Fully released</b> — the newest version tag sits on the tip of the default branch. Nothing at all is ahead, not even a bot commit.</li>
       <li><b>No version tag</b> — the repository has no semver tag, so the Terraform registry has nothing to publish. Most of these are proposed modules that were never developed.</li>
       <li><b>Managed files</b> — the version of <code>azure-verified-modules-managed-files</code> the repository is pinned to. A lagging pin usually means an open pull request is holding the upgrade back.</li>
+      <li><b>Suggested next version</b> — computed by comparing every <code>variable</code> and <code>output</code> declaration at the newest tag against the default branch. AVM's SNFR17 bumps the minor version for a breaking change or a feature before 1.0.0, and the patch version only for a backward-compatible fix, so any interface change means a minor bump. Expand a row to see which declarations moved.</li>
     </ul>
+    <p class="fine">The suggested version reads declarations, not commit messages. Comparing the interface at the tag against the default branch agreed with SNFR17 on all ten historical bumps tested, where reading commit subjects agreed on five. Its two disagreements with what maintainers actually shipped were both cases where a variable was added and released as a patch, which SNFR17 calls a minor bump. The comparison cannot see behaviour that changed without the interface changing, so it is evidence to weigh rather than a decision.</p>
     <p class="fine">Each module's wait is measured from its oldest unreleased commit, shown in the <b>Oldest days</b> column. The card at the top reports the median across every module in the table, so half sit above that figure and half below.</p>
     <p class="fine">Versions come from git tags rather than GitHub releases, because the Terraform registry publishes from tags. Three repositories carry a version tag with no matching release, and reading releases alone reports those as unpublished while the registry serves them.</p>
     <p class="fine">Bot and human commits are separated by commit author, not by message. Subjects such as <code>fix: grept apply</code> appear under both, so the message cannot tell them apart. Almost every repository is ahead by at least one bot commit, because the AVM bot pushes to all of them daily.</p>
