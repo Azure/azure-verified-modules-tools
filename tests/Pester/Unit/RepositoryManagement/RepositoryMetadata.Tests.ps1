@@ -66,4 +66,13 @@ Describe "Repository merge methods" {
             'allowed_merge_methods\s*=\s*\["squash"\]'
         )
     }
+
+    It "limits the AVM App bypass to pull requests" {
+        $script:rulesetsTerraform | Should -Match (
+            'bypass_mode\s*=\s*"pull_request"'
+        )
+        $script:rulesetsTerraform | Should -Not -Match (
+            'bypass_mode\s*=\s*"always"'
+        )
+    }
 }

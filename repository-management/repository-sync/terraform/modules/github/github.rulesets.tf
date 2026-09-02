@@ -10,7 +10,7 @@ resource "github_repository_ruleset" "main" {
     content {
       actor_id    = var.github_avm_app_id
       actor_type  = "Integration"
-      bypass_mode = "always"
+      bypass_mode = "pull_request"
     }
   }
 
