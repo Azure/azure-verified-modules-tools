@@ -41,7 +41,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'runs transform then clean-backup with the config and module dirs, reporting pass on a no-op' {
+    It 'runs transform, post-transform cleanup, then clean-backup and reports pass on a no-op' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -51,7 +51,12 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Resolve-AvmMapotfConfigDir {
+                if ($Bundle -eq 'post-transform') {
+                    return '/fake/post-transform'
+                }
+                return '/fake/configs'
+            }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTransform -Context $C
         }
@@ -70,6 +75,13 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $ArgumentList[0] -eq 'transform' -and
                 $ArgumentList -contains '--mptf-dir' -and
                 $ArgumentList -contains '/fake/configs' -and
+                $ArgumentList -contains '--tf-dir'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -eq '/fake/mapotf' -and
+                $ArgumentList[0] -eq 'transform' -and
+                $ArgumentList -contains '--mptf-dir' -and
+                $ArgumentList -contains '/fake/post-transform' -and
                 $ArgumentList -contains '--tf-dir'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -284,7 +296,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 if ($ArgumentList -contains 'transform') {
                     $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
                     $tfDir = $ArgumentList[$i + 1]
-                    Remove-Item -LiteralPath (Join-Path $tfDir 'variables.tf') -Force
+                    Remove-Item -LiteralPath (Join-Path $tfDir 'variables.tf') -Force -ErrorAction SilentlyContinue
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -355,7 +367,7 @@ Describe 'Invoke-AvmTerraformTransform' {
 
         $result.Status | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {

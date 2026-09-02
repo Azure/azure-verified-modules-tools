@@ -157,7 +157,6 @@ Describe 'Module Resources packaging' {
         $mapotfDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))
         $mapotfDir | Should -Exist
         $expected = @(
-            'avm_headers_for_azapi.mptf.hcl'
             'main_telemetry_tf.mptf.hcl'
             'move_misplaced_blocks.mptf.hcl'
             'order_module_attrs.mptf.hcl'
@@ -174,6 +173,13 @@ Describe 'Module Resources packaging' {
             (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
         }
         @(Get-ChildItem -LiteralPath $mapotfDir -Filter '*.mptf.hcl' -File).Count | Should -Be $expected.Count
+
+        $postTransformDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'post-transform'))
+        $postTransformDir | Should -Exist
+        $postTransformPath = Join-Path $postTransformDir 'remove_avm_headers_for_azapi.mptf.hcl'
+        $postTransformPath | Should -Exist
+        (Get-Item -LiteralPath $postTransformPath).Length | Should -BeGreaterThan 0
+        @(Get-ChildItem -LiteralPath $postTransformDir -Filter '*.mptf.hcl' -File).Count | Should -Be 1
     }
 
     It 'ships a deterministic Terraform declaration ordering transform' {

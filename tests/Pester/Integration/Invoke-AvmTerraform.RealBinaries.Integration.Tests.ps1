@@ -250,6 +250,70 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
+        It 'removes legacy AVM headers and their telemetry helper locals' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the AzAPI fixture needs to prove legacy header cleanup'
+                return
+            }
+
+            $legacy = Join-Path $script:WorkRoot "$name-legacy-headers"
+            Copy-Item -LiteralPath $script:StagedModule -Destination $legacy -Recurse -Force
+
+            $legacyResources = @'
+resource "azapi_data_plane_resource" "legacy_headers" {
+  create_headers = { "User-Agent" = local.avm_azapi_header }
+  delete_headers = { "User-Agent" = local.avm_azapi_header }
+  read_headers   = { "User-Agent" = local.avm_azapi_header }
+  update_headers = { "User-Agent" = local.avm_azapi_header }
+}
+
+resource "azapi_update_resource" "legacy_headers" {
+  read_headers   = { "User-Agent" = local.avm_azapi_header }
+  update_headers = { "User-Agent" = local.avm_azapi_header }
+}
+'@
+            Add-Content -LiteralPath (Join-Path $legacy 'main.tf') -Value "`n$legacyResources" -Encoding utf8NoBOM -NoNewline
+
+            $legacyLocals = @'
+locals {
+  valid_module_source_regex = []
+}
+
+locals {
+  fork_avm = false
+}
+
+locals {
+  avm_azapi_headers = {}
+}
+
+locals {
+  avm_azapi_header = ""
+}
+'@
+            Add-Content -LiteralPath (Join-Path $legacy 'main.telemetry.tf') -Value "`n$legacyLocals" -Encoding utf8NoBOM -NoNewline
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $legacy } {
+                param($R)
+                Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $R
+                        Ecosystem = 'terraform'
+                        Source = 'integration'
+                    })
+            }
+
+            $result.Status | Should -Be 'pass'
+            $transformed = (Get-ChildItem -LiteralPath $legacy -Filter '*.tf' -File |
+                    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+            $transformed | Should -Not -Match '(?m)^\s*(create|delete|read|update)_headers\s*='
+            $transformed | Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
+            $transformed | Should -Match 'resource "azapi_data_plane_resource" "legacy_headers"'
+            $transformed | Should -Match 'resource "azapi_update_resource" "legacy_headers"'
+            $transformed | Should -Match '(?m)^\s*main_location\s*='
+        }
+
         It 'sorts required provider entries with released MAPOTF nested-block ordering' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
             if ($name -ne 'terraform-azure-avm-res-mock') {

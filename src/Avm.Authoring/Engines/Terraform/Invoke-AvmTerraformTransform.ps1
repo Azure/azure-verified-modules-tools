@@ -1,19 +1,15 @@
 function Resolve-AvmMapotfConfigDir {
     <#
     .SYNOPSIS
-        Resolve the directory holding the vendored mapotf pre-commit configs.
+        Resolve a directory holding vendored mapotf configs.
 
     .DESCRIPTION
         Returns the absolute path to the '*.mptf.hcl' bundle passed to
         'mapotf transform --mptf-dir'. Resolution order:
 
-          1. $env:AVM_MPTF_CONFIG_DIR - explicit override (test injection and
-             power users).
-          2. <Root>/config/mapotf/pre-commit - a consumer repository that
-             vendors its own config bundle at the top of the repo overrides
-             the packaged defaults.
-          3. <ModuleRoot>/Resources/mapotf/pre-commit - the bundle shipped
-             inside the published module (the default source).
+          1. $env:AVM_MPTF_CONFIG_DIR for the pre-commit bundle only.
+          2. <Root>/config/mapotf/<bundle>.
+          3. <ModuleRoot>/Resources/mapotf/<bundle>.
 
         Each candidate must be a directory containing at least one
         '*.mptf.hcl' file. Throws AvmConfigurationException when none
@@ -22,7 +18,10 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Root
         The consumer repository root, used to locate an optional
-        'config/mapotf/pre-commit' override. Pass $Context.Root.
+        'config/mapotf/<bundle>' override. Pass $Context.Root.
+
+    .PARAMETER Bundle
+        The config bundle to resolve. Defaults to 'pre-commit'.
 
     .OUTPUTS
         [string] absolute path to the resolved config directory.
@@ -31,7 +30,10 @@ function Resolve-AvmMapotfConfigDir {
     [OutputType([string])]
     param(
         [Parameter(Mandatory)]
-        [string] $Root
+        [string] $Root,
+
+        [ValidateSet('pre-commit', 'post-transform')]
+        [string] $Bundle = 'pre-commit'
     )
 
     Set-StrictMode -Version 3.0
@@ -39,14 +41,14 @@ function Resolve-AvmMapotfConfigDir {
 
     $candidates = New-Object System.Collections.Generic.List[string]
 
-    if ($env:AVM_MPTF_CONFIG_DIR) {
+    if ($Bundle -eq 'pre-commit' -and $env:AVM_MPTF_CONFIG_DIR) {
         $candidates.Add($env:AVM_MPTF_CONFIG_DIR)
     }
 
-    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' 'pre-commit'))))
+    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' $Bundle))))
 
     $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))))
+    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' $Bundle))))
 
     foreach ($candidate in $candidates) {
         if (-not $candidate) { continue }
@@ -58,9 +60,9 @@ function Resolve-AvmMapotfConfigDir {
     }
 
     throw [AvmConfigurationException]::new(
-        ("Cannot resolve the mapotf pre-commit config bundle (looked in: {0}). " -f ($candidates -join '; ')) +
-        'The bundle normally ships inside the module under Resources/mapotf/pre-commit; ' +
-        'set AVM_MPTF_CONFIG_DIR or add config/mapotf/pre-commit/*.mptf.hcl to override it.')
+        ("Cannot resolve the mapotf {0} config bundle (looked in: {1}). " -f $Bundle, ($candidates -join '; ')) +
+        ("The bundle normally ships inside the module under Resources/mapotf/{0}; " -f $Bundle) +
+        ("add config/mapotf/{0}/*.mptf.hcl to override it." -f $Bundle))
 }
 
 function Get-AvmTerraformFile {
@@ -150,13 +152,14 @@ function Invoke-AvmTerraformTransform {
         Resolve-AvmMapotfConfigDir, then runs, against $Context.Root:
 
             mapotf transform --mptf-dir <configs> --tf-dir <root>
+            mapotf transform --mptf-dir <post-transform-configs> --tf-dir <root>
             mapotf clean-backup --tf-dir <root>
 
-        The first call mutates '*.tf' in place (telemetry wiring, azapi
-        headers, provider pins, block/attribute ordering, variables/outputs
-        partitioning) and leaves '*.tf.mptfbackup' files; the second removes
-        those backups. This mirrors the legacy Terraform governance
-        pre-commit flow.
+        The first call mutates '*.tf' in place (telemetry wiring, provider
+        pins, block/attribute ordering, variables/outputs partitioning). The
+        second pass removes legacy AzAPI telemetry headers after all resource
+        reordering is complete. The final call removes '*.tf.mptfbackup'
+        files.
 
         Several of the vendored configs (e.g. order_resource_attrs) read
         provider schemas, so mapotf shells out to 'terraform init' +
@@ -226,7 +229,9 @@ function Invoke-AvmTerraformTransform {
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
     $configDir = Resolve-AvmMapotfConfigDir -Root $Context.Root
+    $postTransformConfigDir = Resolve-AvmMapotfConfigDir -Root $Context.Root -Bundle 'post-transform'
     Write-AvmLog ("transform: config directory={0}" -f $configDir) -Level Verbose | Out-Null
+    Write-AvmLog ("transform: post-transform config directory={0}" -f $postTransformConfigDir) -Level Verbose | Out-Null
 
     $beforeFiles = Get-AvmTerraformFile -Root $Context.Root
     Write-AvmLog ("transform: discovered {0} terraform file(s)" -f $beforeFiles.Count) -Level Verbose | Out-Null
@@ -309,6 +314,21 @@ function Invoke-AvmTerraformTransform {
             Start-Sleep -Seconds $delaySeconds
         } while ($attempt -le $maxRetries)
         Write-AvmLog 'transform: mapotf transform completed' -Level Verbose | Out-Null
+
+        $postTransform = Invoke-AvmProcess `
+            -FilePath $tool.Path `
+            -ArgumentList @('transform', '--mptf-dir', $postTransformConfigDir, '--tf-dir', $Context.Root) `
+            -WorkingDirectory $Context.Root `
+            -EnvVars $mapotfEnv `
+            -IgnoreExitCode
+        if ($postTransform.ExitCode -ne 0) {
+            $message = Add-AvmProcessFailureDetail `
+                -Message ('mapotf post-transform cleanup exited with code {0}.' -f $postTransform.ExitCode) `
+                -StdOut $postTransform.StdOut `
+                -StdErr $postTransform.StdErr
+            throw [AvmProcessException]::new($message)
+        }
+        Write-AvmLog 'transform: mapotf post-transform cleanup completed' -Level Verbose | Out-Null
 
         $clean = Invoke-AvmProcess `
             -FilePath $tool.Path `
