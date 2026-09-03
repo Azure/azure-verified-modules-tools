@@ -17,7 +17,8 @@ gate.
 - [x] Generate an isolated mock-provider test for each active example.
 - [x] Convert the Terraform test plan event into Conftest-compatible JSON.
 - [x] Preserve hooks, `.env` variables, policy exceptions, and parallelism.
-- [x] Enable the reusable PR check for fork pull requests.
+- [x] Prepare the reusable PR check change for a separate post-release pull
+  request.
 - [x] Keep credentialled integration and end-to-end jobs trusted-only.
 - [x] Update unit, component, integration, and workflow coverage.
 - [x] Run `./build.ps1 pre-commit`.
@@ -40,4 +41,7 @@ gate.
 
 ## Blockers or dependencies
 
-None.
+The reusable `terraform-module.yml` change is deliberately split into a
+separate pull request. It must merge only after this module implementation is
+released to PSGallery, otherwise consumers would invoke credential-free
+behavior before their installed module supports it.

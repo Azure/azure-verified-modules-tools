@@ -750,7 +750,8 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   temporary `terraform test` file with native `mock_provider` blocks, and passes
   the emitted `test_plan` JSON to APRL and AVMSEC through Conftest. Real Azure
   authentication is reserved for the integration and end-to-end module tiers,
-  so the static PR check can run on fork pull requests.
+  enabling a separately released workflow-template update to run the static PR
+  check on fork pull requests.
 
 ---
 
