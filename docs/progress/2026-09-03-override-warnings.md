@@ -17,7 +17,7 @@ source file and rule or rules being overridden.
 - [x] Add Conftest exception override warning detection.
 - [x] Cover warning behavior with focused unit tests.
 - [x] Run targeted tests and the pre-commit gate.
-- [ ] Run code review and CodeQL checks.
+- [x] Run code review and CodeQL checks.
 
 ## Validation
 
@@ -27,6 +27,10 @@ source file and rule or rules being overridden.
 - BLOCKED: `pwsh ./build.ps1 test` and `pwsh ./build.ps1 pre-commit` both require
   InvokeBuild, and PSGallery returned `Resource temporarily unavailable` while
   installing it.
+- PASS: Code review completed after the production changes; its actionable
+  feedback was addressed. The final test-only review retry timed out.
+- PASS: CodeQL checker reported no analyzable code changes for CodeQL languages,
+  so no analysis was performed.
 
 ## Blockers
 
