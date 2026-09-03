@@ -400,7 +400,7 @@ function Get-AvmTflintInlineIgnoreWarning {
                         $heredocTerminator = $line.Substring($start, $cursor - $start)
                         $heredocIndented = $indented
                     }
-                    $charIndex = $cursor
+                    $charIndex = $cursor - 1
                     continue
                 }
                 if ($char -eq '#') {
