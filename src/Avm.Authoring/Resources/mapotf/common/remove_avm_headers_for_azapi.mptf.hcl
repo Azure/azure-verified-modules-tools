@@ -1,4 +1,4 @@
-# Remove retired AVM telemetry headers from a root module or discovered submodule.
+# Remove retired AVM telemetry headers from a root module or local submodule.
 transform "regex_replace_expression" unwrap_merged_avm_headers {
   regex       = "(?s)^merge\\((.*),\\s*\\(\\s*var\\.enable_telemetry\\s*\\?\\s*\\{\\s*\"User-Agent\"\\s*:\\s*local\\.avm_azapi_header\\s*\\}\\s*:\\s*\\{\\s*\\}\\s*\\)\\s*\\)$"
   replacement = "$${1}"

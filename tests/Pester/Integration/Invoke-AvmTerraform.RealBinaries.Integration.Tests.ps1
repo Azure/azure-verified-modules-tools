@@ -364,6 +364,19 @@ locals {
 '@
             Add-Content -LiteralPath (Join-Path $legacy 'main.telemetry.tf') -Value "`n$legacyLocals" -Encoding utf8NoBOM -NoNewline
 
+            $exampleMain = Join-Path $legacy 'examples' 'default' 'main.tf'
+            Add-Content -LiteralPath $exampleMain -Encoding utf8NoBOM -NoNewline -Value @'
+
+variable "single_file_input" {
+  type    = string
+  default = "example"
+}
+
+output "single_file_output" {
+  value = var.single_file_input
+}
+'@
+
             $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $legacy } {
                 param($R)
                 Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
@@ -390,6 +403,14 @@ locals {
                 Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header|tracing_headers)\s*='
             (Get-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Raw) |
                 Should -Not -Match 'variable "tracing_tags_header"'
+            (Get-Content -LiteralPath $exampleMain -Raw) |
+                Should -Match 'variable "single_file_input"'
+            (Get-Content -LiteralPath $exampleMain -Raw) |
+                Should -Match 'output "single_file_output"'
+            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'variables.tf')) |
+                Should -BeFalse
+            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'outputs.tf')) |
+                Should -BeFalse
             @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
                 Should -Be 3
             $transformed | Should -Match '(?m)^\s*main_location\s*='

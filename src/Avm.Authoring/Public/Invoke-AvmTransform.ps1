@@ -10,10 +10,10 @@ function Invoke-AvmTransform {
           - terraform  -> Invoke-AvmTerraformTransform  (mapotf transform + clean-backup)
 
         The Terraform engine is wired against the pinned mapotf binary and
-        the mapotf config bundle shipped in the module under
-        Resources/mapotf/pre-commit, which a consumer repository can override
-        with its own config/mapotf/pre-commit or the AVM_MPTF_CONFIG_DIR
-        environment variable. The Bicep engine remains intentionally stubbed in
+        scoped config profiles under Resources/mapotf/{common,module,root}.
+        A consumer repository can override a profile under
+        config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
+        The Bicep engine remains intentionally stubbed in
         this slice and throws AvmConfigurationException with a clear "next
         slice" message.
 

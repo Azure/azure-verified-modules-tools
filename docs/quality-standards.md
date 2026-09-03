@@ -345,7 +345,7 @@ Currently vendored:
 - `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`,
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
   (root / `modules/*` / `examples/*`).
-- `Resources/mapotf/pre-commit/*.mptf.hcl` - used by
+- `Resources/mapotf/{common,module,root}/*.mptf.hcl` - composed per target by
   `Invoke-AvmTerraformTransform`.
 
 **Update process.**
@@ -387,7 +387,7 @@ Two cache layouts produced by the module today:
 | -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------ | ------------------ |
 | Tool cache     | `%LOCALAPPDATA%\Avm\Tools\<tool>\<version>\<binary>`               | `…\Avm\Tools\terraform-docs\0.20.0\terraform-docs.exe`                                           | ~92    | ~168               |
 | Tool cache     | same                                                               | `…\Avm\Tools\avm-mapotf-pre-commit\1.99.0\avm-mapotf-pre-commit.exe`                             | ~108   | ~152               |
-| Asset cache    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\<sha256>\<sub-path>`       | `…\Cache\assets\avm-mapotf-configs-pre-commit\<64-hex>\mapotf-configs\cleanup\remove_avm_headers_for_azapi.mptf.hcl` | **204** | **56**             |
+| Asset cache    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\<sha256>\<sub-path>`       | `…\Cache\assets\avm-mapotf-configs-pre-commit\<64-hex>\mapotf-configs\common\remove_avm_headers_for_azapi.mptf.hcl` | **204** | **56**             |
 | Asset cache    | same, but with spec-compliant 12-hex segment                       | same with `<12-hex>` in place of `<64-hex>`                                                      | 152    | 108                |
 | Staging dir    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\.staging\<12-char-guid>\…` | …same `mapotf` content path under `.staging\<guid>\`                                             | ~161   | ~99                |
 | Log file       | `%LOCALAPPDATA%\Avm\Logs\<iso8601>.log`                            | `…\Avm\Logs\20260605T123045Z.log`                                                                | ~70    | ~190               |
@@ -535,8 +535,8 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
-> **UPDATE 2026-09-02 — AzAPI request-header telemetry is retired.** A
-> cleanup-only bundle replaces `avm_headers_for_azapi` with
+> **UPDATE 2026-09-02 — AzAPI request-header telemetry is retired.** The common
+> profile replaces `avm_headers_for_azapi` with
 > `remove_avm_headers_for_azapi`, removes direct AVM telemetry header
 > attributes, unwraps the AVM contribution from merged custom headers, and
 > removes nested-module `tracing_tags_header` arguments that reference
@@ -545,18 +545,15 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 > attributes, transitive module arguments, helper locals, and input variables.
 > Unrelated custom headers remain unchanged. The cleanup removes the
 > `valid_module_source_regex`, `fork_avm`, `avm_azapi_headers`, and
-> `avm_azapi_header` locals. The standard pre-commit bundle runs on the root;
-> the cleanup bundle runs on the root and every local module root under
-> `modules/` identified by its own `terraform.tf`, so previously generated
-> submodule telemetry is removed without
-> creating new telemetry resources or modifying downloaded modules. The
-> `main_telemetry_tf` rule still manages `variable.enable_telemetry` and the
-> `modtm_telemetry` resource path. The historical audit below is retained to
-> explain the previous behavior.
+> `avm_azapi_header` locals. Profile composition is root=`root,module,common`,
+> submodule=`module,common`, and example=`common`. This removes generated
+> submodule telemetry without recreating it, while examples keep their authored
+> file layout. The `main_telemetry_tf` rule remains root-only. The historical
+> audit below is retained to explain the previous behavior.
 >
 > **UPDATE 2026-06-19 — supply-chain UNBLOCKED; recommendation flips from build-and-host to wrap-the-shipping-release. See [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh) for the authoritative current state.** Three facts changed since this audit was written:
 > 1. **`Azure/mapotf` now ships goreleaser releases.** Latest `v0.1.4` (published 2026-06-10) ships the canonical 6-platform archive shape (`mapotf_0.1.4_{os}_{arch}.{tar.gz|zip}` + `checksums.txt`) — identical to `conftest` / `terraform-docs`. The open follow-up #1 below ("confirm mapotf release-shipping status — the 2026-05-27 audit said no") is now **resolved: yes**. The build-and-host hosting decision (follow-up #2) is **moot** — no Azure-side workflow PR needed; we pin the upstream `Azure/mapotf` release directly in `avm.pins.jsonc`.
-> 2. **mapotf gained ordering/sorting transform primitives.** The per-config audit below predates `reorder_attributes`, `sort_blocks_in_file`, `remove_block_element`, and `move_block`. The live pre-commit bundle has eight configs: `main_telemetry_tf`, `move_misplaced_blocks`, `order_module_attrs`, `order_resource_attrs`, `order_resource_meta`, `required_provider_versions`, `sort_outputs`, `sort_variables`; `remove_avm_headers_for_azapi` is isolated in the cleanup bundle. Together they realise the **entire** avmfix 10-behaviour catalogue from Appendix C — including the file-partitioning behaviours #5 + #7 that [Appendix I](#appendix-i-decision-hcl2json-adoption-for-narrow-file-layout-enforcement) was going to cover with `hcl2json`.
+> 2. **mapotf gained ordering/sorting transform primitives.** The per-config audit below predates `reorder_attributes`, `sort_blocks_in_file`, `remove_block_element`, and `move_block`. The live rules are partitioned into `common`, `module`, and `root` profiles without duplicating config files. Together they realise the **entire** avmfix 10-behaviour catalogue from Appendix C — including the file-partitioning behaviours #5 + #7 that [Appendix I](#appendix-i-decision-hcl2json-adoption-for-narrow-file-layout-enforcement) was going to cover with `hcl2json`.
 > 3. **Recommended option is now: wrap the shipping `Azure/mapotf` release + pin the governance `mapotf-configs/pre-commit` bundle as a pinned-asset.** The "reimplement in PowerShell / `hcledit`" analysis below stands as the reason we don't reimplement — but the build-and-host conclusion is superseded. The Slice G recipe with concrete SHA256s lives in [Appendix J](#appendix-j-2026-06-19-terraform-pre-commit-ground-truth-refresh).
 >
 > The per-config audit and reasoning below are retained verbatim as the historical record (they explain *why* wrapping beats reimplementing).
@@ -1230,8 +1227,8 @@ Concrete reasoning:
 ## Appendix J. 2026-06-19 Terraform pre-commit ground-truth refresh
 
 This appendix records the **2026-06-19 implementation state** for the Terraform
-pre-commit pivot. The packaged MAPOTF configuration now lives under
-`src/Avm.Authoring/Resources/mapotf/pre-commit/` and is authoritative in this
+pre-commit pivot. The packaged MAPOTF configuration now lives under scoped directories beneath
+`src/Avm.Authoring/Resources/mapotf/` and is authoritative in this
 repository; section 12 defines its current maintenance contract.
 
 > **STATUS 2026-06-19 — Terraform `pre-commit` is DONE end-to-end.** `slice-g-transform` landed: `mapotf` v0.1.4 pinned in `avm.pins.jsonc` (commit `1eb82d7`, six SHA256s from J.4 via `scripts/Update-AvmPins.ps1 -Mapotf`); `Invoke-AvmTerraformTransform` wired against the vendored `config/mapotf/pre-commit/` — `mapotf transform` → `clean-backup`, `-CheckDrift` for pr-check, `tests/fixtures/bin/mapotf.ps1` stub, 12 unit + 3 integration tests — and threaded into the pre-commit/pr-check Terraform chains (commit `c3dd21a`). `g-testmodules` landed: both on-disk mock fixtures (`terraform-azurerm-avm-res-mock` 25 files, `terraform-azure-avm-res-mock` 45 files) refreshed to governance SHA `7f8c4ee` and **verified byte-for-byte against upstream** for the full functional Terraform surface (commit `664da48`). The pre-commit chain `check convention → transform → format → lint → test → docs` now has **zero stub engines**. Gate green at **432/0/7**; 3/3 Terraform integration tests pass.
@@ -1316,8 +1313,8 @@ These use mapotf's newer primitives — `reorder_attributes`, `sort_blocks_in_fi
 Steps:
 
 1. **Pin `Azure/mapotf` v0.1.4 in `avm.pins.jsonc`** — six platforms, the six SHA256s in J.4, mixed `archives` map (`tar.gz` + `zip`) with `urlTemplate` using `{version}`/`{os}`/`{arch}`/`{ext}` placeholders. Add a `Get-MapotfEntry` helper to `scripts/Update-AvmPins.ps1` mirroring `Get-ConftestEntry`.
-2. **Supply the configs (decision A - RESOLVED = package).** The nine configs
-   ship under `src/Avm.Authoring/Resources/mapotf/pre-commit/`.
+2. **Supply the configs (decision A - RESOLVED = package).** The configs
+   ship under scoped directories beneath `src/Avm.Authoring/Resources/mapotf/`.
    `Invoke-AvmTerraformTransform` resolves this packaged path directly - no
    pinned-asset download or upstream synchronization.
 3. **Implement `Invoke-AvmTerraformTransform`** — drop the `AvmConfigurationException` stub; resolve the mapotf binary + the configs asset; run `mapotf transform --mptf-dir <asset.Path> --tf-dir <Context.Root>` then `mapotf clean-backup --tf-dir <Context.Root>` via `Invoke-AvmProcess`; return the standard envelope (`Engine='terraform'`, `Tool='mapotf/<version>'`, `Status`, `Issues`). `[CmdletBinding(SupportsShouldProcess)]` — it mutates files.
@@ -1330,7 +1327,7 @@ Steps:
 - **(A) How to supply the configs - RESOLVED = package.** The original
   2026-06-19 decision moved the bundle into this repository ahead of module
   release. The completed state packages the canonical bundle under
-  `src/Avm.Authoring/Resources/mapotf/pre-commit/`; the transitional upstream
+  `src/Avm.Authoring/Resources/mapotf/`; the transitional upstream
   synchronization utility has been removed.
 - **(B) fix-in-pre-commit + drift-check-in-pr-check semantics (J.3) — RESOLVED = follow upstream.** The user confirmed (2026-06-19, *"yes proceed"*) the upstream-canonical model: `pre-commit` **fixes** via `mapotf transform`, `pr-check` **flags drift** via re-transform + `git status --porcelain`. This consciously reverses the 2026-06-03 flag-only preference.
 

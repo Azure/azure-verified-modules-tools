@@ -133,6 +133,10 @@ transform "reorder_attributes" "azapi_resource_body" {
   body_attributes          = try(local.attrs_azapi_resource_body_by_type[each.value], [])
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
+  depends_on = [
+    transform.remove_block_element.resource_headers,
+    transform.remove_block_element.resource_tracing_headers,
+  ]
 }
 
 transform "reorder_attributes" "random_resource_body" {
@@ -168,6 +172,10 @@ transform "reorder_attributes" "azapi_data_body" {
   body_attributes          = try(local.attrs_azapi_data_body_by_type[each.value], [])
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
+  depends_on = [
+    transform.remove_block_element.data_headers,
+    transform.remove_block_element.data_tracing_headers,
+  ]
 }
 
 transform "reorder_attributes" "random_data_body" {

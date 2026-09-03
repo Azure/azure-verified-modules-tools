@@ -3,11 +3,10 @@ variable "policy_fixture_name" {
 }
 
 resource "azapi_resource" "policy_violation" {
-  type      = "Microsoft.EventHub/namespaces@2024-01-01"
-  name      = var.policy_fixture_name
   location  = "westus3"
+  name      = var.policy_fixture_name
   parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-avm-policy-fixture"
-
+  type      = "Microsoft.EventHub/namespaces@2024-01-01"
   body = {
     sku = {
       name     = "Standard"

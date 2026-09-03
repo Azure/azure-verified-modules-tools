@@ -153,39 +153,46 @@ Describe 'Module Resources packaging' {
         $fixture | Should -Not -Match 'replace_triggers_refs\s*='
     }
 
-    It 'ships the mapotf pre-commit config bundle under Resources/mapotf/pre-commit' {
-        $mapotfDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))
-        $mapotfDir | Should -Exist
-        $expected = @(
-            'main_telemetry_tf.mptf.hcl'
-            'move_misplaced_blocks.mptf.hcl'
-            'order_module_attrs.mptf.hcl'
-            'order_resource_attrs.mptf.hcl'
-            'order_resource_meta.mptf.hcl'
-            'order_terraform.mptf.hcl'
-            'required_provider_versions.mptf.hcl'
-            'sort_outputs.mptf.hcl'
-            'sort_variables.mptf.hcl'
-        )
-        foreach ($file in $expected) {
-            $path = Join-Path $mapotfDir $file
-            $path | Should -Exist
-            (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
+    It 'ships non-duplicated common, module, and root mapotf profiles' {
+        $mapotfRoot = Join-Path $script:moduleRoot (Join-Path 'Resources' 'mapotf')
+        $expected = @{
+            common = @(
+                'order_module_attrs.mptf.hcl'
+                'order_output_attrs.mptf.hcl'
+                'order_resource_attrs.mptf.hcl'
+                'order_resource_meta.mptf.hcl'
+                'order_terraform.mptf.hcl'
+                'order_variable_attrs.mptf.hcl'
+                'remove_avm_headers_for_azapi.mptf.hcl'
+            )
+            module = @(
+                'move_misplaced_blocks.mptf.hcl'
+                'required_provider_versions.mptf.hcl'
+                'sort_outputs.mptf.hcl'
+                'sort_variables.mptf.hcl'
+            )
+            root = @(
+                'main_telemetry_tf.mptf.hcl'
+            )
         }
-        @(Get-ChildItem -LiteralPath $mapotfDir -Filter '*.mptf.hcl' -File).Count | Should -Be $expected.Count
 
-        $cleanupDir = Join-Path $script:moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'cleanup'))
-        $cleanupDir | Should -Exist
-        $cleanupPath = Join-Path $cleanupDir 'remove_avm_headers_for_azapi.mptf.hcl'
-        $cleanupPath | Should -Exist
-        (Get-Item -LiteralPath $cleanupPath).Length | Should -BeGreaterThan 0
-        @(Get-ChildItem -LiteralPath $cleanupDir -Filter '*.mptf.hcl' -File).Count | Should -Be 1
+        foreach ($profile in $expected.Keys) {
+            $profileDir = Join-Path $mapotfRoot $profile
+            $profileDir | Should -Exist
+            foreach ($file in $expected[$profile]) {
+                $path = Join-Path $profileDir $file
+                $path | Should -Exist
+                (Get-Item -LiteralPath $path).Length | Should -BeGreaterThan 0
+            }
+            @(Get-ChildItem -LiteralPath $profileDir -Filter '*.mptf.hcl' -File).Count |
+                Should -Be $expected[$profile].Count
+        }
     }
 
     It 'ships a deterministic Terraform declaration ordering transform' {
         $path = Join-Path `
             $script:moduleRoot `
-            (Join-Path 'Resources' (Join-Path 'mapotf' (Join-Path 'pre-commit' 'order_terraform.mptf.hcl')))
+            (Join-Path 'Resources' (Join-Path 'mapotf' (Join-Path 'common' 'order_terraform.mptf.hcl')))
         $content = Get-Content -LiteralPath $path -Raw
 
         $content | Should -Match 'head_attributes\s*=\s*\["required_version"\]'

@@ -1,7 +1,7 @@
-data "variable" "for_sort" {}
+data "variable" "for_file_sort" {}
 
 locals {
-  vars = data.variable.for_sort.result
+  vars = data.variable.for_file_sort.result
 
   # Each variable's target file: stay in its current file if that file already
   # matches the canonical `*variables*.tf` pattern; otherwise route to
@@ -28,37 +28,6 @@ locals {
       sort([for n, vf in local.vars_with_tf : n if vf.target_file == f && contains(keys(vf.v), "default")]),
     )
   }
-}
-
-# Re-order attributes inside every variable block: type, default, description, nullable, sensitive, ephemeral.
-# Anything else (validation, etc.) stays as a nested element handled by mapotf's reorder_attributes
-# nested-block semantics.
-transform "reorder_attributes" "var_attrs" {
-  for_each                 = local.vars
-  target_block_address     = "variable.${each.key}"
-  head_attributes          = ["type", "default", "description", "nullable", "sensitive", "ephemeral"]
-  sort_body_alphabetically = false
-}
-
-# Drop redundant nullable = true (the language default).
-transform "remove_block_element" "drop_nullable_true" {
-  for_each             = { for n, v in local.vars : n => v if try(v.nullable, null) == true }
-  target_block_address = "variable.${each.key}"
-  paths                = ["nullable"]
-}
-
-# Drop redundant sensitive = false (the language default).
-transform "remove_block_element" "drop_sensitive_false" {
-  for_each             = { for n, v in local.vars : n => v if try(v.sensitive, null) == false }
-  target_block_address = "variable.${each.key}"
-  paths                = ["sensitive"]
-}
-
-# Drop redundant ephemeral = false (the language default).
-transform "remove_block_element" "drop_ephemeral_false" {
-  for_each             = { for n, v in local.vars : n => v if try(v.ephemeral, null) == false }
-  target_block_address = "variable.${each.key}"
-  paths                = ["ephemeral"]
 }
 
 # Per-file sort. One transform per file that currently holds at least one variable

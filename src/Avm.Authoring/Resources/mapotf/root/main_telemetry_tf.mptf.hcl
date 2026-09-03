@@ -45,24 +45,6 @@ DESCRIPTION
   ]
 }
 
-data "local" deprecated_azapi_header_helpers {}
-
-locals {
-  deprecated_azapi_header_helper_names = toset([
-    for name in [
-      "avm_azapi_header",
-      "avm_azapi_headers",
-      "fork_avm",
-      "valid_module_source_regex",
-    ] : name if contains(keys(data.local.deprecated_azapi_header_helpers.result), name)
-  ])
-}
-
-transform "remove_block" deprecated_azapi_header_helpers {
-  for_each             = local.sync_main_telemetry_tf ? local.deprecated_azapi_header_helper_names : toset([])
-  target_block_address = "local.${each.value}"
-}
-
 data "data" "azurerm_client_config" {
   data_source_type = "azurerm_client_config"
 }
