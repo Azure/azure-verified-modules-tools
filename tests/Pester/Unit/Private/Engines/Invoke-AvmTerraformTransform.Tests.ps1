@@ -41,7 +41,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'runs transform then clean-backup with the config and module dirs, reporting pass on a no-op' {
+    It 'runs root transform, recursive cleanup, then clean-backup and reports pass on a no-op' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -51,7 +51,12 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Resolve-AvmMapotfConfigDir {
+                if ($Bundle -eq 'cleanup') {
+                    return '/fake/cleanup'
+                }
+                return '/fake/configs'
+            }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTransform -Context $C
         }
@@ -70,6 +75,12 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $ArgumentList[0] -eq 'transform' -and
                 $ArgumentList -contains '--mptf-dir' -and
                 $ArgumentList -contains '/fake/configs' -and
+                $ArgumentList -contains '--tf-dir'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -eq '/fake/mapotf' -and
+                $ArgumentList[0] -eq 'transform' -and
+                $ArgumentList -contains '/fake/cleanup' -and
                 $ArgumentList -contains '--tf-dir'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -355,7 +366,7 @@ Describe 'Invoke-AvmTerraformTransform' {
 
         $result.Status | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -437,6 +448,50 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $ArgumentList[0] -eq 'transform'
             }
             Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'throws AvmProcessException when telemetry cleanup exits non-zero' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/mapotf'
+                    }
+                }
+                Mock Resolve-AvmMapotfConfigDir {
+                    if ($Bundle -eq 'cleanup') {
+                        return '/fake/cleanup'
+                    }
+                    return '/fake/configs'
+                }
+                Mock Invoke-AvmProcess {
+                    if ($ArgumentList[0] -eq 'transform' -and $ArgumentList -contains '/fake/cleanup') {
+                        return [pscustomobject]@{ ExitCode = 4; StdOut = ''; StdErr = 'recursive cleanup failed' }
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Invoke-AvmTerraformTransform -Context $C
+            }
+        }
+        catch {
+            $err = $_.Exception
+        }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'telemetry cleanup'
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and $ArgumentList -contains '/fake/cleanup'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                $ArgumentList[0] -eq 'clean-backup'
+            }
         }
     }
 

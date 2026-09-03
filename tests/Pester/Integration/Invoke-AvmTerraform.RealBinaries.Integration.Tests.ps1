@@ -263,9 +263,49 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $legacyModule = Join-Path $legacy 'modules' 'legacy_headers'
             $null = New-Item -ItemType Directory -Path $legacyModule -Force
             Set-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+}
+
 variable "tracing_tags_header" {
   type    = string
   default = null
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'terraform.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+  }
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'main.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+resource "azapi_resource" "legacy_headers" {
+  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  read_headers   = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+locals {
+  valid_module_source_regex = []
+}
+
+locals {
+  fork_avm = false
+}
+
+locals {
+  avm_azapi_headers = {}
+}
+
+locals {
+  avm_azapi_header = ""
 }
 '@
 
@@ -326,12 +366,19 @@ locals {
             }
 
             $result.Status | Should -Be 'pass'
-            $transformed = (Get-ChildItem -LiteralPath $legacy -Filter '*.tf' -File |
+            $transformed = (Get-ChildItem -LiteralPath $legacy -Recurse -Filter '*.tf' -File |
+                    Where-Object {
+                        [System.IO.Path]::GetRelativePath($legacy, $_.FullName) -notmatch '(^|[\\/])\.'
+                    } |
                     ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
             $transformed | Should -Not -Match 'local\.avm_azapi_header'
             $transformed | Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
             $transformed | Should -Match 'resource "azapi_data_plane_resource" "legacy_headers"'
             $transformed | Should -Match 'resource "azapi_update_resource" "legacy_headers"'
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'main.tf') -Raw) |
+                Should -Not -Match '(?m)^\s*(create|delete|read|update)_headers\s*='
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Raw) |
+                Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
             @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
                 Should -Be 3
             $transformed | Should -Match '(?m)^\s*main_location\s*='

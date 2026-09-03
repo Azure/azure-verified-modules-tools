@@ -35,9 +35,6 @@ transform "reorder_attributes" "module_full" {
   body_attributes          = concat(sort(each.value.required_variables), sort(each.value.optional_variables))
   foot_attributes          = ["depends_on"]
   sort_body_alphabetically = false
-  depends_on = [
-    transform.remove_block_element.module_tracing_tags_header,
-  ]
 }
 
 transform "reorder_attributes" "moved_attrs" {

@@ -22,11 +22,15 @@ header-only helper locals from `main.telemetry.tf` while preserving the
 - [x] Run the updated pre-commit chain against current AzAPI and AzureRM
       modules, including modules with no AzAPI resources.
 - [x] Validate the transformed real modules and record the results.
+- [x] Remove MaPoTF-generated telemetry headers and helper locals from local
+      submodules without applying the full pre-commit bundle recursively.
+- [x] Validate recursive cleanup against real modules containing generated
+      submodule telemetry.
 
 ## Validation
 
 - `./build.ps1 pre-commit`: passed.
-  - Unit: 1,019 passed, 8 skipped.
+  - Unit: 1,020 passed, 8 skipped.
   - Component: 29 passed.
   - Layout and lint passed.
 - `$env:AVM_INTEGRATION_FIXTURE = 'terraform-azure-avm-res-mock';
@@ -48,9 +52,16 @@ header-only helper locals from `main.telemetry.tf` while preserving the
     `azapi_resource_action`; pre-commit and validation passed; second transform
     changed zero files. All 30 executable `local.avm_azapi_header` references
     were removed and all 58 unrelated tracing-header attributes were preserved.
-- The cleanup remains a single MaPoTF invocation. Header removal runs before
-  resource and module attribute ordering through `depends_on`; no MaPoTF code
-  change or post-transform bundle is required.
+- MaPoTF-generated submodule telemetry was confirmed in
+  `terraform-azurerm-avm-res-compute-virtualmachine/modules/backup` and
+  `terraform-azurerm-avm-res-app-containerapp/modules/auth-config`.
+- The engine applies the standard pre-commit bundle to the root and a
+  cleanup-only bundle to the root plus each immediate local `modules/*`
+  module. This removes generated submodule headers and helper locals without
+  applying `main_telemetry_tf` to submodules or modifying downloaded modules.
+- Fresh VM and Container App runs removed all executable
+  `local.avm_azapi_header` references from the root and submodules, passed
+  `avm test`, and produced zero transform changes on the second pre-commit run.
 
 ## Blockers or dependencies
 
