@@ -133,6 +133,10 @@ transform "reorder_attributes" "azapi_resource_body" {
   body_attributes          = try(local.attrs_azapi_resource_body_by_type[each.value], [])
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
+  depends_on = [
+    transform.remove_block_element.full_headers,
+    transform.remove_block_element.azapi_update_resource_headers,
+  ]
 }
 
 transform "reorder_attributes" "random_resource_body" {

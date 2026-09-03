@@ -387,7 +387,7 @@ Two cache layouts produced by the module today:
 | -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------ | ------------------ |
 | Tool cache     | `%LOCALAPPDATA%\Avm\Tools\<tool>\<version>\<binary>`               | `…\Avm\Tools\terraform-docs\0.20.0\terraform-docs.exe`                                           | ~92    | ~168               |
 | Tool cache     | same                                                               | `…\Avm\Tools\avm-mapotf-pre-commit\1.99.0\avm-mapotf-pre-commit.exe`                             | ~108   | ~152               |
-| Asset cache    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\<sha256>\<sub-path>`       | `…\Cache\assets\avm-mapotf-configs-pre-commit\<64-hex>\mapotf-configs\post-transform\remove_avm_headers_for_azapi.mptf.hcl` | **204** | **56**             |
+| Asset cache    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\<sha256>\<sub-path>`       | `…\Cache\assets\avm-mapotf-configs-pre-commit\<64-hex>\mapotf-configs\pre-commit\remove_avm_headers_for_azapi.mptf.hcl` | **204** | **56**             |
 | Asset cache    | same, but with spec-compliant 12-hex segment                       | same with `<12-hex>` in place of `<64-hex>`                                                      | 152    | 108                |
 | Staging dir    | `%LOCALAPPDATA%\Avm\Cache\assets\<name>\.staging\<12-char-guid>\…` | …same `mapotf` content path under `.staging\<guid>\`                                             | ~161   | ~99                |
 | Log file       | `%LOCALAPPDATA%\Avm\Logs\<iso8601>.log`                            | `…\Avm\Logs\20260605T123045Z.log`                                                                | ~70    | ~190               |
@@ -536,10 +536,13 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 ## Appendix B. Decision: mapotf replacement strategy
 
 > **UPDATE 2026-09-02 — AzAPI request-header telemetry is retired.** The live
-> transform chain replaces `avm_headers_for_azapi` with a dedicated
-> post-transform `remove_avm_headers_for_azapi` pass, removes all AzAPI lifecycle header
-> attributes, and removes the `valid_module_source_regex`, `fork_avm`,
-> `avm_azapi_headers`, and `avm_azapi_header` locals. The
+> bundle replaces `avm_headers_for_azapi` with
+> `remove_avm_headers_for_azapi`, removes direct AVM telemetry header
+> attributes, unwraps the AVM contribution from merged custom headers, and
+> removes nested-module `tracing_tags_header` arguments that reference
+> `local.avm_azapi_header`. Unrelated custom headers remain unchanged. It also
+> removes the `valid_module_source_regex`, `fork_avm`, `avm_azapi_headers`, and
+> `avm_azapi_header` locals. The
 > `main_telemetry_tf` rule still manages `variable.enable_telemetry` and the
 > `modtm_telemetry` resource path. The historical audit below is retained to
 > explain the previous behavior.

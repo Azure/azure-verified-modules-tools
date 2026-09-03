@@ -57,9 +57,10 @@ section when cutting a release.
 
 ### Changed
 
-- The packaged MaPoTF rules now remove AzAPI lifecycle header attributes and
-  their obsolete telemetry helper locals. AVM telemetry continues through the
-  `modtm_telemetry` resource without adding request headers.
+- The packaged MaPoTF rules now remove AVM telemetry contributions from AzAPI
+  lifecycle headers and nested-module tracing inputs while preserving unrelated
+  custom headers. The obsolete helper locals are removed and telemetry
+  continues through the `modtm_telemetry` resource.
 - The packaged AVM TFLint plugin now pins 1.0.0 and every AVM rule reference
   uses its canonical `avm_*` name. Built-in Terraform rule names remain
   unchanged. The previously deferred rule families now receive native

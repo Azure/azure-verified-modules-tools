@@ -260,17 +260,32 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $legacy = Join-Path $script:WorkRoot "$name-legacy-headers"
             Copy-Item -LiteralPath $script:StagedModule -Destination $legacy -Recurse -Force
 
+            $legacyModule = Join-Path $legacy 'modules' 'legacy_headers'
+            $null = New-Item -ItemType Directory -Path $legacyModule -Force
+            Set-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+variable "tracing_tags_header" {
+  type    = string
+  default = null
+}
+'@
+
             $legacyResources = @'
 resource "azapi_data_plane_resource" "legacy_headers" {
   create_headers = { "User-Agent" = local.avm_azapi_header }
-  delete_headers = { "User-Agent" = local.avm_azapi_header }
-  read_headers   = { "User-Agent" = local.avm_azapi_header }
+  delete_headers = merge(local.tracing_headers, (var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {}))
+  read_headers   = local.tracing_headers
   update_headers = { "User-Agent" = local.avm_azapi_header }
 }
 
 resource "azapi_update_resource" "legacy_headers" {
   read_headers   = { "User-Agent" = local.avm_azapi_header }
-  update_headers = { "User-Agent" = local.avm_azapi_header }
+  update_headers = merge(local.tracing_headers, (var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {}))
+}
+
+module "legacy_headers" {
+  source = "./modules/legacy_headers"
+
+  tracing_tags_header = var.enable_telemetry ? local.avm_azapi_header : null
 }
 '@
             Add-Content -LiteralPath (Join-Path $legacy 'main.tf') -Value "`n$legacyResources" -Encoding utf8NoBOM -NoNewline
@@ -291,6 +306,12 @@ locals {
 locals {
   avm_azapi_header = ""
 }
+
+locals {
+  tracing_headers = {
+    "x-ms-correlation-request-id" = "test"
+  }
+}
 '@
             Add-Content -LiteralPath (Join-Path $legacy 'main.telemetry.tf') -Value "`n$legacyLocals" -Encoding utf8NoBOM -NoNewline
 
@@ -307,10 +328,12 @@ locals {
             $result.Status | Should -Be 'pass'
             $transformed = (Get-ChildItem -LiteralPath $legacy -Filter '*.tf' -File |
                     ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
-            $transformed | Should -Not -Match '(?m)^\s*(create|delete|read|update)_headers\s*='
+            $transformed | Should -Not -Match 'local\.avm_azapi_header'
             $transformed | Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
             $transformed | Should -Match 'resource "azapi_data_plane_resource" "legacy_headers"'
             $transformed | Should -Match 'resource "azapi_update_resource" "legacy_headers"'
+            @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
+                Should -Be 3
             $transformed | Should -Match '(?m)^\s*main_location\s*='
         }
 
