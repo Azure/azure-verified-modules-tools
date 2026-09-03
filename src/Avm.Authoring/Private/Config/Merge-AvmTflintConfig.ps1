@@ -71,6 +71,67 @@ function Get-AvmTflintOverrideBlock {
     return $blocks.ToArray()
 }
 
+function Get-AvmTflintOverrideWarning {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [object[]] $Scopes = @()
+    )
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $overridePaths = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @(
+            'avm.tflint.override.hcl'
+            'avm.tflint_example.override.hcl'
+            'avm.tflint_module.override.hcl'
+        )) {
+        $overridePath = Join-Path $rootFull $name
+        if (Test-Path -LiteralPath $overridePath -PathType Leaf) {
+            $overridePaths.Add($overridePath)
+        }
+    }
+
+    foreach ($scope in $Scopes) {
+        $relPath = [string]$scope.RelPath
+        if ($relPath -eq '.') {
+            continue
+        }
+        $overridePath = Get-AvmTflintScopeOverridePath -Root $rootFull -RelPath $relPath
+        if ($overridePath) {
+            $overridePaths.Add($overridePath)
+        }
+    }
+
+    $warnings = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($overridePath in $overridePaths) {
+        $file = [System.IO.Path]::GetRelativePath($rootFull, $overridePath).Replace('\', '/')
+        foreach ($block in (Get-AvmTflintOverrideBlock -Path $overridePath)) {
+            if ($block.Type -cne 'rule') {
+                continue
+            }
+            $enabled = @($block.Attributes | Where-Object { $_.Name -ceq 'enabled' } | Select-Object -Last 1)
+            if ($enabled.Count -eq 0 -or $enabled[0].Value -cne 'false') {
+                continue
+            }
+            $rule = [string]$block.Label
+            $key = "$file`0$rule"
+            if (-not $seen.Add($key)) {
+                continue
+            }
+            $warnings.Add([pscustomobject][ordered]@{
+                    File = $file
+                    Rule = $rule
+                })
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
 function Merge-AvmTflintConfig {
     [CmdletBinding()]
     param(

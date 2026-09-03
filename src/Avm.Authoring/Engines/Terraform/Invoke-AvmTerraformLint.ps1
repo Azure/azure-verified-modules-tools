@@ -309,6 +309,53 @@ function Test-AvmInlineAvmNotice {
     )
 }
 
+function Get-AvmTflintInlineIgnoreWarning {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $warnings = [System.Collections.Generic.List[object]]::new()
+    $terraformFiles = @(
+        Get-ChildItem `
+            -LiteralPath $rootFull `
+            -Filter '*.tf' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                @(($_.FullName.Substring($rootFull.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)) -split '[\\/]' |
+                    Where-Object { $_ -eq '.terraform' }).Count -eq 0
+            } |
+            Sort-Object FullName
+    )
+
+    $pattern = '(?i)(?:#|//)\s*tflint-ignore\s*:?\s*(?<rules>[A-Za-z0-9_.-][A-Za-z0-9_.,\s-]*)?'
+    foreach ($terraformFile in $terraformFiles) {
+        $relativePath = [System.IO.Path]::GetRelativePath($rootFull, $terraformFile.FullName).Replace('\', '/')
+        $lines = [System.IO.File]::ReadAllLines($terraformFile.FullName)
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            $line = $lines[$index]
+            foreach ($match in [regex]::Matches($line, $pattern)) {
+                $rules = @(
+                    ([string]$match.Groups['rules'].Value) -split '[,\s]+' |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                )
+                $warnings.Add([pscustomobject][ordered]@{
+                        File  = $relativePath
+                        Line  = $index + 1
+                        Rules = $rules
+                    })
+            }
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
 function Invoke-AvmTerraformLint {
     <#
     .SYNOPSIS
@@ -419,6 +466,25 @@ function Invoke-AvmTerraformLint {
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
     )
+    foreach ($warning in (Get-AvmTflintOverrideWarning -Root $Context.Root -Scopes $sourceScopes)) {
+        Write-AvmLog `
+            -Message ("TFLint override disables rule '{0}'." -f $warning.Rule) `
+            -Level Warning `
+            -File $warning.File
+    }
+    foreach ($warning in (Get-AvmTflintInlineIgnoreWarning -Root $Context.Root)) {
+        $ruleText = if ($warning.Rules.Count -gt 0) {
+            " for rule(s): $($warning.Rules -join ', ')"
+        }
+        else {
+            ''
+        }
+        Write-AvmLog `
+            -Message ("TFLint inline ignore comment found{0}." -f $ruleText) `
+            -Level Warning `
+            -File $warning.File `
+            -Line $warning.Line
+    }
     $configSet = New-AvmTflintConfigSet `
         -Root $Context.Root `
         -BaseConfigDir $baseConfigDir `
