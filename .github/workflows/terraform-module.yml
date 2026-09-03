@@ -17,11 +17,12 @@
 #         contents: read
 #       secrets: inherit
 #
-# `secrets: inherit` is REQUIRED: the "Prepare test environment" step fans the
-# full secret + variable sets into $GITHUB_ENV so terraform and example hooks
-# inherit them. This replaces the governance cred-prep script's curated
-# `AVM_*` / `TF_VAR_*` subset forwarding - and makes the old `AVM_BARE_` prefix
-# escape hatch redundant, so it is intentionally dropped here.
+# For trusted runs, `secrets: inherit` is REQUIRED: the credentialled
+# integration and end-to-end jobs fan the full secret + variable sets into
+# $GITHUB_ENV so terraform and example hooks inherit them. Fork pull requests
+# receive no inherited secrets, but can still run unit tests and the static
+# `pr-check` job. Integration, example discovery, and end-to-end tests remain
+# restricted to trusted, non-fork pull requests.
 #
 # Divergences from the governance template (tracked as follow-ups):
 #   * There is no global setup/teardown stage; the module implements per-example
@@ -214,13 +215,8 @@ jobs:
 
   pr-check:
     name: PR check
-    if: github.event.pull_request.head.repo.fork == false
-    needs: subscriptions
     runs-on: ubuntu-latest
-    environment: pr-check
-    permissions:
-      id-token: write
-      contents: read
+    environment: no-approval
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,8 +235,6 @@ jobs:
 
       - name: Prepare test environment
         shell: pwsh
-        env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -279,26 +273,12 @@ jobs:
               "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
-          # Azure OIDC plumbing for terraform (ARM_USE_OIDC=true).
-          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
-              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
-              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-
           # ARM_*_OVERRIDE precedence (governance convention).
           foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
               $override = [string] $combined["${name}_OVERRIDE"]
               if (-not [string]::IsNullOrWhiteSpace($override)) {
                   "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
               }
-          }
-
-          # Selected test subscription wins unless an explicit override was set.
-          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
-              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
       - name: Install Avm.Authoring

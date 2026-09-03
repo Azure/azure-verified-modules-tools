@@ -9,6 +9,21 @@ Describe 'terraform-module reusable workflow' {
         $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
         $script:e2eJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  pr-check:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the pr-check job block.' }
+        $script:prCheckJob = $jobMatch.Value
+    }
+
+    It 'runs the static pr-check job for fork pull requests without Azure credentials' {
+        $script:prCheckJob | Should -Not -Match 'github\.event\.pull_request\.head\.repo\.fork'
+        $script:prCheckJob | Should -Not -Match '(?m)^\s*needs:\s*subscriptions\s*$'
+        $script:prCheckJob | Should -Not -Match 'id-token:\s*write'
+        $script:prCheckJob | Should -Not -Match 'ARM_OIDC_REQUEST_(TOKEN|URL)'
+        $script:prCheckJob | Should -Not -Match 'SELECTED_SUBSCRIPTION_ID'
+        $script:prCheckJob | Should -Not -Match 'needs\.subscriptions\.outputs\.subscriptionId'
+        $script:prCheckJob | Should -Match '(?m)^\s*environment:\s*no-approval\s*$'
+        $script:prCheckJob | Should -Match '(?m)^\s*avm pr-check\s*$'
     }
 
     It 'passes the non-secret subscription ID as a job output without masking it' {
