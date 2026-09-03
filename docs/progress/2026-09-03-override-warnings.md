@@ -19,6 +19,7 @@ source file and rule or rules being overridden.
 - [x] Run targeted tests and the pre-commit gate.
 - [x] Run code review and CodeQL checks.
 - [x] Reuse the applied TFLint override paths for warning detection.
+- [x] Update real-binary integration assertions for the new warnings.
 
 ## Validation
 
@@ -30,6 +31,8 @@ source file and rule or rules being overridden.
 - PASS: focused TFLint suite after override-path reuse (47 passed).
 - PASS: `./build.ps1 pre-commit` after override-path reuse (1,025 unit tests
   passed, 8 skipped; 29 component tests passed; 5 tasks, 0 errors).
+- PASS: `./build.ps1 integration` after updating warning-stream assertions
+  (21 passed, 3 skipped).
 - PASS: Code review completed after the production changes; its actionable
   feedback was addressed. The final test-only review retry timed out.
 - PASS: CodeQL checker reported no analyzable code changes for CodeQL languages,
