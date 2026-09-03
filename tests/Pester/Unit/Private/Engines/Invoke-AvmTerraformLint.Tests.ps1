@@ -218,6 +218,8 @@ rule "terraform_unused_declarations" {
         $warnings[0].Rule | Should -Be 'avm_interface_managed_identities'
         $warnings[1].File | Should -Be 'modules/network/avm.tflint.override.hcl'
         $warnings[1].Rule | Should -Be 'terraform_unused_declarations'
+        @($warnings | Where-Object File -eq 'modules/network/avm.tflint.override.hcl').Count |
+            Should -Be 1
     }
 }
 
