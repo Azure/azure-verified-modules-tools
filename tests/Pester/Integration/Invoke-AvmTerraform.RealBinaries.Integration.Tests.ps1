@@ -376,6 +376,13 @@ output "single_file_output" {
   value = var.single_file_input
 }
 '@
+            $noTerraformExample = Join-Path $legacy 'examples' 'no_terraform_block'
+            $null = New-Item -ItemType Directory -Path $noTerraformExample -Force
+            Set-Content -LiteralPath (Join-Path $noTerraformExample 'main.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+locals {
+  example = "no terraform block"
+}
+'@
 
             $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $legacy } {
                 param($R)
@@ -410,6 +417,8 @@ output "single_file_output" {
             (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'variables.tf')) |
                 Should -BeFalse
             (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'outputs.tf')) |
+                Should -BeFalse
+            (Test-Path -LiteralPath (Join-Path $noTerraformExample 'terraform.tf')) |
                 Should -BeFalse
             @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
                 Should -Be 3

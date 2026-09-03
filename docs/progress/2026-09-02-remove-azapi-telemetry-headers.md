@@ -39,7 +39,7 @@ header-only helper locals from `main.telemetry.tf` while preserving the
 ## Validation
 
 - `./build.ps1 pre-commit`: passed.
-  - Unit: 1,022 passed, 8 skipped.
+  - Unit: 1,024 passed, 8 skipped.
   - Component: 29 passed.
   - Layout and lint passed.
 - `$env:AVM_INTEGRATION_FIXTURE = 'terraform-azure-avm-res-mock';
@@ -98,6 +98,17 @@ header-only helper locals from `main.telemetry.tf` while preserving the
     duration 12m 21s.
   - Web Site: 20 files changed, 111 insertions, 162 deletions; transform
     duration 14m 03s.
+- Final-profile cross-kind validation:
+  - AzureRM-only resource modules `keyvault-vault` and
+    `network-networksecuritygroup`: pre-commit and validation passed; repeat
+    transforms changed zero files.
+  - Utility module `network-ip-addresses`: pre-commit and validation passed;
+    repeat transform changed zero files. Its example has no `terraform` block,
+    proving common Terraform ordering skips that valid shape.
+  - Pattern module `azuremonitorwindowsagent`: clean baseline, pre-commit, and
+    post-transform validation passed; repeat transform changed zero files.
+  - Pattern module `ephemeral-credential` has a pre-existing root-validation
+    failure for ephemeral outputs; the same error occurs on an untouched clone.
 
 ## Blockers or dependencies
 
