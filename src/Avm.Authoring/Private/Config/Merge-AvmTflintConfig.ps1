@@ -71,6 +71,46 @@ function Get-AvmTflintOverrideBlock {
     return $blocks.ToArray()
 }
 
+function Get-AvmTflintOverrideWarning {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $OverridePaths
+    )
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $warnings = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($overridePath in $OverridePaths) {
+        $file = [System.IO.Path]::GetRelativePath($rootFull, $overridePath).Replace('\', '/')
+        foreach ($block in (Get-AvmTflintOverrideBlock -Path $overridePath)) {
+            if ($block.Type -cne 'rule') {
+                continue
+            }
+            $enabled = @($block.Attributes | Where-Object { $_.Name -ceq 'enabled' } | Select-Object -Last 1)
+            if ($enabled.Count -eq 0 -or $enabled[0].Value -cne 'false') {
+                continue
+            }
+            $rule = [string]$block.Label
+            $key = "$file`0$rule"
+            if (-not $seen.Add($key)) {
+                continue
+            }
+            $warnings.Add([pscustomobject][ordered]@{
+                    File = $file
+                    Rule = $rule
+                })
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
 function Merge-AvmTflintConfig {
     [CmdletBinding()]
     param(
@@ -188,13 +228,19 @@ function New-AvmTflintConfigSet {
         [object[]] $Scopes = @()
     )
 
-    $names = @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')
+    $names = @(
+        $Scopes |
+            ForEach-Object { [System.IO.Path]::GetFileName([string]$_.Config) } |
+            Sort-Object -Unique
+    )
     $overrides = @{}
+    $overridePaths = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $names) {
         $overrideName = $name -replace '\.hcl$', '.override.hcl'
         $overridePath = Join-Path $Root $overrideName
         if (Test-Path -LiteralPath $overridePath -PathType Leaf) {
             $overrides[$name] = $overridePath
+            $overridePaths.Add($overridePath)
         }
     }
 
@@ -211,12 +257,14 @@ function New-AvmTflintConfigSet {
         $overridePath = Get-AvmTflintScopeOverridePath -Root $Root -RelPath $relPath
         if ($overridePath) {
             $scopeOverrides.Add($relPath, $overridePath)
+            $overridePaths.Add($overridePath)
         }
     }
 
     if ($overrides.Count -eq 0 -and $scopeOverrides.Count -eq 0) {
         return [pscustomobject]@{
             ConfigDir        = $BaseConfigDir
+            OverridePaths    = @()
             ScopeConfigNames = @{}
             StageDir         = $null
         }
@@ -265,6 +313,7 @@ function New-AvmTflintConfigSet {
 
         return [pscustomobject]@{
             ConfigDir        = $stageDir
+            OverridePaths    = $overridePaths.ToArray()
             ScopeConfigNames = $scopeConfigNames
             StageDir         = $stageDir
         }
