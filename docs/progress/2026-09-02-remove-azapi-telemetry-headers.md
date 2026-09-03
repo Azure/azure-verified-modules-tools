@@ -39,7 +39,7 @@ header-only helper locals from `main.telemetry.tf` while preserving the
 ## Validation
 
 - `./build.ps1 pre-commit`: passed.
-  - Unit: 1,024 passed, 8 skipped.
+  - Unit: 1,030 passed, 8 skipped.
   - Component: 29 passed.
   - Layout and lint passed.
 - `$env:AVM_INTEGRATION_FIXTURE = 'terraform-azure-avm-res-mock';
@@ -109,6 +109,10 @@ header-only helper locals from `main.telemetry.tf` while preserving the
     post-transform validation passed; repeat transform changed zero files.
   - Pattern module `ephemeral-credential` has a pre-existing root-validation
     failure for ephemeral outputs; the same error occurs on an untouched clone.
+- After merging current `main`, the TFLint attestation expectation was updated
+  from three warnings to two because this slice removes the
+  `terraform_unused_declarations` inline-ignore comment along with
+  `local.avm_azapi_header`. The released-plugin integration passed afterward.
 
 ## Blockers or dependencies
 
