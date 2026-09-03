@@ -1,9 +1,9 @@
 # Override warnings
 
-**Status**: blocked
+**Status**: complete
 **Started**: 2026-09-03
 **Updated**: 2026-09-03
-**Branch**: `copilot/add-warning-output-for-overrides`
+**Branch**: `jaredfholgate-complete-override-warnings`
 
 ## Outcome
 
@@ -24,9 +24,8 @@ source file and rule or rules being overridden.
 - PASS: `Invoke-Pester -Path ./tests/Pester/Unit/Private/Engines/Invoke-AvmTerraformLint.Tests.ps1,./tests/Pester/Unit/Private/Engines/Invoke-AvmTerraformCheckPolicy.Tests.ps1 -CI`
   (60 passed; focused fallback after the build dependency could not be
   installed).
-- BLOCKED: `pwsh ./build.ps1 test` and `pwsh ./build.ps1 pre-commit` both require
-  InvokeBuild, and PSGallery returned `Resource temporarily unavailable` while
-  installing it.
+- PASS: `./build.ps1 pre-commit` (1,025 unit tests passed, 8 skipped; 29
+  component tests passed; 5 tasks, 0 errors).
 - PASS: Code review completed after the production changes; its actionable
   feedback was addressed. The final test-only review retry timed out.
 - PASS: CodeQL checker reported no analyzable code changes for CodeQL languages,
@@ -34,5 +33,4 @@ source file and rule or rules being overridden.
 
 ## Blockers
 
-- Pre-commit cannot run until InvokeBuild is available; PSGallery returned
-  `Resource temporarily unavailable` while installing it.
+- None.
