@@ -343,10 +343,10 @@ function Get-AvmTflintInlineIgnoreWarning {
             $line = $lines[$index]
             if ($null -ne $heredocTerminator) {
                 $candidateTerminator = if ($heredocIndented) {
-                    $line.TrimStart()
+                    $line.TrimStart().TrimEnd()
                 }
                 else {
-                    $line
+                    $line.TrimEnd()
                 }
                 if ($candidateTerminator -ceq $heredocTerminator) {
                     $heredocTerminator = $null

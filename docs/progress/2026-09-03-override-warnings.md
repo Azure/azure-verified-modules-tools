@@ -1,6 +1,6 @@
 # Override warnings
 
-**Status**: complete
+**Status**: blocked
 **Started**: 2026-09-03
 **Updated**: 2026-09-03
 **Branch**: `copilot/add-warning-output-for-overrides`
@@ -30,4 +30,5 @@ source file and rule or rules being overridden.
 
 ## Blockers
 
-- None.
+- Pre-commit cannot run until InvokeBuild is available; PSGallery returned
+  `Resource temporarily unavailable` while installing it.
