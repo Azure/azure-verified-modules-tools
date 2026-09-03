@@ -19,6 +19,10 @@ switch ($args[0]) {
         Write-Output "Version: $env:AVM_STUB_TOOL_VERSION"
         exit 0
     }
+    'parse' {
+        Write-Output '[{"path":"main.tf","contents":{}}]'
+        exit 0
+    }
     'test' {
         $override = $env:AVM_STUB_CONFTEST_OUTPUT
         if ([string]::IsNullOrWhiteSpace($override)) {

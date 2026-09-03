@@ -24,6 +24,8 @@ function Invoke-AvmTerraformInit {
 
         [switch] $NoColor,
 
+        [string] $TestDirectory,
+
         [switch] $SkipPluginCacheLock,
 
         [switch] $StreamOutput
@@ -38,6 +40,9 @@ function Invoke-AvmTerraformInit {
     $arguments.Add('-input=false')
     if ($NoColor) {
         $arguments.Add('-no-color')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TestDirectory)) {
+        $arguments.Add(('-test-directory={0}' -f $TestDirectory))
     }
 
     $processParameters = @{

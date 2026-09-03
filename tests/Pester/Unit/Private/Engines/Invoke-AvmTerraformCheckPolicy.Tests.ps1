@@ -85,7 +85,32 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $null = New-Item -ItemType Directory -Path $script:aprlDir -Force
         $null = New-Item -ItemType Directory -Path $script:avmsecDir -Force
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value 'variable "x" {}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'terraform.tf') -Encoding utf8 -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source = "Azure/modtm"
+    }
+  }
+}
+'@
         Set-Content -LiteralPath (Join-Path $script:exampleDir 'main.tf') -Value 'module "test" { source = "../.." }' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'terraform.tf') -Encoding utf8 -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source = "Azure/azapi"
+    }
+    random = {
+      source = "hashicorp/random"
+    }
+  }
+}
+
+provider "azapi" {
+  alias = "secondary"
+}
+'@
         Set-Content -LiteralPath (Join-Path $script:avmsecDir 'avm_exceptions.rego.bak') -Value 'package avmsec' -Encoding utf8
 
         $script:context = [pscustomobject][ordered]@{
@@ -154,8 +179,21 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                         FilePath         = $FilePath
                         Arguments        = @($ArgumentList)
                         WorkingDirectory = $WorkingDirectory
-                        EnvVars          = @{} + $EnvVars
+                        EnvVars          = if ($EnvVars -is [hashtable]) { @{} + $EnvVars } else { @{} }
                         PlanJsonExists   = Test-Path -LiteralPath (Join-Path $WorkingDirectory 'tfplan.json')
+                        PlanJson         = if (Test-Path -LiteralPath (Join-Path $WorkingDirectory 'tfplan.json')) {
+                            Get-Content -LiteralPath (Join-Path $WorkingDirectory 'tfplan.json') -Raw
+                        }
+                        else {
+                            ''
+                        }
+                        PolicyTest       = if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                            Get-ChildItem -LiteralPath $WorkingDirectory -Recurse -File -Filter '*.tftest.hcl' |
+                                ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
+                        }
+                        else {
+                            ''
+                        }
                         CacheLockHeld    = (
                             $null -ne $script:providerCacheLock -and
                             $script:providerCacheLock.CanRead
@@ -164,8 +202,22 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                 if ($ArgumentList[-1] -like '*pre.ps1') {
                     Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_SUBSCRIPTION_ID=example-sub' -Encoding utf8
                 }
-                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.2"}'; StdErr = '' }
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut   = @(
+                            '{"type":"version","terraform":"1.15.8"}'
+                            '{"type":"test_plan","test_plan":{"plan_format_version":"1.2","resource_changes":[],"provider_schemas":{}}}'
+                        ) -join "`n"
+                        StdErr   = ''
+                    }
+                }
+                if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '[{"path":"main.tf","contents":{"terraform":[{"required_providers":[{"azapi":{"source":"Azure/azapi"},"modtm":{"source":"Azure/modtm"},"random":{"source":"hashicorp/random"}}]}],"provider":{"azapi":[{},{"alias":"secondary"}]},"resource":{"azapi_resource":{"example":[{"parent_id":"${one(azapi_resource.parent[*].output.id)}","private_service_connection":[{"private_connection_resource_id":"${azapi_resource.parent.output.id}"}]}]}}}}]'
+                        StdErr = ''
+                    }
                 }
                 if ($FilePath -eq '/fake/conftest') {
                     return [pscustomobject]@{
@@ -188,34 +240,59 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Result.Status | Should -Be 'pass'
         $probe.Result.Evaluated | Should -Be 260
         $probe.Result.Issues.Count | Should -Be 0
-        $probe.Calls.Count | Should -Be 7
-        $probe.Calls[0].Arguments[-1] | Should -BeLike '*pre.ps1'
-        $probe.Calls[1].Arguments | Should -Be @('init', '-upgrade', '-input=false', '-no-color')
-        $probe.Calls[2].Arguments | Should -Be @('plan', '-out=tfplan', '-input=false', '-no-color')
-        $probe.Calls[3].Arguments | Should -Be @('show', '-json', 'tfplan')
-        foreach ($terraformCall in @($probe.Calls[1], $probe.Calls[2], $probe.Calls[3])) {
+        $preCall = @($probe.Calls | Where-Object { $_.Arguments[-1] -like '*pre.ps1' })[0]
+        $postCall = @($probe.Calls | Where-Object { $_.Arguments[-1] -like '*post.ps1' })[0]
+        $terraformCalls = @($probe.Calls | Where-Object FilePath -eq '/fake/terraform')
+        $parseCalls = @($probe.Calls | Where-Object {
+                $_.FilePath -eq '/fake/conftest' -and $_.Arguments[0] -eq 'parse'
+            })
+        $policyCalls = @($probe.Calls | Where-Object {
+                $_.FilePath -eq '/fake/conftest' -and $_.Arguments[0] -eq 'test'
+            })
+
+        $preCall | Should -Not -BeNullOrEmpty
+        $postCall | Should -Not -BeNullOrEmpty
+        $terraformCalls.Count | Should -Be 2
+        $terraformCalls[0].Arguments[0..3] | Should -Be @('init', '-upgrade', '-input=false', '-no-color')
+        $terraformCalls[0].Arguments[4] | Should -BeLike '-test-directory=.avm-policy-tests-*'
+        $terraformCalls[1].Arguments[0..3] | Should -Be @('test', '-json', '-verbose', '-no-color')
+        $terraformCalls[1].Arguments[4] | Should -BeLike '-test-directory=.avm-policy-tests-*'
+        foreach ($terraformCall in $terraformCalls) {
             $terraformCall.CacheLockHeld | Should -BeTrue
         }
-        $probe.Calls[4].FilePath | Should -Be '/fake/conftest'
-        $probe.Calls[5].FilePath | Should -Be '/fake/conftest'
-        $probe.Calls[4].CacheLockHeld | Should -BeFalse
-        $probe.Calls[5].CacheLockHeld | Should -BeFalse
-        $probe.Calls[6].Arguments[-1] | Should -BeLike '*post.ps1'
-        foreach ($policyCall in @($probe.Calls[4], $probe.Calls[5])) {
+        $terraformCalls[1].PolicyTest | Should -Match 'mock_provider "azapi" \{\s+override_during = plan'
+        $terraformCalls[1].PolicyTest | Should -Match 'mock_provider "azapi" \{\s+alias = "secondary"'
+        $terraformCalls[1].PolicyTest | Should -Match 'alias = "secondary"\s+override_during = plan'
+        $terraformCalls[1].PolicyTest | Should -Match 'mock_provider "modtm" \{\s+override_during = plan'
+        $terraformCalls[1].PolicyTest | Should -Match 'mock_provider "random" \{\s+override_during = plan'
+        $parseCalls.Count | Should -BeGreaterThan 0
+        $parseCalls[0].Arguments | Should -Contain '--parser'
+        $parseCalls[0].Arguments | Should -Contain 'hcl2'
+        $policyCalls.Count | Should -Be 2
+        foreach ($policyCall in $policyCalls) {
+            $policyCall.CacheLockHeld | Should -BeFalse
             $policyCall.Arguments | Should -Contain '--all-namespaces'
             $policyCall.Arguments | Should -Contain '--output'
             $policyCall.Arguments | Should -Contain 'json'
             $policyCall.Arguments[-1] | Should -Be 'tfplan.json'
             $policyCall.PlanJsonExists | Should -BeTrue
+            $planJson = $policyCall.PlanJson | ConvertFrom-Json
+            $planJson.format_version | Should -Be '1.2'
+            $planJson.terraform_version | Should -Be '1.15.8'
+            $planJson.configuration.root_module.resources[0].address | Should -Be 'azapi_resource.example'
+            $planJson.configuration.root_module.resources[0].expressions.parent_id.references |
+                Should -Contain 'azapi_resource.parent.output.id'
+            $planJson.configuration.root_module.resources[0].expressions.private_service_connection[0].private_connection_resource_id.references |
+                Should -Contain 'azapi_resource.parent.output.id'
             $policyCall.EnvVars['ARM_SUBSCRIPTION_ID'] | Should -Be 'example-sub'
             @($policyCall.Arguments | Where-Object { $_ -like '*default_exceptions*' }).Count | Should -Be 1
             @($policyCall.Arguments | Where-Object { $_ -like '*examples*default*exceptions' }).Count | Should -Be 1
         }
         @($probe.Calls | Where-Object WorkingDirectory -like '*ignored*').Count | Should -Be 0
-        $probe.Calls[4].Arguments | Should -Contain $script:aprlDir
-        $probe.Calls[4].Arguments | Should -Not -Contain $script:avmsecDir
-        $probe.Calls[5].Arguments | Should -Contain $script:avmsecDir
-        $probe.Calls[5].Arguments | Should -Not -Contain $script:aprlDir
+        $policyCalls[0].Arguments | Should -Contain $script:aprlDir
+        $policyCalls[0].Arguments | Should -Not -Contain $script:avmsecDir
+        $policyCalls[1].Arguments | Should -Contain $script:avmsecDir
+        $policyCalls[1].Arguments | Should -Not -Contain $script:aprlDir
         Test-Path -LiteralPath (Join-Path $probe.Cache 'policy-stage') |
             Should -BeTrue
         @(Get-ChildItem -LiteralPath (Join-Path $probe.Cache 'policy-stage') -Force).Count |
@@ -294,12 +371,19 @@ exception contains rules if {
             }
             Mock Get-AvmFolder { $Cache }
             Mock Invoke-AvmProcess {
+                if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
                 if ($FilePath -eq '/fake/conftest') {
                     $seen.Add([pscustomobject]@{ WorkingDirectory = $WorkingDirectory; Arguments = @($ArgumentList) })
                     return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
                 }
-                if ($ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"type":"test_plan","test_plan":{"plan_format_version":"1.2"}}'
+                        StdErr = ''
+                    }
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -337,6 +421,9 @@ exception contains rules if {
             }
             Mock Get-AvmFolder { $Cache }
             Mock Invoke-AvmProcess {
+                if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
                 if ($FilePath -eq '/fake/conftest' -and $ArgumentList -contains $Aprl) {
                     return [pscustomobject]@{
                         ExitCode = 1
@@ -351,8 +438,12 @@ exception contains rules if {
                         StdErr   = ''
                     }
                 }
-                if ($ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"type":"test_plan","test_plan":{"plan_format_version":"1.2"}}'
+                        StdErr = ''
+                    }
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -387,12 +478,15 @@ exception contains rules if {
             Mock Get-AvmFolder { $Cache }
             Mock Write-AvmLog
             Mock Invoke-AvmProcess {
+                if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
                 if ($ArgumentList[-1] -like '*post.ps1') {
                     $script:postRan = $true
                     throw [AvmConfigurationException]::new('post hook failed')
                 }
-                if ($ArgumentList[0] -eq 'plan') {
-                    throw [AvmProcessException]::new('terraform plan failed')
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    throw [AvmProcessException]::new('terraform policy test failed')
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -419,7 +513,7 @@ exception contains rules if {
         }
 
         $probe.ErrorName | Should -Be 'AvmProcessException'
-        $probe.Message | Should -Match 'terraform plan failed'
+        $probe.Message | Should -Match 'terraform policy test failed'
         $probe.Message | Should -Not -Match 'post hook failed'
         $probe.PostRan | Should -BeTrue
     }
@@ -444,10 +538,17 @@ exception contains rules if {
                 if ($ArgumentList[-1] -like '*post.ps1') {
                     throw [AvmConfigurationException]::new('post hook failed')
                 }
-                if ($ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"type":"test_plan","test_plan":{"plan_format_version":"1.2"}}'
+                        StdErr = ''
+                    }
                 }
-                if ($ArgumentList[0] -eq 'test') {
+                if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
+                if ($FilePath -eq '/fake/conftest') {
                     return [pscustomobject]@{
                         ExitCode = 0
                         StdOut   = '[{"filename":"tfplan.json","namespace":"main","successes":1}]'
@@ -566,6 +667,58 @@ exception contains rules if {
         $exceptionName | Should -Be 'AvmConfigurationException'
     }
 
+    It 'rejects conflicting provider source declarations before terraform init' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'terraform.tf') -Encoding utf8 -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source = "Azure/azapi"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'terraform.tf') -Encoding utf8 -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source = "hashicorp/azapi"
+    }
+  }
+}
+'@
+
+        $exceptionName = ''
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                Example = $script:exampleDir
+                Root = $script:moduleDir
+            } {
+                param($Example, $Root)
+                Mock Invoke-AvmProcess {
+                    $stdout = if ($WorkingDirectory -eq $Root) {
+                        '[{"path":"terraform.tf","contents":{"terraform":[{"required_providers":[{"azapi":{"source":"Azure/azapi"}}]}]}}]'
+                    }
+                    else {
+                        '[{"path":"terraform.tf","contents":{"terraform":[{"required_providers":[{"azapi":{"source":"hashicorp/azapi"}}]}]}}]'
+                    }
+                    [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = $stdout
+                        StdErr = ''
+                    }
+                }
+                New-AvmTerraformPolicyTest `
+                    -WorkingDirectory $Example `
+                    -ModuleRoot $Root `
+                    -ConftestPath '/fake/conftest'
+            }
+        }
+        catch {
+            $exceptionName = $_.Exception.GetType().Name
+        }
+        $exceptionName | Should -Be 'AvmConfigurationException'
+    }
+
     It 'throws when conftest exits without a policy result' {
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{
                 C = $script:context
@@ -582,11 +735,18 @@ exception contains rules if {
                 }
                 Mock Get-AvmFolder { $Cache }
                 Mock Invoke-AvmProcess {
+                    if ($FilePath -eq '/fake/conftest' -and $ArgumentList[0] -eq 'parse') {
+                        return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                    }
                     if ($FilePath -eq '/fake/conftest') {
                         return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'load failed' }
                     }
-                    if ($ArgumentList[0] -eq 'show') {
-                        return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                    if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                        return [pscustomobject]@{
+                            ExitCode = 0
+                            StdOut = '{"type":"test_plan","test_plan":{"plan_format_version":"1.2"}}'
+                            StdErr = ''
+                        }
                     }
                     [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }

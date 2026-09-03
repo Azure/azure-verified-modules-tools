@@ -9,6 +9,10 @@ Describe 'terraform-module reusable workflow' {
         $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
         $script:e2eJob = $jobMatch.Value
+
+        $prCheckMatch = [regex]::Match($script:workflow, '(?ms)^  pr-check:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $prCheckMatch.Success) { throw 'Could not isolate the pr-check job block.' }
+        $script:prCheckJob = $prCheckMatch.Value
     }
 
     It 'passes the non-secret subscription ID as a job output without masking it' {
@@ -69,6 +73,15 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match 'FALLBACK_SUBSCRIPTION_ID:\s*\$\{\{ needs\.subscriptions\.outputs\.subscriptionId \}\}'
     }
 
+    It 'runs the static PR check for fork pull requests without Azure identity permissions' {
+        $script:prCheckJob | Should -Not -Match 'head\.repo\.fork'
+        $script:prCheckJob | Should -Not -Match 'needs:\s*subscriptions'
+        $script:prCheckJob | Should -Not -Match 'id-token:\s*write'
+        $script:prCheckJob | Should -Not -Match 'ARM_OIDC_REQUEST_'
+        $script:prCheckJob | Should -Match 'environment:\s*no-approval'
+        $script:prCheckJob | Should -Match 'avm pr-check'
+    }
+
     It 'no longer lists per-example e2e targeting as a divergence' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
     }
@@ -89,6 +102,16 @@ Describe 'CI workflow' {
                 $script:ci,
                 '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 2
         $script:ci | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+    }
+
+    It 'runs real-binary static integration without Azure credentials' {
+        $integration = [regex]::Match(
+            $script:ci,
+            '(?ms)^  integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
+        $integration | Should -Not -Match 'azure/login'
+        $integration | Should -Not -Match 'id-token:\s*write'
+        $integration | Should -Not -Match 'ARM_(CLIENT|TENANT|SUBSCRIPTION)_ID'
+        $integration | Should -Not -Match 'environment:\s*avm'
     }
 }
 

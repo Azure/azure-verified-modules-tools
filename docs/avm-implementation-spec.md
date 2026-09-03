@@ -745,6 +745,12 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   - PSScriptAnalyzer with project settings.
   - Pester Unit layer.
 - `build/avm.build.ps1` exposes this as `./build.ps1 pre-commit`; contributors run it before pushing.
+- Terraform `avm pr-check` policy analysis is credential-free. For each active
+  example, the engine stages any missing provider declarations, generates a
+  temporary `terraform test` file with native `mock_provider` blocks, and passes
+  the emitted `test_plan` JSON to APRL and AVMSEC through Conftest. Real Azure
+  authentication is reserved for the integration and end-to-end module tiers,
+  so the static PR check can run on fork pull requests.
 
 ---
 

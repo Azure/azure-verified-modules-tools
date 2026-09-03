@@ -14,9 +14,11 @@ function Invoke-AvmPrCheck {
         that don't carry a Status field).
 
         This is the broader sibling of Invoke-AvmPreCommit. It adds the
-        credentialled policy evaluation and read-only drift checks used to
-        verify that pre-commit output is current. Before any step runs, git
-        status must report a clean working tree.
+        credential-free policy evaluation and read-only drift checks used to
+        verify that pre-commit output is current. Terraform policy plans use
+        native provider mocks; integration and end-to-end tiers retain real
+        provider authentication. Before any step runs, git status must report
+        a clean working tree.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a

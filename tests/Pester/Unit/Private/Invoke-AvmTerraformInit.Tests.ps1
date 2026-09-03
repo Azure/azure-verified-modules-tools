@@ -29,6 +29,7 @@ Describe 'Invoke-AvmTerraformInit' {
                 -EnvVars @{ TF_PLUGIN_CACHE_DIR = $CachePath } `
                 -Label 'fixture init' `
                 -NoColor `
+                -TestDirectory 'tests/policy' `
                 -StreamOutput
 
             Should -Invoke Lock-AvmToolCache -Exactly 1 -ParameterFilter {
@@ -40,7 +41,7 @@ Describe 'Invoke-AvmTerraformInit' {
                 $WorkingDirectory -eq $TestDrive -and
                 $Label -eq 'fixture init' -and
                 $StreamOutput -and
-                ($ArgumentList -join ' ') -eq 'init -upgrade -input=false -no-color'
+                ($ArgumentList -join ' ') -eq 'init -upgrade -input=false -no-color -test-directory=tests/policy'
             }
 
             [pscustomobject]@{
