@@ -168,12 +168,14 @@ function Get-AvmConftestOverrideWarning {
             $file = [System.IO.Path]::GetRelativePath($rootFull, $exceptionFile.FullName).Replace('\', '/')
             $text = [System.IO.File]::ReadAllText($exceptionFile.FullName)
             $rules = @(
-                foreach ($ruleListMatch in [regex]::Matches($text, '(?ms)\brules\s*(?::=|=)\s*\[(?<body>.*?)\]')) {
-                    foreach ($ruleMatch in [regex]::Matches($ruleListMatch.Groups['body'].Value, '["''](?<rule>[^"'']+)["'']')) {
-                        [string]$ruleMatch.Groups['rule'].Value
+                @(
+                    foreach ($ruleListMatch in [regex]::Matches($text, '(?ms)\brules\s*(?::=|=)\s*\[(?<body>.*?)\]')) {
+                        foreach ($ruleMatch in [regex]::Matches($ruleListMatch.Groups['body'].Value, '["''](?<rule>[^"'']+)["'']')) {
+                            [string]$ruleMatch.Groups['rule'].Value
+                        }
                     }
-                }
-            ) | Select-Object -Unique
+                ) | Select-Object -Unique
+            )
 
             if ($rules.Count -eq 0) {
                 $rules = @('<unknown>')

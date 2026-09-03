@@ -473,8 +473,9 @@ function Invoke-AvmTerraformLint {
             -File $warning.File
     }
     foreach ($warning in (Get-AvmTflintInlineIgnoreWarning -Root $Context.Root)) {
-        $ruleText = if ($warning.Rules.Count -gt 0) {
-            " for rule(s): $($warning.Rules -join ', ')"
+        $rules = @($warning.Rules)
+        $ruleText = if ($rules.Count -gt 0) {
+            " for rule(s): $($rules -join ', ')"
         }
         else {
             ''

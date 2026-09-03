@@ -180,6 +180,47 @@ rule "x" {
     }
 }
 
+Describe 'Get-AvmTflintOverrideWarning' {
+    It 'reports one disabled rule warning per override file and rule' {
+        $root = Join-Path $TestDrive 'override-warning-root'
+        $moduleDir = Join-Path $root 'modules' 'network'
+        New-Item -ItemType Directory -Path $moduleDir -Force | Out-Null
+        @'
+rule "avm_interface_managed_identities" {
+  enabled = false
+}
+
+rule "still_enabled" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath (Join-Path $root 'avm.tflint.override.hcl') -Encoding utf8
+        @'
+rule "terraform_unused_declarations" {
+  enabled = false
+}
+
+rule "terraform_unused_declarations" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $moduleDir 'avm.tflint.override.hcl') -Encoding utf8
+        $scopes = @(
+            [pscustomobject]@{ RelPath = '.' }
+            [pscustomobject]@{ RelPath = 'modules/network' }
+        )
+
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; S = $scopes } {
+            param($R, $S)
+            Get-AvmTflintOverrideWarning -Root $R -Scopes $S
+        }
+
+        @($warnings).Count | Should -Be 2
+        $warnings[0].File | Should -Be 'avm.tflint.override.hcl'
+        $warnings[0].Rule | Should -Be 'avm_interface_managed_identities'
+        $warnings[1].File | Should -Be 'modules/network/avm.tflint.override.hcl'
+        $warnings[1].Rule | Should -Be 'terraform_unused_declarations'
+    }
+}
+
 Describe 'Get-AvmTflintScope' {
     BeforeEach {
         $script:root = Join-Path $TestDrive ("scope-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -291,6 +332,32 @@ Describe 'Test-AvmInlineAvmNotice' {
     }
 }
 
+Describe 'Get-AvmTflintInlineIgnoreWarning' {
+    It 'reports one warning per inline tflint ignore comment' {
+        $root = Join-Path $TestDrive 'inline-ignore-root'
+        $nested = Join-Path $root 'examples' 'default'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        @'
+resource "azurerm_resource_group" "this" {}
+# tflint-ignore: terraform_unused_declarations
+output "name" { value = "x" } // tflint-ignore: avm_rule_one, avm_rule_two
+'@ | Set-Content -LiteralPath (Join-Path $nested 'main.tf') -Encoding utf8
+
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Get-AvmTflintInlineIgnoreWarning -Root $R
+        }
+
+        @($warnings).Count | Should -Be 2
+        $warnings[0].File | Should -Be 'examples/default/main.tf'
+        $warnings[0].Line | Should -Be 2
+        $warnings[0].Rules | Should -Be @('terraform_unused_declarations')
+        $warnings[1].File | Should -Be 'examples/default/main.tf'
+        $warnings[1].Line | Should -Be 3
+        $warnings[1].Rules | Should -Be @('avm_rule_one', 'avm_rule_two')
+    }
+}
+
 Describe 'Invoke-AvmTerraformLint' {
     BeforeEach {
         $env:RUNNER_DEBUG = ''
@@ -393,6 +460,51 @@ Describe 'Invoke-AvmTerraformLint' {
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
         $result.FilesProcessed | Should -Be 2
+    }
+
+    It 'emits warnings for override files and inline ignore comments before linting' {
+        $ctx = $script:context
+        $configDir = Join-Path $TestDrive 'warning-configs'
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        foreach ($name in @('avm.tflint.hcl', 'avm.tflint_example.hcl', 'avm.tflint_module.hcl')) {
+            'rule "avm_interface_managed_identities" { enabled = true }' |
+                Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
+        }
+        @'
+rule "avm_interface_managed_identities" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint.override.hcl') -Encoding utf8
+        Add-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value '# tflint-ignore: terraform_unused_declarations'
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Config = $configDir } {
+            param($C, $Config)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmTflintConfigDir { $Config }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Write-AvmLog
+
+            $null = Invoke-AvmTerraformLint -Context $C
+
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and
+                $File -eq 'avm.tflint.override.hcl' -and
+                $Message -eq "TFLint override disables rule 'avm_interface_managed_identities'."
+            }
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and
+                $File -eq 'main.tf' -and
+                $Line -eq 2 -and
+                $Message -eq 'TFLint inline ignore comment found for rule(s): terraform_unused_declarations.'
+            }
+        }
     }
 
     It 'streams subprocess output when <Mode> enables verbose logging' -TestCases @(
