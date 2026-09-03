@@ -188,7 +188,7 @@ provider "azapi" {
                             ''
                         }
                         PolicyTest       = if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
-                            Get-ChildItem -LiteralPath $WorkingDirectory -Recurse -File -Filter '*.tftest.hcl' |
+                            Get-ChildItem -LiteralPath $WorkingDirectory -Recurse -File -Force -Filter '*.tftest.hcl' |
                                 ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
                         }
                         else {
