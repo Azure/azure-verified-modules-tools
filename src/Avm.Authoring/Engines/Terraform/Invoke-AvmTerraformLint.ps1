@@ -555,15 +555,8 @@ function Invoke-AvmTerraformLint {
             -File $warning.File
     }
     foreach ($warning in (Get-AvmTflintInlineIgnoreWarning -Root $Context.Root)) {
-        $rules = @($warning.Rules)
-        $ruleText = if ($rules.Count -gt 0) {
-            " for rule(s): $($rules -join ', ')"
-        }
-        else {
-            ''
-        }
         Write-AvmLog `
-            -Message ("TFLint inline ignore comment found{0}." -f $ruleText) `
+            -Message ("TFLint inline ignore comment found for rule(s): {0}." -f (@($warning.Rules) -join ', ')) `
             -Level Warning `
             -File $warning.File `
             -Line $warning.Line
