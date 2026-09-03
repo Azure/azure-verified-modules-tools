@@ -329,8 +329,12 @@ exception contains rules if {
                 if ($FilePath -eq '/fake/conftest') {
                     return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
                 }
-                if ($ArgumentList[0] -eq 'show') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"type":"test_plan","test_plan":{"plan_format_version":"1.2"}}'
+                        StdErr = ''
+                    }
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
