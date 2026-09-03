@@ -309,6 +309,135 @@ function Test-AvmInlineAvmNotice {
     )
 }
 
+function Get-AvmTflintInlineIgnoreWarning {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $warnings = [System.Collections.Generic.List[object]]::new()
+    $terraformFiles = @(
+        Get-ChildItem `
+            -LiteralPath $rootFull `
+            -Filter '*.tf' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                @(($_.FullName.Substring($rootFull.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)) -split '[\\/]' |
+                    Where-Object { $_ -eq '.terraform' }).Count -eq 0
+            } |
+            Sort-Object FullName
+    )
+
+    $pattern = '(?i)^(?:#|//)\s*tflint-ignore\s*:\s*(?<rules>[A-Za-z0-9_.-][A-Za-z0-9_.,\s-]*)'
+    foreach ($terraformFile in $terraformFiles) {
+        $relativePath = [System.IO.Path]::GetRelativePath($rootFull, $terraformFile.FullName).Replace('\', '/')
+        $lines = [System.IO.File]::ReadAllLines($terraformFile.FullName)
+        $heredocTerminator = $null
+        $heredocIndented = $false
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            $line = $lines[$index]
+            if ($null -ne $heredocTerminator) {
+                $candidateTerminator = if ($heredocIndented) {
+                    $line.TrimStart().TrimEnd()
+                }
+                else {
+                    $line.TrimEnd()
+                }
+                if ($candidateTerminator -ceq $heredocTerminator) {
+                    $heredocTerminator = $null
+                    $heredocIndented = $false
+                }
+                continue
+            }
+
+            $commentIndex = -1
+            $inString = $false
+            $escaped = $false
+            for ($charIndex = 0; $charIndex -lt $line.Length; $charIndex++) {
+                $char = $line[$charIndex]
+                if ($inString) {
+                    if ($escaped) {
+                        $escaped = $false
+                        continue
+                    }
+                    if ($char -eq '\') {
+                        $escaped = $true
+                        continue
+                    }
+                    if ($char -eq '"') {
+                        $inString = $false
+                    }
+                    continue
+                }
+
+                if ($char -eq '"') {
+                    $inString = $true
+                    continue
+                }
+                if ($char -eq '<' -and $charIndex + 1 -lt $line.Length -and $line[$charIndex + 1] -eq '<') {
+                    $cursor = $charIndex + 2
+                    $indented = $false
+                    if ($cursor -lt $line.Length -and $line[$cursor] -eq '-') {
+                        $indented = $true
+                        $cursor++
+                    }
+                    while ($cursor -lt $line.Length -and [char]::IsWhiteSpace($line[$cursor])) {
+                        $cursor++
+                    }
+                    $start = $cursor
+                    while (
+                        $cursor -lt $line.Length -and
+                        ($line[$cursor] -eq '_' -or [char]::IsLetterOrDigit($line[$cursor]))
+                    ) {
+                        $cursor++
+                    }
+                    if ($cursor -gt $start) {
+                        $heredocTerminator = $line.Substring($start, $cursor - $start)
+                        $heredocIndented = $indented
+                    }
+                    $charIndex = $cursor - 1
+                    continue
+                }
+                if ($char -eq '#') {
+                    $commentIndex = $charIndex
+                    break
+                }
+                if ($char -eq '/' -and $charIndex + 1 -lt $line.Length -and $line[$charIndex + 1] -eq '/') {
+                    $commentIndex = $charIndex
+                    break
+                }
+            }
+
+            if ($commentIndex -lt 0) {
+                continue
+            }
+
+            $comment = $line.Substring($commentIndex)
+            foreach ($match in [regex]::Matches($comment, $pattern)) {
+                $rules = @(
+                    ([string]$match.Groups['rules'].Value) -split '[,\s]+' |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                )
+                if ($rules.Count -eq 0) {
+                    continue
+                }
+                $warnings.Add([pscustomobject][ordered]@{
+                        File  = $relativePath
+                        Line  = $index + 1
+                        Rules = $rules
+                    })
+            }
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
 function Invoke-AvmTerraformLint {
     <#
     .SYNOPSIS
@@ -423,6 +552,21 @@ function Invoke-AvmTerraformLint {
         -Root $Context.Root `
         -BaseConfigDir $baseConfigDir `
         -Scopes $sourceScopes
+    foreach ($warning in (Get-AvmTflintOverrideWarning `
+                -Root $Context.Root `
+                -OverridePaths $configSet.OverridePaths)) {
+        Write-AvmLog `
+            -Message ("TFLint override disables rule '{0}'." -f $warning.Rule) `
+            -Level Warning `
+            -File $warning.File
+    }
+    foreach ($warning in (Get-AvmTflintInlineIgnoreWarning -Root $Context.Root)) {
+        Write-AvmLog `
+            -Message ("TFLint inline ignore comment found for rule(s): {0}." -f (@($warning.Rules) -join ', ')) `
+            -Level Warning `
+            -File $warning.File `
+            -Line $warning.Line
+    }
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'
     $stageRoot = Join-Path $stageParent ('avm-lint-' + [guid]::NewGuid().ToString('N'))
 

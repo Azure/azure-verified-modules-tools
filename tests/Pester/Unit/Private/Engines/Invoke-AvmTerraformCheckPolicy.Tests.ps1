@@ -10,6 +10,69 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Get-AvmConftestOverrideWarning' {
+    It 'reports one warning per rule and exception file' {
+        $root = Join-Path $TestDrive 'conftest-warning-root'
+        $exceptions = Join-Path $root 'examples' 'default' 'exceptions'
+        New-Item -ItemType Directory -Path $exceptions -Force | Out-Null
+        @'
+package avmsec
+
+exception contains rules if {
+  rules = ["AVM_SEC_223", "AVM_SEC_224"]
+}
+
+exception contains rules if {
+  rules = ["AVM_SEC_223"]
+}
+
+allow if {
+  rules = ["NOT_AN_EXCEPTION"]
+}
+'@ | Set-Content -LiteralPath (Join-Path $exceptions 'avmsec.rego') -Encoding utf8
+
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{
+            R = $root
+            E = @(Join-Path $root 'examples' 'default')
+        } {
+            param($R, $E)
+            Get-AvmConftestOverrideWarning -Root $R -ExamplePath $E
+        }
+
+        @($warnings).Count | Should -Be 2
+        $warnings[0].File | Should -Be 'examples/default/exceptions/avmsec.rego'
+        $warnings[0].Rule | Should -Be 'AVM_SEC_223'
+        $warnings[1].File | Should -Be 'examples/default/exceptions/avmsec.rego'
+        $warnings[1].Rule | Should -Be 'AVM_SEC_224'
+    }
+
+    It 'uses a distinct message when exception rules cannot be parsed' {
+        $root = Join-Path $TestDrive 'conftest-unknown-warning-root'
+        $exceptions = Join-Path $root 'examples' 'default' 'exceptions'
+        New-Item -ItemType Directory -Path $exceptions -Force | Out-Null
+        @'
+package avmsec
+
+exception contains rules if {
+  rule_set = input.rules
+}
+'@ | Set-Content -LiteralPath (Join-Path $exceptions 'unknown.rego') -Encoding utf8
+
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{
+            R = $root
+            E = @(Join-Path $root 'examples' 'default')
+        } {
+            param($R, $E)
+            Get-AvmConftestOverrideWarning -Root $R -ExamplePath $E
+        }
+
+        @($warnings).Count | Should -Be 1
+        $warnings[0].File | Should -Be 'examples/default/exceptions/unknown.rego'
+        $warnings[0].Rule | Should -Be ''
+        $warnings[0].Message | Should -Be 'Conftest override file found, but no exempted rules could be parsed.'
+    }
+}
+
 Describe 'Invoke-AvmTerraformCheckPolicy' {
     BeforeEach {
         $script:moduleDir = Join-Path $TestDrive ('tf-mod-' + [guid]::NewGuid().ToString('N'))
@@ -157,6 +220,52 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             Should -BeTrue
         @(Get-ChildItem -LiteralPath (Join-Path $probe.Cache 'policy-stage') -Force).Count |
             Should -Be 0
+    }
+
+    It 'emits warnings for local conftest exception overrides' {
+        $exceptionsDir = Join-Path $script:exampleDir 'exceptions'
+        $null = New-Item -ItemType Directory -Path $exceptionsDir -Force
+        @'
+package avmsec
+
+exception contains rules if {
+  rules = ["AVM_SEC_223"]
+}
+'@ | Set-Content -LiteralPath (Join-Path $exceptionsDir 'avmsec.rego') -Encoding utf8
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context
+            Cache = $script:cacheDir
+            Aprl = $script:aprlDir
+            Avmsec = $script:avmsecDir
+        } {
+            param($C, $Cache, $Aprl, $Avmsec)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmPolicyBundle {
+                [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
+            }
+            Mock Get-AvmFolder { $Cache }
+            Mock Write-AvmLog
+            Mock Invoke-AvmProcess {
+                if ($FilePath -eq '/fake/conftest') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
+                if ($ArgumentList[0] -eq 'show') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $null = Invoke-AvmTerraformCheckPolicy -Context $C
+
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and
+                $File -eq 'examples/default/exceptions/avmsec.rego' -and
+                $Message -eq "Conftest override exempts rule 'AVM_SEC_223'."
+            }
+        }
     }
 
     It 'keeps local policy exceptions scoped to their own example' {

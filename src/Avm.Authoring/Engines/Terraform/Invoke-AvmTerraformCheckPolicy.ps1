@@ -134,6 +134,80 @@ function Invoke-AvmTerraformPolicyExample {
     }
 }
 
+function Get-AvmConftestOverrideWarning {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [string[]] $ExamplePath
+    )
+
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath
+    $warnings = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($example in $ExamplePath) {
+        $exceptionsPath = Join-Path $example 'exceptions'
+        if (-not (Test-Path -LiteralPath $exceptionsPath -PathType Container)) {
+            continue
+        }
+
+        $exceptionFiles = @(
+            Get-ChildItem `
+                -LiteralPath $exceptionsPath `
+                -Filter '*.rego' `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Sort-Object FullName
+        )
+        foreach ($exceptionFile in $exceptionFiles) {
+            $file = [System.IO.Path]::GetRelativePath($rootFull, $exceptionFile.FullName).Replace('\', '/')
+            $text = [System.IO.File]::ReadAllText($exceptionFile.FullName)
+            $rules = @(
+                @(
+                    foreach ($exceptionMatch in [regex]::Matches($text, '(?ms)\bexception\s+contains\s+rules\s+if\s*\{(?<block>[^{}]*)\}')) {
+                        foreach ($ruleListMatch in [regex]::Matches($exceptionMatch.Groups['block'].Value, '(?ms)\brules\s*(?::=|=)\s*\[(?<body>.*?)\]')) {
+                            foreach ($ruleMatch in [regex]::Matches($ruleListMatch.Groups['body'].Value, '["''](?<rule>[^"'']+)["'']')) {
+                                [string]$ruleMatch.Groups['rule'].Value
+                            }
+                        }
+                    }
+                ) | Select-Object -Unique
+            )
+
+            if ($rules.Count -gt 0) {
+                foreach ($rule in $rules) {
+                    $key = "$file`0$rule"
+                    if (-not $seen.Add($key)) {
+                        continue
+                    }
+                    $warnings.Add([pscustomobject][ordered]@{
+                            File    = $file
+                            Rule    = $rule
+                            Message = ("Conftest override exempts rule '{0}'." -f $rule)
+                        })
+                }
+            }
+            elseif ($text -cmatch '\bexception\s+contains\s+rules\s+if\b') {
+                $key = "$file`0"
+                if ($seen.Add($key)) {
+                    $warnings.Add([pscustomobject][ordered]@{
+                            File    = $file
+                            Rule    = ''
+                            Message = 'Conftest override file found, but no exempted rules could be parsed.'
+                        })
+                }
+            }
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
 function Invoke-AvmTerraformCheckPolicy {
     <#
     .SYNOPSIS
@@ -226,6 +300,13 @@ function Invoke-AvmTerraformCheckPolicy {
             Evaluated  = 0
             Issues     = @()
         }
+    }
+
+    foreach ($warning in (Get-AvmConftestOverrideWarning -Root $Context.Root -ExamplePath $activeExamples)) {
+        Write-AvmLog `
+            -Message $warning.Message `
+            -Level Warning `
+            -File $warning.File
     }
 
     $shellHooks = [System.Collections.Generic.List[string]]::new()
