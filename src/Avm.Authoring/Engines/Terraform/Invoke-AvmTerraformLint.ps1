@@ -338,11 +338,19 @@ function Get-AvmTflintInlineIgnoreWarning {
         $relativePath = [System.IO.Path]::GetRelativePath($rootFull, $terraformFile.FullName).Replace('\', '/')
         $lines = [System.IO.File]::ReadAllLines($terraformFile.FullName)
         $heredocTerminator = $null
+        $heredocIndented = $false
         for ($index = 0; $index -lt $lines.Count; $index++) {
             $line = $lines[$index]
             if ($null -ne $heredocTerminator) {
-                if ($line.Trim() -ceq $heredocTerminator) {
+                $candidateTerminator = if ($heredocIndented) {
+                    $line.TrimStart()
+                }
+                else {
+                    $line
+                }
+                if ($candidateTerminator -ceq $heredocTerminator) {
                     $heredocTerminator = $null
+                    $heredocIndented = $false
                 }
                 continue
             }
@@ -371,6 +379,30 @@ function Get-AvmTflintInlineIgnoreWarning {
                     $inString = $true
                     continue
                 }
+                if ($char -eq '<' -and $charIndex + 1 -lt $line.Length -and $line[$charIndex + 1] -eq '<') {
+                    $cursor = $charIndex + 2
+                    $indented = $false
+                    if ($cursor -lt $line.Length -and $line[$cursor] -eq '-') {
+                        $indented = $true
+                        $cursor++
+                    }
+                    while ($cursor -lt $line.Length -and [char]::IsWhiteSpace($line[$cursor])) {
+                        $cursor++
+                    }
+                    $start = $cursor
+                    while (
+                        $cursor -lt $line.Length -and
+                        ($line[$cursor] -eq '_' -or [char]::IsLetterOrDigit($line[$cursor]))
+                    ) {
+                        $cursor++
+                    }
+                    if ($cursor -gt $start) {
+                        $heredocTerminator = $line.Substring($start, $cursor - $start)
+                        $heredocIndented = $indented
+                    }
+                    $charIndex = $cursor
+                    continue
+                }
                 if ($char -eq '#') {
                     $commentIndex = $charIndex
                     break
@@ -379,17 +411,6 @@ function Get-AvmTflintInlineIgnoreWarning {
                     $commentIndex = $charIndex
                     break
                 }
-            }
-
-            $codeText = if ($commentIndex -ge 0) {
-                $line.Substring(0, $commentIndex)
-            }
-            else {
-                $line
-            }
-            $heredocMatch = [regex]::Match($codeText, '<<-?\s*(?<terminator>[A-Za-z_][A-Za-z0-9_]*)')
-            if ($heredocMatch.Success) {
-                $heredocTerminator = $heredocMatch.Groups['terminator'].Value
             }
 
             if ($commentIndex -lt 0) {
