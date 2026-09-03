@@ -540,11 +540,15 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 > `remove_avm_headers_for_azapi`, removes direct AVM telemetry header
 > attributes, unwraps the AVM contribution from merged custom headers, and
 > removes nested-module `tracing_tags_header` arguments that reference
-> `local.avm_azapi_header`. Unrelated custom headers remain unchanged. It also
-> removes the `valid_module_source_regex`, `fork_avm`, `avm_azapi_headers`, and
+> `local.avm_azapi_header`. It also removes the legacy
+> `tracing_tags_header` -> `tracing_headers` chain, including resource
+> attributes, transitive module arguments, helper locals, and input variables.
+> Unrelated custom headers remain unchanged. The cleanup removes the
+> `valid_module_source_regex`, `fork_avm`, `avm_azapi_headers`, and
 > `avm_azapi_header` locals. The standard pre-commit bundle runs on the root;
-> the cleanup bundle runs on the root and each immediate local `modules/*`
-> module so previously generated submodule telemetry is removed without
+> the cleanup bundle runs on the root and every local module root under
+> `modules/` identified by its own `terraform.tf`, so previously generated
+> submodule telemetry is removed without
 > creating new telemetry resources or modifying downloaded modules. The
 > `main_telemetry_tf` rule still manages `variable.enable_telemetry` and the
 > `modtm_telemetry` resource path. The historical audit below is retained to

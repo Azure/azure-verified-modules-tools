@@ -290,6 +290,11 @@ resource "azapi_resource" "legacy_headers" {
   read_headers   = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
   update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
 }
+
+resource "azapi_update_resource" "forwarded_headers" {
+  read_headers   = local.tracing_headers
+  update_headers = local.tracing_headers
+}
 '@
             Set-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Encoding utf8NoBOM -NoNewline -Value @'
 locals {
@@ -306,6 +311,10 @@ locals {
 
 locals {
   avm_azapi_header = ""
+}
+
+locals {
+  tracing_headers = var.tracing_tags_header == null ? null : { "User-Agent" = var.tracing_tags_header }
 }
 '@
 
@@ -376,9 +385,11 @@ locals {
             $transformed | Should -Match 'resource "azapi_data_plane_resource" "legacy_headers"'
             $transformed | Should -Match 'resource "azapi_update_resource" "legacy_headers"'
             (Get-Content -LiteralPath (Join-Path $legacyModule 'main.tf') -Raw) |
-                Should -Not -Match '(?m)^\s*(create|delete|read|update)_headers\s*='
+                Should -Not -Match '(?m)^\s*(headers|create_headers|delete_headers|read_headers|update_headers)\s*='
             (Get-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Raw) |
-                Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
+                Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header|tracing_headers)\s*='
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Raw) |
+                Should -Not -Match 'variable "tracing_tags_header"'
             @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
                 Should -Be 3
             $transformed | Should -Match '(?m)^\s*main_location\s*='

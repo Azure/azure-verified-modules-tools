@@ -120,11 +120,11 @@ function Get-AvmTerraformCleanupTarget {
 
     $modulesDir = Join-Path $Root 'modules'
     if (Test-Path -LiteralPath $modulesDir -PathType Container) {
-        foreach ($module in Get-ChildItem -LiteralPath $modulesDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name) {
-            $terraformFiles = @(Get-ChildItem -LiteralPath $module.FullName -File -Filter '*.tf' -ErrorAction SilentlyContinue)
-            if ($terraformFiles.Count -gt 0) {
-                $targets.Add($module.FullName)
-            }
+        $moduleRoots = Get-ChildItem -LiteralPath $modulesDir -Recurse -File -Filter 'terraform.tf' -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Directory.FullName } |
+            Sort-Object -Unique
+        foreach ($moduleRoot in $moduleRoots) {
+            $targets.Add($moduleRoot)
         }
     }
 
@@ -184,7 +184,8 @@ function Invoke-AvmTerraformTransform {
 
         The first call applies the standard pre-commit bundle to the root
         module. The second phase applies only retired-header cleanup to the
-        root and each immediate local module under 'modules/', avoiding
+        root and each local module under 'modules/' that has its own
+        'terraform.tf', avoiding
         creation of telemetry resources in submodules or mutation of downloaded
         modules. The final call removes
         '*.tf.mptfbackup' files.

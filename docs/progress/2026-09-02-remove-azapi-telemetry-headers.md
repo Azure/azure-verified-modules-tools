@@ -26,11 +26,15 @@ header-only helper locals from `main.telemetry.tf` while preserving the
       submodules without applying the full pre-commit bundle recursively.
 - [x] Validate recursive cleanup against real modules containing generated
       submodule telemetry.
+- [x] Remove the legacy `tracing_tags_header` -> `tracing_headers` submodule
+      forwarding chain associated with AVM telemetry.
+- [x] Confirm the storage-account module no longer contains the 58 lifecycle
+      header attributes, 15 helper locals, or 15 input variables.
 
 ## Validation
 
 - `./build.ps1 pre-commit`: passed.
-  - Unit: 1,020 passed, 8 skipped.
+  - Unit: 1,021 passed, 8 skipped.
   - Component: 29 passed.
   - Layout and lint passed.
 - `$env:AVM_INTEGRATION_FIXTURE = 'terraform-azure-avm-res-mock';
@@ -50,18 +54,35 @@ header-only helper locals from `main.telemetry.tf` while preserving the
   - `terraform-azurerm-avm-res-storage-storageaccount`: 84 `azapi_resource`
     blocks, six `azapi_update_resource` blocks, and one
     `azapi_resource_action`; pre-commit and validation passed; second transform
-    changed zero files. All 30 executable `local.avm_azapi_header` references
-    were removed and all 58 unrelated tracing-header attributes were preserved.
+    changed zero files.
 - MaPoTF-generated submodule telemetry was confirmed in
   `terraform-azurerm-avm-res-compute-virtualmachine/modules/backup` and
   `terraform-azurerm-avm-res-app-containerapp/modules/auth-config`.
 - The engine applies the standard pre-commit bundle to the root and a
-  cleanup-only bundle to the root plus each immediate local `modules/*`
-  module. This removes generated submodule headers and helper locals without
+  cleanup-only bundle to the root plus every local module root under
+  `modules/` identified by its own `terraform.tf`. This removes generated
+  submodule headers and helper locals without
   applying `main_telemetry_tf` to submodules or modifying downloaded modules.
 - Fresh VM and Container App runs removed all executable
   `local.avm_azapi_header` references from the root and submodules, passed
   `avm test`, and produced zero transform changes on the second pre-commit run.
+- Storage Account cleanup removed all 58 nested lifecycle header attributes,
+  15 `tracing_headers` locals, 15 `tracing_tags_header` variables, and
+  transitive module arguments. Terraform validation passed and the second
+  pre-commit transform changed zero files.
+- Managed HSM cleanup removed its root `tracing_headers` chain, including
+  merged and direct header uses, and passed Terraform validation.
+- Fleet search enumerated 209 active Azure Terraform AVM repositories. The
+  indexed matches across 187 affected repositories classified as 544
+  executable AzAPI header attributes, 186 helper-local definitions, and 16
+  executable forwarding expressions; every executable shape is handled by the
+  cleanup rule. The only other match was documentation text. The inventory was
+  independently reproduced with searches for all nine supported repository
+  name prefixes; both enumeration methods returned the same 209 repositories.
+- Every repository with indexed generated telemetry under `modules/` was
+  exercised: ALZ hub/spoke, ALZ virtual WAN, Container App, Cognitive Services,
+  and Virtual Machine. Each passed pre-commit and Terraform validation and
+  produced zero changes from a repeat transform.
 
 ## Blockers or dependencies
 

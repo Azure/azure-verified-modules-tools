@@ -588,6 +588,30 @@ Describe 'Invoke-AvmTerraformTransform' {
     }
 }
 
+Describe 'Get-AvmTerraformCleanupTarget' {
+    It 'returns the root and every nested local module with terraform.tf' {
+        $root = Join-Path $TestDrive 'repo'
+        $direct = Join-Path $root 'modules' 'direct'
+        $nested = Join-Path $root 'modules' 'group' 'nested'
+        $notModule = Join-Path $root 'modules' 'group' 'examples' 'default'
+        New-Item -ItemType Directory -Path $direct, $nested, $notModule -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $direct 'terraform.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $nested 'terraform.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $notModule 'main.tf') -Value 'locals {}' -Encoding utf8NoBOM
+
+        $targets = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            @(Get-AvmTerraformCleanupTarget -Root $R)
+        }
+
+        $targets | Should -HaveCount 3
+        $targets | Should -Contain $root
+        $targets | Should -Contain $direct
+        $targets | Should -Contain $nested
+        $targets | Should -Not -Contain $notModule
+    }
+}
+
 Describe 'Resolve-AvmMapotfConfigDir' {
     BeforeAll {
         function script:New-AvmCfgBundle {
