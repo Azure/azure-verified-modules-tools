@@ -337,26 +337,38 @@ function Get-AvmTflintInlineIgnoreWarning {
     foreach ($terraformFile in $terraformFiles) {
         $relativePath = [System.IO.Path]::GetRelativePath($rootFull, $terraformFile.FullName).Replace('\', '/')
         $lines = [System.IO.File]::ReadAllLines($terraformFile.FullName)
+        $heredocTerminator = $null
         for ($index = 0; $index -lt $lines.Count; $index++) {
             $line = $lines[$index]
+            if ($null -ne $heredocTerminator) {
+                if ($line.Trim() -ceq $heredocTerminator) {
+                    $heredocTerminator = $null
+                }
+                continue
+            }
+
             $commentIndex = -1
             $inString = $false
             $escaped = $false
             for ($charIndex = 0; $charIndex -lt $line.Length; $charIndex++) {
                 $char = $line[$charIndex]
-                if ($escaped) {
-                    $escaped = $false
-                    continue
-                }
-                if ($inString -and $char -eq '\') {
-                    $escaped = $true
-                    continue
-                }
-                if ($char -eq '"') {
-                    $inString = -not $inString
-                    continue
-                }
                 if ($inString) {
+                    if ($escaped) {
+                        $escaped = $false
+                        continue
+                    }
+                    if ($char -eq '\') {
+                        $escaped = $true
+                        continue
+                    }
+                    if ($char -eq '"') {
+                        $inString = $false
+                    }
+                    continue
+                }
+
+                if ($char -eq '"') {
+                    $inString = $true
                     continue
                 }
                 if ($char -eq '#') {
@@ -368,6 +380,18 @@ function Get-AvmTflintInlineIgnoreWarning {
                     break
                 }
             }
+
+            $codeText = if ($commentIndex -ge 0) {
+                $line.Substring(0, $commentIndex)
+            }
+            else {
+                $line
+            }
+            $heredocMatch = [regex]::Match($codeText, '<<-?\s*(?<terminator>[A-Za-z_][A-Za-z0-9_]*)')
+            if ($heredocMatch.Success) {
+                $heredocTerminator = $heredocMatch.Groups['terminator'].Value
+            }
+
             if ($commentIndex -lt 0) {
                 continue
             }

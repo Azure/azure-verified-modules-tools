@@ -179,19 +179,28 @@ function Get-AvmConftestOverrideWarning {
                 ) | Select-Object -Unique
             )
 
-            if ($rules.Count -eq 0) {
-                $rules = @('<unknown>')
-            }
-
-            foreach ($rule in $rules) {
-                $key = "$file`0$rule"
-                if (-not $seen.Add($key)) {
-                    continue
+            if ($rules.Count -gt 0) {
+                foreach ($rule in $rules) {
+                    $key = "$file`0$rule"
+                    if (-not $seen.Add($key)) {
+                        continue
+                    }
+                    $warnings.Add([pscustomobject][ordered]@{
+                            File    = $file
+                            Rule    = $rule
+                            Message = ("Conftest override exempts rule '{0}'." -f $rule)
+                        })
                 }
-                $warnings.Add([pscustomobject][ordered]@{
-                        File = $file
-                        Rule = $rule
-                    })
+            }
+            elseif ($text -cmatch '\bexception\s+contains\s+rules\s+if\b') {
+                $key = "$file`0"
+                if ($seen.Add($key)) {
+                    $warnings.Add([pscustomobject][ordered]@{
+                            File    = $file
+                            Rule    = ''
+                            Message = 'Conftest override file found, but no exempted rules could be parsed.'
+                        })
+                }
             }
         }
     }
@@ -295,7 +304,7 @@ function Invoke-AvmTerraformCheckPolicy {
 
     foreach ($warning in (Get-AvmConftestOverrideWarning -Root $Context.Root -ExamplePath $activeExamples)) {
         Write-AvmLog `
-            -Message ("Conftest override exempts rule '{0}'." -f $warning.Rule) `
+            -Message $warning.Message `
             -Level Warning `
             -File $warning.File
     }

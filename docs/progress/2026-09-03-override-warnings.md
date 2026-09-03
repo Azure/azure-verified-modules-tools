@@ -22,7 +22,8 @@ source file and rule or rules being overridden.
 ## Validation
 
 - PASS: `Invoke-Pester -Path ./tests/Pester/Unit/Private/Engines/Invoke-AvmTerraformLint.Tests.ps1,./tests/Pester/Unit/Private/Engines/Invoke-AvmTerraformCheckPolicy.Tests.ps1 -CI`
-  (focused fallback after the build dependency could not be installed).
+  (60 passed; focused fallback after the build dependency could not be
+  installed).
 - BLOCKED: `pwsh ./build.ps1 test` and `pwsh ./build.ps1 pre-commit` both require
   InvokeBuild, and PSGallery returned `Resource temporarily unavailable` while
   installing it.

@@ -342,6 +342,12 @@ resource "azurerm_resource_group" "this" {}
 # tflint-ignore: terraform_unused_declarations
 output "name" { value = "x" } // tflint-ignore: avm_rule_one, avm_rule_two
 variable "description" { default = "# tflint-ignore: not_a_comment" }
+variable "quoted" { default = "she said \"hi\"" } # tflint-ignore: terraform_documented_variables
+locals {
+  script = <<EOT
+# tflint-ignore: heredoc_content
+EOT
+}
 # tflint-ignore:
 '@ | Set-Content -LiteralPath (Join-Path $nested 'main.tf') -Encoding utf8
 
@@ -350,13 +356,16 @@ variable "description" { default = "# tflint-ignore: not_a_comment" }
             Get-AvmTflintInlineIgnoreWarning -Root $R
         }
 
-        @($warnings).Count | Should -Be 2
+        @($warnings).Count | Should -Be 3
         $warnings[0].File | Should -Be 'examples/default/main.tf'
         $warnings[0].Line | Should -Be 2
         $warnings[0].Rules | Should -Be @('terraform_unused_declarations')
         $warnings[1].File | Should -Be 'examples/default/main.tf'
         $warnings[1].Line | Should -Be 3
         $warnings[1].Rules | Should -Be @('avm_rule_one', 'avm_rule_two')
+        $warnings[2].File | Should -Be 'examples/default/main.tf'
+        $warnings[2].Line | Should -Be 5
+        $warnings[2].Rules | Should -Be @('terraform_documented_variables')
     }
 }
 

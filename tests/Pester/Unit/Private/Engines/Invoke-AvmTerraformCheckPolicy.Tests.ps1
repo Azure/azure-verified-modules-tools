@@ -45,6 +45,32 @@ allow if {
         $warnings[1].File | Should -Be 'examples/default/exceptions/avmsec.rego'
         $warnings[1].Rule | Should -Be 'AVM_SEC_224'
     }
+
+    It 'uses a distinct message when exception rules cannot be parsed' {
+        $root = Join-Path $TestDrive 'conftest-unknown-warning-root'
+        $exceptions = Join-Path $root 'examples' 'default' 'exceptions'
+        New-Item -ItemType Directory -Path $exceptions -Force | Out-Null
+        @'
+package avmsec
+
+exception contains rules if {
+  rule_set = input.rules
+}
+'@ | Set-Content -LiteralPath (Join-Path $exceptions 'unknown.rego') -Encoding utf8
+
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{
+            R = $root
+            E = @(Join-Path $root 'examples' 'default')
+        } {
+            param($R, $E)
+            Get-AvmConftestOverrideWarning -Root $R -ExamplePath $E
+        }
+
+        @($warnings).Count | Should -Be 1
+        $warnings[0].File | Should -Be 'examples/default/exceptions/unknown.rego'
+        $warnings[0].Rule | Should -Be ''
+        $warnings[0].Message | Should -Be 'Conftest override file found, but no exempted rules could be parsed.'
+    }
 }
 
 Describe 'Invoke-AvmTerraformCheckPolicy' {
