@@ -548,7 +548,13 @@ function Invoke-AvmTerraformLint {
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
     )
-    foreach ($warning in (Get-AvmTflintOverrideWarning -Root $Context.Root -Scopes $sourceScopes)) {
+    $configSet = New-AvmTflintConfigSet `
+        -Root $Context.Root `
+        -BaseConfigDir $baseConfigDir `
+        -Scopes $sourceScopes
+    foreach ($warning in (Get-AvmTflintOverrideWarning `
+                -Root $Context.Root `
+                -OverridePaths $configSet.OverridePaths)) {
         Write-AvmLog `
             -Message ("TFLint override disables rule '{0}'." -f $warning.Rule) `
             -Level Warning `
@@ -561,10 +567,6 @@ function Invoke-AvmTerraformLint {
             -File $warning.File `
             -Line $warning.Line
     }
-    $configSet = New-AvmTflintConfigSet `
-        -Root $Context.Root `
-        -BaseConfigDir $baseConfigDir `
-        -Scopes $sourceScopes
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'
     $stageRoot = Join-Path $stageParent ('avm-lint-' + [guid]::NewGuid().ToString('N'))
 

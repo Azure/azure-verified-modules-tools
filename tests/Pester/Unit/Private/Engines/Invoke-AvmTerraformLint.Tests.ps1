@@ -181,45 +181,39 @@ rule "x" {
 }
 
 Describe 'Get-AvmTflintOverrideWarning' {
-    It 'reports one disabled rule warning per override file and rule' {
+    It 'reports disabled rules from the applied root and per-scope override paths' {
         $root = Join-Path $TestDrive 'override-warning-root'
         $moduleDir = Join-Path $root 'modules' 'network'
-        New-Item -ItemType Directory -Path $moduleDir -Force | Out-Null
-        @'
-rule "avm_interface_managed_identities" {
+        $exampleDir = Join-Path $root 'examples' 'default'
+        New-Item -ItemType Directory -Path $moduleDir, $exampleDir -Force | Out-Null
+        $overrideRules = [ordered]@{
+            'avm.tflint.override.hcl'                  = 'root_rule'
+            'avm.tflint_module.override.hcl'           = 'all_module_rule'
+            'avm.tflint_example.override.hcl'          = 'all_example_rule'
+            'modules/network/avm.tflint.override.hcl'  = 'module_rule'
+            'examples/default/avm.tflint.override.hcl' = 'example_rule'
+        }
+        $overridePaths = foreach ($entry in $overrideRules.GetEnumerator()) {
+            $path = Join-Path $root $entry.Key
+            @"
+rule "$($entry.Value)" {
   enabled = false
 }
-
-rule "still_enabled" {
-  enabled = true
-}
-'@ | Set-Content -LiteralPath (Join-Path $root 'avm.tflint.override.hcl') -Encoding utf8
-        @'
-rule "terraform_unused_declarations" {
-  enabled = false
-}
-
-rule "terraform_unused_declarations" {
-  enabled = false
-}
-'@ | Set-Content -LiteralPath (Join-Path $moduleDir 'avm.tflint.override.hcl') -Encoding utf8
-        $scopes = @(
-            [pscustomobject]@{ RelPath = '.' }
-            [pscustomobject]@{ RelPath = 'modules/network' }
-        )
-
-        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; S = $scopes } {
-            param($R, $S)
-            Get-AvmTflintOverrideWarning -Root $R -Scopes $S
+"@ | Set-Content -LiteralPath $path -Encoding utf8
+            $path
         }
 
-        @($warnings).Count | Should -Be 2
-        $warnings[0].File | Should -Be 'avm.tflint.override.hcl'
-        $warnings[0].Rule | Should -Be 'avm_interface_managed_identities'
-        $warnings[1].File | Should -Be 'modules/network/avm.tflint.override.hcl'
-        $warnings[1].Rule | Should -Be 'terraform_unused_declarations'
-        @($warnings | Where-Object File -eq 'modules/network/avm.tflint.override.hcl').Count |
-            Should -Be 1
+        $warnings = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; P = $overridePaths } {
+            param($R, $P)
+            Get-AvmTflintOverrideWarning -Root $R -OverridePaths $P
+        }
+
+        @($warnings).Count | Should -Be 5
+        foreach ($entry in $overrideRules.GetEnumerator()) {
+            @($warnings | Where-Object {
+                    $_.File -ceq $entry.Key -and $_.Rule -ceq $entry.Value
+                }).Count | Should -Be 1
+        }
     }
 }
 
@@ -483,15 +477,32 @@ Describe 'Invoke-AvmTerraformLint' {
             'rule "avm_interface_managed_identities" { enabled = true }' |
                 Set-Content -LiteralPath (Join-Path $configDir $name) -Encoding utf8
         }
-        @'
-rule "avm_interface_managed_identities" {
+        $moduleDir = Join-Path $script:moduleDir 'modules/foo'
+        $exampleDir = Join-Path $script:moduleDir 'examples/default'
+        New-Item -ItemType Directory -Path $moduleDir, $exampleDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleDir 'main.tf'), (Join-Path $exampleDir 'main.tf') `
+            -Value 'output "value" { value = 1 }' `
+            -Encoding utf8
+        $overrideRules = [ordered]@{
+            'avm.tflint.override.hcl'                 = 'root_rule'
+            'avm.tflint_module.override.hcl'          = 'all_module_rule'
+            'avm.tflint_example.override.hcl'         = 'all_example_rule'
+            'modules/foo/avm.tflint.override.hcl'     = 'module_rule'
+            'examples/default/avm.tflint.override.hcl' = 'example_rule'
+        }
+        foreach ($entry in $overrideRules.GetEnumerator()) {
+            @"
+rule "$($entry.Value)" {
   enabled = false
 }
-'@ | Set-Content -LiteralPath (Join-Path $script:moduleDir 'avm.tflint.override.hcl') -Encoding utf8
+"@ | Set-Content -LiteralPath (Join-Path $script:moduleDir $entry.Key) -Encoding utf8
+        }
         Add-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value '# tflint-ignore: terraform_unused_declarations'
 
-        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Config = $configDir } {
-            param($C, $Config)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $ctx; Config = $configDir; ExpectedOverrides = $overrideRules
+        } {
+            param($C, $Config, $ExpectedOverrides)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
@@ -506,10 +517,13 @@ rule "avm_interface_managed_identities" {
 
             $null = Invoke-AvmTerraformLint -Context $C
 
-            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
-                $Level -eq 'Warning' -and
-                $File -eq 'avm.tflint.override.hcl' -and
-                $Message -eq "TFLint override disables rule 'avm_interface_managed_identities'."
+            foreach ($entry in $ExpectedOverrides.GetEnumerator()) {
+                $expectedMessage = "TFLint override disables rule '$($entry.Value)'."
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Warning' -and
+                    $File -ceq $entry.Key -and
+                    $Message -ceq $expectedMessage
+                }
             }
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                 $Level -eq 'Warning' -and
