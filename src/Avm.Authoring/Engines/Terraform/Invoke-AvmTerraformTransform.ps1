@@ -1,19 +1,15 @@
 function Resolve-AvmMapotfConfigDir {
     <#
     .SYNOPSIS
-        Resolve the directory holding the vendored mapotf pre-commit configs.
+        Resolve a scoped directory holding vendored mapotf configs.
 
     .DESCRIPTION
         Returns the absolute path to the '*.mptf.hcl' bundle passed to
         'mapotf transform --mptf-dir'. Resolution order:
 
-          1. $env:AVM_MPTF_CONFIG_DIR - explicit override (test injection and
-             power users).
-          2. <Root>/config/mapotf/pre-commit - a consumer repository that
-             vendors its own config bundle at the top of the repo overrides
-             the packaged defaults.
-          3. <ModuleRoot>/Resources/mapotf/pre-commit - the bundle shipped
-             inside the published module (the default source).
+          1. $env:AVM_MPTF_CONFIG_DIR/<profile>.
+          2. <Root>/config/mapotf/<profile>.
+          3. <ModuleRoot>/Resources/mapotf/<profile>.
 
         Each candidate must be a directory containing at least one
         '*.mptf.hcl' file. Throws AvmConfigurationException when none
@@ -22,7 +18,13 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Root
         The consumer repository root, used to locate an optional
-        'config/mapotf/pre-commit' override. Pass $Context.Root.
+        'config/mapotf/<profile>' override. Pass $Context.Root.
+
+    .PARAMETER Profile
+        Config profile to resolve: common, module, root, or example.
+
+    .PARAMETER Optional
+        Return $null instead of throwing when the profile does not exist.
 
     .OUTPUTS
         [string] absolute path to the resolved config directory.
@@ -31,7 +33,13 @@ function Resolve-AvmMapotfConfigDir {
     [OutputType([string])]
     param(
         [Parameter(Mandatory)]
-        [string] $Root
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('common', 'module', 'root', 'example')]
+        [string] $Profile,
+
+        [switch] $Optional
     )
 
     Set-StrictMode -Version 3.0
@@ -40,13 +48,13 @@ function Resolve-AvmMapotfConfigDir {
     $candidates = New-Object System.Collections.Generic.List[string]
 
     if ($env:AVM_MPTF_CONFIG_DIR) {
-        $candidates.Add($env:AVM_MPTF_CONFIG_DIR)
+        $candidates.Add((Join-Path $env:AVM_MPTF_CONFIG_DIR $Profile))
     }
 
-    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' 'pre-commit'))))
+    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' $Profile))))
 
     $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' 'pre-commit'))))
+    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' $Profile))))
 
     foreach ($candidate in $candidates) {
         if (-not $candidate) { continue }
@@ -57,10 +65,14 @@ function Resolve-AvmMapotfConfigDir {
         }
     }
 
+    if ($Optional) {
+        return $null
+    }
+
     throw [AvmConfigurationException]::new(
-        ("Cannot resolve the mapotf pre-commit config bundle (looked in: {0}). " -f ($candidates -join '; ')) +
-        'The bundle normally ships inside the module under Resources/mapotf/pre-commit; ' +
-        'set AVM_MPTF_CONFIG_DIR or add config/mapotf/pre-commit/*.mptf.hcl to override it.')
+        ("Cannot resolve the mapotf '{0}' config profile (looked in: {1}). " -f $Profile, ($candidates -join '; ')) +
+        ("The profile normally ships inside the module under Resources/mapotf/{0}; " -f $Profile) +
+        ("set AVM_MPTF_CONFIG_DIR or add config/mapotf/{0}/*.mptf.hcl to override it." -f $Profile))
 }
 
 function Get-AvmTerraformFile {
@@ -100,6 +112,56 @@ function Get-AvmTerraformFile {
                 -not ($parts | Where-Object { $_.StartsWith('.') -or $_ -eq 'node_modules' })
             }
     )
+}
+
+function Get-AvmTerraformTransformTarget {
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $targets = New-Object System.Collections.Generic.List[object]
+    $targets.Add([pscustomobject]@{
+            Path     = $Root
+            Scope    = 'root'
+            Profiles = @('root', 'module', 'common')
+        })
+
+    $modulesDir = Join-Path $Root 'modules'
+    if (Test-Path -LiteralPath $modulesDir -PathType Container) {
+        $moduleRoots = Get-ChildItem -LiteralPath $modulesDir -Recurse -File -Filter 'terraform.tf' -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Directory.FullName } |
+            Sort-Object -Unique
+        foreach ($moduleRoot in $moduleRoots) {
+            $targets.Add([pscustomobject]@{
+                    Path     = $moduleRoot
+                    Scope    = 'module'
+                    Profiles = @('module', 'common')
+                })
+        }
+    }
+
+    $examplesDir = Join-Path $Root 'examples'
+    if (Test-Path -LiteralPath $examplesDir -PathType Container) {
+        foreach ($example in Get-ChildItem -LiteralPath $examplesDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name) {
+            $terraformFiles = @(Get-ChildItem -LiteralPath $example.FullName -File -Filter '*.tf' -ErrorAction SilentlyContinue)
+            if ($terraformFiles.Count -eq 0) {
+                continue
+            }
+            $targets.Add([pscustomobject]@{
+                    Path     = $example.FullName
+                    Scope    = 'example'
+                    Profiles = @('common', 'example')
+                })
+        }
+    }
+
+    return $targets.ToArray()
 }
 
 function Test-AvmMapotfTransientProviderError {
@@ -149,14 +211,18 @@ function Invoke-AvmTerraformTransform {
         Resolve-AvmTool and the vendored config bundle via
         Resolve-AvmMapotfConfigDir, then runs, against $Context.Root:
 
-            mapotf transform --mptf-dir <configs> --tf-dir <root>
+            mapotf transform --mptf-dir <profile> [...] --tf-dir <target>
             mapotf clean-backup --tf-dir <root>
 
-        The first call mutates '*.tf' in place (telemetry wiring, azapi
-        headers, provider pins, block/attribute ordering, variables/outputs
-        partitioning) and leaves '*.tf.mptfbackup' files; the second removes
-        those backups. This mirrors the legacy Terraform governance
-        pre-commit flow.
+        Profile composition:
+          - root: root, module, common
+          - local module: module, common
+          - example: common, then optional example
+
+        Root-only telemetry therefore never runs against submodules or examples.
+        Module file-layout and provider rules apply to the root and submodules.
+        Common in-place ordering and cleanup applies everywhere. The final call
+        removes '*.tf.mptfbackup' files.
 
         Several of the vendored configs (e.g. order_resource_attrs) read
         provider schemas, so mapotf shells out to 'terraform init' +
@@ -225,13 +291,19 @@ function Invoke-AvmTerraformTransform {
     }
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
-    $configDir = Resolve-AvmMapotfConfigDir -Root $Context.Root
-    Write-AvmLog ("transform: config directory={0}" -f $configDir) -Level Verbose | Out-Null
+    $profileDirs = @{
+        common = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'common'
+        module = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'module'
+        root = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'root'
+        example = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'example' -Optional
+    }
+    $targets = @(Get-AvmTerraformTransformTarget -Root $Context.Root)
+    Write-AvmLog ("transform: discovered {0} target(s)" -f $targets.Count) -Level Verbose | Out-Null
 
     $beforeFiles = Get-AvmTerraformFile -Root $Context.Root
     Write-AvmLog ("transform: discovered {0} terraform file(s)" -f $beforeFiles.Count) -Level Verbose | Out-Null
 
-    if (-not $PSCmdlet.ShouldProcess($Context.Root, ("mapotf transform --mptf-dir '{0}'" -f $configDir))) {
+    if (-not $PSCmdlet.ShouldProcess($Context.Root, ("mapotf transform across {0} scoped target(s)" -f $targets.Count))) {
         return [pscustomobject][ordered]@{
             Engine         = 'terraform'
             Tool           = ('{0}/{1}' -f $tool.Name, $tool.Version)
@@ -274,55 +346,71 @@ function Invoke-AvmTerraformTransform {
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
 
-        $maxRetries = 2
-        $attempt = 0
-        do {
-            $transform = Invoke-AvmProcess `
+        foreach ($target in $targets) {
+            $args = New-Object System.Collections.Generic.List[string]
+            $args.Add('transform')
+            foreach ($profile in $target.Profiles) {
+                $profileDir = $profileDirs[$profile]
+                if (-not $profileDir) {
+                    continue
+                }
+                $args.Add('--mptf-dir')
+                $args.Add($profileDir)
+            }
+            $args.Add('--tf-dir')
+            $args.Add($target.Path)
+
+            $maxRetries = 2
+            $attempt = 0
+            do {
+                $transform = Invoke-AvmProcess `
+                    -FilePath $tool.Path `
+                    -ArgumentList $args.ToArray() `
+                    -WorkingDirectory $target.Path `
+                    -EnvVars $mapotfEnv `
+                    -IgnoreExitCode
+                if ($transform.ExitCode -eq 0) {
+                    break
+                }
+
+                $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
+                if (
+                    $attempt -ge $maxRetries -or
+                    -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
+                ) {
+                    $message = Add-AvmProcessFailureDetail `
+                        -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $target.Scope, $target.Path) `
+                        -StdOut $transform.StdOut `
+                        -StdErr $transform.StdErr
+                    throw [AvmProcessException]::new($message)
+                }
+
+                $attempt++
+                $delaySeconds = $attempt * 5
+                Write-AvmLog (
+                    'transform: transient provider download failure; retrying {0} target in {1}s ({2} of {3})' -f
+                    $target.Scope, $delaySeconds, $attempt, $maxRetries
+                ) -Level Warning | Out-Null
+                Start-Sleep -Seconds $delaySeconds
+            } while ($attempt -le $maxRetries)
+        }
+        Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
+
+        foreach ($target in $targets) {
+            $clean = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('transform', '--mptf-dir', $configDir, '--tf-dir', $Context.Root) `
-                -WorkingDirectory $Context.Root `
+                -ArgumentList @('clean-backup', '--tf-dir', $target.Path) `
+                -WorkingDirectory $target.Path `
                 -EnvVars $mapotfEnv `
                 -IgnoreExitCode
-            if ($transform.ExitCode -eq 0) {
-                break
-            }
-
-            $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
-            if (
-                $attempt -ge $maxRetries -or
-                -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
-            ) {
+            if ($clean.ExitCode -ne 0) {
                 $message = Add-AvmProcessFailureDetail `
-                    -Message ('mapotf transform exited with code {0}.' -f $transform.ExitCode) `
-                    -StdOut $transform.StdOut `
-                    -StdErr $transform.StdErr
+                    -Message ('mapotf clean-backup exited with code {0} for {1} target {2}.' -f $clean.ExitCode, $target.Scope, $target.Path) `
+                    -StdOut $clean.StdOut `
+                    -StdErr $clean.StdErr
                 throw [AvmProcessException]::new(
                     $message)
             }
-
-            $attempt++
-            $delaySeconds = $attempt * 5
-            Write-AvmLog (
-                'transform: transient provider download failure; retrying mapotf in {0}s ({1} of {2})' -f
-                $delaySeconds, $attempt, $maxRetries
-            ) -Level Warning | Out-Null
-            Start-Sleep -Seconds $delaySeconds
-        } while ($attempt -le $maxRetries)
-        Write-AvmLog 'transform: mapotf transform completed' -Level Verbose | Out-Null
-
-        $clean = Invoke-AvmProcess `
-            -FilePath $tool.Path `
-            -ArgumentList @('clean-backup', '--tf-dir', $Context.Root) `
-            -WorkingDirectory $Context.Root `
-            -EnvVars $mapotfEnv `
-            -IgnoreExitCode
-        if ($clean.ExitCode -ne 0) {
-            $message = Add-AvmProcessFailureDetail `
-                -Message ('mapotf clean-backup exited with code {0}.' -f $clean.ExitCode) `
-                -StdOut $clean.StdOut `
-                -StdErr $clean.StdErr
-            throw [AvmProcessException]::new(
-                $message)
         }
         Write-AvmLog 'transform: mapotf clean-backup completed' -Level Verbose | Out-Null
 

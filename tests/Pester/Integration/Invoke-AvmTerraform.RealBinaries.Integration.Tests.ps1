@@ -250,6 +250,181 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
+        It 'removes legacy AVM headers and their telemetry helper locals' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the AzAPI fixture needs to prove legacy header cleanup'
+                return
+            }
+
+            $legacy = Join-Path $script:WorkRoot "$name-legacy-headers"
+            Copy-Item -LiteralPath $script:StagedModule -Destination $legacy -Recurse -Force
+
+            $legacyModule = Join-Path $legacy 'modules' 'legacy_headers'
+            $null = New-Item -ItemType Directory -Path $legacyModule -Force
+            Set-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+}
+
+variable "tracing_tags_header" {
+  type    = string
+  default = null
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'terraform.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+  }
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'main.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+resource "azapi_resource" "legacy_headers" {
+  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  read_headers   = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+}
+
+resource "azapi_update_resource" "forwarded_headers" {
+  read_headers   = local.tracing_headers
+  update_headers = local.tracing_headers
+}
+'@
+            Set-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+locals {
+  valid_module_source_regex = []
+}
+
+locals {
+  fork_avm = false
+}
+
+locals {
+  avm_azapi_headers = {}
+}
+
+locals {
+  avm_azapi_header = ""
+}
+
+locals {
+  tracing_headers = var.tracing_tags_header == null ? null : { "User-Agent" = var.tracing_tags_header }
+}
+'@
+
+            $legacyResources = @'
+resource "azapi_data_plane_resource" "legacy_headers" {
+  create_headers = { "User-Agent" = local.avm_azapi_header }
+  delete_headers = merge(local.tracing_headers, (var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {}))
+  read_headers   = local.tracing_headers
+  update_headers = { "User-Agent" = local.avm_azapi_header }
+}
+
+resource "azapi_update_resource" "legacy_headers" {
+  read_headers   = { "User-Agent" = local.avm_azapi_header }
+  update_headers = merge(local.tracing_headers, (var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {}))
+}
+
+module "legacy_headers" {
+  source = "./modules/legacy_headers"
+
+  tracing_tags_header = var.enable_telemetry ? local.avm_azapi_header : null
+}
+'@
+            Add-Content -LiteralPath (Join-Path $legacy 'main.tf') -Value "`n$legacyResources" -Encoding utf8NoBOM -NoNewline
+
+            $legacyLocals = @'
+locals {
+  valid_module_source_regex = []
+}
+
+locals {
+  fork_avm = false
+}
+
+locals {
+  avm_azapi_headers = {}
+}
+
+locals {
+  avm_azapi_header = ""
+}
+
+locals {
+  tracing_headers = {
+    "x-ms-correlation-request-id" = "test"
+  }
+}
+'@
+            Add-Content -LiteralPath (Join-Path $legacy 'main.telemetry.tf') -Value "`n$legacyLocals" -Encoding utf8NoBOM -NoNewline
+
+            $exampleMain = Join-Path $legacy 'examples' 'default' 'main.tf'
+            Add-Content -LiteralPath $exampleMain -Encoding utf8NoBOM -NoNewline -Value @'
+
+variable "single_file_input" {
+  type    = string
+  default = "example"
+}
+
+output "single_file_output" {
+  value = var.single_file_input
+}
+'@
+            $noTerraformExample = Join-Path $legacy 'examples' 'no_terraform_block'
+            $null = New-Item -ItemType Directory -Path $noTerraformExample -Force
+            Set-Content -LiteralPath (Join-Path $noTerraformExample 'main.tf') -Encoding utf8NoBOM -NoNewline -Value @'
+locals {
+  example = "no terraform block"
+}
+'@
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ R = $legacy } {
+                param($R)
+                Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $R
+                        Ecosystem = 'terraform'
+                        Source = 'integration'
+                    })
+            }
+
+            $result.Status | Should -Be 'pass'
+            $transformed = (Get-ChildItem -LiteralPath $legacy -Recurse -Filter '*.tf' -File |
+                    Where-Object {
+                        [System.IO.Path]::GetRelativePath($legacy, $_.FullName) -notmatch '(^|[\\/])\.'
+                    } |
+                    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+            $transformed | Should -Not -Match 'local\.avm_azapi_header'
+            $transformed | Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header)\s*='
+            $transformed | Should -Match 'resource "azapi_data_plane_resource" "legacy_headers"'
+            $transformed | Should -Match 'resource "azapi_update_resource" "legacy_headers"'
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'main.tf') -Raw) |
+                Should -Not -Match '(?m)^\s*(headers|create_headers|delete_headers|read_headers|update_headers)\s*='
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'main.telemetry.tf') -Raw) |
+                Should -Not -Match '(?m)^\s*(valid_module_source_regex|fork_avm|avm_azapi_headers|avm_azapi_header|tracing_headers)\s*='
+            (Get-Content -LiteralPath (Join-Path $legacyModule 'variables.tf') -Raw) |
+                Should -Not -Match 'variable "tracing_tags_header"'
+            (Get-Content -LiteralPath $exampleMain -Raw) |
+                Should -Match 'variable "single_file_input"'
+            (Get-Content -LiteralPath $exampleMain -Raw) |
+                Should -Match 'output "single_file_output"'
+            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'variables.tf')) |
+                Should -BeFalse
+            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'outputs.tf')) |
+                Should -BeFalse
+            (Test-Path -LiteralPath (Join-Path $noTerraformExample 'terraform.tf')) |
+                Should -BeFalse
+            @([regex]::Matches($transformed, '(?m)^\s*(delete|read|update)_headers\s*=\s*local\.tracing_headers\s*$')).Count |
+                Should -Be 3
+            $transformed | Should -Match '(?m)^\s*main_location\s*='
+        }
+
         It 'sorts required provider entries with released MAPOTF nested-block ordering' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
             if ($name -ne 'terraform-azure-avm-res-mock') {

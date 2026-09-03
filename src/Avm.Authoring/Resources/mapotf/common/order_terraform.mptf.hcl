@@ -1,4 +1,12 @@
+data "terraform" "for_order" {}
+
+locals {
+  terraform_block_exists     = try(data.terraform.for_order.block != null, false)
+  required_providers_exists = try(data.terraform.for_order.block.required_providers != null, false)
+}
+
 transform "reorder_attributes" "block_layout" {
+  for_each                 = local.terraform_block_exists ? toset([1]) : toset([])
   target_block_address     = "terraform"
   head_attributes          = ["required_version"]
   body_attributes          = ["experiments", "backend", "cloud", "provider_meta"]
@@ -7,6 +15,7 @@ transform "reorder_attributes" "block_layout" {
 }
 
 transform "reorder_attributes" "required_providers_entries" {
+  for_each             = local.required_providers_exists ? toset([1]) : toset([])
   target_block_address = "terraform"
   nested_block_path    = ["required_providers"]
 }

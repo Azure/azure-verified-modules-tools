@@ -41,7 +41,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
-    It 'runs transform then clean-backup with the config and module dirs, reporting pass on a no-op' {
+    It 'runs root, module, and common profiles for the root then cleans backups' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -51,7 +51,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTransform -Context $C
         }
@@ -68,8 +68,8 @@ Describe 'Invoke-AvmTerraformTransform' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/mapotf' -and
                 $ArgumentList[0] -eq 'transform' -and
-                $ArgumentList -contains '--mptf-dir' -and
-                $ArgumentList -contains '/fake/configs' -and
+                ([array]::IndexOf($ArgumentList, '/fake/root')) -lt ([array]::IndexOf($ArgumentList, '/fake/module')) -and
+                ([array]::IndexOf($ArgumentList, '/fake/module')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
                 $ArgumentList -contains '--tf-dir'
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -284,7 +284,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 if ($ArgumentList -contains 'transform') {
                     $i = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
                     $tfDir = $ArgumentList[$i + 1]
-                    Remove-Item -LiteralPath (Join-Path $tfDir 'variables.tf') -Force
+                    Remove-Item -LiteralPath (Join-Path $tfDir 'variables.tf') -Force -ErrorAction SilentlyContinue
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -440,6 +440,53 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
+    It 'throws AvmProcessException when a scoped target transform exits non-zero' {
+        $ctx = $script:context
+        $err = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+                param($C)
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Source = 'cache'; Path = '/fake/mapotf'
+                    }
+                }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+                Mock Get-AvmTerraformTransformTarget {
+                    @(
+                        [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                        [pscustomobject]@{ Path = '/fake/module'; Scope = 'module'; Profiles = @('module', 'common') }
+                    )
+                }
+                Mock Invoke-AvmProcess {
+                    $tfDirIndex = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                    if ($ArgumentList[0] -eq 'transform' -and $ArgumentList[$tfDirIndex + 1] -eq '/fake/module') {
+                        return [pscustomobject]@{ ExitCode = 4; StdOut = ''; StdErr = 'module transform failed' }
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Invoke-AvmTerraformTransform -Context $C
+            }
+        }
+        catch {
+            $err = $_.Exception
+        }
+
+        $err                | Should -Not -BeNullOrEmpty
+        $err.GetType().Name | Should -Be 'AvmProcessException'
+        $err.Message        | Should -Match 'module target'
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $tfDirIndex = [array]::IndexOf([object[]]$ArgumentList, '--tf-dir')
+                $ArgumentList[0] -eq 'transform' -and $ArgumentList[$tfDirIndex + 1] -eq '/fake/module'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                $ArgumentList[0] -eq 'clean-backup'
+            }
+        }
+    }
+
     It 'throws AvmProcessException when mapotf clean-backup exits non-zero' {
         $ctx = $script:context
         $err = $null
@@ -533,13 +580,45 @@ Describe 'Invoke-AvmTerraformTransform' {
     }
 }
 
+Describe 'Get-AvmTerraformTransformTarget' {
+    It 'returns scoped root, nested module, and direct example targets' {
+        $root = Join-Path $TestDrive 'repo'
+        $direct = Join-Path $root 'modules' 'direct'
+        $nested = Join-Path $root 'modules' 'group' 'nested'
+        $notModule = Join-Path $root 'modules' 'group' 'examples' 'default'
+        $example = Join-Path $root 'examples' 'default'
+        New-Item -ItemType Directory -Path $direct, $nested, $notModule, $example -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $direct 'terraform.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $nested 'terraform.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $notModule 'main.tf') -Value 'locals {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Value 'locals {}' -Encoding utf8NoBOM
+
+        $targets = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            @(Get-AvmTerraformTransformTarget -Root $R)
+        }
+
+        $targets | Should -HaveCount 4
+        ($targets | Where-Object Path -eq $root).Profiles | Should -Be @('root', 'module', 'common')
+        ($targets | Where-Object Path -eq $direct).Profiles | Should -Be @('module', 'common')
+        ($targets | Where-Object Path -eq $nested).Profiles | Should -Be @('module', 'common')
+        ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('common', 'example')
+        @($targets.Path) | Should -Not -Contain $notModule
+    }
+}
+
 Describe 'Resolve-AvmMapotfConfigDir' {
     BeforeAll {
         function script:New-AvmCfgBundle {
-            param([string] $Path, [string] $FileName = 'sample.mptf.hcl')
-            New-Item -ItemType Directory -Path $Path -Force | Out-Null
-            Set-Content -LiteralPath (Join-Path $Path $FileName) -Value 'transform {}' -Encoding utf8
-            return $Path
+            param(
+                [string] $Path,
+                [string] $Profile = 'common',
+                [string] $FileName = 'sample.mptf.hcl'
+            )
+            $profilePath = Join-Path $Path $Profile
+            New-Item -ItemType Directory -Path $profilePath -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $profilePath $FileName) -Value 'transform {}' -Encoding utf8
+            return $profilePath
         }
     }
 
@@ -559,42 +638,66 @@ Describe 'Resolve-AvmMapotfConfigDir' {
     It 'prefers the AVM_MPTF_CONFIG_DIR override over the consumer and packaged bundles' {
         $override = script:New-AvmCfgBundle -Path (Join-Path $TestDrive ("cfg-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)))
         $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl' | Out-Null
-        $env:AVM_MPTF_CONFIG_DIR = $override
+        script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf')) -FileName 'consumer.mptf.hcl' | Out-Null
+        $env:AVM_MPTF_CONFIG_DIR = Split-Path -Parent $override
 
-        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile common
+        }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $override).ProviderPath)
     }
 
-    It 'prefers the consumer config/mapotf/pre-commit bundle over the packaged module bundle' {
+    It 'prefers the consumer config/mapotf profile over the packaged profile' {
         Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
         $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl'
+        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf')) -FileName 'consumer.mptf.hcl'
 
-        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile common
+        }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
     }
 
-    It 'skips an empty AVM_MPTF_CONFIG_DIR override and uses the consumer bundle' {
+    It 'skips an empty AVM_MPTF_CONFIG_DIR profile and uses the consumer profile' {
         $emptyOverride = Join-Path $TestDrive ("empty-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $emptyOverride -Force | Out-Null
         $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf', 'pre-commit')) -FileName 'consumer.mptf.hcl'
+        $consumer = script:New-AvmCfgBundle -Path ([System.IO.Path]::Combine($root, 'config', 'mapotf')) -FileName 'consumer.mptf.hcl'
         $env:AVM_MPTF_CONFIG_DIR = $emptyOverride
 
-        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile common
+        }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
     }
 
-    It 'falls back to the packaged module bundle when no override or consumer bundle exists' {
+    It 'falls back to the packaged profile when no override or consumer profile exists' {
         Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
         $root = Join-Path $TestDrive ("bare-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $root -Force | Out-Null
 
-        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } { param($R) Resolve-AvmMapotfConfigDir -Root $R }
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile common
+        }
         $resolved | Should -Not -BeNullOrEmpty
-        (Split-Path -Leaf $resolved) | Should -Be 'pre-commit'
-        $resolved | Should -Match ([regex]::Escape([System.IO.Path]::Combine('Resources', 'mapotf', 'pre-commit')))
+        (Split-Path -Leaf $resolved) | Should -Be 'common'
+        $resolved | Should -Match ([regex]::Escape([System.IO.Path]::Combine('Resources', 'mapotf', 'common')))
         @(Get-ChildItem -LiteralPath $resolved -Filter '*.mptf.hcl' -File).Count | Should -BeGreaterThan 0
+    }
+
+    It 'returns null for an absent optional example profile' {
+        Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
+        $root = Join-Path $TestDrive ("bare-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile example -Optional
+        }
+        $resolved | Should -BeNullOrEmpty
     }
 }

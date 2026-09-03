@@ -2,64 +2,47 @@ locals {
   sync_main_telemetry_tf = true
 }
 
-data "local" avm_azapi_header {
-  name = "avm_azapi_header"
+data "variable" enable_telemetry {
+  name = "enable_telemetry"
 }
 
 locals {
-  avm_azapi_header_exists       = try(data.local.avm_azapi_header.result["avm_azapi_header"] != null, false)
-  raw_valid_module_source_regex = <<-EOT
-    [
-      "registry.terraform.io/[A|a]zure/.+",
-      "registry.opentofu.io/[A|a]zure/.+",
-      "git::https://github\\.com/[A|a]zure/.+",
-      "git::ssh:://git@github\\.com/[A|a]zure/.+",
-    ]
-EOT
-  raw_avm_azapi_headers         = <<-EOT
-  !var.enable_telemetry ? {} : (local.fork_avm ? {
-    fork_avm  = "true"
-    random_id = one(random_uuid.telemetry).result
-    } : {
-    avm                = "true"
-    random_id          = one(random_uuid.telemetry).result
-    avm_module_source  = one(data.modtm_module_source.telemetry).module_source
-    avm_module_version = one(data.modtm_module_source.telemetry).module_version
-  })
-EOT
-  azapi_headers_locals = {
-    valid_module_source_regex = trim(local.raw_valid_module_source_regex, "\r\n")
-    fork_avm                  = "!anytrue([for r in local.valid_module_source_regex : can(regex(r, one(data.modtm_module_source.telemetry).module_source))])"
-    avm_azapi_headers         = trim(local.raw_avm_azapi_headers, "\r\n")
+  var_dot_enable_telemetry_exists = try(data.variable.enable_telemetry.result["enable_telemetry"] != null, false)
+}
+
+transform "new_block" new_enable_telemetry_variable {
+  for_each       = local.sync_main_telemetry_tf && !local.var_dot_enable_telemetry_exists ? toset([1]) : toset([])
+  new_block_type = "variable"
+  labels         = ["enable_telemetry"]
+  filename       = "variables.tf"
+  asraw {
+    type        = bool
+    default     = true
+    description = <<DESCRIPTION
+This variable controls whether or not telemetry is enabled for the module.
+For more information see <https://aka.ms/avm/telemetryinfo>.
+If it is set to false, then no telemetry will be collected.
+DESCRIPTION
+    nullable    = false
   }
-  avm_azapi_header                    = "join(\" \", [ for k, v in local.avm_azapi_headers : \"$${k}=$${v}\" ])"
-  raw_new_avm_azapi_header_local_body = <<-EOT
-    # tflint-ignore: terraform_unused_declarations
-    avm_azapi_header = ${local.avm_azapi_header}
-EOT
-  new_avm_azapi_header_local_body     = trim(local.raw_new_avm_azapi_header_local_body, "\r\n")
 }
 
-transform "new_block" new_avm_azapi_header_local {
-  for_each       = local.sync_main_telemetry_tf && !local.avm_azapi_header_exists ? toset([1]) : toset([])
-  new_block_type = "locals"
-  filename       = "main.telemetry.tf"
-  body           = local.new_avm_azapi_header_local_body
-}
-
-transform "ensure_local" azapi_headers_helper_local {
-  for_each           = local.sync_main_telemetry_tf ? local.azapi_headers_locals : {}
-  name               = each.key
-  fallback_file_name = "main.telemetry.tf"
-  value_as_string    = each.value
-}
-
-# We can declare tflint-ignore annotation only by using new_block, so we don't provision ensure_local if local.avm_azapi_headers is absent
-transform "ensure_local" azapi_headers_local {
-  for_each           = local.sync_main_telemetry_tf && local.avm_azapi_header_exists ? toset([1]) : toset([])
-  name               = "avm_azapi_header"
-  fallback_file_name = "main.telemetry.tf"
-  value_as_string    = local.avm_azapi_header
+transform "update_in_place" enable_telemetry_variable {
+  for_each             = local.sync_main_telemetry_tf && local.var_dot_enable_telemetry_exists ? toset([1]) : toset([])
+  target_block_address = "variable.enable_telemetry"
+  asraw {
+    type        = bool
+    default     = true
+    description = <<DESCRIPTION
+This variable controls whether or not telemetry is enabled for the module.
+For more information see <https://aka.ms/avm/telemetryinfo>.
+If it is set to false, then no telemetry will be collected.
+DESCRIPTION
+    nullable    = false
+  }
+  depends_on = [
+    transform.new_block.new_enable_telemetry_variable
+  ]
 }
 
 data "data" "azurerm_client_config" {
