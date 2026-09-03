@@ -333,17 +333,54 @@ function Get-AvmTflintInlineIgnoreWarning {
             Sort-Object FullName
     )
 
-    $pattern = '(?i)(?:#|//)\s*tflint-ignore\s*:?\s*(?<rules>[A-Za-z0-9_.-][A-Za-z0-9_.,\s-]*)?'
+    $pattern = '(?i)^(?:#|//)\s*tflint-ignore\s*:\s*(?<rules>[A-Za-z0-9_.-][A-Za-z0-9_.,\s-]*)'
     foreach ($terraformFile in $terraformFiles) {
         $relativePath = [System.IO.Path]::GetRelativePath($rootFull, $terraformFile.FullName).Replace('\', '/')
         $lines = [System.IO.File]::ReadAllLines($terraformFile.FullName)
         for ($index = 0; $index -lt $lines.Count; $index++) {
             $line = $lines[$index]
-            foreach ($match in [regex]::Matches($line, $pattern)) {
+            $commentIndex = -1
+            $inString = $false
+            $escaped = $false
+            for ($charIndex = 0; $charIndex -lt $line.Length; $charIndex++) {
+                $char = $line[$charIndex]
+                if ($escaped) {
+                    $escaped = $false
+                    continue
+                }
+                if ($inString -and $char -eq '\') {
+                    $escaped = $true
+                    continue
+                }
+                if ($char -eq '"') {
+                    $inString = -not $inString
+                    continue
+                }
+                if ($inString) {
+                    continue
+                }
+                if ($char -eq '#') {
+                    $commentIndex = $charIndex
+                    break
+                }
+                if ($char -eq '/' -and $charIndex + 1 -lt $line.Length -and $line[$charIndex + 1] -eq '/') {
+                    $commentIndex = $charIndex
+                    break
+                }
+            }
+            if ($commentIndex -lt 0) {
+                continue
+            }
+
+            $comment = $line.Substring($commentIndex)
+            foreach ($match in [regex]::Matches($comment, $pattern)) {
                 $rules = @(
                     ([string]$match.Groups['rules'].Value) -split '[,\s]+' |
                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                 )
+                if ($rules.Count -eq 0) {
+                    continue
+                }
                 $warnings.Add([pscustomobject][ordered]@{
                         File  = $relativePath
                         Line  = $index + 1

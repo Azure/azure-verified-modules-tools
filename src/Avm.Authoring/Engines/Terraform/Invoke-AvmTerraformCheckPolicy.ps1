@@ -169,9 +169,11 @@ function Get-AvmConftestOverrideWarning {
             $text = [System.IO.File]::ReadAllText($exceptionFile.FullName)
             $rules = @(
                 @(
-                    foreach ($ruleListMatch in [regex]::Matches($text, '(?ms)\brules\s*(?::=|=)\s*\[(?<body>.*?)\]')) {
-                        foreach ($ruleMatch in [regex]::Matches($ruleListMatch.Groups['body'].Value, '["''](?<rule>[^"'']+)["'']')) {
-                            [string]$ruleMatch.Groups['rule'].Value
+                    foreach ($exceptionMatch in [regex]::Matches($text, '(?ms)\bexception\s+contains\s+rules\s+if\s*\{(?<block>[^{}]*)\}')) {
+                        foreach ($ruleListMatch in [regex]::Matches($exceptionMatch.Groups['block'].Value, '(?ms)\brules\s*(?::=|=)\s*\[(?<body>.*?)\]')) {
+                            foreach ($ruleMatch in [regex]::Matches($ruleListMatch.Groups['body'].Value, '["''](?<rule>[^"'']+)["'']')) {
+                                [string]$ruleMatch.Groups['rule'].Value
+                            }
                         }
                     }
                 ) | Select-Object -Unique

@@ -341,6 +341,8 @@ Describe 'Get-AvmTflintInlineIgnoreWarning' {
 resource "azurerm_resource_group" "this" {}
 # tflint-ignore: terraform_unused_declarations
 output "name" { value = "x" } // tflint-ignore: avm_rule_one, avm_rule_two
+variable "description" { default = "# tflint-ignore: not_a_comment" }
+# tflint-ignore:
 '@ | Set-Content -LiteralPath (Join-Path $nested 'main.tf') -Encoding utf8
 
         $warnings = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {

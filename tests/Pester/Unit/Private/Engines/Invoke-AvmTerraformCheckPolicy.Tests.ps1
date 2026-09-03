@@ -25,6 +25,10 @@ exception contains rules if {
 exception contains rules if {
   rules = ["AVM_SEC_223"]
 }
+
+allow if {
+  rules = ["NOT_AN_EXCEPTION"]
+}
 '@ | Set-Content -LiteralPath (Join-Path $exceptions 'avmsec.rego') -Encoding utf8
 
         $warnings = InModuleScope 'Avm.Authoring' -Parameters @{
