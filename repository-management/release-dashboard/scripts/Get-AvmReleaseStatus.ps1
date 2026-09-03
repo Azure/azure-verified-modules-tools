@@ -154,7 +154,9 @@ function Get-AvmHclField {
         $index++
     }
 
-    $fields['validation'] = ($validations -join ' ;; ')
+    # Sorted, because Terraform applies every rule regardless of the order they are
+    # written in. Joining them as encountered reported a reordering as a rewrite.
+    $fields['validation'] = (($validations | Sort-Object) -join ' ;; ')
     $fields['validationCount'] = $validations.Count
     return $fields
 }
