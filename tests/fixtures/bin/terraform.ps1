@@ -36,11 +36,9 @@ switch ($args[0]) {
     }
     'test' {
         # Emit a minimal newline-delimited JSON stream that the suite engine
-        # and policy engine tolerate. The policy engine consumes test_plan;
-        # the suite engine consumes test_run and test_summary.
-        Write-Output ('{"@level":"info","type":"version","terraform":"{0}","ui":"1.3"}' -f $toolVersion)
+        # tolerates. No test_run failures and no error diagnostics => the
+        # engine reports Status=pass. Exit 0 = every run passed.
         Write-Output '{"@level":"info","type":"test_run","test_run":{"path":"tests/unit/main.tftest.hcl","run":"stub","status":"pass"}}'
-        Write-Output '{"@level":"info","type":"test_plan","test_plan":{"plan_format_version":"1.2","resource_changes":[],"provider_schemas":{}}}'
         Write-Output '{"@level":"info","type":"test_summary","test_summary":{"status":"pass","passed":1,"failed":0,"errored":0,"skipped":0}}'
         exit 0
     }

@@ -130,7 +130,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm new`                     | Scaffold new resource/pattern/utility module (replaces `Set-ModuleFileAndFolderSetup.ps1`) | Scaffold new module from `tfmod-scaffold` template                         |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
 | `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init -upgrade` then `tflint` with merged AVM config |
-| `avm check policy`            | PSRule.Rules.Azure                                                       | Credential-free mock-provider plans evaluated by Conftest with APRL + AVMSEC |
+| `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC over a real `terraform plan`; falls back to a synthetic loopback token when no Azure credential is configured |
 | `avm check convention`        | Compliance Pester suite (`module.tests.ps1`)                             | `grept run`                                                                |
 | `avm transform`               | Regenerate README + test scaffolding (`Set-AVMModule`)                   | `mapotf transform` + clean-backup                                          |
 | `avm docs`                    | _Deferred (2026-05-26 pivot): the ARM-JSON walker spike was reverted; new design will shell out to a dedicated Bicep docs CLI when one is selected_ | `terraform-docs`                                                           |

@@ -745,13 +745,16 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   - PSScriptAnalyzer with project settings.
   - Pester Unit layer.
 - `build/avm.build.ps1` exposes this as `./build.ps1 pre-commit`; contributors run it before pushing.
-- Terraform `avm pr-check` policy analysis is credential-free. For each active
-  example, the engine stages any missing provider declarations, generates a
-  temporary `terraform test` file with native `mock_provider` blocks, and passes
-  the emitted `test_plan` JSON to APRL and AVMSEC through Conftest. Real Azure
-  authentication is reserved for the integration and end-to-end module tiers,
-  enabling a separately released workflow-template update to run the static PR
-  check on fork pull requests.
+- Terraform `avm pr-check` policy analysis prefers a real Azure credential and
+  falls back to a credential-free plan when none is configured. Either way it
+  runs the real `terraform init` -> `plan -out` -> `show -json` sequence with
+  the genuine providers, so the plan JSON the policies evaluate is always
+  Terraform's own. The fallback serves the providers' access token from a
+  synthetic loopback endpoint (`Start-AvmFakeAzureCredential`) and disables
+  every other credential source, enhanced validation, and resource-provider
+  registration; a create-only plan against empty state then makes no Azure API
+  call. Examples whose data sources read existing Azure resources still need a
+  real credential and remain covered by the credentialled tiers.
 
 ---
 
