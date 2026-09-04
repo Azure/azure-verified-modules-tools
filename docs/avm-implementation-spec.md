@@ -745,6 +745,18 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   - PSScriptAnalyzer with project settings.
   - Pester Unit layer.
 - `build/avm.build.ps1` exposes this as `./build.ps1 pre-commit`; contributors run it before pushing.
+- Terraform `avm pr-check` policy analysis prefers a real Azure credential and
+  falls back to a credential-free plan when none is configured. Either way it
+  runs the real `terraform init` -> `plan -out` -> `show -json` sequence with
+  the genuine providers, so the plan JSON the policies evaluate is always
+  Terraform's own. The fallback serves the providers' access token from a
+  synthetic loopback endpoint (`Start-AvmFakeAzureCredential`) and disables
+  every other credential source, enhanced validation, and resource-provider
+  registration; a create-only plan against empty state then makes no Azure API
+  call. Data sources that read existing Azure resources cannot resolve on that
+  path, so the engine detects them up front and fails the example with
+  `avm.tf.policy-needs-credential`, directing the author to run the
+  credentialled pipeline from a branch in the module repository.
 
 ---
 
