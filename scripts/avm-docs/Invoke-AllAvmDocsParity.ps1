@@ -18,10 +18,10 @@ param (
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AvmDocs.Common.ps1')
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $templatePath = Join-Path $PSScriptRoot 'README.byte-parity.scriban'
 $modelIndexTemplatePath = Join-Path $PSScriptRoot 'model-index.scriban'
-$docsConfigPath = Join-Path $PSScriptRoot 'bicepconfig.json'
 $modulePaths = @(Get-ChildItem (Join-Path $SourceRepositoryPath 'avm') -Recurse -Filter main.bicep -File |
     Where-Object {
         (Test-Path (Join-Path $_.DirectoryName 'README.md')) -and
@@ -31,88 +31,95 @@ $modulePaths = @(Get-ChildItem (Join-Path $SourceRepositoryPath 'avm') -Recurse 
     Sort-Object)
 
 New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
-Copy-Item -LiteralPath $docsConfigPath -Destination (Join-Path $WorkingRepositoryPath 'bicepconfig.json') -Force
+$configurationContext = New-AvmDocsConfigurationContext `
+    -RepositoryPath $WorkingRepositoryPath `
+    -ReadmeTemplatePath $templatePath `
+    -ModelIndexTemplatePath $modelIndexTemplatePath
+try {
+    $results = @($modulePaths | ForEach-Object -Parallel {
+            $modulePath = $_
+            $moduleRoot = Join-Path $using:WorkingRepositoryPath $modulePath
+            $moduleOutputPath = Join-Path $using:OutputPath $modulePath
+            New-Item -ItemType Directory -Path $moduleOutputPath -Force | Out-Null
 
-$results = @($modulePaths | ForEach-Object -Parallel {
-        $modulePath = $_
-        $moduleRoot = Join-Path $using:WorkingRepositoryPath $modulePath
-        $moduleOutputPath = Join-Path $using:OutputPath $modulePath
-        New-Item -ItemType Directory -Path $moduleOutputPath -Force | Out-Null
+            try {
+                $result = & $using:VerifierPath `
+                    -BicepPath $using:BicepPath `
+                    -AvmRepositoryPath $using:WorkingRepositoryPath `
+                    -ExpectedRepositoryPath $using:SourceRepositoryPath `
+                    -ModulePaths @($modulePath) `
+                    -TemplatePath $using:templatePath `
+                    -ModelIndexTemplatePath $using:modelIndexTemplatePath `
+                    -ConfigurationPrepared `
+                    -GenerateInPlace `
+                    -PassThru
 
-        try {
-            $result = & $using:VerifierPath `
-                -BicepPath $using:BicepPath `
-                -AvmRepositoryPath $using:WorkingRepositoryPath `
-                -ExpectedRepositoryPath $using:SourceRepositoryPath `
-                -ModulePaths @($modulePath) `
-                -TemplatePath $using:templatePath `
-                -ModelIndexTemplatePath $using:modelIndexTemplatePath `
-                -GenerateInPlace `
-                -PassThru
+                $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
+                $generatedPath = Join-Path $moduleRoot 'README.md'
+                Copy-Item (Join-Path $fragmentRoot 'README.stderr.txt') (Join-Path $moduleOutputPath 'README.stderr.txt') -Force
+                if (Test-Path (Join-Path $fragmentRoot 'model-index.tsv')) {
+                    Copy-Item (Join-Path $fragmentRoot 'model-index.tsv') (Join-Path $moduleOutputPath 'model-index.tsv') -Force
+                }
+                if (Test-Path (Join-Path $fragmentRoot 'model-index.stderr.txt')) {
+                    Copy-Item (Join-Path $fragmentRoot 'model-index.stderr.txt') (Join-Path $moduleOutputPath 'model-index.stderr.txt') -Force
+                }
 
-            $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
-            $generatedPath = Join-Path $moduleRoot 'README.md'
-            Copy-Item (Join-Path $fragmentRoot 'README.stderr.txt') (Join-Path $moduleOutputPath 'README.stderr.txt') -Force
-            if (Test-Path (Join-Path $fragmentRoot 'model-index.tsv')) {
-                Copy-Item (Join-Path $fragmentRoot 'model-index.tsv') (Join-Path $moduleOutputPath 'model-index.tsv') -Force
-            }
-            if (Test-Path (Join-Path $fragmentRoot 'model-index.stderr.txt')) {
-                Copy-Item (Join-Path $fragmentRoot 'model-index.stderr.txt') (Join-Path $moduleOutputPath 'model-index.stderr.txt') -Force
-            }
+                if (-not $result.ReadmeMatches) {
+                    $diffPath = Join-Path $moduleOutputPath 'README.diff.txt'
+                    git --no-pager diff --no-index -- (Join-Path $using:SourceRepositoryPath "$modulePath/README.md") $generatedPath 2>&1 |
+                        Set-Content $diffPath
+                }
 
-            if (-not $result.ReadmeMatches) {
-                $diffPath = Join-Path $moduleOutputPath 'README.diff.txt'
-                git --no-pager diff --no-index -- (Join-Path $using:SourceRepositoryPath "$modulePath/README.md") $generatedPath 2>&1 |
-                    Set-Content $diffPath
-            }
+                [pscustomobject]@{
+                    Module = $modulePath
+                    Matches = $result.Matches
+                    ReadmeMatches = $result.ReadmeMatches
+                    ModelMatches = $result.ModelMatches
+                    ExpectedParameterCount = $result.ExpectedParameterCount
+                    ActualParameterCount = $result.ActualParameterCount
+                    MissingParameters = $result.MissingParameters
+                    UnexpectedParameters = $result.UnexpectedParameters
+                    ExpectedExampleCount = $result.ExpectedExampleCount
+                    ActualExampleCount = $result.ActualExampleCount
+                    MissingExamples = $result.MissingExamples
+                    UnexpectedExamples = $result.UnexpectedExamples
+                    ExpectedSha256 = $result.ExpectedSha256
+                    ActualSha256 = $result.ActualSha256
+                    GeneratedReadme = $generatedPath
+                    Error = $null
+                }
+            } catch {
+                $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
+                foreach ($logName in @('README.stderr.txt', 'model-index.stderr.txt')) {
+                    $logPath = Join-Path $fragmentRoot $logName
+                    if (Test-Path $logPath) {
+                        Copy-Item $logPath (Join-Path $moduleOutputPath $logName) -Force
+                    }
+                }
 
-            [pscustomobject]@{
-                Module = $modulePath
-                Matches = $result.Matches
-                ReadmeMatches = $result.ReadmeMatches
-                ModelMatches = $result.ModelMatches
-                ExpectedParameterCount = $result.ExpectedParameterCount
-                ActualParameterCount = $result.ActualParameterCount
-                MissingParameters = $result.MissingParameters
-                UnexpectedParameters = $result.UnexpectedParameters
-                ExpectedExampleCount = $result.ExpectedExampleCount
-                ActualExampleCount = $result.ActualExampleCount
-                MissingExamples = $result.MissingExamples
-                UnexpectedExamples = $result.UnexpectedExamples
-                ExpectedSha256 = $result.ExpectedSha256
-                ActualSha256 = $result.ActualSha256
-                GeneratedReadme = $generatedPath
-                Error = $null
-            }
-        } catch {
-            $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
-            foreach ($logName in @('README.stderr.txt', 'model-index.stderr.txt')) {
-                $logPath = Join-Path $fragmentRoot $logName
-                if (Test-Path $logPath) {
-                    Copy-Item $logPath (Join-Path $moduleOutputPath $logName) -Force
+                [pscustomobject]@{
+                    Module = $modulePath
+                    Matches = $false
+                    ReadmeMatches = $false
+                    ModelMatches = $false
+                    ExpectedParameterCount = $null
+                    ActualParameterCount = $null
+                    MissingParameters = $null
+                    UnexpectedParameters = $null
+                    ExpectedExampleCount = $null
+                    ActualExampleCount = $null
+                    MissingExamples = $null
+                    UnexpectedExamples = $null
+                    ExpectedSha256 = $null
+                    ActualSha256 = $null
+                    GeneratedReadme = $null
+                    Error = $_.Exception.Message
                 }
             }
-
-            [pscustomobject]@{
-                Module = $modulePath
-                Matches = $false
-                ReadmeMatches = $false
-                ModelMatches = $false
-                ExpectedParameterCount = $null
-                ActualParameterCount = $null
-                MissingParameters = $null
-                UnexpectedParameters = $null
-                ExpectedExampleCount = $null
-                ActualExampleCount = $null
-                MissingExamples = $null
-                UnexpectedExamples = $null
-                ExpectedSha256 = $null
-                ActualSha256 = $null
-                GeneratedReadme = $null
-                Error = $_.Exception.Message
-            }
-        }
-} -ThrottleLimit $ThrottleLimit)
+    } -ThrottleLimit $ThrottleLimit)
+} finally {
+    Remove-AvmDocsConfigurationContext -Context $configurationContext
+}
 
 $results = @($results | Sort-Object Module)
 $results | Export-Csv (Join-Path $OutputPath 'comparison.csv') -NoTypeInformation
