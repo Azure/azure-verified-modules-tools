@@ -2,15 +2,16 @@
 
 **Status**: complete
 **Started**: 2026-09-03
-**Updated**: 2026-09-03
+**Updated**: 2026-09-04
 **Branch**: `jaredfholgate-fork-safe-terraform-workflow`
 
 ## Outcome
 
-Allow the reusable Terraform module workflow's static `pr-check` job to run for
-pull requests from forks without Azure credentials. Keep integration,
-example discovery, and end-to-end tests restricted to trusted, non-fork runs
-with their existing Azure authentication.
+Split the reusable Terraform module workflow's PR gate into two paths. Branch
+pull requests retain the authoritative credentialled `pr-check`; fork pull
+requests run a separate credential-free `pr-check` using the synthetic token
+fallback from PR #98. Unit tests run for both paths, while integration, example
+discovery, and end-to-end tests remain restricted to trusted, non-fork runs.
 
 > [!IMPORTANT]
 > This workflow pull request must not merge until
@@ -21,17 +22,18 @@ with their existing Azure authentication.
 
 ## Checklist
 
-- [x] Make `pr-check` fork-safe and credential-free.
-- [x] Preserve trusted credential handling for integration and end-to-end jobs.
-- [x] Document the caller secret and trust-boundary behavior in the workflow.
-- [x] Add isolated unit assertions for the `pr-check` job contract.
+- [x] Restore the authoritative credentialled `pr-check` for branch pull requests.
+- [x] Add a fork-only credential-free `pr-check-fork` job.
+- [x] Keep unit tests available to forks and integration/e2e trusted-only.
+- [x] Document both paths and the policy-needs-credential limitation.
+- [x] Add isolated unit assertions for both PR-check job contracts.
 - [x] Run `./build.ps1 pre-commit`.
 
 ## Validation
 
-- `./build.ps1 pre-commit` - 1,031 unit tests passed, 8 skipped;
+- `./build.ps1 pre-commit` - 1,033 unit tests passed, 8 skipped;
   29 component tests passed. Build completed with 0 errors. The lint task
-  recovered from two known transient PSScriptAnalyzer `NullReferenceException`
+  recovered from known transient PSScriptAnalyzer `NullReferenceException`
   retries and reported its existing warning set.
 
 ## Dependencies

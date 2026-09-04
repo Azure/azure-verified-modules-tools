@@ -17,12 +17,16 @@
 #         contents: read
 #       secrets: inherit
 #
-# For trusted runs, `secrets: inherit` is REQUIRED: the credentialled
-# integration and end-to-end jobs fan the full secret + variable sets into
-# $GITHUB_ENV so terraform and example hooks inherit them. Fork pull requests
-# receive no inherited secrets, but can still run unit tests and the static
-# `pr-check` job. Integration, example discovery, and end-to-end tests remain
-# restricted to trusted, non-fork pull requests.
+# For trusted runs, `secrets: inherit` is REQUIRED: the authoritative
+# credentialled `pr-check`, integration, and end-to-end jobs fan the full secret
+# + variable sets into $GITHUB_ENV so terraform and example hooks inherit them.
+# Fork pull requests receive no inherited secrets. They run unit tests plus a
+# separate credential-free `pr-check` job, which uses Avm.Authoring's synthetic
+# loopback-token fallback for Terraform policy plans. An example that reads an
+# existing Azure resource through a data source fails that path with
+# `avm.tf.policy-needs-credential`; verify it through a branch pull request so
+# the trusted credentialled `pr-check` can run. Integration, example discovery,
+# and end-to-end tests remain restricted to trusted, non-fork pull requests.
 #
 # Divergences from the governance template (tracked as follow-ups):
 #   * There is no global setup/teardown stage; the module implements per-example
@@ -215,8 +219,13 @@ jobs:
 
   pr-check:
     name: PR check
+    if: github.event.pull_request.head.repo.fork == false
+    needs: subscriptions
     runs-on: ubuntu-latest
-    environment: no-approval
+    environment: pr-check
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,6 +244,8 @@ jobs:
 
       - name: Prepare test environment
         shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -273,12 +284,26 @@ jobs:
               "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
+          # Azure OIDC plumbing for terraform (ARM_USE_OIDC=true).
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
+              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
+              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
           # ARM_*_OVERRIDE precedence (governance convention).
           foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
               $override = [string] $combined["${name}_OVERRIDE"]
               if (-not [string]::IsNullOrWhiteSpace($override)) {
                   "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
               }
+          }
+
+          # Selected test subscription wins unless an explicit override was set.
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
+              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
       - name: Install Avm.Authoring
@@ -306,6 +331,60 @@ jobs:
           avm version
 
       - name: Run pr-check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          avm pr-check
+
+  pr-check-fork:
+    name: PR check (fork, credential-free)
+    if: github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+    environment: no-approval
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module 'Microsoft.PowerShell.PSResourceGet'
+
+          $params = @{
+              Name            = 'Avm.Authoring'
+              Scope           = 'CurrentUser'
+              TrustRepository = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+              $params['Version'] = $env:AVM_AUTHORING_VERSION
+          }
+          Install-PSResource @params
+
+          Import-Module Avm.Authoring
+          avm version
+
+      - name: Run credential-free pr-check
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
