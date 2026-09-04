@@ -7,28 +7,27 @@
 
 ## Outcome
 
-Preserve diagnostic file, line, and column information in ordinary terminal
-warnings and errors, and emit native Azure DevOps task issues when running
-inside an Azure Pipelines job.
+Append readable file, line, and column information to ordinary terminal
+warnings and errors while retaining existing GitHub Actions annotations.
 
 ## Checklist
 
 - [x] Format positioned diagnostics for ordinary terminal output.
-- [x] Emit Azure DevOps warning and error task issues with source positions.
 - [x] Preserve existing GitHub Actions annotation behavior.
-- [x] Cover terminal, Azure DevOps, and escaping behavior.
+- [x] Cover positioned terminal output.
 - [x] Update directly related documentation.
 - [x] Run the pre-commit gate.
 - [x] Commit and push the slice.
 
 ## Validation
 
-- `./build.ps1 test`: 1,035 passed, 0 failed, 8 skipped.
-- `./build.ps1 pre-commit`: layout, lint, unit, and 29 component tests passed.
+- `./build.ps1 pre-commit`: layout, lint, 1,033 unit tests, and 29 component
+  tests passed.
 - The canary repository's real inline-ignore scan rendered:
-  - `main.telemetry.tf:59`
-  - `variables.tf:168`
-- Azure DevOps task issue tests cover file, line, column, and command escaping.
+  - `TFLint inline ignore comment found for rule(s):
+    terraform_unused_declarations. (main.telemetry.tf, line 59)`
+  - `TFLint inline ignore comment found for rule(s):
+    terraform_unused_declarations. (variables.tf, line 168)`
 - Existing GitHub Actions annotation tests remained green.
 - `git diff --check`: passed.
 

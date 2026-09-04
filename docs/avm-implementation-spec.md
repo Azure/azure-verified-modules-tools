@@ -526,10 +526,9 @@ GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
 Warnings and errors that carry a file position preserve it as
-`path:line[:column]: message` in ordinary terminal output. GitHub Actions uses
-native workflow annotations, and Azure Pipelines uses `task.logissue`, so both
-CI systems receive the same file, line, and column metadata without duplicating
-the position in the message.
+`message (path, line N[, column N])` in ordinary terminal output. GitHub Actions
+keeps using native workflow annotations without duplicating the position in
+the message.
 
 The `avm` dispatcher renders every result carrying `Status`, including each
 composition step and nested issue, before returning or throwing. When

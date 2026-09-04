@@ -178,9 +178,9 @@ section when cutting a release.
 
 ### Fixed
 
-- Positioned warnings and errors now retain `file:line[:column]` in ordinary
-  terminal output and emit native Azure DevOps task issues, while preserving
-  existing GitHub Actions annotations.
+- Positioned warnings and errors now append a readable
+  `(file, line N[, column N])` location in ordinary terminal output while
+  preserving existing GitHub Actions annotations.
 - Mapotf transforms now process independent root, local-module, and example
   targets with bounded parallelism. The public transform, pre-commit, and
   pr-check commands share one throttle setting, while a configured

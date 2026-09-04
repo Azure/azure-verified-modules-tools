@@ -6,8 +6,6 @@ BeforeAll {
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
 
     $script:savedActions = $env:GITHUB_ACTIONS
-    $script:savedAzureDevOps = $env:TF_BUILD
-    $script:savedBuildSourcesDirectory = $env:BUILD_SOURCESDIRECTORY
     $script:savedRunner = $env:RUNNER_DEBUG
     $script:savedVerbose = $env:AVM_VERBOSE
     $script:savedNoColor = $env:NO_COLOR
@@ -16,8 +14,6 @@ BeforeAll {
 
 AfterAll {
     $env:GITHUB_ACTIONS = $script:savedActions
-    $env:TF_BUILD = $script:savedAzureDevOps
-    $env:BUILD_SOURCESDIRECTORY = $script:savedBuildSourcesDirectory
     $env:RUNNER_DEBUG = $script:savedRunner
     $env:AVM_VERBOSE = $script:savedVerbose
     $env:NO_COLOR = $script:savedNoColor
@@ -28,8 +24,6 @@ AfterAll {
 Describe 'Write-AvmLog' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
-        $env:TF_BUILD = ''
-        $env:BUILD_SOURCESDIRECTORY = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
         Remove-Item Env:\NO_COLOR -ErrorAction SilentlyContinue
@@ -117,8 +111,8 @@ Describe 'Write-AvmLog' {
                 }
             }
 
-            @($observed.Warning) | Should -Contain 'variables.tf:168: careful'
-            @($observed.Info) | Should -Contain 'main.tf:12:3: boom'
+            @($observed.Warning) | Should -Contain 'careful (variables.tf, line 168)'
+            @($observed.Info) | Should -Contain 'boom (main.tf, line 12, column 3)'
         }
 
         It 'writes Error to the information stream so it is never swallowed' {
@@ -289,41 +283,6 @@ Describe 'Write-AvmLog' {
         }
     }
 
-    Context 'inside Azure DevOps' {
-        BeforeEach {
-            $env:GITHUB_ACTIONS = ''
-            $env:TF_BUILD = 'True'
-        }
-
-        It 'emits task issues with file, line and column positions' {
-            $messages = InModuleScope 'Avm.Authoring' {
-                $captured = @()
-                Write-AvmLog 'be careful' -Level Warning -File 'variables.tf' -Line 168 -InformationVariable captured
-                Write-AvmLog 'it broke' -Level Error -File 'main.tf' -Line 12 -Column 3 -InformationVariable +captured
-                @($captured | ForEach-Object { [string]$_.MessageData })
-            }
-
-            @($messages) | Should -Contain '##vso[task.logissue type=warning;sourcepath=variables.tf;linenumber=168]be careful'
-            @($messages) | Should -Contain '##vso[task.logissue type=error;sourcepath=main.tf;linenumber=12;columnnumber=3]it broke'
-        }
-
-        It 'escapes task issue properties and messages' {
-            $messages = InModuleScope 'Avm.Authoring' {
-                $captured = @()
-                Write-AvmLog "one%`ntwo" `
-                    -Level Warning `
-                    -File 'folder;a]\main.tf' `
-                    -Line 4 `
-                    -InformationVariable captured
-                @($captured | ForEach-Object { [string]$_.MessageData })
-            }
-
-            @($messages) | Should -Contain (
-                '##vso[task.logissue type=warning;sourcepath=folder%3Ba%5D/main.tf;linenumber=4]one%AZP25%0Atwo'
-            )
-        }
-    }
-
     Context 'group markers outside GitHub Actions' {
         It 'emits nothing' {
             $messages = InModuleScope 'Avm.Authoring' {
@@ -390,7 +349,6 @@ Describe 'Write-AvmLog' {
 Describe 'Test-AvmDebugMode' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
-        $env:TF_BUILD = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
     }
@@ -418,7 +376,6 @@ Describe 'Test-AvmDebugMode' {
 Describe 'Format-AvmDuration' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
-        $env:TF_BUILD = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
     }
@@ -445,7 +402,6 @@ Describe 'Format-AvmDuration' {
 Describe 'Format-AvmTimestamp' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
-        $env:TF_BUILD = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
     }
@@ -462,7 +418,6 @@ Describe 'Format-AvmTimestamp' {
 Describe 'Format-AvmTimingSuffix' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
-        $env:TF_BUILD = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
     }
