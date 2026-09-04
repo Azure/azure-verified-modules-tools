@@ -30,88 +30,125 @@ function Invoke-AvmTerraformPolicyExample {
         # run keeps exactly the behaviour and coverage it has today. The
         # synthetic credential is a fallback for contributors and forks, not
         # a replacement.
+        $usingSyntheticCredential = $false
         if ($null -ne $Options.CredentialEnvVars -and
             -not (Test-AvmAzureCredentialAvailable -EnvVars $envVars)) {
             foreach ($name in $Options.CredentialEnvVars.Keys) {
                 $envVars[$name] = $Options.CredentialEnvVars[$name]
             }
+            $usingSyntheticCredential = $true
         }
 
-        $terraformLock = Lock-AvmTerraformPluginCache `
-            -WorkingDirectory $Example.StagedPath `
-            -EnvVars $envVars
-        try {
-            $null = Invoke-AvmTerraformInit `
-                -TerraformPath $Options.TerraformPath `
-                -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
-                -Label ("terraform init ({0})" -f $Example.Name) `
-                -NoColor `
-                -SkipPluginCacheLock
-
-            $null = Invoke-AvmProcess `
-                -FilePath $Options.TerraformPath `
-                -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
-                -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
-                -Label ("terraform plan ({0})" -f $Example.Name)
-
-            $showResult = Invoke-AvmProcess `
-                -FilePath $Options.TerraformPath `
-                -ArgumentList @('show', '-json', 'tfplan') `
-                -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
-                -Label ("terraform show ({0})" -f $Example.Name)
-        }
-        finally {
-            if ($null -ne $terraformLock) {
-                $terraformLock.Dispose()
+        $skipReason = $null
+        if ($usingSyntheticCredential) {
+            # Terraform reads data sources during plan whenever their
+            # configuration is known, and '-refresh=false' does not suppress
+            # that, so an API-backed data source cannot resolve here. Report
+            # it as a failure rather than letting terraform plan surface a
+            # provider authentication error: the example is genuinely
+            # unverified, and the author needs a credentialled run.
+            $credentialledDataSources = @(
+                Get-AvmTerraformCredentialledDataSource -Path $Example.StagedPath)
+            if ($credentialledDataSources.Count -gt 0) {
+                $addresses = ($credentialledDataSources.DataSourceAddress | Sort-Object -Unique) -join ', '
+                $skipReason = (
+                    'Policy checks were skipped for this example because it declares data ' +
+                    "source(s) that read existing Azure resources ($addresses), which cannot " +
+                    'be resolved without an Azure credential. Run the credentialled pipeline ' +
+                    'from a branch in the module repository to verify this example.')
+                Write-AvmLog `
+                    -Level Warning `
+                    -File $Example.RelativePath `
+                    -Message $skipReason |
+                    Out-Null
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = $Example.RelativePath.Replace('\', '/')
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = 'avm.tf.policy-needs-credential'
+                        Message  = $skipReason
+                    })
             }
         }
 
-        $planJsonPath = Join-Path $Example.StagedPath 'tfplan.json'
-        [System.IO.File]::WriteAllText(
-            $planJsonPath,
-            [string]$showResult.StdOut,
-            [System.Text.UTF8Encoding]::new($false))
+        if ($null -eq $skipReason) {
+            $terraformLock = Lock-AvmTerraformPluginCache `
+                -WorkingDirectory $Example.StagedPath `
+                -EnvVars $envVars
+            try {
+                $null = Invoke-AvmTerraformInit `
+                    -TerraformPath $Options.TerraformPath `
+                    -WorkingDirectory $Example.StagedPath `
+                    -EnvVars $envVars `
+                    -Label ("terraform init ({0})" -f $Example.Name) `
+                    -NoColor `
+                    -SkipPluginCacheLock
 
-        $localExceptions = Join-Path $Example.StagedPath 'exceptions'
-        $policyRuns = @(
-            [pscustomobject]@{ Name = 'APRL'; Path = $Options.AprlPath }
-            [pscustomobject]@{ Name = 'AVMSEC'; Path = $Options.AvmsecPath }
-        )
+                $null = Invoke-AvmProcess `
+                    -FilePath $Options.TerraformPath `
+                    -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
+                    -WorkingDirectory $Example.StagedPath `
+                    -EnvVars $envVars `
+                    -Label ("terraform plan ({0})" -f $Example.Name)
 
-        foreach ($policyRun in $policyRuns) {
-            $arguments = [System.Collections.Generic.List[string]]::new()
-            $arguments.Add('test')
-            $arguments.Add('--all-namespaces')
-            $arguments.Add('--policy')
-            $arguments.Add([string]$policyRun.Path)
-            $arguments.Add('--policy')
-            $arguments.Add($Options.DefaultExceptions)
-            if (Test-Path -LiteralPath $localExceptions -PathType Container) {
+                $showResult = Invoke-AvmProcess `
+                    -FilePath $Options.TerraformPath `
+                    -ArgumentList @('show', '-json', 'tfplan') `
+                    -WorkingDirectory $Example.StagedPath `
+                    -EnvVars $envVars `
+                    -Label ("terraform show ({0})" -f $Example.Name)
+            }
+            finally {
+                if ($null -ne $terraformLock) {
+                    $terraformLock.Dispose()
+                }
+            }
+
+            $planJsonPath = Join-Path $Example.StagedPath 'tfplan.json'
+            [System.IO.File]::WriteAllText(
+                $planJsonPath,
+                [string]$showResult.StdOut,
+                [System.Text.UTF8Encoding]::new($false))
+
+            $localExceptions = Join-Path $Example.StagedPath 'exceptions'
+            $policyRuns = @(
+                [pscustomobject]@{ Name = 'APRL'; Path = $Options.AprlPath }
+                [pscustomobject]@{ Name = 'AVMSEC'; Path = $Options.AvmsecPath }
+            )
+
+            foreach ($policyRun in $policyRuns) {
+                $arguments = [System.Collections.Generic.List[string]]::new()
+                $arguments.Add('test')
+                $arguments.Add('--all-namespaces')
                 $arguments.Add('--policy')
-                $arguments.Add($localExceptions)
-            }
-            $arguments.Add('--output')
-            $arguments.Add('json')
-            $arguments.Add('tfplan.json')
+                $arguments.Add([string]$policyRun.Path)
+                $arguments.Add('--policy')
+                $arguments.Add($Options.DefaultExceptions)
+                if (Test-Path -LiteralPath $localExceptions -PathType Container) {
+                    $arguments.Add('--policy')
+                    $arguments.Add($localExceptions)
+                }
+                $arguments.Add('--output')
+                $arguments.Add('json')
+                $arguments.Add('tfplan.json')
 
-            $policyResult = Invoke-AvmProcess `
-                -FilePath $Options.ConftestPath `
-                -ArgumentList $arguments.ToArray() `
-                -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
-                -Label ("conftest {0} ({1})" -f $policyRun.Name, $Example.Name) `
-                -IgnoreExitCode
+                $policyResult = Invoke-AvmProcess `
+                    -FilePath $Options.ConftestPath `
+                    -ArgumentList $arguments.ToArray() `
+                    -WorkingDirectory $Example.StagedPath `
+                    -EnvVars $envVars `
+                    -Label ("conftest {0} ({1})" -f $policyRun.Name, $Example.Name) `
+                    -IgnoreExitCode
 
-            $parsed = ConvertFrom-AvmPolicyResult `
-                -Result $policyResult `
-                -ExamplePath $Example.RelativePath `
-                -PolicyName $policyRun.Name
-            $evaluated += $parsed.Evaluated
-            foreach ($issue in $parsed.Issues) {
-                $issues.Add($issue)
+                $parsed = ConvertFrom-AvmPolicyResult `
+                    -Result $policyResult `
+                    -ExamplePath $Example.RelativePath `
+                    -PolicyName $policyRun.Name
+                $evaluated += $parsed.Evaluated
+                foreach ($issue in $parsed.Issues) {
+                    $issues.Add($issue)
+                }
             }
         }
     }

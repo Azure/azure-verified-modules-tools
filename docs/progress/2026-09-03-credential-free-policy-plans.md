@@ -60,9 +60,11 @@ parsing and plan synthesis, along with the dependencies on the undocumented
 ## Checklist
 
 - [x] Serve a synthetic Azure token from a loopback endpoint.
-- [x] Apply the credential after `.env` so an example cannot override it.
+- [x] Prefer a real credential whenever one is configured.
 - [x] Disable every other credential source, enhanced validation, and
-  resource-provider registration.
+  resource-provider registration on the fallback path.
+- [x] Detect data sources that need a real credential and fail the example
+  with an actionable message instead of a provider authentication error.
 - [x] Keep the real `init` -> `plan` -> `show -json` sequence unchanged.
 - [x] Prepare the reusable PR check change for a separate post-release pull
   request.
@@ -90,15 +92,28 @@ parsing and plan synthesis, along with the dependencies on the undocumented
 ## Known limitations
 
 A create-only plan against empty state makes no Azure API call, so resources
-plan correctly. Two cases still need real credentials, which is why a real
-credential is always preferred over the synthetic one:
+plan correctly. Data sources are the exception: Terraform reads them during
+plan whenever their configuration is known, and `-refresh=false` does not
+suppress that, so a data source backed by a live API cannot resolve against
+the synthetic credential. Seeding a state file does not help either, which was
+verified: Terraform still logs `Reading...` and calls the API.
 
-- Data sources that read an existing Azure resource (for example
-  `data "azurerm_key_vault"`). Token-derived data sources such as
-  `azurerm_client_config` and `azapi_client_config` work.
-- `ARM_PROVIDER_ENHANCED_VALIDATION` is off on the fallback path, so
-  provider-side location and resource-provider-name validation does not run.
-  TFLint and `terraform validate` still cover the configuration.
+On the fallback path the engine therefore detects those declarations up front
+(`Get-AvmTerraformCredentialledDataSource`) and reports the example as
+`avm.tf.policy-needs-credential` instead of letting `terraform plan` surface a
+provider authentication error. That is a **failure**, not a silent skip, so a
+module owner can see the example is unverified and run the credentialled
+pipeline from a branch in the module repository.
+
+Detection is by provider prefix (`azurerm_`, `azapi_`, `azuread_`,
+`azuredevops_`, `azurestack_`) with an allow-list for types that resolve
+locally: `azurerm_client_config`, `azapi_client_config` (token claims) and
+`azapi_resource_id` (a local ID parser). Unknown types fail closed, because
+the alternative is a confusing provider error deep inside the plan.
+
+`ARM_PROVIDER_ENHANCED_VALIDATION` is also off on the fallback path, so
+provider-side location and resource-provider-name validation does not run.
+TFLint and `terraform validate` still cover the configuration.
 
 A fleet survey of 55 AVM Terraform repositories covering 344 example
 directories found roughly 28% of examples declare at least one data source
@@ -107,12 +122,26 @@ source types (`azapi_resource_action`, `azurerm_subscription`,
 `azurerm_role_definition`, `azapi_resource`, `azurerm_resource_group`).
 Roughly 19% specifically need Azure ARM or Microsoft Graph; the remainder are
 `http`, `azuredevops_*` and `github_*`. Module roots can also declare such
-data sources, though many are `count`-gated. Those examples continue to
-depend on the credentialled tiers, which is unchanged from today.
+data sources, though many are `count`-gated.
 
 Note that `terraform init` already needs registry and GitHub egress for
 essentially every example, because `Azure/naming/azurerm` and the regions
 utility module are fetched from the public registry.
+
+## Rejected alternatives
+
+- **Pre-seeded state plus `-refresh=false`.** Verified not to work: Terraform
+  re-reads data sources during plan regardless of the state entry.
+- **`override_data` with the real provider.** This does resolve data sources
+  and, unlike `mock_provider`, preserves provider defaults. It was rejected
+  for now only because the `test_plan` event still carries no `configuration`
+  section, which five pinned AVMSEC rules read, so it would reintroduce the
+  same false-negative class. Worth revisiting if Terraform adds
+  `configuration` to that event.
+- **A local ARM emulator.** The provider forces HTTPS on the metadata host, so
+  it needs a trusted certificate, and Go uses the Windows system store rather
+  than `SSL_CERT_FILE` on a Tier 1 platform. It would also require emulating
+  per-resource-type ARM responses.
 
 ## Blockers or dependencies
 
