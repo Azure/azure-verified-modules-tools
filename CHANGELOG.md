@@ -57,6 +57,9 @@ section when cutting a release.
 
 ### Changed
 
+- Managed Mapotf now pins 0.1.11, which batches statically evaluable provider
+  schema requests into one Terraform initialization and schema read per
+  transform plan.
 - The packaged MaPoTF rules now remove AVM telemetry contributions from AzAPI
   headers and nested-module tracing chains while preserving unrelated custom
   headers. Cleanup removes the associated forwarding arguments, helper locals,
