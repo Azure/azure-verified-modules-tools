@@ -64,6 +64,10 @@ function Invoke-AvmPreCommit {
         When set, abort the chain on the first step whose Status is 'fail'.
         A throwing step is always fatal regardless of this flag.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent Terraform transform targets to process
+        at once. Defaults to four.
+
     .PARAMETER ManagedFilesRepo
         owner/name of the git repo holding the managed files. Forwarded only to
         the Terraform sync step.
@@ -142,6 +146,9 @@ function Invoke-AvmPreCommit {
 
         [switch] $StopOnFail,
 
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 4,
+
         [string] $ManagedFilesRepo,
         [string] $ManagedFilesRef,
         [string] $ManagedFilesPath,
@@ -180,7 +187,10 @@ function Invoke-AvmPreCommit {
                 Cmdlet    = 'Invoke-AvmCheckConvention'
                 ExtraArgs = @{ Fix = $true; FixableOnly = $true }
             }
-            [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
+            [pscustomobject]@{
+                Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'
+                ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }
+            }
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )

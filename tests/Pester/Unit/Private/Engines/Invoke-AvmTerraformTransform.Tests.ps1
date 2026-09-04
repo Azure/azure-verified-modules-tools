@@ -80,6 +80,71 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
+    It 'schedules independent targets with the requested throttle' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = $Name; Version = 'test'; Platform = 'test'
+                    Source = 'cache'; Path = "/fake/$Name"
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+            Mock Get-AvmTerraformTransformTarget {
+                @(
+                    [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                    [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('common', 'example') }
+                )
+            }
+            Mock Invoke-AvmParallel
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+
+            Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
+
+            Should -Invoke Invoke-AvmParallel -Exactly 1 -ParameterFilter {
+                $FunctionName -eq 'Invoke-AvmMapotfTransformTarget' -and
+                $InputObject.Count -eq 2 -and
+                $ThrottleLimit -eq 4
+            }
+        }
+    }
+
+    It 'uses a serial target throttle when Terraform has a shared plugin cache' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $savedPluginCache = $env:TF_PLUGIN_CACHE_DIR
+            try {
+                $env:TF_PLUGIN_CACHE_DIR = '/fake/plugin-cache'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = $Name; Version = 'test'; Platform = 'test'
+                        Source = 'cache'; Path = "/fake/$Name"
+                    }
+                }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+                Mock Get-AvmTerraformTransformTarget {
+                    @(
+                        [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('common', 'example') }
+                    )
+                }
+                Mock Invoke-AvmParallel
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+
+                Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
+
+                Should -Invoke Invoke-AvmParallel -Exactly 1 -ParameterFilter {
+                    $ThrottleLimit -eq 1
+                }
+            }
+            finally {
+                $env:TF_PLUGIN_CACHE_DIR = $savedPluginCache
+            }
+        }
+    }
+
     It 'removes competing terraform binaries from the child PATH without mutating the caller PATH' {
         $ctx = $script:context
         $entrypoint = if ([OperatingSystem]::IsWindows()) { 'terraform.exe' } else { 'terraform' }

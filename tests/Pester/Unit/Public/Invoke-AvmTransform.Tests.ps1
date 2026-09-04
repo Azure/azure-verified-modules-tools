@@ -60,9 +60,11 @@ Describe 'Invoke-AvmTransform' {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' }
             }
             Mock Invoke-AvmBicepTransform { throw 'wrong engine' }
-            $result = Invoke-AvmTransform -Path $D
+            $result = Invoke-AvmTransform -Path $D -ThrottleLimit 6
             $result.Engine | Should -Be 'terraform'
-            Should -Invoke Invoke-AvmTerraformTransform -Exactly 1
+            Should -Invoke Invoke-AvmTerraformTransform -Exactly 1 -ParameterFilter {
+                $ThrottleLimit -eq 6
+            }
             Should -Invoke Invoke-AvmBicepTransform -Times 0 -Exactly
         }
     }

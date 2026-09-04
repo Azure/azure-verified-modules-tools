@@ -74,8 +74,8 @@ function Invoke-AvmPrCheck {
         A throwing step is always fatal regardless of this flag.
 
     .PARAMETER ThrottleLimit
-        Maximum number of independent Terraform lint scopes or policy examples
-        to process at once. Defaults to four.
+        Maximum number of independent Terraform transform targets, lint scopes,
+        or policy examples to process at once. Defaults to four.
 
     .OUTPUTS
         pscustomobject with:
@@ -126,7 +126,10 @@ function Invoke-AvmPrCheck {
     $stepDefs = @(
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
-        [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'; ExtraArgs = @{ CheckDrift = $true } }
+        [pscustomobject]@{
+            Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'
+            ExtraArgs = @{ CheckDrift = $true; ThrottleLimit = $ThrottleLimit }
+        }
         [pscustomobject]@{
             Name = 'lint'; Cmdlet = 'Invoke-AvmLint'
             ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }

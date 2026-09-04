@@ -178,6 +178,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Mapotf transforms now process independent root, local-module, and example
+  targets with bounded parallelism. The public transform, pre-commit, and
+  pr-check commands share one throttle setting, while a configured
+  `TF_PLUGIN_CACHE_DIR` preserves serial execution for cache safety.
 - Terminating subprocess errors now include captured stderr, or stdout when
   stderr is empty, across every manual exit-code handler. TFLint override
   failures such as unknown rule names therefore show their reason without

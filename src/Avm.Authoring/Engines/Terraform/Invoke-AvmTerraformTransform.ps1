@@ -200,6 +200,74 @@ function Test-AvmMapotfTransientProviderError {
     return $false
 }
 
+function Invoke-AvmMapotfTransformTarget {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object] $Target,
+
+        [Parameter(Mandatory)]
+        [object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $args = New-Object System.Collections.Generic.List[string]
+    $args.Add('transform')
+    foreach ($profile in $Target.Profiles) {
+        $profileDir = $Options.ProfileDirs[$profile]
+        if (-not $profileDir) {
+            continue
+        }
+        $args.Add('--mptf-dir')
+        $args.Add($profileDir)
+    }
+    $args.Add('--tf-dir')
+    $args.Add($Target.Path)
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $maxRetries = 2
+    $attempt = 0
+    do {
+        $transform = Invoke-AvmProcess `
+            -FilePath $Options.ToolPath `
+            -ArgumentList $args.ToArray() `
+            -WorkingDirectory $Target.Path `
+            -EnvVars $Options.EnvVars `
+            -IgnoreExitCode
+        if ($transform.ExitCode -eq 0) {
+            break
+        }
+
+        $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
+        if (
+            $attempt -ge $maxRetries -or
+            -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
+        ) {
+            $message = Add-AvmProcessFailureDetail `
+                -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $Target.Scope, $Target.Path) `
+                -StdOut $transform.StdOut `
+                -StdErr $transform.StdErr
+            throw [AvmProcessException]::new($message)
+        }
+
+        $attempt++
+        $delaySeconds = $attempt * 5
+        Write-AvmLog (
+            'transform: transient provider download failure; retrying {0} target in {1}s ({2} of {3})' -f
+            $Target.Scope, $delaySeconds, $attempt, $maxRetries
+        ) -Level Warning | Out-Null
+        Start-Sleep -Seconds $delaySeconds
+    } while ($attempt -le $maxRetries)
+    $stopwatch.Stop()
+
+    Write-AvmLog (
+        'transform: {0} target completed in {1}: {2}' -f
+        $Target.Scope, (Format-AvmDuration -Duration $stopwatch.Elapsed), $Target.Path
+    ) -Level Verbose | Out-Null
+}
+
 function Invoke-AvmTerraformTransform {
     <#
     .SYNOPSIS
@@ -247,6 +315,11 @@ function Invoke-AvmTerraformTransform {
         in CI therefore means the author did not run pre-commit, and pr-check
         flags it.
 
+        Independent root, local-module, and example targets run through the
+        bounded Invoke-AvmParallel scheduler. A configured TF_PLUGIN_CACHE_DIR
+        forces serial target execution because Terraform's shared provider
+        plugin cache is not concurrency-safe.
+
         mapotf exit codes: 0 = success. A transform failure caused by a
         recognized transient Terraform provider network error is retried twice
         with incremental delay; other failures and retry exhaustion surface as
@@ -267,6 +340,10 @@ function Invoke-AvmTerraformTransform {
         with one Issue per changed file) instead of a silent fix. Used by the
         pr-check chain.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent root, module, or example targets to
+        transform at once. Defaults to one for direct engine calls.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, Changed, Issues.
@@ -279,7 +356,10 @@ function Invoke-AvmTerraformTransform {
 
         [switch] $AllowPathFallback,
 
-        [switch] $CheckDrift
+        [switch] $CheckDrift,
+
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 1
     )
 
     Set-StrictMode -Version 3.0
@@ -346,54 +426,25 @@ function Invoke-AvmTerraformTransform {
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
 
-        foreach ($target in $targets) {
-            $args = New-Object System.Collections.Generic.List[string]
-            $args.Add('transform')
-            foreach ($profile in $target.Profiles) {
-                $profileDir = $profileDirs[$profile]
-                if (-not $profileDir) {
-                    continue
-                }
-                $args.Add('--mptf-dir')
-                $args.Add($profileDir)
-            }
-            $args.Add('--tf-dir')
-            $args.Add($target.Path)
-
-            $maxRetries = 2
-            $attempt = 0
-            do {
-                $transform = Invoke-AvmProcess `
-                    -FilePath $tool.Path `
-                    -ArgumentList $args.ToArray() `
-                    -WorkingDirectory $target.Path `
-                    -EnvVars $mapotfEnv `
-                    -IgnoreExitCode
-                if ($transform.ExitCode -eq 0) {
-                    break
-                }
-
-                $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
-                if (
-                    $attempt -ge $maxRetries -or
-                    -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
-                ) {
-                    $message = Add-AvmProcessFailureDetail `
-                        -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $target.Scope, $target.Path) `
-                        -StdOut $transform.StdOut `
-                        -StdErr $transform.StdErr
-                    throw [AvmProcessException]::new($message)
-                }
-
-                $attempt++
-                $delaySeconds = $attempt * 5
-                Write-AvmLog (
-                    'transform: transient provider download failure; retrying {0} target in {1}s ({2} of {3})' -f
-                    $target.Scope, $delaySeconds, $attempt, $maxRetries
-                ) -Level Warning | Out-Null
-                Start-Sleep -Seconds $delaySeconds
-            } while ($attempt -le $maxRetries)
+        $effectiveThrottle = $ThrottleLimit
+        $pluginCache = [string]$env:TF_PLUGIN_CACHE_DIR
+        if ($effectiveThrottle -gt 1 -and -not [string]::IsNullOrWhiteSpace($pluginCache)) {
+            $effectiveThrottle = 1
+            Write-AvmLog (
+                'transform: TF_PLUGIN_CACHE_DIR is configured; running Mapotf targets serially because the shared Terraform provider cache is not concurrency-safe'
+            ) -Level Verbose | Out-Null
         }
+
+        $transformOptions = [pscustomobject]@{
+            ToolPath    = $tool.Path
+            ProfileDirs = $profileDirs
+            EnvVars     = $mapotfEnv
+        }
+        Invoke-AvmParallel `
+            -InputObject $targets `
+            -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+            -Argument $transformOptions `
+            -ThrottleLimit $effectiveThrottle
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 
         foreach ($target in $targets) {

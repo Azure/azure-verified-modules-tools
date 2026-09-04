@@ -191,13 +191,15 @@ Describe 'Invoke-AvmPreCommit' {
             # must never call them. Mock them so the -Times 0 guard is meaningful.
             Mock Invoke-AvmLint            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             Mock Invoke-AvmTest            { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
-            $r = Invoke-AvmPreCommit -Path $D
+            $r = Invoke-AvmPreCommit -Path $D -ThrottleLimit 5
 
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter {
                 $Ecosystem -eq 'terraform' -and $Fix -eq $true -and $FixableOnly -eq $true
             }
-            Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5
+            }
             Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
