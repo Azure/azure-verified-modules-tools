@@ -231,7 +231,13 @@ function Write-AvmLog {
 
         $text = if ($null -eq $Message) { '' } else { $Message }
         $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
-        $displayText = Format-AvmLogText -Text $text -Level $Level
+        $diagnosticText = if ($Level -in @('Warning', 'Error')) {
+            Format-AvmDiagnosticText -Text $text -File $File -Line $Line -Column $Column
+        }
+        else {
+            $text
+        }
+        $displayText = Format-AvmLogText -Text $diagnosticText -Level $Level
 
         switch ($Level) {
             'Debug' {
@@ -337,6 +343,37 @@ function ConvertTo-AvmAnnotationPath {
     }
 
     return $normalised
+}
+
+function Format-AvmDiagnosticText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Text,
+
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
+    )
+
+    $path = ConvertTo-AvmAnnotationPath -Path $File
+    if ([string]::IsNullOrWhiteSpace($path) -or $Line -le 0) {
+        return $Text
+    }
+
+    $location = [System.Collections.Generic.List[string]]::new()
+    $location.Add($path)
+    $location.Add('line {0}' -f $Line)
+    if ($Column -gt 0) {
+        $location.Add('column {0}' -f $Column)
+    }
+
+    return '{0} ({1})' -f $Text, ($location -join ', ')
 }
 
 function Format-AvmAnnotationProperty {

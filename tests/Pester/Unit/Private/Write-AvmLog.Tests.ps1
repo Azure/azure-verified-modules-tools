@@ -98,6 +98,37 @@ Describe 'Write-AvmLog' {
             @($observed.Info) | Should -Not -Contain 'careful'
         }
 
+        It 'includes file, line and column in positioned diagnostics' {
+            $observed = InModuleScope 'Avm.Authoring' {
+                $env:NO_COLOR = '1'
+                $warn = @()
+                $info = @()
+                Write-AvmLog 'careful' -Level Warning -File 'variables.tf' -Line 168 -WarningVariable warn
+                Write-AvmLog 'boom' -Level Error -File 'main.tf' -Line 12 -Column 3 -InformationVariable info
+                [pscustomobject]@{
+                    Warning = @($warn | ForEach-Object { [string]$_ })
+                    Info    = @($info | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+
+            @($observed.Warning) | Should -Contain 'careful (variables.tf, line 168)'
+            @($observed.Info) | Should -Contain 'boom (main.tf, line 12, column 3)'
+        }
+
+        It 'leaves file-only diagnostics unchanged' {
+            $warnings = InModuleScope 'Avm.Authoring' {
+                $env:NO_COLOR = '1'
+                $captured = @()
+                Write-AvmLog 'override warning' `
+                    -Level Warning `
+                    -File 'avm.tflint.override.hcl' `
+                    -WarningVariable captured
+                @($captured | ForEach-Object { [string]$_ })
+            }
+
+            @($warnings) | Should -Contain 'override warning'
+        }
+
         It 'writes Error to the information stream so it is never swallowed' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()

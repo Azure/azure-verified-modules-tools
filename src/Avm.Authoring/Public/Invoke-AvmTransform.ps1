@@ -39,6 +39,10 @@ function Invoke-AvmTransform {
         a silent fix. Used by the pr-check chain to flag modules that did not
         run pre-commit. Ignored by the Bicep engine.
 
+    .PARAMETER ThrottleLimit
+        Maximum number of independent Terraform root, module, or example
+        targets to transform at once. Defaults to four. Ignored by Bicep.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Changed, Issues.
@@ -62,6 +66,9 @@ function Invoke-AvmTransform {
 
         [switch] $CheckDrift,
 
+        [ValidateRange(1, 32)]
+        [int] $ThrottleLimit = 4,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -77,7 +84,11 @@ function Invoke-AvmTransform {
             Invoke-AvmBicepTransform -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformTransform -Context $context -AllowPathFallback:$AllowPathFallback -CheckDrift:$CheckDrift
+            Invoke-AvmTerraformTransform `
+                -Context $context `
+                -AllowPathFallback:$AllowPathFallback `
+                -CheckDrift:$CheckDrift `
+                -ThrottleLimit $ThrottleLimit
         }
         default {
             throw [AvmContextException]::new(

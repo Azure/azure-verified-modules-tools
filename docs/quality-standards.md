@@ -346,7 +346,10 @@ Currently vendored:
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
   (root / `modules/*` / `examples/*`).
 - `Resources/mapotf/{common,module,root}/*.mptf.hcl` - composed per target by
-  `Invoke-AvmTerraformTransform`.
+  `Invoke-AvmTerraformTransform`. Independent root, module, and example targets
+  use the shared bounded runspace scheduler. A configured
+  `TF_PLUGIN_CACHE_DIR` keeps these target transforms serial because Terraform's
+  shared provider plugin cache is not concurrency-safe.
 
 **Update process.**
 

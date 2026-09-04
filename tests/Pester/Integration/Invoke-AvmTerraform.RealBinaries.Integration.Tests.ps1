@@ -34,6 +34,10 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $script:Manifest = Join-Path $script:RepoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
         Import-Module $script:Manifest -Force
+        $script:MapotfVersion = InModuleScope 'Avm.Authoring' {
+            $pins = Read-AvmPins
+            [string](($pins.tools | Where-Object name -eq 'mapotf').version)
+        }
 
         # Compare two on-disk trees and return a list of human-readable differences
         # (added / removed / modified relative paths). Text content is compared with
@@ -478,7 +482,7 @@ locals {
             }
 
             $result.Status | Should -Be 'pass'
-            $result.Tool | Should -Be 'mapotf/0.1.10'
+            $result.Tool | Should -Be ('mapotf/{0}' -f $script:MapotfVersion)
             $transformed = Get-Content -LiteralPath $terraformPath -Raw
             $azapiIndex = $transformed.IndexOf('    azapi = {')
             $modtmIndex = $transformed.IndexOf('    modtm = {')
