@@ -48,11 +48,11 @@ For examples, please refer to the [Usage Examples](#usage-examples) section.
 {{~ end ~}}
 - [Data Collection](#Data-Collection)
 
-{{ include ".bicep-docs-parity/resource-types.md" }}
+{{ custom.resourceTypes }}
 
-{{ include ".bicep-docs-parity/usage-examples.md" }}
+{{ custom.usageExamples }}
 
-{{ include ".bicep-docs-parity/parameters.md" }}
+{{ custom.parameters }}
 {{~ if module.exportedFunctions.size > 0 ~}}
 
 ## Exported functions
@@ -98,11 +98,11 @@ _None_
 {{~ end ~}}
 {{~ if custom.hasCrossReferences == "true" ~}}
 
-{{ include ".bicep-docs-parity/cross-referenced-modules.md" }}
+{{ custom.crossReferencedModules }}
 {{~ end ~}}
 {{~ if custom.hasNotes == "true" ~}}
 
-{{ include ".bicep-docs-parity/notes.md" }}
+{{ custom.notes }}
 {{~ end ~}}
 
 ## Data Collection

@@ -20,10 +20,23 @@ modules in separate source and working checkouts. It records compiler failures
 and semantic-model mismatches in its output reports; failed compilation does
 not produce a README.
 
-`bicepconfig.json` is copied to the root of the validation working checkout so
-the Bicep CLI discovers its `documentation` settings for each source file. Its
-example reassignments move multi-scope tests from parent stubs to the
+The scripts temporarily merge the documentation settings into the root
+`bicepconfig.json` of the validation working checkout, then restore its original
+bytes. An exclusive repository-keyed lock is stored outside the checkout and
+held before the original configuration is read. Configuration installation and
+restoration use atomic sibling-file replacement. One immutable configuration is
+used by all parallel workers. It points to an isolated dispatcher template that
+selects README or model-index rendering from an invocation-only custom value,
+so workers never swap shared template settings. The source checkout is
+read-only.
+
+Template file and include-root settings come only from the discovered
+`bicepconfig.json`. README fragments and other custom strings are supplied with
+`--custom-template-value-file-path`; the model-index mode is supplied with
+`--custom-template-value`. The same invocation-only custom-value contract
+applies to JSON-RPC requests. `documentation.template.values` is not used.
+
+The example reassignments move multi-scope tests from parent stubs to the
 corresponding `mg-scope`, `rg-scope`, and `sub-scope` modules while leaving
-ordinary modules unchanged. The scripts use `bicep docs generate`; output-mode
-calls add `--stdout`. The semantic index also flattens structured discriminator
-cases and records exported type and variable names.
+ordinary modules unchanged. The semantic index also flattens structured
+discriminator cases and records exported type and variable names.

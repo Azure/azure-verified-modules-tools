@@ -17,12 +17,15 @@ param (
 
     [string] $ModelIndexTemplatePath = (Join-Path $PSScriptRoot 'model-index.scriban'),
 
+    [switch] $ConfigurationPrepared,
+
     [switch] $GenerateInPlace,
 
     [switch] $PassThru
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AvmDocs.Common.ps1')
 
 function Get-Section {
     param (
@@ -40,20 +43,6 @@ function Get-Section {
     }
 
     return $match.Value.TrimEnd()
-}
-
-function Write-Utf8Lf {
-    param (
-        [Parameter(Mandatory)]
-        [string] $Path,
-
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $Content
-    )
-
-    $normalized = $Content.ReplaceLineEndings("`n")
-    [IO.File]::WriteAllText($Path, $normalized, [Text.UTF8Encoding]::new($false))
 }
 
 function Test-StringSetEqual {
@@ -74,148 +63,145 @@ function Test-StringSetEqual {
     return @(Compare-Object $expectedValues $actualValues).Count -eq 0
 }
 
-function ConvertTo-ScribanLiteral {
-    param (
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $Content
-    )
-
-    $openToken = "__SCRIBAN_OPEN_$([Guid]::NewGuid().ToString('N'))__"
-    $closeToken = "__SCRIBAN_CLOSE_$([Guid]::NewGuid().ToString('N'))__"
-    return $Content.Replace('{{', $openToken).Replace('}}', $closeToken).Replace($openToken, "{{ '{{' }}").Replace($closeToken, "{{ '}}' }}")
-}
-
-$results = foreach ($modulePath in $ModulePaths) {
-    $moduleRoot = Join-Path $AvmRepositoryPath $modulePath
-    $expectedModuleRoot = Join-Path $ExpectedRepositoryPath $modulePath
-    $mainPath = Join-Path $moduleRoot 'main.bicep'
-    $readmePath = Join-Path $expectedModuleRoot 'README.md'
-    $expectedBytes = [IO.File]::ReadAllBytes($readmePath)
-    $expected = [Text.Encoding]::UTF8.GetString($expectedBytes).ReplaceLineEndings("`n").TrimEnd("`n") + "`n"
-    $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
-    New-Item -ItemType Directory -Path $fragmentRoot -Force | Out-Null
-
-    $sections = @{
-        'resource-types.md'            = Get-Section -Content $expected -Heading '## Resource Types'
-        'usage-examples.md'            = Get-Section -Content $expected -Heading '## Usage examples'
-        'parameters.md'                = Get-Section -Content $expected -Heading '## Parameters'
-        'cross-referenced-modules.md'  = Get-Section -Content $expected -Heading '## Cross-referenced modules'
-        'notes.md'                     = Get-Section -Content $expected -Heading '## Notes'
+$configurationContext = $null
+try {
+    if (-not $ConfigurationPrepared) {
+        $configurationContext = New-AvmDocsConfigurationContext `
+            -RepositoryPath $AvmRepositoryPath `
+            -ReadmeTemplatePath $TemplatePath `
+            -ModelIndexTemplatePath $ModelIndexTemplatePath
     }
 
-    foreach ($entry in $sections.GetEnumerator()) {
-        Write-Utf8Lf `
-            -Path (Join-Path $fragmentRoot $entry.Key) `
-            -Content (ConvertTo-ScribanLiteral ($entry.Value ?? ''))
-    }
-    Write-Utf8Lf `
-        -Path (Join-Path $fragmentRoot 'full-readme.md') `
-        -Content (ConvertTo-ScribanLiteral $expected)
+    $results = foreach ($modulePath in $ModulePaths) {
+        $moduleRoot = Join-Path $AvmRepositoryPath $modulePath
+        $expectedModuleRoot = Join-Path $ExpectedRepositoryPath $modulePath
+        $mainPath = Join-Path $moduleRoot 'main.bicep'
+        $readmePath = Join-Path $expectedModuleRoot 'README.md'
+        $expectedBytes = [IO.File]::ReadAllBytes($readmePath)
+        $expected = [Text.Encoding]::UTF8.GetString($expectedBytes).ReplaceLineEndings("`n").TrimEnd("`n") + "`n"
+        $fragmentRoot = Join-Path $moduleRoot '.bicep-docs-parity'
+        New-Item -ItemType Directory -Path $fragmentRoot -Force | Out-Null
 
-    $primaryResourceType = [Regex]::Match($expected, '^# .+? `\[(.+?)\]`', 'Multiline').Groups[1].Value
-    $moduleSymbolName = [Regex]::Match($expected, "(?m)^module\s+(\w+)\s+'br/public:").Groups[1].Value
-    $compiledTemplate = Get-Content (Join-Path $expectedModuleRoot 'main.json') -Raw | ConvertFrom-Json -AsHashtable
-    if ($compiledTemplate.outputs) {
-        $typelessOutputNames = @($compiledTemplate.outputs.Keys |
-            Where-Object { -not $compiledTemplate.outputs[$_].ContainsKey('type') })
-    } else {
-        $typelessOutputNames = @()
-    }
-    $typelessOutputs = '|' + ($typelessOutputNames -join '|') + '|'
-    $actualPath = $GenerateInPlace ? (Join-Path $moduleRoot 'README.md') : (Join-Path $fragmentRoot 'README.actual.md')
-    $stdoutPath = Join-Path $fragmentRoot 'README.stdout.txt'
-    $stderrPath = Join-Path $fragmentRoot 'README.stderr.txt'
-    $modelIndexPath = Join-Path $fragmentRoot 'model-index.tsv'
-    $modelIndexStderrPath = Join-Path $fragmentRoot 'model-index.stderr.txt'
-    $modelIndexExitCode = $null
-    $commandArguments = @(
-            'docs'
-            'generate'
-            $mainPath
-            '--template-file'
-            $TemplatePath
-            '--template-root'
-            $moduleRoot
-            '--custom-template-value'
-            "primaryResourceType=$primaryResourceType"
-            '--custom-template-value'
-            "moduleSymbolName=$moduleSymbolName"
-            '--custom-template-value'
-            "moduleReference=$($modulePath.Replace('\', '/'))"
-            '--custom-template-value'
-            "typelessOutputs=$typelessOutputs"
-            '--custom-template-value'
-            "hasCrossReferences=$(($null -ne $sections['cross-referenced-modules.md']).ToString().ToLowerInvariant())"
-            '--custom-template-value'
-            "hasNotes=$(($null -ne $sections['notes.md']).ToString().ToLowerInvariant())"
-        )
-    if (-not $GenerateInPlace) {
-        $commandArguments += '--stdout'
-    }
-    & $BicepPath @commandArguments `
-        1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
-        2> $stderrPath
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0) {
-        & $BicepPath docs generate $mainPath `
-            --stdout `
-            --template-file $ModelIndexTemplatePath `
-            1> $modelIndexPath `
-            2> $modelIndexStderrPath
-        $modelIndexExitCode = $LASTEXITCODE
-    }
+        $sections = @{
+            'resource-types.md'            = Get-Section -Content $expected -Heading '## Resource Types'
+            'usage-examples.md'            = Get-Section -Content $expected -Heading '## Usage examples'
+            'parameters.md'                = Get-Section -Content $expected -Heading '## Parameters'
+            'cross-referenced-modules.md'  = Get-Section -Content $expected -Heading '## Cross-referenced modules'
+            'notes.md'                     = Get-Section -Content $expected -Heading '## Notes'
+        }
 
-    if ($exitCode -ne 0) {
-        throw "Documentation generation failed for [$modulePath]. See [$stderrPath]."
-    }
-    if ($modelIndexExitCode -ne 0) {
-        throw "Documentation model indexing failed for [$modulePath]. See [$modelIndexStderrPath]."
-    }
+        $primaryResourceType = [Regex]::Match($expected, '^# .+? `\[(.+?)\]`', 'Multiline').Groups[1].Value
+        $moduleSymbolName = [Regex]::Match($expected, "(?m)^module\s+(\w+)\s+'br/public:").Groups[1].Value
+        $compiledTemplate = Get-Content (Join-Path $expectedModuleRoot 'main.json') -Raw | ConvertFrom-Json -AsHashtable
+        if ($compiledTemplate.outputs) {
+            $typelessOutputNames = @($compiledTemplate.outputs.Keys |
+                Where-Object { -not $compiledTemplate.outputs[$_].ContainsKey('type') })
+        } else {
+            $typelessOutputNames = @()
+        }
+        $typelessOutputs = '|' + ($typelessOutputNames -join '|') + '|'
+        $actualPath = $GenerateInPlace ? (Join-Path $moduleRoot 'README.md') : (Join-Path $fragmentRoot 'README.actual.md')
+        $stdoutPath = Join-Path $fragmentRoot 'README.stdout.txt'
+        $stderrPath = Join-Path $fragmentRoot 'README.stderr.txt'
+        $modelIndexPath = Join-Path $fragmentRoot 'model-index.tsv'
+        $modelIndexStderrPath = Join-Path $fragmentRoot 'model-index.stderr.txt'
+        $customValuesPath = Join-Path $fragmentRoot 'custom-values.json'
+        $modelIndexExitCode = $null
+        $customValues = [ordered]@{
+            renderMode = 'readme'
+            primaryResourceType = $primaryResourceType
+            moduleSymbolName = $moduleSymbolName
+            moduleReference = $modulePath.Replace('\', '/')
+            typelessOutputs = $typelessOutputs
+            hasCrossReferences = ($null -ne $sections['cross-referenced-modules.md']).ToString().ToLowerInvariant()
+            hasNotes = ($null -ne $sections['notes.md']).ToString().ToLowerInvariant()
+            resourceTypes = $sections['resource-types.md'] ?? ''
+            usageExamples = $sections['usage-examples.md'] ?? ''
+            parameters = $sections['parameters.md'] ?? ''
+            crossReferencedModules = $sections['cross-referenced-modules.md'] ?? ''
+            notes = $sections['notes.md'] ?? ''
+            fullReadme = $expected
+        }
+        Write-AvmDocsText -Path $customValuesPath -Content ($customValues | ConvertTo-Json -Depth 5)
 
-    $actualBytes = [IO.File]::ReadAllBytes($actualPath)
-    $readmeMatches = [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals(
-        $actualBytes,
-        $expectedBytes)
-    if ($modelIndexExitCode -eq 0) {
-        $modelIndex = Get-Content $modelIndexPath
-        $modelParameters = @($modelIndex |
-            Where-Object { $_ -like "P`t*" } |
-            ForEach-Object { $_.Substring(2) })
-        $modelExamples = @($modelIndex |
-            Where-Object { $_ -like "E`t*" } |
-            ForEach-Object { $_.Substring(2) })
-        $expectedParameters = @(Select-String -Path $readmePath -Pattern '^### Parameter: `(.+)`$' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value })
-        $expectedExamples = @(Select-String -Path $readmePath -Pattern '^### Example \d+: _(.+)_$' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value })
-        $parameterMatches = Test-StringSetEqual -Expected $expectedParameters -Actual $modelParameters
-        $exampleMatches = Test-StringSetEqual -Expected $expectedExamples -Actual $modelExamples
-        $modelMatches = $parameterMatches -and $exampleMatches
-        $missingParameters = @($expectedParameters | Where-Object { $_ -notin $modelParameters } | Sort-Object -Unique)
-        $unexpectedParameters = @($modelParameters | Where-Object { $_ -notin $expectedParameters } | Sort-Object -Unique)
-        $missingExamples = @($expectedExamples | Where-Object { $_ -notin $modelExamples } | Sort-Object -Unique)
-        $unexpectedExamples = @($modelExamples | Where-Object { $_ -notin $expectedExamples } | Sort-Object -Unique)
-    } else {
-        $modelMatches = $false
-    }
+        $commandArguments = @(
+                'docs'
+                'generate'
+                $mainPath
+                '--custom-template-value-file-path'
+                $customValuesPath
+            )
+        if (-not $GenerateInPlace) {
+            $commandArguments += '--stdout'
+        }
+        & $BicepPath @commandArguments `
+            1> ($GenerateInPlace ? $stdoutPath : $actualPath) `
+            2> $stderrPath
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            & $BicepPath docs generate $mainPath `
+                --stdout `
+                --custom-template-value 'renderMode=model-index' `
+                1> $modelIndexPath `
+                2> $modelIndexStderrPath
+            $modelIndexExitCode = $LASTEXITCODE
+        }
 
-    [pscustomobject]@{
-        Module = $modulePath
-        Matches = $readmeMatches
-        ReadmeMatches = $readmeMatches
-        ModelMatches = $modelMatches
-        ExpectedParameterCount = $expectedParameters.Count
-        ActualParameterCount = $modelParameters.Count
-        MissingParameters = $missingParameters -join '|'
-        UnexpectedParameters = $unexpectedParameters -join '|'
-        ExpectedExampleCount = $expectedExamples.Count
-        ActualExampleCount = $modelExamples.Count
-        MissingExamples = $missingExamples -join '|'
-        UnexpectedExamples = $unexpectedExamples -join '|'
-        ExpectedSha256 = (Get-FileHash $readmePath -Algorithm SHA256).Hash
-        ActualSha256 = (Get-FileHash $actualPath -Algorithm SHA256).Hash
-        ActualPath = $actualPath
+        if ($exitCode -ne 0) {
+            throw "Documentation generation failed for [$modulePath]. See [$stderrPath]."
+        }
+        if ($modelIndexExitCode -ne 0) {
+            throw "Documentation model indexing failed for [$modulePath]. See [$modelIndexStderrPath]."
+        }
+
+        $actualBytes = [IO.File]::ReadAllBytes($actualPath)
+        $readmeMatches = [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals(
+            $actualBytes,
+            $expectedBytes)
+        if ($modelIndexExitCode -eq 0) {
+            $modelIndex = Get-Content $modelIndexPath
+            $modelParameters = @($modelIndex |
+                Where-Object { $_ -like "P`t*" } |
+                ForEach-Object { $_.Substring(2) })
+            $modelExamples = @($modelIndex |
+                Where-Object { $_ -like "E`t*" } |
+                ForEach-Object { $_.Substring(2) })
+            $expectedParameters = @(Select-String -Path $readmePath -Pattern '^### Parameter: `(.+)`$' |
+                ForEach-Object { $_.Matches[0].Groups[1].Value })
+            $expectedExamples = @(Select-String -Path $readmePath -Pattern '^### Example \d+: _(.+)_$' |
+                ForEach-Object { $_.Matches[0].Groups[1].Value })
+            $parameterMatches = Test-StringSetEqual -Expected $expectedParameters -Actual $modelParameters
+            $exampleMatches = Test-StringSetEqual -Expected $expectedExamples -Actual $modelExamples
+            $modelMatches = $parameterMatches -and $exampleMatches
+            $missingParameters = @($expectedParameters | Where-Object { $_ -notin $modelParameters } | Sort-Object -Unique)
+            $unexpectedParameters = @($modelParameters | Where-Object { $_ -notin $expectedParameters } | Sort-Object -Unique)
+            $missingExamples = @($expectedExamples | Where-Object { $_ -notin $modelExamples } | Sort-Object -Unique)
+            $unexpectedExamples = @($modelExamples | Where-Object { $_ -notin $expectedExamples } | Sort-Object -Unique)
+        } else {
+            $modelMatches = $false
+        }
+
+        [pscustomobject]@{
+            Module = $modulePath
+            Matches = $readmeMatches
+            ReadmeMatches = $readmeMatches
+            ModelMatches = $modelMatches
+            ExpectedParameterCount = $expectedParameters.Count
+            ActualParameterCount = $modelParameters.Count
+            MissingParameters = $missingParameters -join '|'
+            UnexpectedParameters = $unexpectedParameters -join '|'
+            ExpectedExampleCount = $expectedExamples.Count
+            ActualExampleCount = $modelExamples.Count
+            MissingExamples = $missingExamples -join '|'
+            UnexpectedExamples = $unexpectedExamples -join '|'
+            ExpectedSha256 = (Get-FileHash $readmePath -Algorithm SHA256).Hash
+            ActualSha256 = (Get-FileHash $actualPath -Algorithm SHA256).Hash
+            ActualPath = $actualPath
+        }
+    }
+} finally {
+    if ($null -ne $configurationContext) {
+        Remove-AvmDocsConfigurationContext -Context $configurationContext
     }
 }
 
