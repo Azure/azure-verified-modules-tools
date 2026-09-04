@@ -125,6 +125,113 @@ Describe 'Resolve-AvmManagedFilesSetting defaults' {
     }
 }
 
+Describe 'Get-AvmManagedFilesCheckout cache recovery' {
+    BeforeEach {
+        $script:originalCheckoutAvmHome = $env:AVM_HOME
+        $script:checkoutAvmHome = Join-Path $TestDrive ("avm-home-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $env:AVM_HOME = $script:checkoutAvmHome
+    }
+
+    AfterEach {
+        if ($null -eq $script:originalCheckoutAvmHome) {
+            Remove-Item Env:\AVM_HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AVM_HOME = $script:originalCheckoutAvmHome
+        }
+    }
+
+    It 'clears an invalid cached repository and retries with a clone' {
+        $cacheRoot = Join-Path $script:checkoutAvmHome 'cache'
+        $cacheRoot = Join-Path $cacheRoot 'managed-files'
+        $cacheRoot = Join-Path $cacheRoot 'Azure_azure-verified-modules-managed-files'
+        $cacheRoot = Join-Path $cacheRoot 'v1.0.27'
+        $marker = Join-Path $cacheRoot 'stale-cache-marker'
+        New-Item -ItemType Directory -Path (Join-Path $cacheRoot '.git') -Force | Out-Null
+        Set-Content -LiteralPath $marker -Value 'stale'
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            CacheRoot = $cacheRoot
+            Marker    = $marker
+        } {
+            param($CacheRoot, $Marker)
+
+            $script:cachePresentWhenCloneStarted = $null
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq '-C' -and $ArgumentList[2] -eq 'fetch') {
+                    throw [AvmProcessException]::new(
+                        'cached fetch failed',
+                        $FilePath,
+                        @($ArgumentList),
+                        128,
+                        '',
+                        "fatal: not a git repository (or any of the parent directories): .git`n")
+                }
+                if ($ArgumentList[0] -eq 'clone') {
+                    $script:cachePresentWhenCloneStarted = Test-Path -LiteralPath $Marker
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Get-AvmManagedFilesCheckout `
+                -Repo 'Azure/azure-verified-modules-managed-files' `
+                -Ref 'v1.0.27' `
+                -GitPath 'git'
+
+            $result | Should -BeExactly $CacheRoot
+            $script:cachePresentWhenCloneStarted | Should -BeFalse
+            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly -ParameterFilter {
+                $ArgumentList[0] -eq '-C' -and $ArgumentList[2] -eq 'fetch'
+            }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter {
+                $ArgumentList[0] -eq '-C' -and $ArgumentList[2] -eq 'checkout'
+            }
+            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly -ParameterFilter {
+                $ArgumentList[0] -eq 'clone'
+            }
+        }
+    }
+
+    It 'preserves unrelated cached fetch failures without clearing the cache' {
+        $cacheRoot = Join-Path $script:checkoutAvmHome 'cache'
+        $cacheRoot = Join-Path $cacheRoot 'managed-files'
+        $cacheRoot = Join-Path $cacheRoot 'Azure_azure-verified-modules-managed-files'
+        $cacheRoot = Join-Path $cacheRoot 'v1.0.27'
+        $marker = Join-Path $cacheRoot 'cache-marker'
+        New-Item -ItemType Directory -Path (Join-Path $cacheRoot '.git') -Force | Out-Null
+        Set-Content -LiteralPath $marker -Value 'keep'
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ Marker = $marker } {
+            param($Marker)
+
+            Mock Invoke-AvmProcess {
+                throw [AvmProcessException]::new(
+                    'cached fetch failed',
+                    $FilePath,
+                    @($ArgumentList),
+                    128,
+                    '',
+                    "fatal: unable to access 'https://github.com/example/repo.git': connection failed`n")
+            }
+
+            {
+                Get-AvmManagedFilesCheckout `
+                    -Repo 'Azure/azure-verified-modules-managed-files' `
+                    -Ref 'v1.0.27' `
+                    -GitPath 'git'
+            } | Should -Throw -ExceptionType ([AvmProcessException])
+
+            Test-Path -LiteralPath $Marker | Should -BeTrue
+            Should -Invoke Invoke-AvmProcess -Times 1 -Exactly -ParameterFilter {
+                $ArgumentList[0] -eq '-C' -and $ArgumentList[2] -eq 'fetch'
+            }
+            Should -Invoke Invoke-AvmProcess -Times 0 -Exactly -ParameterFilter {
+                $ArgumentList[0] -eq 'clone'
+            }
+        }
+    }
+}
+
 Describe 'Sync-AvmManagedFile' {
     BeforeEach {
         $unique = [Guid]::NewGuid().ToString('N').Substring(0, 8)

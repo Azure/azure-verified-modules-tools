@@ -898,23 +898,36 @@ function Get-AvmManagedFilesCheckout {
     $cacheRoot = Join-Path (Join-Path (Join-Path (Join-Path $homeDir 'cache') 'managed-files') $slug) $Ref
 
     if (Test-Path -LiteralPath (Join-Path $cacheRoot '.git') -PathType Container) {
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) | Out-Null
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'checkout', '-q', 'FETCH_HEAD') | Out-Null
-    }
-    else {
-        $parent = Split-Path -Parent $cacheRoot
-        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        try {
+            Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) | Out-Null
+            Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'checkout', '-q', 'FETCH_HEAD') | Out-Null
+            return $cacheRoot
         }
-        if (Test-Path -LiteralPath $cacheRoot) {
-            Remove-Item `
-                -LiteralPath $cacheRoot `
-                -Recurse `
-                -Force `
-                -ProgressAction SilentlyContinue
+        catch [AvmProcessException] {
+            $isInvalidRepository = $_.Exception.ExitCode -eq 128 -and
+                $_.Exception.StdErr -match '(?im)^\s*fatal:\s+not a git repository\b'
+            if (-not $isInvalidRepository) {
+                throw
+            }
+
+            Write-AvmLog (
+                "sync: cached checkout '$cacheRoot' is not a valid Git repository; clearing it and retrying once."
+            ) -Level Warning | Out-Null
         }
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) | Out-Null
     }
+
+    $parent = Split-Path -Parent $cacheRoot
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $cacheRoot) {
+        Remove-Item `
+            -LiteralPath $cacheRoot `
+            -Recurse `
+            -Force `
+            -ProgressAction SilentlyContinue
+    }
+    Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) | Out-Null
 
     return $cacheRoot
 }

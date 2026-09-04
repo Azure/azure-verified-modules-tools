@@ -405,6 +405,11 @@ Each source layer applies broadcast templates before concrete paths, so an
 explicit path in that layer is more specific. Later overlays still win over
 earlier layers, and exclusions are evaluated against the expanded target paths.
 
+Remote sources use a ref-specific shallow checkout under the AVM cache. If a
+fetch of an existing checkout exits 128 with Git's `not a git repository`
+diagnostic, the CLI deletes only that checkout and clones the ref again once.
+Every other Git failure propagates without clearing the cache.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.
