@@ -178,7 +178,7 @@ section when cutting a release.
 
 ### Fixed
 
-- Positioned warnings and errors now append a readable
+- Warnings and errors with a file and line position now append a readable
   `(file, line N[, column N])` location in ordinary terminal output while
   preserving existing GitHub Actions annotations.
 - Mapotf transforms now process independent root, local-module, and example

@@ -362,17 +362,15 @@ function Format-AvmDiagnosticText {
     )
 
     $path = ConvertTo-AvmAnnotationPath -Path $File
-    if ([string]::IsNullOrWhiteSpace($path)) {
+    if ([string]::IsNullOrWhiteSpace($path) -or $Line -le 0) {
         return $Text
     }
 
     $location = [System.Collections.Generic.List[string]]::new()
     $location.Add($path)
-    if ($Line -gt 0) {
-        $location.Add('line {0}' -f $Line)
-        if ($Column -gt 0) {
-            $location.Add('column {0}' -f $Column)
-        }
+    $location.Add('line {0}' -f $Line)
+    if ($Column -gt 0) {
+        $location.Add('column {0}' -f $Column)
     }
 
     return '{0} ({1})' -f $Text, ($location -join ', ')

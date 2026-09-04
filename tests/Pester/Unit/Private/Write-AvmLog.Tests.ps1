@@ -115,6 +115,20 @@ Describe 'Write-AvmLog' {
             @($observed.Info) | Should -Contain 'boom (main.tf, line 12, column 3)'
         }
 
+        It 'leaves file-only diagnostics unchanged' {
+            $warnings = InModuleScope 'Avm.Authoring' {
+                $env:NO_COLOR = '1'
+                $captured = @()
+                Write-AvmLog 'override warning' `
+                    -Level Warning `
+                    -File 'avm.tflint.override.hcl' `
+                    -WarningVariable captured
+                @($captured | ForEach-Object { [string]$_ })
+            }
+
+            @($warnings) | Should -Contain 'override warning'
+        }
+
         It 'writes Error to the information stream so it is never swallowed' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()

@@ -525,7 +525,7 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
-Warnings and errors that carry a file position preserve it as
+Warnings and errors that carry a file and line position preserve it as
 `message (path, line N[, column N])` in ordinary terminal output. GitHub Actions
 keeps using native workflow annotations without duplicating the position in
 the message.

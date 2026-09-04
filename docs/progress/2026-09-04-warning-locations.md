@@ -21,8 +21,10 @@ warnings and errors while retaining existing GitHub Actions annotations.
 
 ## Validation
 
-- `./build.ps1 pre-commit`: layout, lint, 1,033 unit tests, and 29 component
+- `./build.ps1 pre-commit`: layout, lint, 1,034 unit tests, and 29 component
   tests passed.
+- `$env:AVM_INTEGRATION_FIXTURE = 'terraform-azure-avm-res-mock';
+  ./build.ps1 integration`: 19 passed, 1 skipped.
 - The canary repository's real inline-ignore scan rendered:
   - `TFLint inline ignore comment found for rule(s):
     terraform_unused_declarations. (main.telemetry.tf, line 59)`
