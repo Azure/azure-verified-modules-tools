@@ -6,6 +6,14 @@ function Test-AvmGitHubActionsContext {
     return -not [string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)
 }
 
+function Test-AvmAzureDevOpsContext {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    return Test-AvmEnvironmentFlag -Name 'TF_BUILD'
+}
+
 function Test-AvmEnvironmentFlag {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -218,6 +226,7 @@ function Write-AvmLog {
         Set-StrictMode -Version 3.0
         $ErrorActionPreference = 'Stop'
         $actions = Test-AvmGitHubActionsContext
+        $azureDevOps = Test-AvmAzureDevOpsContext
     }
 
     process {
@@ -231,7 +240,13 @@ function Write-AvmLog {
 
         $text = if ($null -eq $Message) { '' } else { $Message }
         $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
-        $displayText = Format-AvmLogText -Text $text -Level $Level
+        $diagnosticText = if ($Level -in @('Warning', 'Error')) {
+            Format-AvmDiagnosticText -Text $text -File $File -Line $Line -Column $Column
+        }
+        else {
+            $text
+        }
+        $displayText = Format-AvmLogText -Text $diagnosticText -Level $Level
 
         switch ($Level) {
             'Debug' {
@@ -254,6 +269,17 @@ function Write-AvmLog {
                 if ($actions) {
                     Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
                 }
+                elseif ($azureDevOps) {
+                    $properties = Format-AvmAzureDevOpsLogIssueProperty `
+                        -Type 'warning' `
+                        -File $File `
+                        -Line $Line `
+                        -Column $Column
+                    Write-Information (
+                        '##vso[task.logissue {0}]{1}' -f
+                        $properties, (ConvertTo-AvmAzureDevOpsCommandText -Text $text)
+                    ) -InformationAction Continue
+                }
                 else {
                     Write-Warning $displayText
                 }
@@ -261,6 +287,17 @@ function Write-AvmLog {
             'Error' {
                 if ($actions) {
                     Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
+                }
+                elseif ($azureDevOps) {
+                    $properties = Format-AvmAzureDevOpsLogIssueProperty `
+                        -Type 'error' `
+                        -File $File `
+                        -Line $Line `
+                        -Column $Column
+                    Write-Information (
+                        '##vso[task.logissue {0}]{1}' -f
+                        $properties, (ConvertTo-AvmAzureDevOpsCommandText -Text $text)
+                    ) -InformationAction Continue
                 }
                 else {
                     Write-Information $displayText -InformationAction Continue
@@ -297,6 +334,27 @@ function ConvertTo-AvmAnnotationText {
     return $Text.TrimStart().Replace("`r", '').Replace("`n", '%0A')
 }
 
+function ConvertTo-AvmAzureDevOpsCommandText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Text
+    )
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return ''
+    }
+
+    return $Text `
+        -replace '%', '%AZP25' `
+        -replace ';', '%3B' `
+        -replace '\]', '%5D' `
+        -replace "`r", '%0D' `
+        -replace "`n", '%0A'
+}
+
 function ConvertTo-AvmAnnotationPath {
     <#
     .SYNOPSIS
@@ -322,7 +380,7 @@ function ConvertTo-AvmAnnotationPath {
 
     $normalised = $Path.Trim().Replace('\', '/')
 
-    $roots = @($env:GITHUB_WORKSPACE, (Get-Location).Path) |
+    $roots = @($env:GITHUB_WORKSPACE, $env:BUILD_SOURCESDIRECTORY, (Get-Location).Path) |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     foreach ($root in $roots) {
         $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'
@@ -337,6 +395,39 @@ function ConvertTo-AvmAnnotationPath {
     }
 
     return $normalised
+}
+
+function Format-AvmDiagnosticText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Text,
+
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
+    )
+
+    $path = ConvertTo-AvmAnnotationPath -Path $File
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        return $Text
+    }
+
+    $location = [System.Collections.Generic.List[string]]::new()
+    $location.Add($path)
+    if ($Line -gt 0) {
+        $location.Add([string]$Line)
+        if ($Column -gt 0) {
+            $location.Add([string]$Column)
+        }
+    }
+
+    return '{0}: {1}' -f ($location -join ':'), $Text
 }
 
 function Format-AvmAnnotationProperty {
@@ -366,6 +457,39 @@ function Format-AvmAnnotationProperty {
     }
 
     return ' ' + ($parts -join ',')
+}
+
+function Format-AvmAzureDevOpsLogIssueProperty {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('warning', 'error')]
+        [string] $Type,
+
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
+    )
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add('type={0}' -f $Type)
+
+    $path = ConvertTo-AvmAnnotationPath -Path $File
+    if (-not [string]::IsNullOrWhiteSpace($path)) {
+        $parts.Add('sourcepath={0}' -f (ConvertTo-AvmAzureDevOpsCommandText -Text $path))
+        if ($Line -gt 0) {
+            $parts.Add('linenumber={0}' -f $Line)
+            if ($Column -gt 0) {
+                $parts.Add('columnnumber={0}' -f $Column)
+            }
+        }
+    }
+
+    return $parts -join ';'
 }
 
 function Enter-AvmLogGroup {
