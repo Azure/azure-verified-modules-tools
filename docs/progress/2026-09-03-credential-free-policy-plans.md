@@ -105,11 +105,23 @@ provider authentication error. That is a **failure**, not a silent skip, so a
 module owner can see the example is unverified and run the credentialled
 pipeline from a branch in the module repository.
 
-Detection is by provider prefix (`azurerm_`, `azapi_`, `azuread_`,
+Detection only reports data sources Terraform actually reads during plan. One
+whose arguments reference a resource the configuration is about to create, a
+module output, another data source, or that carries `depends_on`, is deferred
+to apply and renders as `will be read during apply`, so it never executes.
+This was verified against Terraform 1.15: a `listKeys` action whose
+`resource_id` comes from a resource in the same configuration plans cleanly on
+the synthetic credential. That distinction matters a great deal in practice,
+because it covers the whole `azapi_resource_action`/`listKeys` family that
+dominates the raw declaration counts.
+
+Types are matched by provider prefix (`azurerm_`, `azapi_`, `azuread_`,
 `azuredevops_`, `azurestack_`) with an allow-list for types that resolve
-locally: `azurerm_client_config`, `azapi_client_config` (token claims) and
-`azapi_resource_id` (a local ID parser). Unknown types fail closed, because
-the alternative is a confusing provider error deep inside the plan.
+locally: `azurerm_client_config` and `azapi_client_config` (token claims),
+`azapi_resource_id` (a local ID parser) and
+`azuread_application_published_app_ids` (a static map compiled into the
+provider). Unknown types fail closed, because the alternative is a confusing
+provider error deep inside the plan.
 
 `ARM_PROVIDER_ENHANCED_VALIDATION` is also off on the fallback path, so
 provider-side location and resource-provider-name validation does not run.
@@ -117,12 +129,26 @@ TFLint and `terraform validate` still cover the configuration.
 
 A fleet survey of 55 AVM Terraform repositories covering 344 example
 directories found roughly 28% of examples declare at least one data source
-needing a live API read, concentrated in six repositories and five data
-source types (`azapi_resource_action`, `azurerm_subscription`,
-`azurerm_role_definition`, `azapi_resource`, `azurerm_resource_group`).
-Roughly 19% specifically need Azure ARM or Microsoft Graph; the remainder are
-`http`, `azuredevops_*` and `github_*`. Module roots can also declare such
-data sources, though many are `count`-gated.
+needing a live API read. A follow-up necessity audit of the actual example
+code refined that materially:
+
+- Roughly 8% of examples declare such a data source but **defer** the read to
+  apply, so they plan fine credential-free. This includes all 13
+  `azapi_resource_action`/`listKeys` uses in `avm-res-web-site`, whose
+  `resource_id` comes from a resource the example itself creates.
+- Roughly 15-16% genuinely block on Azure ARM or Microsoft Graph at plan time.
+- A further ~4% use `data "http"` to `api.ipify.org` for firewall ACLs, which
+  needs egress but no Azure credential, and ~3% need an Azure DevOps or GitHub
+  token rather than an Azure one.
+
+Of the blocking set, the audit judged roughly 42% trivially avoidable (chiefly
+`azurerm_subscription` used only for `.id`, and `azurerm_role_definition`
+looking up a built-in role by name, both of which have credential-free
+equivalents), ~31% avoidable with effort, and ~27% genuinely required. The
+required set is dominated by the Azure Local / Arc family, which must read
+custom locations and resource groups provisioned on physical hardware out of
+band. Publishing authoring guidance for the avoidable patterns would reduce
+the blocking share to roughly 6-8%.
 
 Note that `terraform init` already needs registry and GitHub egress for
 essentially every example, because `Azure/naming/azurerm` and the regions

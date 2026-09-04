@@ -71,9 +71,69 @@ data "azurerm_key_vault" "real" {}
     }
 }
 
+Describe 'Test-AvmTerraformReadDeferred' {
+    It 'reports a deferred read for resource, module and data references' {
+        InModuleScope 'Avm.Authoring' {
+            Test-AvmTerraformReadDeferred -Body 'resource_id = azapi_resource.storage_account.id' |
+                Should -BeTrue
+            Test-AvmTerraformReadDeferred -Body 'key_vault_id = module.key_vault.resource_id' |
+                Should -BeTrue
+            Test-AvmTerraformReadDeferred -Body 'parent_id = data.azurerm_resource_group.rg.id' |
+                Should -BeTrue
+            Test-AvmTerraformReadDeferred -Body "  depends_on = [azurerm_network_watcher.this]" |
+                Should -BeTrue
+        }
+    }
+
+    It 'does not report a deferred read for known values' {
+        InModuleScope 'Avm.Authoring' {
+            Test-AvmTerraformReadDeferred -Body 'name = var.resource_group_name' | Should -BeFalse
+            Test-AvmTerraformReadDeferred -Body 'name = local.watcher_name' | Should -BeFalse
+            Test-AvmTerraformReadDeferred -Body 'client_id = "f1dd0a37-89c6-4e07-bcd1-ffd3d43d8875"' |
+                Should -BeFalse
+            Test-AvmTerraformReadDeferred -Body '' | Should -BeFalse
+        }
+    }
+
+    It 'does not mistake each, self or count for a resource reference' {
+        InModuleScope 'Avm.Authoring' {
+            Test-AvmTerraformReadDeferred -Body 'name = each.value.name' | Should -BeFalse
+            Test-AvmTerraformReadDeferred -Body 'name = count.index.name' | Should -BeFalse
+        }
+    }
+}
+
+Describe 'Get-AvmTerraformBlockBody' {
+    It 'returns the body of a block, including nested braces' {
+        $body = InModuleScope 'Avm.Authoring' {
+            $source = 'data "x" "y" {' + "`n" + '  a = { b = 1 }' + "`n" + '}' + "`n" + 'trailing'
+            Get-AvmTerraformBlockBody -Content $source -OpenBraceIndex $source.IndexOf('{')
+        }
+
+        $body | Should -Match 'a = \{ b = 1 \}'
+        $body | Should -Not -Match 'trailing'
+    }
+
+    It 'ignores braces inside string literals' {
+        $body = InModuleScope 'Avm.Authoring' {
+            $source = 'data "x" "y" {' + "`n" + '  a = "not } a brace"' + "`n" + '}'
+            Get-AvmTerraformBlockBody -Content $source -OpenBraceIndex $source.IndexOf('{')
+        }
+
+        $body | Should -Match 'not \} a brace'
+    }
+
+    It 'returns empty for an unterminated block' {
+        $body = InModuleScope 'Avm.Authoring' {
+            Get-AvmTerraformBlockBody -Content 'data "x" "y" {' -OpenBraceIndex 13
+        }
+
+        $body | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-AvmTerraformCredentialledDataSource' {
-    It 'reports data sources that read existing Azure resources' {
-        $path = New-TerraformFixture -Content @'
+    It 'reports data sources that read existing Azure resources' {        $path = New-TerraformFixture -Content @'
 data "azurerm_resource_group" "existing" {
   name = "rg-existing"
 }
@@ -114,6 +174,99 @@ data "random_id" "suffix" {
 data "local_file" "config" {
   filename = "config.json"
 }
+'@
+
+        $found = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
+            param($P)
+            @(Get-AvmTerraformCredentialledDataSource -Path $P)
+        }
+
+        @($found).Count | Should -Be 0
+    }
+
+    It 'ignores data sources whose read is deferred to apply' {
+        # Verified against Terraform 1.15: a data source whose arguments come
+        # from a resource in the same configuration renders "will be read
+        # during apply" and never executes during the plan, so it is not a
+        # credential blocker.
+        $path = New-TerraformFixture -Content @'
+data "azapi_resource_action" "keys" {
+  action      = "listKeys"
+  resource_id = azapi_resource.storage_account.id
+  type        = "Microsoft.Storage/storageAccounts@2025-01-01"
+}
+
+data "azurerm_key_vault_secret" "sql" {
+  key_vault_id = module.key_vault.resource_id
+  name         = var.secret_name
+}
+
+data "azapi_resource" "customlocation" {
+  name      = var.custom_location_name
+  parent_id = data.azurerm_resource_group.existing.id
+  type      = "Microsoft.ExtendedLocation/customLocations@2021-08-15"
+}
+
+data "azurerm_network_watcher" "this" {
+  name                = local.network_watcher_name
+  resource_group_name = local.network_watcher_resource_group_name
+
+  depends_on = [azurerm_network_watcher.this]
+}
+'@
+
+        $found = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
+            param($P)
+            @(Get-AvmTerraformCredentialledDataSource -Path $P)
+        }
+
+        @($found).Count | Should -Be 0
+    }
+
+    It 'still reports a deferred-looking type when every argument is known' {
+        # Same type as the deferred case above, but nothing defers the read,
+        # so this one does execute during plan.
+        $path = New-TerraformFixture -Content @'
+data "azapi_resource" "customlocation" {
+  name      = var.custom_location_name
+  parent_id = "/subscriptions/0000/resourceGroups/rg"
+  type      = "Microsoft.ExtendedLocation/customLocations@2021-08-15"
+}
+'@
+
+        $found = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
+            param($P)
+            @(Get-AvmTerraformCredentialledDataSource -Path $P)
+        }
+
+        @($found).Count | Should -Be 1
+        $found[0].DataSourceAddress | Should -Be 'data.azapi_resource.customlocation'
+    }
+
+    It 'treats variables and locals as known at plan time' {
+        $path = New-TerraformFixture -Content @'
+data "azurerm_resource_group" "existing" {
+  name = var.resource_group_name
+}
+
+data "azurerm_key_vault" "existing" {
+  name                = local.key_vault_name
+  resource_group_name = var.resource_group_name
+}
+'@
+
+        $found = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
+            param($P)
+            @(Get-AvmTerraformCredentialledDataSource -Path $P)
+        }
+
+        @($found).Count | Should -Be 2
+    }
+
+    It 'ignores azuread_application_published_app_ids, which calls no API' {
+        # The provider returns a static map compiled into the binary.
+        $path = New-TerraformFixture -Content @'
+data "azuread_application_published_app_ids" "well_known" {}
 '@
 
         $found = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
