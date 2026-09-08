@@ -181,6 +181,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Mapotf no longer adds an unused AzAPI requirement to provider-free local
+  helpers. Direct AzAPI use and root telemetry still receive a requirement;
+  generated constraints and provider schemas now use the `~> 2.12` floor.
 - Warnings and errors with a file and line position now append a readable
   `(file, line N[, column N])` location in ordinary terminal output while
   preserving existing GitHub Actions annotations.

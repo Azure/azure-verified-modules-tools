@@ -538,6 +538,14 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
+> **UPDATE 2026-09-08 - provider requirements.** The module profile inserts AzAPI
+> only for direct `azapi_*` resources/data sources or an existing AzAPI
+> declaration, including function-only use. Constraints below the permitted
+> floor are updated to `~> 2.12`. Root telemetry runs before the module profile,
+> so its generated `azapi_client_config` still receives a requirement.
+> Provider-free local helpers remain provider-free; unused declarations remain
+> visible to `terraform_unused_required_providers`.
+
 > **UPDATE 2026-09-02 — AzAPI request-header telemetry is retired.** The common
 > profile replaces `avm_headers_for_azapi` with
 > `remove_avm_headers_for_azapi`, removes direct AVM telemetry header

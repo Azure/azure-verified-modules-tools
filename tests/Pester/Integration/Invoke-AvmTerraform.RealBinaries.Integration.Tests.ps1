@@ -447,7 +447,7 @@ locals {
     }
     azapi = {
       source  = "Azure/azapi"
-      version = "~> 2.4"
+      version = "~> 2.12"
     }
     modtm = {
       source  = "Azure/modtm"
@@ -457,7 +457,7 @@ locals {
             $canonical = @'
     azapi = {
       source  = "Azure/azapi"
-      version = "~> 2.4"
+      version = "~> 2.12"
     }
     modtm = {
       source  = "Azure/modtm"
