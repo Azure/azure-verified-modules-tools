@@ -1,0 +1,5 @@
+{{~ if custom.renderMode == "model-index" ~}}
+{{ include "model-index.scriban" }}
+{{~ else ~}}
+{{ include "README.scriban" }}
+{{~ end ~}}
