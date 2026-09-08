@@ -1,63 +1,88 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
-    $script:main = Get-Content -Raw (Join-Path $script:root 'infra' 'main.bicep')
-    $script:backend = Get-Content -Raw (Join-Path $script:root 'infra' 'modules' 'state-backend.bicep')
-    $script:parameters = Get-Content -Raw (Join-Path $script:root 'infra' 'main.bicepparam')
+    $script:main = Get-Content -Raw (Join-Path $script:root 'infra' 'main.tf')
+    $script:variables = Get-Content -Raw (Join-Path $script:root 'infra' 'variables.tf')
+    $script:providers = Get-Content -Raw (Join-Path $script:root 'infra' 'providers.tf')
+    $script:terraform = Get-Content -Raw (Join-Path $script:root 'infra' 'terraform.tf')
+    $script:outputs = Get-Content -Raw (Join-Path $script:root 'infra' 'outputs.tf')
 }
 
 Describe 'TME state infrastructure contract' {
-    It 'creates a dedicated subscription-scope resource group in North Europe' {
-        $script:main | Should -Match "targetScope = 'subscription'"
-        $script:main | Should -Match "param location string = 'northeurope'"
-        $script:parameters | Should -Match "param location = 'northeurope'"
-        $script:main | Should -Match 'Microsoft.Resources/resourceGroups@'
-        $script:main | Should -Match "resourceGroupName string = 'rg-avm-repository-sync-state-tme'"
-    }
-
-    It 'hardens blob storage and preserves recovery features' {
-        foreach ($setting in @(
-            "name: 'Standard_ZRS'",
-            'allowBlobPublicAccess: false',
-            'allowSharedKeyAccess: false',
-            'supportsHttpsTrafficOnly: true',
-            "minimumTlsVersion: 'TLS1_2'",
-            "publicAccess: 'None'",
-            'isVersioningEnabled: true',
-            'deleteRetentionPolicy:',
-            'containerDeleteRetentionPolicy:',
-            "level: 'CanNotDelete'"
+    It 'pins AVM modules for every deployed resource family' {
+        foreach ($entry in @(
+            @{ Name = 'resources-resourcegroup'; Version = '0.4.0' }
+            @{ Name = 'storage-storageaccount'; Version = '0.10.0' }
+            @{ Name = 'managedidentity-userassignedidentity'; Version = '0.5.2' }
         )) {
-            $script:backend | Should -Match ([regex]::Escape($setting))
+            $script:main | Should -Match (
+                'source\s*=\s*"Azure/avm-res-' + $entry.Name +
+                '/azurerm"\s+version\s*=\s*"' + [regex]::Escape($entry.Version) + '"'
+            )
         }
-        $script:main | Should -Match '@minValue\(7\)'
+        $script:main | Should -Not -Match '(?m)^\s*resource\s+"'
+        ([regex]::Matches($script:main, 'enable_telemetry\s*=\s*false')).Count | Should -Be 3
     }
 
-    It 'trusts the existing immutable repository ID and environment subject' {
-        $script:parameters | Should -Match "githubRepositoryOwnerId = '6844498'"
-        $script:parameters | Should -Match "githubRepositoryId = '1239632211'"
-        $script:backend | Should -Match ([regex]::Escape(
-            'repository_owner_id:${githubRepositoryOwnerId}:repository_id:${githubRepositoryId}:environment:avm'
+    It 'targets the dedicated West US 3 TME resource group' {
+        $script:variables | Should -Match 'default\s*=\s*"westus3"'
+        $script:variables | Should -Match 'default\s*=\s*"c7fedf3b-cbde-4f68-8c81-7a0313adfc21"'
+        $script:variables | Should -Match 'default\s*=\s*"70a036f6-8e4d-4615-bad6-149c02e7720d"'
+        $script:variables | Should -Match 'default\s*=\s*"rg-avm-repository-sync-state-tme"'
+        ([regex]::Matches($script:providers, 'subscription_id\s*=\s*var.subscription_id')).Count | Should -Be 2
+        ([regex]::Matches($script:providers, 'tenant_id\s*=\s*var.tenant_id')).Count | Should -Be 2
+    }
+
+    It 'requires Entra ID and preserves recovery features' {
+        foreach ($pattern in @(
+            'account_sku_name\s*=\s*"Standard_ZRS"',
+            'allow_nested_items_to_be_public\s*=\s*false',
+            'shared_access_key_enabled\s*=\s*false',
+            'default_to_oauth_authentication\s*=\s*true',
+            'https_traffic_only_enabled\s*=\s*true',
+            'min_tls_version\s*=\s*"TLS1_2"',
+            'local_user_enabled\s*=\s*false',
+            'public_access\s*=\s*"None"',
+            'versioning_enabled\s*=\s*true',
+            'delete_retention_policy\s*=\s*\{',
+            'container_delete_retention_policy\s*=\s*\{',
+            'kind\s*=\s*"CanNotDelete"'
+        )) {
+            $script:main | Should -Match $pattern
+        }
+        $script:providers | Should -Match 'storage_use_azuread\s*=\s*true'
+        $script:variables | Should -Match 'var.soft_delete_retention_days >= 7'
+    }
+
+    It 'trusts the existing repository ID and environment subject' {
+        $script:variables | Should -Match 'default\s*=\s*"6844498"'
+        $script:variables | Should -Match 'default\s*=\s*"1239632211"'
+        $script:main | Should -Match ([regex]::Escape(
+            'repository_owner_id:${var.github_repository_owner_id}:repository_id:${var.github_repository_id}:environment:avm'
         ))
-        $script:backend | Should -Match "issuer: 'https://token.actions.githubusercontent.com'"
-        $script:backend | Should -Match "'api://AzureADTokenExchange'"
+        $script:main | Should -Match 'issuer\s*=\s*"https://token.actions.githubusercontent.com"'
+        $script:main | Should -Match '"api://AzureADTokenExchange"'
     }
 
-    It 'grants only container-scoped Blob Data Contributor to the backend identity' {
-        ([regex]::Matches($script:backend, 'Microsoft.Authorization/roleAssignments@')).Count | Should -Be 1
-        $script:backend | Should -Match "'ba92f5b4-2d11-453d-a403-e96b0029c9fe'"
-        $script:backend | Should -Match '(?s)resource backendStateAccess.*?scope: stateContainer'
-        $script:backend | Should -Match 'principalId: backendIdentity.properties.principalId'
-        $script:backend | Should -Match "principalType: 'ServicePrincipal'"
+    It 'grants container-only Blob Data Contributor to the UAMI' {
+        ([regex]::Matches($script:main, 'role_assignments\s*=')).Count | Should -Be 1
+        $script:main | Should -Match 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+        $script:main | Should -Match '(?s)containers\s*=\s*\{.*?role_assignments\s*='
+        $script:main | Should -Match 'principal_id\s*=\s*module.backend_identity.principal_id'
+        $script:main | Should -Match 'principal_type\s*=\s*"ServicePrincipal"'
     }
 
-    It 'exports the workflow input map without secrets or deployment side effects' {
-        $script:main | Should -Match 'output workflowVariables object ='
+    It 'uses disposable local bootstrap state with nonsecret handoff outputs' {
+        $script:terraform | Should -Match 'backend "local" \{\}'
+        $script:terraform | Should -Not -Match 'backend "azurerm"'
+        $script:outputs | Should -Match 'output "workflowVariables"'
         foreach ($name in @(
             'ARM_BACKEND_CLIENT_ID', 'ARM_BACKEND_TENANT_ID', 'ARM_BACKEND_SUBSCRIPTION_ID',
             'STORAGE_ACCOUNT_NAME', 'STORAGE_ACCOUNT_RESOURCE_GROUP_NAME', 'STORAGE_ACCOUNT_CONTAINER_NAME'
         )) {
-            $script:main | Should -Match ("(?m)^\s+" + $name + ':')
+            $script:outputs | Should -Match ("(?m)^\s+" + $name + '\s*=')
         }
-        ($script:main + $script:backend) | Should -Not -Match 'listKeys|Microsoft.Resources/deploymentScripts'
+        $script:outputs | Should -Not -Match 'access_key|sas_token|client_secret'
+        Test-Path (Join-Path $script:root 'infra' 'main.bicep') | Should -BeFalse
+        Test-Path (Join-Path $script:root 'infra' 'main.bicepparam') | Should -BeFalse
     }
 }

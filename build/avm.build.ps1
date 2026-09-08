@@ -299,17 +299,21 @@ task 'test-repository-management' {
 
 task infra {
     $infraRoot = Join-Path $script:repoRoot 'infra'
-    $outputRoot = Join-Path $script:outRoot 'infra'
-    $null = New-Item -ItemType Directory -Path $outputRoot -Force
-    & az bicep build --file (Join-Path $infraRoot 'main.bicep') --outfile (Join-Path $outputRoot 'main.json')
-    if ($LASTEXITCODE -ne 0) {
-        throw 'State infrastructure Bicep compilation failed.'
+    $initArguments = @('init', '-backend=false', '-input=false')
+    if (Test-Path -LiteralPath (Join-Path $infraRoot '.terraform.lock.hcl')) {
+        $initArguments += '-lockfile=readonly'
     }
-    & az bicep build-params --file (Join-Path $infraRoot 'main.bicepparam') --outfile (Join-Path $outputRoot 'main.parameters.json')
-    if ($LASTEXITCODE -ne 0) {
-        throw 'State infrastructure Bicep parameter compilation failed.'
+    foreach ($arguments in @(
+        @('fmt', '-check', '-diff'),
+        $initArguments,
+        @('validate', '-no-color')
+    )) {
+        & terraform "-chdir=$infraRoot" @arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Terraform state bootstrap validation failed: $($arguments[0])."
+        }
     }
-    Write-Build Green '  infra OK: state infrastructure and TME parameters compiled (no deployment)'
+    Write-Build Green '  infra OK: Terraform AVM bootstrap validated (no deployment)'
 }
 
 task test {

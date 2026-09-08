@@ -6,7 +6,8 @@ AzAPI/AzureAD providers' tenant.
 
 [State infrastructure](../../../infra/README.md) provisions the TME resource
 group, storage account, container, and federated state-only managed identity.
-Bicep avoids needing a Terraform backend to bootstrap the backend itself.
+Terraform AVM creates the infrastructure once using disposable local bootstrap
+state. That bootstrap state is separate from the live repo-sync state blobs.
 
 ## Authentication and configuration
 
@@ -49,8 +50,10 @@ performing the copy needs Blob Data Reader on the old container and Blob Data
 Contributor on the new container. Provision access separately; do not grant the
 runtime state identity cross-tenant or provider-management permissions.
 
-1. Deploy the [Bicep infrastructure](../../../infra/README.md). Its `workflowVariables`
-   output contains the six new environment values. Do not configure them yet.
+1. Deploy the [Terraform AVM bootstrap](../../../infra/README.md). Save its
+   `workflowVariables` output to `infra/tme.outputs.json` before discarding the
+   local bootstrap state. This non-secret file contains the six new environment
+   values. Do not configure them yet.
 2. Merge the tools change, then pause automatic sync and agree that no other
    operators will run manual sync or Terraform during the copy:
 
@@ -76,7 +79,11 @@ runtime state identity cross-tenant or provider-management permissions.
    $sourceContainer = 'tfstate'
    $targetSubscription = 'c7fedf3b-cbde-4f68-8c81-7a0313adfc21'
    $targetTenant = '70a036f6-8e4d-4615-bad6-149c02e7720d'
-   $deploymentName = 'avm-repository-sync-state-tme'
+   $settings = Get-Content -Raw .\infra\tme.outputs.json | ConvertFrom-Json
+   if ($settings.ARM_BACKEND_SUBSCRIPTION_ID -ne $targetSubscription -or
+       $settings.ARM_BACKEND_TENANT_ID -ne $targetTenant) {
+     throw 'Bootstrap outputs do not match the approved TME target.'
+   }
    $backup = Join-Path $PWD "out/state-migration-$([guid]::NewGuid())"
    $null = New-Item -ItemType Directory -Path "$backup/source", "$backup/readback"
    gh variable list --repo $repo --env avm --json name,value |
@@ -111,8 +118,6 @@ runtime state identity cross-tenant or provider-management permissions.
 
    az login --tenant $targetTenant --output none
    az account set --subscription $targetSubscription
-   $deployment = az deployment sub show --name $deploymentName --subscription $targetSubscription -o json | ConvertFrom-Json
-   $settings = $deployment.properties.outputs.workflowVariables.value
    $targetAccount = $settings.STORAGE_ACCOUNT_NAME
    $targetContainer = $settings.STORAGE_ACCOUNT_CONTAINER_NAME
    if (@(Get-StateBlobs $targetAccount $targetContainer $targetSubscription).Count) {
