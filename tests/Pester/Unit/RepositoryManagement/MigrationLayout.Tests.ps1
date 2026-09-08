@@ -64,6 +64,38 @@ Describe "Repository management migration layout" {
         }
     }
 
+    It "does not manage the retired Copilot Actions environment or secrets" {
+        $terraformRoot = Join-Path $script:repoRoot "repository-management/repository-sync/terraform"
+        $files = @(Get-ChildItem -LiteralPath $terraformRoot -Recurse -File -Filter "*.tf")
+        $retiredReferences = @(
+            'github_repository_copilot_environment_name'
+            'resource\s+"github_repository_environment"\s+"copilot"'
+            'resource\s+"github_actions_environment_secret"\s+"copilot_'
+            'environment\s*=\s*"copilot"'
+        )
+
+        foreach ($pattern in $retiredReferences) {
+            @($files | Select-String -Pattern $pattern) |
+                Should -BeNullOrEmpty -Because "Copilot uses separately configured Agents secrets"
+        }
+    }
+
+    It "preserves Copilot firewall configuration independently of the retired environment" {
+        $terraformRoot = Join-Path $script:repoRoot "repository-management/repository-sync/terraform"
+        $main = Get-Content -LiteralPath (Join-Path $terraformRoot "main.tf") -Raw
+        $variables = Get-Content -LiteralPath (Join-Path $terraformRoot "variables.tf") -Raw
+        $firewall = Get-Content -LiteralPath (
+            Join-Path $terraformRoot "modules/github/github.repository.variables.tf"
+        ) -Raw
+
+        $main | Should -Match 'copilot_agent_firewall_allow_list\s*=\s*var\.github_copilot_agent_firewall_allow_list'
+        $main | Should -Match 'copilot_agent_firewall_allow_list_variable_name\s*=\s*var\.github_copilot_agent_firewall_allow_list_variable_name'
+        $variables | Should -Match 'default\s*=\s*"COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"'
+        $firewall | Should -Match 'resource\s+"github_actions_variable"\s+"copilot_firewall_allow_list"'
+        $firewall | Should -Match 'variable_name\s*=\s*var\.copilot_agent_firewall_allow_list_variable_name'
+        $firewall | Should -Match 'value\s*=\s*join\(",",\s*var\.copilot_agent_firewall_allow_list\)'
+    }
+
     It "uses avm environment variables and only secrets the app private key" {
         $workflow = Get-Content -LiteralPath (
             Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
