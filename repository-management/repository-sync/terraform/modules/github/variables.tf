@@ -61,11 +61,6 @@ variable "github_repository_no_approval_environment_name" {
   description = "Name of the environment used by jobs that do not require approval."
 }
 
-variable "github_repository_copilot_environment_name" {
-  type        = string
-  description = "Name of the environment used for copilot."
-}
-
 variable "github_teams" {
   type = map(object({
     slug                         = string
