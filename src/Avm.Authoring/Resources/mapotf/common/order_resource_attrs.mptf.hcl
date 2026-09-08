@@ -27,7 +27,7 @@ data "provider_schema" "azurerm" {
 
 data "provider_schema" "azapi" {
   provider_source  = "Azure/azapi"
-  provider_version = "~> 2.4"
+  provider_version = "~> 2.12"
 }
 
 data "provider_schema" "random" {
