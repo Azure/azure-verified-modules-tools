@@ -60,6 +60,7 @@ defaults:
 jobs:
   generate-matrix:
     name: Repository Management - Generate Matrix
+    if: ${{ vars.AVM_SYNC_PAUSED != 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     environment: avm
     outputs:
@@ -116,15 +117,42 @@ jobs:
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      # Terraform authenticates on its own via the ARM_* variables below. The
-      # Azure CLI needs its own login so state lock recovery can break the
-      # lease on a state blob left locked by a cancelled run.
-      - name: Azure Login (OIDC)
+      - name: Resolve state identity
+        id: state-identity
+        shell: pwsh
+        env:
+          ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+        run: |
+          . ./scripts/lib/TerraformOperations.ps1
+          $identity = Resolve-RepositorySyncStateIdentity `
+            -TenantId $env:ARM_BACKEND_TENANT_ID `
+            -SubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
+            -ClientId $env:ARM_BACKEND_CLIENT_ID
+          if ($null -eq $identity) {
+            $identity = Resolve-RepositorySyncStateIdentity `
+              -TenantId $env:ARM_TENANT_ID `
+              -SubscriptionId $env:ARM_SUBSCRIPTION_ID `
+              -ClientId $env:ARM_CLIENT_ID
+          }
+          if ($null -eq $identity) {
+            throw 'The state identity is not configured.'
+          }
+          "tenant-id=$($identity.TenantId)" >> $env:GITHUB_OUTPUT
+          "subscription-id=$($identity.SubscriptionId)" >> $env:GITHUB_OUTPUT
+          "client-id=$($identity.ClientId)" >> $env:GITHUB_OUTPUT
+
+      # Only state lock recovery uses this CLI login; providers retain ARM_* below.
+      - name: Azure Login for state (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
-          client-id: ${{ vars.ARM_CLIENT_ID }}
-          tenant-id: ${{ vars.ARM_TENANT_ID }}
-          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          client-id: ${{ steps.state-identity.outputs.client-id }}
+          tenant-id: ${{ steps.state-identity.outputs.tenant-id }}
+          subscription-id: ${{ steps.state-identity.outputs.subscription-id }}
 
       - name: Download Labels CSV File
         run: |
@@ -167,6 +195,9 @@ jobs:
             -stateStorageAccountName "${{ vars.STORAGE_ACCOUNT_NAME }}" `
             -stateResourceGroupName "${{ vars.STORAGE_ACCOUNT_RESOURCE_GROUP_NAME }}" `
             -stateContainerName "${{ vars.STORAGE_ACCOUNT_CONTAINER_NAME }}" `
+            -stateTenantId $env:ARM_BACKEND_TENANT_ID `
+            -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
+            -stateClientId $env:ARM_BACKEND_CLIENT_ID `
             -identityResourceGroupName "${{ vars.IDENTITY_RESOURCE_GROUP_NAME }}" `
             -repoId "${{ matrix.repoId }}" `
             -repoUrl "${{ matrix.repoUrl }}" `
@@ -180,6 +211,9 @@ jobs:
           ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
           ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
           ARM_USE_AZUREAD: true
           ARM_USE_OIDC: true
           TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}

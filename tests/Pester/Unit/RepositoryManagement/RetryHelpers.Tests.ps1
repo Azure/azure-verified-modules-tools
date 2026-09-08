@@ -203,6 +203,7 @@ Describe "Invoke-GitHubCliWithRetry transient failures" {
                 Output   = ""
                 Error    = "tls: failed to verify certificate: x509: certificate is not valid for any names"
             }
+
             @{ ExitCode = 0; Output = '{"ok":true}'; Error = "" }
         )
 
@@ -240,5 +241,47 @@ Describe "Invoke-GitHubCliWithRetry transient failures" {
         $result.exitCode | Should -Be 1
         $result.error | Should -Match "HTTP 404"
         $global:retryHelpersAttempts | Should -Be 1
+    }
+}
+
+Describe "State lock recovery identity" {
+    BeforeEach {
+        Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+    }
+
+    It "uses the state subscription and logged-in identity for the blob fallback" {
+        Clear-TerraformStateLock -errorOutput @('Error acquiring the state lock') `
+            -workingDirectory $TestDrive -storageAccountName 'stateaccount' `
+            -containerName 'tfstate' -blobName 'repo.tfstate' `
+            -subscriptionId '55555555-5555-4555-8555-555555555555' | Should -BeTrue
+
+        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
+            $FilePath -eq 'az' -and
+            ($ArgumentList -join ' ') -eq (
+                'storage blob lease break --account-name stateaccount --container-name tfstate ' +
+                '--blob-name repo.tfstate --lease-break-period 0 --auth-mode login ' +
+                '--subscription 55555555-5555-4555-8555-555555555555'
+            )
+        }
+    }
+
+    It "uses the initialized Terraform backend for a known lock ID" {
+        Clear-TerraformStateLock -errorOutput @('ID: 11111111-1111-4111-8111-111111111111') `
+            -workingDirectory $TestDrive -storageAccountName 'stateaccount' `
+            -containerName 'tfstate' -blobName 'repo.tfstate' `
+            -subscriptionId '55555555-5555-4555-8555-555555555555' | Should -BeTrue
+
+        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
+            $FilePath -eq 'terraform' -and
+            $ArgumentList -contains 'force-unlock'
+        }
+    }
+
+    It "keeps legacy CLI subscription discovery when no override is supplied" {
+        Clear-TerraformStateBlobLease -storageAccountName 'stateaccount' `
+            -containerName 'tfstate' -blobName 'repo.tfstate' | Should -BeTrue
+        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
+            $FilePath -eq 'az' -and $ArgumentList -notcontains '--subscription'
+        }
     }
 }

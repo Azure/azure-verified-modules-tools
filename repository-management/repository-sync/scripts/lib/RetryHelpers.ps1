@@ -60,6 +60,7 @@ function Invoke-TerraformWithRetry {
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
         [string]$stateBlobName,
+        [string]$stateSubscriptionId,
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutputParsedFromJson
@@ -85,6 +86,7 @@ function Invoke-TerraformWithRetry {
                 storageAccountName = $stateStorageAccountName
                 containerName      = $stateContainerName
                 blobName           = $stateBlobName
+                subscriptionId     = $stateSubscriptionId
             }
             Action      = {
                 param([string[]]$errorOutput, [hashtable]$context)
@@ -93,7 +95,8 @@ function Invoke-TerraformWithRetry {
                     -workingDirectory $context.workingDirectory `
                     -storageAccountName $context.storageAccountName `
                     -containerName $context.containerName `
-                    -blobName $context.blobName
+                    -blobName $context.blobName `
+                    -subscriptionId $context.subscriptionId
             }
         }
     )
@@ -127,6 +130,7 @@ function Clear-TerraformStateLock {
         [string]$storageAccountName,
         [string]$containerName,
         [string]$blobName,
+        [string]$subscriptionId,
         [string]$outputLog = "force-unlock.log",
         [string]$errorLog = "force-unlock.error.log"
     )
@@ -171,7 +175,8 @@ function Clear-TerraformStateLock {
     return Clear-TerraformStateBlobLease `
         -storageAccountName $storageAccountName `
         -containerName $containerName `
-        -blobName $blobName
+        -blobName $blobName `
+        -subscriptionId $subscriptionId
 }
 
 # Breaks the Azure Storage blob lease that backs a Terraform state lock. Used
@@ -182,6 +187,7 @@ function Clear-TerraformStateBlobLease {
         [string]$storageAccountName,
         [string]$containerName,
         [string]$blobName,
+        [string]$subscriptionId,
         [string]$outputLog = "lease-break.log",
         [string]$errorLog = "lease-break.error.log"
     )
@@ -193,16 +199,20 @@ function Clear-TerraformStateBlobLease {
 
     Write-Host "Breaking the lease on state blob '$blobName' in '$storageAccountName/$containerName'."
 
-    $process = Start-Process `
-        -FilePath "az" `
-        -ArgumentList @(
+    $arguments = @(
             "storage", "blob", "lease", "break",
             "--account-name", $storageAccountName,
             "--container-name", $containerName,
             "--blob-name", $blobName,
             "--lease-break-period", "0",
             "--auth-mode", "login"
-        ) `
+    )
+    if ($subscriptionId) {
+        $arguments += @("--subscription", $subscriptionId)
+    }
+    $process = Start-Process `
+        -FilePath "az" `
+        -ArgumentList $arguments `
         -RedirectStandardOutput $outputLog `
         -RedirectStandardError $errorLog `
         -PassThru `

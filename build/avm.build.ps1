@@ -280,6 +280,38 @@ task lint {
     }
 }
 
+task 'test-repository-management' {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    $config = New-PesterConfiguration
+    $config.Run.Path = Join-Path $script:testsRoot 'Unit' 'RepositoryManagement'
+    $config.Run.PassThru = $true
+    $config.Run.Exit = $false
+    $config.Output.Verbosity = 'Detailed'
+    $config.Output.StackTraceVerbosity = 'Full'
+    $config.TestResult.Enabled = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath = script:Get-AvmTestResultPath -Tier 'repository-management'
+    $result = script:Invoke-AvmPester -Configuration $config
+    if ($result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
+        throw 'Repository management tests failed.'
+    }
+}
+
+task infra {
+    $infraRoot = Join-Path $script:repoRoot 'infra'
+    $outputRoot = Join-Path $script:outRoot 'infra'
+    $null = New-Item -ItemType Directory -Path $outputRoot -Force
+    & az bicep build --file (Join-Path $infraRoot 'main.bicep') --outfile (Join-Path $outputRoot 'main.json')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'State infrastructure Bicep compilation failed.'
+    }
+    & az bicep build-params --file (Join-Path $infraRoot 'main.bicepparam') --outfile (Join-Path $outputRoot 'main.parameters.json')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'State infrastructure Bicep parameter compilation failed.'
+    }
+    Write-Build Green '  infra OK: state infrastructure and TME parameters compiled (no deployment)'
+}
+
 task test {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 
