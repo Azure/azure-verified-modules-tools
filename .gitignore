@@ -409,8 +409,10 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
-# One-shot state infrastructure bootstrap artifacts (not the provider lock file)
+# Local-only one-shot state infrastructure bootstrap artifacts
 infra/.terraform/
+infra/.terraform.lock.hcl
+infra/tme.outputs.json
 infra/*.tfstate
 infra/*.tfstate.*
 infra/*.tfplan

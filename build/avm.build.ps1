@@ -300,9 +300,6 @@ task 'test-repository-management' {
 task infra {
     $infraRoot = Join-Path $script:repoRoot 'infra'
     $initArguments = @('init', '-backend=false', '-input=false')
-    if (Test-Path -LiteralPath (Join-Path $infraRoot '.terraform.lock.hcl')) {
-        $initArguments += '-lockfile=readonly'
-    }
     foreach ($arguments in @(
         @('fmt', '-check', '-diff'),
         $initArguments,

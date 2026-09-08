@@ -85,4 +85,17 @@ Describe 'TME state infrastructure contract' {
         Test-Path (Join-Path $script:root 'infra' 'main.bicep') | Should -BeFalse
         Test-Path (Join-Path $script:root 'infra' 'main.bicepparam') | Should -BeFalse
     }
+
+    It 'keeps generated bootstrap outputs and dependency locks local-only' {
+        $paths = @('infra/.terraform.lock.hcl', 'infra/tme.outputs.json')
+        $tracked = @(& git -C $script:root ls-files -- @paths)
+        $LASTEXITCODE | Should -Be 0
+        $tracked | Should -BeNullOrEmpty
+        $ignored = @(& git -C $script:root check-ignore --no-index -- @paths)
+        $LASTEXITCODE | Should -Be 0
+        $ignored | Should -Be $paths
+
+        $build = Get-Content -Raw (Join-Path $script:root 'build' 'avm.build.ps1')
+        $build | Should -Not -Match '-lockfile=readonly'
+    }
 }

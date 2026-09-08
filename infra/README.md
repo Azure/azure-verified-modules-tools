@@ -56,17 +56,12 @@ Use PowerShell 7.4+, Terraform 1.10 or newer, and the repository's build runner:
 .\build.ps1 infra
 ```
 
-This runs `fmt -check`, downloads the pinned modules/providers with the backend
-disabled, and runs `validate`. It does not plan or apply Azure changes.
-The provider lock file is source-controlled; `.terraform`, plans, and state are
-not. Use `terraform -chdir=infra init -backend=false` when intentionally updating
-dependencies, then review and commit the resulting lock-file changes.
-Refresh hashes for the supported platforms before committing a dependency update:
-
-```powershell
-terraform -chdir=infra providers lock -platform=linux_amd64 -platform=linux_arm64 `
-    -platform=windows_amd64 -platform=darwin_amd64 -platform=darwin_arm64
-```
+This runs `fmt -check`, downloads the pinned modules and providers satisfying
+their version constraints with the backend disabled, and runs `validate`. It
+does not plan or apply Azure changes. Terraform generates a local provider lock
+file during init. That lock file, `tme.outputs.json`, `.terraform`, plans, and
+state are ignored by Git and must not be committed. CI initializes its own lock
+file on each fresh checkout.
 
 ## Deploy once
 
@@ -90,7 +85,7 @@ if ($account.id -ne $subscriptionId -or $account.tenantId -ne $tenantId) {
     throw 'Wrong subscription or tenant. Do not deploy.'
 }
 
-terraform -chdir=infra init -input=false -lockfile=readonly
+terraform -chdir=infra init -input=false
 terraform -chdir=infra plan -input=false '-out=bootstrap.tfplan'
 ```
 
@@ -130,6 +125,7 @@ propagation. These infrastructure checks do not replace a later sync canary.
 This is deliberately fire-and-forget: local state is needed only while Terraform
 creates the infrastructure. **First save and retain `tme.outputs.json`**, which
 contains only identifiers needed for cutover, not Terraform state or secrets.
+Keep it locally; it is deliberately excluded from source control.
 Then, after successful deployment and verification:
 
 ```powershell
@@ -169,9 +165,36 @@ when documenting the operational handoff.
 
 The approved bootstrap was deployed to West US 3. Storage account
 `stavmstate92172623a0c0c6` and UAMI `id-avm-repository-sync-state-tme` are in
-`rg-avm-repository-sync-state-tme`. The verified non-secret handoff values are in
-[`tme.outputs.json`](tme.outputs.json).
+`rg-avm-repository-sync-state-tme`. The non-secret handoff values are kept locally
+in `infra/tme.outputs.json`, not in the repository.
 
 Local bootstrap state and the apply plan were discarded after verification.
 Do not apply this configuration again without importing the existing resources.
 Live repo-sync state has not been copied and its GitHub configuration is unchanged.
+
+If the local output file is missing, reconstruct it using read-only Azure queries
+instead of applying the bootstrap again. Sign in to the TME tenant first, then
+run from the repository root:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+$subscriptionId = 'c7fedf3b-cbde-4f68-8c81-7a0313adfc21'
+$resourceGroup = 'rg-avm-repository-sync-state-tme'
+$identity = az identity show --subscription $subscriptionId `
+    --resource-group $resourceGroup --name id-avm-repository-sync-state-tme -o json |
+    ConvertFrom-Json
+$accountName = az storage account show --subscription $subscriptionId `
+    --resource-group $resourceGroup --name stavmstate92172623a0c0c6 --query name -o tsv
+if ($identity.tenantId -ne '70a036f6-8e4d-4615-bad6-149c02e7720d') {
+    throw 'Unexpected identity tenant.'
+}
+@{
+    ARM_BACKEND_CLIENT_ID = $identity.clientId
+    ARM_BACKEND_TENANT_ID = $identity.tenantId
+    ARM_BACKEND_SUBSCRIPTION_ID = $subscriptionId
+    STORAGE_ACCOUNT_NAME = $accountName
+    STORAGE_ACCOUNT_RESOURCE_GROUP_NAME = $resourceGroup
+    STORAGE_ACCOUNT_CONTAINER_NAME = 'tfstate'
+} | ConvertTo-Json | Set-Content -LiteralPath .\infra\tme.outputs.json -Encoding utf8NoBOM
+```

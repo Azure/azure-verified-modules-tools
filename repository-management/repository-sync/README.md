@@ -53,7 +53,9 @@ runtime state identity cross-tenant or provider-management permissions.
 1. Deploy the [Terraform AVM bootstrap](../../../infra/README.md). Save its
    `workflowVariables` output to `infra/tme.outputs.json` before discarding the
    local bootstrap state. This non-secret file contains the six new environment
-   values. Do not configure them yet.
+   values and is ignored by Git. For an already-deployed bootstrap with no local
+   file, use the infrastructure README's read-only output recovery commands.
+   Do not configure GitHub variables yet.
 2. Merge the tools change, then pause automatic sync and agree that no other
    operators will run manual sync or Terraform during the copy:
 
