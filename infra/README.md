@@ -61,6 +61,12 @@ disabled, and runs `validate`. It does not plan or apply Azure changes.
 The provider lock file is source-controlled; `.terraform`, plans, and state are
 not. Use `terraform -chdir=infra init -backend=false` when intentionally updating
 dependencies, then review and commit the resulting lock-file changes.
+Refresh hashes for the supported platforms before committing a dependency update:
+
+```powershell
+terraform -chdir=infra providers lock -platform=linux_amd64 -platform=linux_arm64 `
+    -platform=windows_amd64 -platform=darwin_amd64 -platform=darwin_arm64
+```
 
 ## Deploy once
 
@@ -158,3 +164,14 @@ under a separate migration approval.
 Record the retained infrastructure and non-secret outputs in
 [Azure-Verified-Modules-Docs](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
 when documenting the operational handoff.
+
+## Deployed bootstrap
+
+The approved bootstrap was deployed to West US 3. Storage account
+`stavmstate92172623a0c0c6` and UAMI `id-avm-repository-sync-state-tme` are in
+`rg-avm-repository-sync-state-tme`. The verified non-secret handoff values are in
+[`tme.outputs.json`](tme.outputs.json).
+
+Local bootstrap state and the apply plan were discarded after verification.
+Do not apply this configuration again without importing the existing resources.
+Live repo-sync state has not been copied and its GitHub configuration is unchanged.

@@ -1,6 +1,6 @@
 # Terraform AVM state bootstrap
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-08
 **Updated**: 2026-09-08
 **Branch**: `jaredfholgate-terraform-state-migration`
@@ -20,10 +20,10 @@ or changing its GitHub settings is not authorized by this deployment request.
 - [x] Replace Bicep with AVM resource-group, storage, and identity modules.
 - [x] Preserve federation, least-privilege RBAC, versioning, soft delete, and lock.
 - [x] Update build/CI/tests and both deployment/cutover runbooks.
-- [ ] Validate and commit/push the updated existing contribution.
-- [ ] Inspect the plan and deploy only the approved TME bootstrap resources.
-- [ ] Verify Entra-only settings and save non-secret handoff outputs.
-- [ ] Discard successful bootstrap state/plans without destroying resources.
+- [x] Validate and commit/push the updated existing contribution.
+- [x] Inspect the plan and deploy only the approved TME bootstrap resources.
+- [x] Verify Entra-only settings and save non-secret handoff outputs.
+- [x] Discard successful bootstrap state/plans without destroying resources.
 
 ## Validation
 
@@ -41,8 +41,23 @@ or changing its GitHub settings is not authorized by this deployment request.
   The dedicated resource group does not already exist; Storage and
   ManagedIdentity resource providers are registered.
 - User activated deployment access; target permissions now include `*`.
+- Apply completed with nine additions, zero changes, zero destroys.
+- Azure readback confirms `allowSharedKeyAccess=false`,
+  `allowBlobPublicAccess=false`, `defaultToOAuthAuthentication=true`,
+  private container access, ZRS/West US 3, versioning, seven-day retention,
+  exact federation, and the deletion lock.
+- UAMI client ID: `1634c564-8f0f-4a24-8de9-1531d9dcc6ec`.
+  Its only role is Blob Data Contributor at the `tfstate` container.
+  Role assignment ID: `6ed9c0be-f855-898b-e7e2-c91e10aebb47`.
+- Saved `infra/tme.outputs.json` and compared all six values with Terraform
+  outputs before deleting local state, its backup, and the apply plan.
+- CI exposed missing Linux package hashes with a readonly lock file.
+  Refreshed signed provider checksums for Linux AMD64/ARM64, Windows AMD64,
+  and macOS AMD64/ARM64 without changing provider versions.
 
 ## Blockers or dependencies
 
 No dependency on the unreleased Terraform backend environment-variable feature.
-Keep local state on an interrupted/failed apply until it can be reconciled.
+The infrastructure is deployed; the live repo-sync state migration and GitHub
+configuration switch remain separate, unapproved operations. Do not reapply
+the bootstrap after discarding its local state without importing resources.
