@@ -145,6 +145,9 @@ runtime state identity cross-tenant or provider-management permissions.
    if (@($source | Where-Object { $_.name -notmatch '^[A-Za-z0-9._-]+\.tfstate$' }).Count) {
      throw 'Unexpected blob names/workspaces; review the inventory before copying.'
    }
+   if ($IsWindows -and @($source | Group-Object { $_.name.ToLowerInvariant() } | Where-Object Count -gt 1).Count) {
+     throw 'Case-distinct blob names require case-sensitive staging or case-safe local filenames; do not batch-download them on Windows.'
+   }
    $source | ConvertTo-Json | Set-Content "$backup/source-inventory.json"
    az storage blob download-batch --source $sourceContainer --destination "$backup/source" `
      --account-name $sourceAccount --subscription $sourceSubscription --auth-mode login --output none
@@ -181,6 +184,11 @@ runtime state identity cross-tenant or provider-management permissions.
    leases; retain the source account for historical recovery. If interrupted,
    leave automatic sync paused and reconcile the destination against the saved
    manifest rather than blindly rerunning or overwriting blobs.
+
+   The completed migration preserved both
+   `avm-res-redhatopenShift-openshiftcluster.tfstate` and
+   `avm-res-redhatopenshift-openshiftcluster.tfstate` using case-safe local
+   filenames and exact remote keys.
 4. Still disabled, inspect `target-variables.json`, then set or confirm only the
    five backend values:
 
