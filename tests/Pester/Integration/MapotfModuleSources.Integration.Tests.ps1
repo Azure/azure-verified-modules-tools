@@ -129,7 +129,10 @@ variable "a_optional" {
         $revision = (Invoke-ModuleSourceProcess -FilePath $script:gitPath -WorkingDirectory $repository -ArgumentList @(
             'rev-parse', 'HEAD'
         )).StdOut.Trim()
-        $source = 'git::' + ([uri]$repository).AbsoluteUri
+        $repositoryUri = [UriBuilder]::new('file', '', -1, $repository).Uri
+        $repositoryUri.IsFile | Should -BeTrue
+        $repositoryUri.LocalPath | Should -BeExactly $repository
+        $source = 'git::' + $repositoryUri.AbsoluteUri
         if ($Subdirectory) {
             $source += '//' + $Subdirectory
         }
