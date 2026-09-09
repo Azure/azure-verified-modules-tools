@@ -17,14 +17,17 @@ The upstream fix belongs in `Azure/mapotf`: resolve the synthetic module `x`
 through Terraform's module manifest before inspecting its variables.
 This slice covers AVM regression coverage and adoption of the patched release.
 
+Upstream: [Azure/mapotf#127](https://github.com/Azure/mapotf/pull/127).
+Consumer: [#108](https://github.com/Azure/azure-verified-modules-tools/pull/108).
+
 ## Checklist
 
 - [x] Identify the shared failure and confirm the upstream hardcoded directory.
-- [ ] Implement and submit the upstream mapotf fix.
+- [x] Implement and submit the upstream mapotf fix.
 - [x] Add deterministic AVM coverage for Git module subdirectory ordering.
 - [ ] Publish the upstream patch after approval and refresh verified tool pins.
 - [ ] Run focused integration coverage and the pre-commit gate.
-- [ ] Commit, push, and open the AVM update for review.
+- [x] Commit, push, and open the AVM update as a dependency-blocked draft.
 
 ## Validation
 
@@ -39,6 +42,11 @@ This slice covers AVM regression coverage and adoption of the patched release.
   `0.1.12-dev` Windows candidate, including a second identical transform.
   The test file accepts the candidate through Pester container data
   (`MapotfPath`); normal runs still use the verified pinned binary.
+- Repeated the three-case integration run against the final local binary from
+  upstream commit `16504384939db91d28c6afdd0dfe88b496b67fd5`: all passed.
+  The binary SHA256 is
+  `85b99a14703924fd40af1bebcf3e425ddc952bdc62a20e182d3477bfbcab6d60`;
+  it is an unsigned development artifact, not a release asset.
 - `.\build.ps1 pre-commit`: passed with 1,043 unit cases passed, eight skipped,
   and 29 component cases passed. PSScriptAnalyzer reported 162 non-blocking
   warnings and recovered after its existing transient-crash retries.
