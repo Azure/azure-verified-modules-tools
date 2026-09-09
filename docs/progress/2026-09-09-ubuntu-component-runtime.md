@@ -1,6 +1,6 @@
 # Ubuntu component runtime
 
-**Status**: complete
+**Status**: blocked
 **Started**: 2026-09-09
 **Updated**: 2026-09-09
 **Branch**: `jaredfholgate-fix-mapotf-errors`
@@ -35,7 +35,7 @@ Ordinary JIT compilation, all test suites, and coverage thresholds remain intact
 - [x] Compare matching Linux runtime versions and identify the upstream defect.
 - [x] Apply the approved CI-only workaround without weakening assertions.
 - [x] Run the local pre-commit gate, including the workflow-environment guard.
-- [x] Commit and push the approved mitigation for full-matrix CI.
+- [ ] Push the approved mitigation for full-matrix CI.
 
 ## Validation
 
@@ -56,5 +56,10 @@ Ordinary JIT compilation, all test suites, and coverage thresholds remain intact
   No tests or assertions are skipped by the workaround.
 
 ## Blockers or dependencies
+
+The mitigation is committed locally as `f80f4be`, but GitHub rejected the push
+because the session's OAuth token lacks the `workflow` scope required to update
+`.github/workflows/ci.yml`. An authorized push is required before the full matrix
+can run.
 
 The user owns merging and publishing. No production execution is needed.
