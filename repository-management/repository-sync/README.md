@@ -16,15 +16,27 @@ All runtime settings below are GitHub **`avm` environment variables**, not secre
 | Settings | Purpose |
 | --- | --- |
 | `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` | Existing provider identity and Azure resource targets; do not change these during migration |
-| `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID` | State-only identity; set all three together |
-| `STORAGE_ACCOUNT_NAME`, `STORAGE_ACCOUNT_RESOURCE_GROUP_NAME`, `STORAGE_ACCOUNT_CONTAINER_NAME` | State location |
+| `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID` | TME state-only identity |
+| `ARM_BACKEND_STORAGE_ACCOUNT_NAME`, `ARM_BACKEND_STORAGE_CONTAINER_NAME` | TME state location, selected with the state identity |
+| `STORAGE_ACCOUNT_NAME`, `STORAGE_ACCOUNT_CONTAINER_NAME` | Original state location; keep unchanged for the original workflow and rollback |
 
-With no backend identity variables, existing authentication is unchanged. A
-partial or invalid identity is rejected before repository mutations. The sync
-script passes the complete backend identity through `terraform init
+Set all five `ARM_BACKEND_*` values together. They can be staged while `main`
+still runs the original workflow: it does not consume these variables. With all
+five unset, the updated workflow selects the original provider identity and
+storage together. Partial overrides are rejected before repository mutations;
+it never combines TME identity with the original account by fallback.
+
+The sync script passes the complete backend configuration through `terraform init
 -backend-config`, together with Entra/OIDC authentication and disabled CLI/MSI
 fallback. This works with released Terraform: these workflow variables do not
 require native Terraform support for backend-specific environment variables.
+
+The runtime no longer accepts a state resource-group name. Entra/OIDC access
+uses the standard blob endpoint with `lookup_blob_endpoint=false`, and
+blob-lease recovery uses account/container/blob names. Retain
+`STORAGE_ACCOUNT_RESOURCE_GROUP_NAME` for the original workflow; the deployed
+resource group is still needed for bootstrap and management commands, not
+runtime state access.
 
 Only non-secret identifiers and authentication flags are persisted in backend
 configuration and plans. GitHub provides fresh OIDC tokens for both identities;
@@ -42,6 +54,23 @@ When its value is `true`, scheduled and repository-dispatch runs are skipped.
 Manual runs remain available for operator-controlled canaries. Other workflows
 and module test identities are unaffected.
 
+## Isolated branch testing
+
+After an approved snapshot copy, test the migration branch explicitly without
+merging or changing the original storage variables:
+
+```powershell
+$migrationRef = 'YOUR-MIGRATION-BRANCH'
+gh workflow run repository-management-sync.yml --repo Azure/azure-verified-modules-tools `
+    --ref $migrationRef -f repositories=avm-ptn-example-repo `
+    -f plan_only=true -f sync_project_items=false
+```
+
+Use **plan-only**. Separate variables isolate configuration, not the resources
+tracked by the two state copies. Never apply from both copies. A snapshot
+becomes stale if the original sync writes again; copy fresh state during the
+final freeze rather than treating an old test copy as authoritative.
+
 ## Cutover (operator only)
 
 Do not run these commands without approval for the production change. Use
@@ -52,20 +81,25 @@ runtime state identity cross-tenant or provider-management permissions.
 
 1. Deploy the [Terraform AVM bootstrap](../../../infra/README.md). Save its
    `workflowVariables` output to `infra/tme.outputs.json` before discarding the
-   local bootstrap state. This non-secret file contains the six new environment
+   local bootstrap state. This non-secret file contains the five new environment
    values and is ignored by Git. For an already-deployed bootstrap with no local
    file, use the infrastructure README's read-only output recovery commands.
-   Do not configure GitHub variables yet.
-2. Merge the tools change, then pause automatic sync and agree that no other
+   The new backend variables may already be staged; leave original variables unchanged.
+2. Before merging the tools change, disable the workflow, set the pause flag,
+   and agree that no other
    operators will run manual sync or Terraform during the copy:
 
    ```powershell
+   gh workflow disable repository-management-sync.yml --repo Azure/azure-verified-modules-tools
    gh variable set AVM_SYNC_PAUSED --repo Azure/azure-verified-modules-tools --body true
    gh run list --repo Azure/azure-verified-modules-tools --workflow repository-management-sync.yml --limit 100
    ```
 
    Wait for **all** active, waiting, and queued runs to finish. Do not cancel a
    state writer or break a lease to speed up the migration.
+   Disabling is necessary while the original `main` workflow does not yet
+   honor `AVM_SYNC_PAUSED`. Keep the workflow disabled until the copy and merge
+   are complete.
 3. Run the copy below from the repository root on a trusted machine. It refuses
    a populated destination, leased source blobs, unexpected blob names, and
    byte mismatches. Keep the protected local backup until cutover succeeds.
@@ -120,8 +154,8 @@ runtime state identity cross-tenant or provider-management permissions.
 
    az login --tenant $targetTenant --output none
    az account set --subscription $targetSubscription
-   $targetAccount = $settings.STORAGE_ACCOUNT_NAME
-   $targetContainer = $settings.STORAGE_ACCOUNT_CONTAINER_NAME
+   $targetAccount = $settings.ARM_BACKEND_STORAGE_ACCOUNT_NAME
+   $targetContainer = $settings.ARM_BACKEND_STORAGE_CONTAINER_NAME
    if (@(Get-StateBlobs $targetAccount $targetContainer $targetSubscription).Count) {
      throw 'Destination is not empty; do not overwrite an existing state.'
    }
@@ -147,18 +181,33 @@ runtime state identity cross-tenant or provider-management permissions.
    leases; retain the source account for historical recovery. If interrupted,
    leave automatic sync paused and reconcile the destination against the saved
    manifest rather than blindly rerunning or overwriting blobs.
-4. Still paused, inspect `target-variables.json`, then set its six values:
+4. Still disabled, inspect `target-variables.json`, then set or confirm only the
+   five backend values:
 
    ```powershell
-   foreach ($setting in $settings.PSObject.Properties) {
-     gh variable set $setting.Name --repo $repo --env avm --body ([string]$setting.Value)
+   $backendVariableNames = @(
+     'ARM_BACKEND_CLIENT_ID', 'ARM_BACKEND_TENANT_ID', 'ARM_BACKEND_SUBSCRIPTION_ID',
+     'ARM_BACKEND_STORAGE_ACCOUNT_NAME', 'ARM_BACKEND_STORAGE_CONTAINER_NAME'
+   )
+   foreach ($name in $backendVariableNames) {
+     if ([string]::IsNullOrWhiteSpace($settings.$name)) { throw "Missing $name." }
+   }
+   foreach ($name in $backendVariableNames) {
+     gh variable set $name --repo $repo --env avm --body ([string]$settings.$name)
    }
    ```
 
-   Leave provider `ARM_*`, management group, identity resource group, and test
+   Leave the original `STORAGE_ACCOUNT_*`, provider `ARM_*`, management group,
+   identity resource group, and test
    subscription variables unchanged. No state migration flags are needed during
    normal init: fresh workflow checkouts select the copied state by the unchanged
    `<repoId>.tfstate` key.
+   Merge the reviewed tools change under the cutover approval, then enable the
+   workflow while `AVM_SYNC_PAUSED` is still `true`:
+
+   ```powershell
+   gh workflow enable repository-management-sync.yml --repo $repo
+   ```
 5. Run a manual plan-only canary from `main` while automated sync remains paused:
 
    ```powershell
@@ -188,9 +237,11 @@ runtime state identity cross-tenant or provider-management permissions.
 ## Rollback
 
 Pause automatic sync and drain all writers again. **Before any apply has written
-to TME**, restore the three original `STORAGE_ACCOUNT_*` variables and remove all
-three `ARM_BACKEND_*_ID` variables together. Use the saved original-variable file
-and confirm a canary plan before resuming.
+to TME**, remove all five `ARM_BACKEND_*` variables together; the updated
+workflow then uses the original provider identity and unchanged
+`STORAGE_ACCOUNT_*` account/container values. Keep sync disabled while removing
+the values so no run sees a partial configuration. Confirm a canary plan before
+resuming.
 
 **After an apply has written to TME, the old blobs are stale.** Do not simply
 point the workflow back. Export the latest TME state, verify lineage/serial and

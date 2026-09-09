@@ -55,6 +55,43 @@ function Resolve-RepositorySyncStateIdentity {
     }
 }
 
+function Resolve-RepositorySyncStateConfiguration {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Backend,
+        [Parameter(Mandatory)]
+        [hashtable]$Legacy
+    )
+
+    $names = @('TenantId', 'SubscriptionId', 'ClientId', 'StorageAccountName', 'ContainerName')
+    $configured = @($names | Where-Object { -not [string]::IsNullOrWhiteSpace($Backend[$_]) })
+    if ($configured.Count -gt 0 -and $configured.Count -ne $names.Count) {
+        throw [System.ArgumentException]::new(
+            'Set all five backend identity and storage variables, or leave all five unset. Backend and original settings cannot be mixed.'
+        )
+    }
+    $selected = if ($configured.Count -eq 0) { $Legacy } else { $Backend }
+    $identity = Resolve-RepositorySyncStateIdentity `
+        -TenantId $selected.TenantId -SubscriptionId $selected.SubscriptionId -ClientId $selected.ClientId
+    if ($null -eq $identity) {
+        throw [System.ArgumentException]::new('The state identity is not configured.')
+    }
+    if ($selected.StorageAccountName -cnotmatch '^[a-z0-9]{3,24}$') {
+        throw [System.ArgumentException]::new('The state storage account must have 3-24 lowercase letters or digits.')
+    }
+    if ($selected.ContainerName -cnotmatch '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$' -or
+        $selected.ContainerName.Contains('--')) {
+        throw [System.ArgumentException]::new('The state container must have 3-63 lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.')
+    }
+    return [pscustomobject]@{
+        TenantId = $identity.TenantId
+        SubscriptionId = $identity.SubscriptionId
+        ClientId = $identity.ClientId
+        StorageAccountName = $selected.StorageAccountName
+        ContainerName = $selected.ContainerName
+    }
+}
+
 # Runs `terraform init`. In repository-creation mode this is a local-backend
 # bootstrap (writes `backend_override.tf` first); otherwise it points at the
 # remote AzureRM backend using the supplied state-storage parameters.
@@ -64,7 +101,6 @@ function Invoke-TerraformInit {
         [bool]$repositoryCreationModeEnabled,
         [string]$repoId,
         [string]$orgAndRepoName,
-        [string]$stateResourceGroupName,
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
         [string]$stateTenantId,
@@ -95,7 +131,6 @@ terraform {
         $initArguments = @(
             "init",
             "-upgrade",
-            "-backend-config=`"resource_group_name=$stateResourceGroupName`"",
             "-backend-config=`"storage_account_name=$stateStorageAccountName`"",
             "-backend-config=`"container_name=$stateContainerName`"",
             "-backend-config=`"key=$($repoId).tfstate`""

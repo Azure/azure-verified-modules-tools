@@ -1,12 +1,11 @@
 output "workflowVariables" {
   description = "Non-secret repository-sync workflow inputs to configure in the existing GitHub avm environment after state migration. These are not applied automatically."
   value = {
-    ARM_BACKEND_CLIENT_ID               = module.backend_identity.client_id
-    ARM_BACKEND_TENANT_ID               = module.backend_identity.tenant_id
-    ARM_BACKEND_SUBSCRIPTION_ID         = var.subscription_id
-    STORAGE_ACCOUNT_NAME                = module.state_storage.name
-    STORAGE_ACCOUNT_RESOURCE_GROUP_NAME = module.state_resource_group.name
-    STORAGE_ACCOUNT_CONTAINER_NAME      = module.state_storage.containers["tfstate"].name
+    ARM_BACKEND_CLIENT_ID              = module.backend_identity.client_id
+    ARM_BACKEND_TENANT_ID              = module.backend_identity.tenant_id
+    ARM_BACKEND_SUBSCRIPTION_ID        = var.subscription_id
+    ARM_BACKEND_STORAGE_ACCOUNT_NAME   = module.state_storage.name
+    ARM_BACKEND_STORAGE_CONTAINER_NAME = module.state_storage.containers["tfstate"].name
   }
 }
 

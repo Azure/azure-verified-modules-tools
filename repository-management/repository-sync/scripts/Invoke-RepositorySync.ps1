@@ -10,7 +10,6 @@
 param(
     [switch]$repositoryCreationModeEnabled,
     [string]$stateStorageAccountName = "",
-    [string]$stateResourceGroupName = "",
     [string]$stateContainerName = "",
     [string]$stateTenantId = "",
     [string]$stateSubscriptionId = "",
@@ -203,7 +202,6 @@ $issueLog = Invoke-TerraformInit `
     -repositoryCreationModeEnabled $repositoryCreationModeEnabled.IsPresent `
     -repoId $repoId `
     -orgAndRepoName $orgAndRepoName `
-    -stateResourceGroupName $stateResourceGroupName `
     -stateStorageAccountName $stateStorageAccountName `
     -stateContainerName $stateContainerName `
     -stateTenantId $stateTenantId `

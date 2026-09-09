@@ -77,11 +77,13 @@ Describe 'TME state infrastructure contract' {
         $script:outputs | Should -Match 'output "workflowVariables"'
         foreach ($name in @(
             'ARM_BACKEND_CLIENT_ID', 'ARM_BACKEND_TENANT_ID', 'ARM_BACKEND_SUBSCRIPTION_ID',
-            'STORAGE_ACCOUNT_NAME', 'STORAGE_ACCOUNT_RESOURCE_GROUP_NAME', 'STORAGE_ACCOUNT_CONTAINER_NAME'
+            'ARM_BACKEND_STORAGE_ACCOUNT_NAME', 'ARM_BACKEND_STORAGE_CONTAINER_NAME'
         )) {
             $script:outputs | Should -Match ("(?m)^\s+" + $name + '\s*=')
         }
         $script:outputs | Should -Not -Match 'access_key|sas_token|client_secret'
+        $script:outputs | Should -Not -Match '(?m)^\s+STORAGE_ACCOUNT_(NAME|RESOURCE_GROUP_NAME|CONTAINER_NAME)\s*='
+        $script:outputs | Should -Match 'output "resourceGroupId"'
         Test-Path (Join-Path $script:root 'infra' 'main.bicep') | Should -BeFalse
         Test-Path (Join-Path $script:root 'infra' 'main.bicepparam') | Should -BeFalse
     }

@@ -106,13 +106,15 @@ if ($settings.ARM_BACKEND_SUBSCRIPTION_ID -ne $subscriptionId -or
     throw 'Unexpected bootstrap outputs. Keep state and investigate.'
 }
 $settingsJson | Set-Content -LiteralPath .\infra\tme.outputs.json -Encoding utf8NoBOM
+$resourceGroupId = terraform -chdir=infra output -raw resourceGroupId
+$resourceGroup = ($resourceGroupId -split '/')[-1]
 
 az storage account show --subscription $subscriptionId `
-    --resource-group $settings.STORAGE_ACCOUNT_RESOURCE_GROUP_NAME `
-    --name $settings.STORAGE_ACCOUNT_NAME `
+    --resource-group $resourceGroup `
+    --name $settings.ARM_BACKEND_STORAGE_ACCOUNT_NAME `
     --query '{name:name,location:location,sharedKeys:allowSharedKeyAccess,publicBlobs:allowBlobPublicAccess,httpsOnly:enableHttpsTrafficOnly}' -o json
 az identity federated-credential list --subscription $subscriptionId `
-    --resource-group $settings.STORAGE_ACCOUNT_RESOURCE_GROUP_NAME `
+    --resource-group $resourceGroup `
     --identity-name id-avm-repository-sync-state-tme -o json
 ```
 
@@ -149,11 +151,15 @@ or discard the state blobs used by the existing sync workflow.
 `workflowVariables`/`tme.outputs.json` contains:
 
 - `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID`
-- `STORAGE_ACCOUNT_NAME`, `STORAGE_ACCOUNT_RESOURCE_GROUP_NAME`, `STORAGE_ACCOUNT_CONTAINER_NAME`
+- `ARM_BACKEND_STORAGE_ACCOUNT_NAME`, `ARM_BACKEND_STORAGE_CONTAINER_NAME`
 
 These are workflow inputs translated into non-secret `-backend-config` settings
-by the repo-sync script; released Terraform is sufficient. Do not update GitHub
-variables just because bootstrap succeeded. Follow the
+by the repo-sync script; released Terraform is sufficient. The resource group is
+available separately as `resourceGroupId` for management commands; runtime
+Entra-authenticated state access does not need it. The five backend variables
+can be staged without modifying the original `STORAGE_ACCOUNT_*` values. Do not
+run against TME until state has been copied, and do not merge or apply until the
+cutover is approved. Follow the
 [state cutover and rollback runbook](../repository-management/repository-sync/README.md)
 under a separate migration approval.
 
@@ -170,7 +176,8 @@ in `infra/tme.outputs.json`, not in the repository.
 
 Local bootstrap state and the apply plan were discarded after verification.
 Do not apply this configuration again without importing the existing resources.
-Live repo-sync state has not been copied and its GitHub configuration is unchanged.
+Live repo-sync state has not been copied. Backend variables are staged separately;
+the original provider and storage variables remain unchanged.
 
 If the local output file is missing, reconstruct it using read-only Azure queries
 instead of applying the bootstrap again. Sign in to the TME tenant first, then
@@ -193,8 +200,7 @@ if ($identity.tenantId -ne '70a036f6-8e4d-4615-bad6-149c02e7720d') {
     ARM_BACKEND_CLIENT_ID = $identity.clientId
     ARM_BACKEND_TENANT_ID = $identity.tenantId
     ARM_BACKEND_SUBSCRIPTION_ID = $subscriptionId
-    STORAGE_ACCOUNT_NAME = $accountName
-    STORAGE_ACCOUNT_RESOURCE_GROUP_NAME = $resourceGroup
-    STORAGE_ACCOUNT_CONTAINER_NAME = 'tfstate'
+    ARM_BACKEND_STORAGE_ACCOUNT_NAME = $accountName
+    ARM_BACKEND_STORAGE_CONTAINER_NAME = 'tfstate'
 } | ConvertTo-Json | Set-Content -LiteralPath .\infra\tme.outputs.json -Encoding utf8NoBOM
 ```
