@@ -974,6 +974,20 @@ Describe 'Managed-file repository id resolution (helpers)' {
         }
     }
 
+    It 'strips the terraform-azure- prefix without disturbing the longer provider prefixes' {
+        InModuleScope 'Avm.Authoring' {
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azure-avm-res-mock' | Should -Be 'avm-res-mock'
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azure-avm-ptn-alz-application-landing-zone-cicd-bootstrap-github' |
+                Should -Be 'avm-ptn-alz-application-landing-zone-cicd-bootstrap-github'
+
+            # The trailing hyphen keeps these disjoint: 'terraform-azurerm-' and
+            # 'terraform-azapi-' diverge from 'terraform-azure-' at the character
+            # after 'terraform-azure', so no ordering of the list can mis-strip them.
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azurerm-avm-res-foo' | Should -Be 'avm-res-foo'
+            ConvertTo-AvmManagedFilesRepoId 'terraform-azapi-avm-res-bar'   | Should -Be 'avm-res-bar'
+        }
+    }
+
     It 'extracts the repository leaf from every remote URL shape (F11)' {
         InModuleScope 'Avm.Authoring' {
             Get-AvmRepoLeafFromUrl 'https://github.com/Azure/terraform-azurerm-avm-res-foo'       | Should -Be 'terraform-azurerm-avm-res-foo'

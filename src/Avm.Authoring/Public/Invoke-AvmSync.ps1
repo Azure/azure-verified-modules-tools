@@ -80,7 +80,8 @@ function Invoke-AvmSync {
     .PARAMETER RepoId
         Repository id used to look up overlays/exclusions in config.json.
         Defaults to the leaf of the module root with a leading
-        'terraform-azurerm-' / 'terraform-azapi-' prefix stripped.
+        'terraform-azurerm-' / 'terraform-azapi-' / 'terraform-azure-' prefix
+        stripped.
 
     .PARAMETER Upgrade
         Sync the newest managed-files release instead of the version pinned in
