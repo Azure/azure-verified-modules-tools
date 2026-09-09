@@ -409,6 +409,15 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
+# Local-only one-shot state infrastructure bootstrap artifacts
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/tme.outputs.json
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
+infra/crash*.log
+
 # VS Code files for those working on multiple tools
 .vscode/*
 !.vscode/settings.json

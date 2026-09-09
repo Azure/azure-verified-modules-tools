@@ -10,8 +10,10 @@
 param(
     [switch]$repositoryCreationModeEnabled,
     [string]$stateStorageAccountName = "",
-    [string]$stateResourceGroupName = "",
     [string]$stateContainerName = "",
+    [string]$stateTenantId = "",
+    [string]$stateSubscriptionId = "",
+    [string]$stateClientId = "",
     [string]$identityResourceGroupName = "",
     [bool]$planOnly = $false,
     [string]$repoId = "avm-ptn-example-repo",
@@ -49,6 +51,11 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "CodeQlDefaultSetup.ps1")
 . (Join-Path $libDir "TeamsAndUsers.ps1")
 . (Join-Path $libDir "TerraformOperations.ps1")
+
+if (!$repositoryCreationModeEnabled) {
+    $null = Resolve-RepositorySyncStateIdentity `
+        -TenantId $stateTenantId -SubscriptionId $stateSubscriptionId -ClientId $stateClientId
+}
 
 $env:ARM_USE_AZUREAD = "true"
 
@@ -195,9 +202,11 @@ $issueLog = Invoke-TerraformInit `
     -repositoryCreationModeEnabled $repositoryCreationModeEnabled.IsPresent `
     -repoId $repoId `
     -orgAndRepoName $orgAndRepoName `
-    -stateResourceGroupName $stateResourceGroupName `
     -stateStorageAccountName $stateStorageAccountName `
     -stateContainerName $stateContainerName `
+    -stateTenantId $stateTenantId `
+    -stateSubscriptionId $stateSubscriptionId `
+    -stateClientId $stateClientId `
     -issueLog $issueLog
 
 $issueLog = Invoke-TerraformPlanAndApply `
@@ -208,6 +217,7 @@ $issueLog = Invoke-TerraformPlanAndApply `
     -resourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed `
     -stateStorageAccountName $stateStorageAccountName `
     -stateContainerName $stateContainerName `
+    -stateSubscriptionId $stateSubscriptionId `
     -issueLog $issueLog
 
 # Run the complete authoring pre-commit gauntlet after Terraform succeeds. Managed
