@@ -80,6 +80,16 @@ Describe 'CI workflow' {
         $script:ci = Get-Content -LiteralPath $script:ciPath -Raw
     }
 
+    It 'disables shared startup JIT profiles before CI PowerShell processes start' {
+        $globalEnvironment = [regex]::Match($script:ci, '(?ms)^env:\r?\n(?<body>.*?)(?=^\S|\z)')
+        $globalEnvironment.Success | Should -BeTrue
+        $globalEnvironment.Groups['body'].Value |
+            Should -Match "(?m)^  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'\r?$"
+        ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
+        $script:ci | Should -Match 'run: \./build\.ps1 ci'
+        $script:ci | Should -Match 'run: \./build\.ps1 integration'
+    }
+
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
         $script:ci | Should -Match 'GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}'
     }

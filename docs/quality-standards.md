@@ -238,6 +238,13 @@ Three layers; each runs with its own tag filter.
 
 **CI matrix.** Every PR runs Unit + Component on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Integration runs on every PR via the `integration` job in the `ci` workflow on each.
 
+**PowerShell startup-profile workaround.** CI sets
+`DOTNET_MultiCoreJitMinNumCpus=7fffffff` before launching PowerShell to avoid
+[shared startup-profile corruption](https://github.com/dotnet/runtime/issues/121977).
+This internal runtime setting disables startup-profile optimization, not ordinary
+JIT compilation, coverage, or assertions. It does not change the shipped module.
+Revisit the workaround when the upstream defect is fixed or the runtime changes.
+
 > See also: [`avm-implementation-spec.md` §18](avm-implementation-spec.md#18-testing), [`avm-implementation-spec.md` §19](avm-implementation-spec.md#19-static-analysis-and-pre-commit).
 
 ---
