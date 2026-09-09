@@ -15,6 +15,9 @@ param(
     "Azure-Verified-Modules-Grept",
     "avmtester",
     "tflint-ruleset-avm",
+    "policy-library-avm",
+    "mapotf",
+    "azure-verified-modules-tools",
     "avm-gh-app",
     "avm-container-images-cicd-agents-and-runners",
     "Azure-Verified-Modules-Workflows"

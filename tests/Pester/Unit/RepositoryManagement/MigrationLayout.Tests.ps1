@@ -104,12 +104,16 @@ Describe "Repository management migration layout" {
             "ARM_CLIENT_ID"
             "ARM_SUBSCRIPTION_ID"
             "ARM_TENANT_ID"
+            "ARM_BACKEND_CLIENT_ID"
+            "ARM_BACKEND_SUBSCRIPTION_ID"
+            "ARM_BACKEND_TENANT_ID"
+            "ARM_BACKEND_STORAGE_ACCOUNT_NAME"
+            "ARM_BACKEND_STORAGE_CONTAINER_NAME"
             "AVM_APP_CLIENT_ID"
             "IDENTITY_RESOURCE_GROUP_NAME"
             "MANAGEMENT_GROUP_ID"
             "STORAGE_ACCOUNT_CONTAINER_NAME"
             "STORAGE_ACCOUNT_NAME"
-            "STORAGE_ACCOUNT_RESOURCE_GROUP_NAME"
             "TEST_SUBSCRIPTION_IDS"
         )
 

@@ -280,6 +280,39 @@ task lint {
     }
 }
 
+task 'test-repository-management' {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    $config = New-PesterConfiguration
+    $config.Run.Path = Join-Path $script:testsRoot 'Unit' 'RepositoryManagement'
+    $config.Run.PassThru = $true
+    $config.Run.Exit = $false
+    $config.Output.Verbosity = 'Detailed'
+    $config.Output.StackTraceVerbosity = 'Full'
+    $config.TestResult.Enabled = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath = script:Get-AvmTestResultPath -Tier 'repository-management'
+    $result = script:Invoke-AvmPester -Configuration $config
+    if ($result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
+        throw 'Repository management tests failed.'
+    }
+}
+
+task infra {
+    $infraRoot = Join-Path $script:repoRoot 'infra'
+    $initArguments = @('init', '-backend=false', '-input=false')
+    foreach ($arguments in @(
+        @('fmt', '-check', '-diff'),
+        $initArguments,
+        @('validate', '-no-color')
+    )) {
+        & terraform "-chdir=$infraRoot" @arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Terraform state bootstrap validation failed: $($arguments[0])."
+        }
+    }
+    Write-Build Green '  infra OK: Terraform AVM bootstrap validated (no deployment)'
+}
+
 task test {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 

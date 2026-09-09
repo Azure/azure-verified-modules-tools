@@ -47,6 +47,7 @@ updates:
 
   - package-ecosystem: terraform
     directories:
+      - /infra
       - /repository-management/repository-sync/terraform
       - /repository-management/repository-sync/terraform/modules/**
     schedule:

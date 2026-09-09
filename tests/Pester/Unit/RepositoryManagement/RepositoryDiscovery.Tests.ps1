@@ -125,4 +125,41 @@ Describe "Repository discovery built-in exclusions" {
         $repositories[0].repoId | Should -Be "avm-res-normal"
         $repositories[0].repoName | Should -Be "terraform-azurerm-avm-res-normal"
     }
+
+    It "skips tooling repositories before validation without warning or issue artifacts" -ForEach @(
+        @{ ToolingName = "policy-library-avm" }
+        @{ ToolingName = "mapotf" }
+        @{ ToolingName = "azure-verified-modules-tools" }
+        @{ ToolingName = "POLICY-LIBRARY-AVM" }
+        @{ ToolingName = "MAPOTF" }
+        @{ ToolingName = "AZURE-VERIFIED-MODULES-TOOLS" }
+    ) {
+        $result = @(
+            Invoke-RepositoryDiscovery -InstalledRepositories @(
+                (New-TestRepository -Name $ToolingName)
+                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
+            ) 3>&1
+        )
+        $warningRecords = @($result | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+        $repositories = @($result | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+
+        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
+        $warningRecords | Should -BeNullOrEmpty
+        Test-Path (Join-Path $TestDrive "issues.log.json") | Should -BeFalse
+    }
+
+    It "still reports an unexpected non-module repository" {
+        $repositories = @(
+            Invoke-RepositoryDiscovery -InstalledRepositories @(
+                (New-TestRepository -Name "unexpected-repository")
+                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
+            )
+        )
+        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
+        $issues = @(Get-Content -Raw (Join-Path $TestDrive "issues.log.json") | ConvertFrom-Json)
+        $issues.Count | Should -Be 1
+        $issues[0].repoId | Should -Be "unexpected-repository"
+        $issues[0].severity | Should -Be "error"
+        $issues[0].message | Should -BeLike "*does not match the required naming convention*"
+    }
 }
