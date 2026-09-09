@@ -90,6 +90,16 @@ Describe 'CI workflow' {
                 '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 2
         $script:ci | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
     }
+
+    It 'runs real-binary static integration without Azure credentials' {
+        $integration = [regex]::Match(
+            $script:ci,
+            '(?ms)^  integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
+        $integration | Should -Not -Match 'azure/login'
+        $integration | Should -Not -Match 'id-token:\s*write'
+        $integration | Should -Not -Match 'ARM_(CLIENT|TENANT|SUBSCRIPTION)_ID'
+        $integration | Should -Not -Match 'environment:\s*avm'
+    }
 }
 
 Describe 'Release workflow' {
