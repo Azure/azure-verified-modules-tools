@@ -31,16 +31,22 @@ GitHub App but are not module repositories and should not emit discovery errors.
   at `d98854c94b0ded26c2107a17a455df080790966c` confirms all three tooling
   repositories are skipped through the exclusion list, with no naming-error
   annotations. TME OIDC login, backend initialization, and Terraform plan pass.
-- The full workflow failed later during MaPoTF authoring transforms because
+- Attempts 1 and 2 failed later during MaPoTF authoring transforms because
   GitHub returned HTTP 500 while downloading AzAPI 2.12.0. One failed-job retry
   hit the same download failure on a different example. No code was changed to
   mask the external error; no apply ran. The earlier complete TME canary remains
   recorded in `2026-09-09-example-repo-tme-canary.md`.
+- [Attempt 3](https://github.com/Azure/azure-verified-modules-tools/actions/runs/34346945719/attempts/3)
+  succeeded at the same tested commit without further code changes. Logs
+  confirm TME backend initialization, `plan_only=true`, four additions, zero
+  changes/destroys, no Terraform apply, and authoring pre-commit with no changes.
+  Project synchronization remained skipped. The download error is no longer
+  a blocker to this canary.
 
 ## Blockers or dependencies
 
 No Azure or GitHub configuration changes; scheduled behavior changes only when
 the reviewed workflow code is merged.
 
-The exclusions are complete. The latest full canary is not green because of the
-separate provider-download failure, not repository discovery or backend access.
+The exclusions and full plan-only canary are complete. Final state migration
+and cutover still require separate approval and a fresh copy under a writer freeze.
