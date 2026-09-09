@@ -32,6 +32,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Avoid shared PowerShell startup-profile corruption: https://github.com/dotnet/runtime/issues/121977
+  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
