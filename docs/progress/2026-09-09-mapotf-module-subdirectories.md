@@ -54,7 +54,9 @@ Consumer: [#108](https://github.com/Azure/azure-verified-modules-tools/pull/108)
 ## Blockers or dependencies
 
 The latest published mapotf version is 0.1.11. The AVM pin must not change until
-the fixed release and its official platform checksums are available. Merging,
-publishing releases, and rerunning repository sync require user confirmation.
+the fixed release and its official platform checksums are available.
+The user owns merging and publishing releases; the agent must not perform
+either operation. Await the user's mapotf 0.1.12 release before refreshing
+the pin. Rerunning repository sync separately requires explicit approval.
 The new integration regression intentionally remains red with the old pin;
 the consumer change must stay draft until adoption of the upstream patch.
