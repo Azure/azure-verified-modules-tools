@@ -115,7 +115,8 @@ function Sync-AvmManagedFile {
         AVM_MANAGED_FILES_REPO_ID environment value or '.avm/managed-files.json'
         repoId override is authoritative; otherwise a candidate is derived from
         the git origin remote, then the working-tree folder name, with a leading
-        'terraform-azurerm-' / 'terraform-azapi-' prefix stripped. Matching a
+        'terraform-azurerm-' / 'terraform-azapi-' / 'terraform-azure-' prefix
+        stripped. Matching a
         config.json repositoryGroups entry adds that group's file groups; every
         repository matches the 'default' group and so receives the shared root
         files. Resolution fails only when no repository id can be determined.
@@ -532,7 +533,8 @@ function ConvertTo-AvmManagedFilesRepoId {
     <#
     .SYNOPSIS
         Normalise a repository name into a managed-files repository id by
-        stripping a leading 'terraform-azurerm-' / 'terraform-azapi-' prefix.
+        stripping a leading 'terraform-azurerm-' / 'terraform-azapi-' /
+        'terraform-azure-' prefix.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -545,7 +547,7 @@ function ConvertTo-AvmManagedFilesRepoId {
     if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
 
     $value = $Name.Trim()
-    foreach ($prefix in @('terraform-azurerm-', 'terraform-azapi-')) {
+    foreach ($prefix in @('terraform-azurerm-', 'terraform-azapi-', 'terraform-azure-')) {
         if ($value.StartsWith($prefix)) {
             $value = $value.Substring($prefix.Length)
             break
@@ -682,7 +684,8 @@ function Resolve-AvmManagedFilesRepoId {
 
         Otherwise a candidate is derived from the git origin remote and from the
         working-tree folder leaf, each normalised by stripping a leading
-        'terraform-azurerm-' / 'terraform-azapi-' prefix. A candidate matching
+        'terraform-azurerm-' / 'terraform-azapi-' / 'terraform-azure-' prefix.
+        A candidate matching
         config.json repositoryGroups membership is preferred so an overlay is not
         lost when only one candidate matches. If neither matches, the origin and
         folder candidates remain valid for root-only sync. An interactive host is
