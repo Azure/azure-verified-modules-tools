@@ -3,24 +3,6 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Get-AvmCatalogPublicationPaths {
-    [CmdletBinding()]
-    param()
-
-    $configuration = Read-AvmCatalogJson -Path (Join-Path $PSScriptRoot '..' 'config.json')
-    $docs = [ordered]@{}
-    foreach ($file in @($configuration.outputs.file) + @('BicepMARModules.json', 'v1/modules.json', 'v1/migration-report.json')) {
-        $docs["docs/$file"] = "docs/static/module-indexes/$file"
-    }
-    return [ordered]@{
-        docs = [ordered]@{ repository = 'Azure/Azure-Verified-Modules'; files = $docs }
-        tools = [ordered]@{
-            repository = 'Azure/azure-verified-modules-tools'
-            files = [ordered]@{ 'tools/config.json' = 'repository-management/repository-config/config.json' }
-        }
-    }
-}
-
 function Assert-AvmCatalogSafePath {
     [CmdletBinding()]
     param([string] $Root, [string] $RelativePath)
@@ -44,13 +26,17 @@ function Assert-AvmCatalogSafePath {
 
 function Test-AvmCatalogPublicationBundle {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string] $Path)
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
 
-    $paths = Get-AvmCatalogPublicationPaths
-    Assert-AvmCatalogSafePath -Root $Path -RelativePath 'plan.json'
-    $plan = Read-AvmCatalogJson -Path (Join-Path $Path 'plan.json')
-    if ($plan.schemaVersion -ne 1) {
-        throw [System.IO.InvalidDataException]::new('Unsupported catalog publication plan.')
+    $paths = Get-AvmCatalogPublicationPaths -Configuration $Configuration
+    $planOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind publication-plan
+    Assert-AvmCatalogSafePath -Root $Path -RelativePath $planOutput.bundlePath
+    $plan = Read-AvmCatalogJson -Path (Join-Path $Path $planOutput.bundlePath)
+    if ($plan.schemaVersion -ne 1 -or $plan['manifestHash'] -cne $Configuration.hash) {
+        throw [System.IO.InvalidDataException]::new('Unsupported or stale catalog publication manifest. Collect and generate again.')
     }
     $expected = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($role in $paths.Keys) {
@@ -87,7 +73,7 @@ function Test-AvmCatalogPublicationBundle {
     if ($plan.outputHashes.Count -ne $expected.Count) {
         throw [System.IO.InvalidDataException]::new('Catalog plan includes unexpected output hashes.')
     }
-    $null = $expected.Add('plan.json')
+    $null = $expected.Add($planOutput.bundlePath)
     $actual = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force)
     foreach ($file in $actual) {
         $relative = [System.IO.Path]::GetRelativePath($Path, $file.FullName).Replace('\', '/')
@@ -98,8 +84,9 @@ function Test-AvmCatalogPublicationBundle {
     if ($actual.Count -ne $expected.Count) {
         throw [System.IO.InvalidDataException]::new('Publication bundle is incomplete.')
     }
-    $schemaPath = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-modules-catalog.schema.json'
-    $catalog = [System.IO.File]::ReadAllText((Join-Path $Path 'docs' 'v1' 'modules.json'))
+    $catalogOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog
+    $schemaPath = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))) $catalogOutput.schema
+    $catalog = [System.IO.File]::ReadAllText((Join-Path $Path $catalogOutput.bundlePath))
     if (-not (Test-Json -Json $catalog -SchemaFile $schemaPath -ErrorAction Stop)) {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }

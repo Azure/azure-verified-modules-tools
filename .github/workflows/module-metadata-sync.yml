@@ -52,10 +52,16 @@ jobs:
           path: tools
           persist-credentials: false
 
+      - name: '[AVM] Read the trusted catalog manifest'
+        id: manifest
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogConfiguration.ps1'
+          & $script -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false | Out-Null
+
       - name: '[AVM] Checkout public legacy catalogs as data'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: Azure/Azure-Verified-Modules
+          repository: ${{ steps.manifest.outputs.documentation-repository }}
           ref: main
           path: input-docs
           persist-credentials: false
@@ -63,7 +69,7 @@ jobs:
       - name: '[AVM] Checkout Bicep sources as data'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: Azure/bicep-registry-modules
+          repository: ${{ steps.manifest.outputs.bicep-repository }}
           ref: main
           path: input-bicep
           persist-credentials: false
@@ -74,7 +80,7 @@ jobs:
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
-          owner: Azure
+          owner: ${{ steps.manifest.outputs.owner }}
           # Read across the app's installed module repositories, not only tools.
           permission-contents: read
           permission-members: read
@@ -125,6 +131,12 @@ jobs:
           path: tools
           persist-credentials: false
 
+      - name: '[AVM] Read the trusted publication manifest'
+        id: manifest
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogConfiguration.ps1'
+          & $script -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false | Out-Null
+
       - name: '[AVM] Download this run catalog bundle'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -144,10 +156,8 @@ jobs:
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
-          owner: Azure
-          repositories: |
-            Azure-Verified-Modules
-            azure-verified-modules-tools
+          owner: ${{ steps.manifest.outputs.owner }}
+          repositories: ${{ steps.manifest.outputs.publication-repositories }}
           permission-contents: write
           permission-pull-requests: write
 

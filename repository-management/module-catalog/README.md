@@ -4,6 +4,21 @@ The tools repository owns both v1 schemas and the daily workflow. Public outputs
 belong in `Azure/Azure-Verified-Modules/docs/static/module-indexes`, not the
 internal team documentation repository.
 
+[`config.json`](config.json) is the complete artifact manifest. `repositories`
+selects the docs, Bicep source, and tools repositories; `destinations` supplies
+the repository-relative output directories. Each `outputs` entry declares its
+kind, relative filename, and destination. This includes all six CSVs,
+`BicepMARModules.json`, `v1/modules.json`, `v1/migration-report.json`, and the
+tier configuration. The `publication-plan` entry has a null destination: it is
+bundle-only and is emitted when publication-base information is available.
+
+Collection, generation, workflow checkouts/token targets, and publication use
+the same validated manifest. Default paths are unchanged. Unsafe paths,
+duplicates, unknown fields, missing artifact kinds, and ambiguous CSV mappings
+fail before output is written. Publication binds the bundle to the manifest
+hash, so changing the manifest requires a fresh collection. The workflow's own
+trusted-repository/main guard remains a separate security boundary.
+
 `module-metadata-sync.yml` is disabled for scheduled collection/publication until
 the repository variable `AVM_METADATA_SYNC_ENABLED` is exactly `true`. Manual
 runs default to artifacts only. Publication additionally requires `main`, the protected `avm` environment,
@@ -28,6 +43,10 @@ authentication boundary. Only trusted local code is imported. Fetched module
 files are data, never scripts, builds, Terraform plans, or Bicep compilations.
 The standalone API client handles live JSON data rather than executable tool
 downloads, whose separate module helper requires a pinned SHA256.
+
+Local collection/generation can use `-ConfigurationPath` for a reviewed manifest
+variant. Publication always reads the trusted tools-checkout manifest, never a
+configuration supplied inside the generated bundle.
 
 `-BicepMode metadata-only` and `-TerraformMode metadata-only` independently reject
 missing metadata and unresolved legacy entries. Dual-source is the default:

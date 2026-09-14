@@ -133,7 +133,7 @@
         "modulePath": { "type": "string", "minLength": 1 },
         "repository": {
           "type": "string",
-          "pattern": "^Azure/(bicep-registry-modules|terraform-(azurerm|azapi|azure)-avm-(res|ptn|utl)-[a-z0-9-]+)$"
+          "pattern": "^Azure/[A-Za-z0-9][A-Za-z0-9_.-]*$"
         },
         "repoURL": { "type": "string", "pattern": "^https://github\\.com/Azure/" },
         "parentModule": { "$ref": "#/definitions/nullableText" },
@@ -154,6 +154,14 @@
         "registry": { "$ref": "#/definitions/registry" }
       },
       "allOf": [
+        {
+          "if": { "properties": { "ecosystem": { "const": "terraform" } } },
+          "then": {
+            "properties": {
+              "repository": { "pattern": "^Azure/terraform-(azurerm|azapi|azure)-avm-(res|ptn|utl)-[a-z0-9-]+$" }
+            }
+          }
+        },
         {
           "if": { "properties": { "metadataSource": { "const": "metadata" } } },
           "then": {

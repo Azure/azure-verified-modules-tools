@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory)][string] $DocumentationRoot,
     [Parameter(Mandatory)][string] $BicepRoot,
-    [Parameter(Mandatory)][string] $SnapshotPath
+    [Parameter(Mandatory)][string] $SnapshotPath,
+    [string] $ConfigurationPath = (Join-Path $PSScriptRoot '..' 'config.json')
 )
 
 Set-StrictMode -Version 3.0
@@ -15,6 +16,7 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.ps1')
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Collection.ps1')
 
+$configuration = Read-AvmCatalogConfiguration -Path $ConfigurationPath
 if (-not $env:GH_TOKEN) {
     throw [System.InvalidOperationException]::new('GH_TOKEN is required for read-only GitHub collection and owner/team validation.')
 }
@@ -37,30 +39,10 @@ try {
     foreach ($directory in @($legacy, $bicep, $terraform)) {
         $null = [System.IO.Directory]::CreateDirectory($directory)
     }
-    $configuration = Read-AvmCatalogJson -Path (Join-Path $PSScriptRoot '..' 'config.json')
-    $docsFiles = @($configuration.outputs.file) + @('BicepMARModules.json', 'v1/modules.json', 'v1/migration-report.json')
-    $publication = [ordered]@{
-        schemaVersion = 1
-        docs = [ordered]@{ repository = 'Azure/Azure-Verified-Modules'; baseFiles = [ordered]@{} }
-        tools = [ordered]@{ repository = 'Azure/azure-verified-modules-tools'; baseFiles = [ordered]@{} }
-    }
-    foreach ($relative in $docsFiles) {
-        $target = "docs/static/module-indexes/$relative"
-        $path = Join-Path $DocumentationRoot $target
-        $exists = Test-Path -LiteralPath $path -PathType Leaf
-        $publication.docs.baseFiles[$target] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
-        if ($relative -notlike 'v1/*') {
-            if (-not $exists) {
-                throw [System.IO.FileNotFoundException]::new("Required legacy catalog is missing: $path")
-            }
-            [System.IO.File]::Copy($path, (Join-Path $legacy $relative))
-        }
-    }
-    $configurationPath = Join-Path $toolsRoot 'repository-management' 'repository-config' 'config.json'
-    [System.IO.File]::Copy($configurationPath, (Join-Path $staging 'repository-config.json'))
-    $publication.tools.baseFiles['repository-management/repository-config/config.json'] = (Get-FileHash -LiteralPath $configurationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $roots = @{ docs = $DocumentationRoot; tools = $toolsRoot }
+    $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $staging -Confirm:$false
 
-    $bicepSources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $terraform
+    $bicepSources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $terraform -Configuration $configuration
     foreach ($source in $bicepSources) {
         $directory = Join-Path $bicep $source.ModulePath
         $null = [System.IO.Directory]::CreateDirectory($directory)
@@ -71,20 +53,20 @@ try {
     $revisions = [System.Collections.Generic.List[object]]::new()
     $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop).Source
     foreach ($inputRepository in @(
-            @{ Name = 'Azure/Azure-Verified-Modules'; Path = $DocumentationRoot },
-            @{ Name = 'Azure/bicep-registry-modules'; Path = $BicepRoot },
-            @{ Name = 'Azure/azure-verified-modules-tools'; Path = $toolsRoot }
+            @{ Name = $configuration.repositories.docs; Path = $DocumentationRoot },
+            @{ Name = $configuration.repositories.bicep; Path = $BicepRoot },
+            @{ Name = $configuration.repositories.tools; Path = $toolsRoot }
         )) {
         $revision = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('rev-parse', 'HEAD') -WorkingDirectory $inputRepository.Path
         $revisions.Add([ordered]@{ repository = $inputRepository.Name; commit = $revision.StdOut.Trim(); status = 'collected' })
     }
-    $repositories = Get-AvmCatalogTerraformRepositories -GitHubToken $token -LegacyPath $legacy
+    $repositories = Get-AvmCatalogTerraformRepositories -GitHubToken $token -LegacyPath $legacy -Configuration $configuration
     foreach ($repository in $repositories) {
         $directory = Join-Path $terraform $repository.Substring('Azure/'.Length)
         $result = Save-AvmCatalogTerraformSource -Repository $repository -Destination $directory -GitHubToken $token -Confirm:$false
         $revisions.Add($result)
     }
-    $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy
+    $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy -Configuration $configuration
     $enrichment = Get-AvmCatalogEnrichment -Inventory $inventory -GitHubToken $token
     foreach ($file in @(
             @{ Name = 'github.json'; Value = $enrichment.GitHub },

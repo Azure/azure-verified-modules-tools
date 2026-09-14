@@ -11,10 +11,11 @@ BeforeAll {
     $workflow = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'module-metadata-sync.yml'))
 
     function New-CatalogPublicationFixture {
+        param([System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration))
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = [System.IO.Directory]::CreateDirectory($root)
-        $paths = Get-AvmCatalogPublicationPaths
-        $plan = [ordered]@{ schemaVersion = 1; docs = $null; tools = $null; outputHashes = [ordered]@{} }
+        $paths = Get-AvmCatalogPublicationPaths -Configuration $Configuration
+        $plan = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash; docs = $null; tools = $null; outputHashes = [ordered]@{} }
         foreach ($role in $paths.Keys) {
             $plan[$role] = [ordered]@{ repository = $paths[$role].repository; baseFiles = [ordered]@{} }
             foreach ($relative in $paths[$role].files.Keys) {
@@ -25,13 +26,13 @@ BeforeAll {
                 $text = if ($relative.EndsWith('.csv')) {
                     "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,Tier,CanonicalType`n"
                 }
-                elseif ($relative -eq 'docs/v1/modules.json') {
+                elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog).bundlePath) {
                     ConvertTo-AvmCatalogJson -Value ([ordered]@{ '$schema' = $catalogSchemaId; schemaVersion = 1; modules = [ordered]@{} })
                 }
-                elseif ($relative -eq 'docs/BicepMARModules.json') {
+                elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind mar).bundlePath) {
                     "[]`n"
                 }
-                elseif ($relative -eq 'tools/config.json') {
+                elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind tier-configuration).bundlePath) {
                     "{`"repositoryGroups`": []}`n"
                 }
                 else {
@@ -41,7 +42,9 @@ BeforeAll {
                 $plan.outputHashes[$relative] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
             }
         }
-        [System.IO.File]::WriteAllText((Join-Path $root 'plan.json'), (ConvertTo-AvmCatalogJson -Value $plan))
+        $planPath = Join-Path $root (Get-AvmCatalogOutput -Configuration $Configuration -Kind publication-plan).bundlePath
+        $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($planPath))
+        [System.IO.File]::WriteAllText($planPath, (ConvertTo-AvmCatalogJson -Value $plan))
         return $root
     }
 }
@@ -59,6 +62,14 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         $root = New-CatalogPublicationFixture
         [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'BicepResourceModules.csv'), 'tampered')
         { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*hash mismatch*'
+    }
+
+    It 'rejects a bundle collected under a different artifact manifest' {
+        $root = New-CatalogPublicationFixture
+        $configuration = Read-AvmCatalogConfiguration
+        $configuration.hash = '0' * 64
+        { Test-AvmCatalogPublicationBundle -Path $root -Configuration $configuration } |
+            Should -Throw '*stale catalog publication manifest*'
     }
 
     It 'refuses non-catalog files and paths outside the output allow-list' {
@@ -131,7 +142,7 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $publication | Should -Match "github.ref == 'refs/heads/main'"
         $publication | Should -Match 'inputs.plan_only == false'
         $workflow | Should -Not -Match 'pull_request_target|repository_dispatch|workflow_run'
-        $publication | Should -Match '(?s)repositories: \|\s+Azure-Verified-Modules\s+azure-verified-modules-tools\s+permission-contents: write\s+permission-pull-requests: write'
+        $publication | Should -Match '(?s)repositories: \$\{\{ steps.manifest.outputs.publication-repositories \}\}\s+permission-contents: write\s+permission-pull-requests: write'
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
     }
 
@@ -159,7 +170,7 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
                 $blocks.Add($body -join "`n")
             }
         }
-        $blocks | Should -HaveCount 4
+        $blocks | Should -HaveCount 6
         foreach ($block in $blocks) {
             $block | Should -Not -Match '\$\{\{'
             $block | Should -Match "'tools' 'repository-management' 'module-catalog' 'scripts'"

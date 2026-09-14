@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Catalog `config.json` now declares every artifact and destination, including
+  the combined catalog and publication plan. Collection, generation, workflow
+  repository selection, and publication consume the same validated manifest;
+  manifest changes invalidate previously collected publication bundles.
 - Bicep management `plan_only` is now a strict dry run, and scheduled CODEOWNERS
   sync no longer uses a separate repository-variable enable gate. Manual
   metadata backfill reuses that workflow and the shared file publisher, with

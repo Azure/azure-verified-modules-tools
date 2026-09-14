@@ -56,6 +56,40 @@ function Invoke-AvmCatalogRequest {
     }
 }
 
+function Copy-AvmCatalogInputFile {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $RepositoryRoots,
+        [Parameter(Mandatory)][string] $SnapshotPath
+    )
+
+    $publication = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash }
+    foreach ($role in @('docs', 'tools')) {
+        $publication[$role] = [ordered]@{ repository = $Configuration.repositories[$role]; baseFiles = [ordered]@{} }
+    }
+    $copies = [System.Collections.Generic.List[object]]::new()
+    foreach ($output in $Configuration.outputs | Where-Object { $null -ne $_.destination }) {
+        $path = Join-Path $RepositoryRoots[$output.destination] $output.targetPath
+        $exists = Test-Path -LiteralPath $path -PathType Leaf
+        $publication[$output.destination].baseFiles[$output.targetPath] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+        if ($output.kind -in @('csv', 'mar', 'tier-configuration')) {
+            if (-not $exists) {
+                throw [System.IO.FileNotFoundException]::new("Required legacy catalog is missing: $path")
+            }
+            $relative = if ($output.kind -eq 'tier-configuration') { 'repository-config.json' } else { "legacy/$($output.file)" }
+            $copies.Add(@{ Source = $path; Target = Join-Path $SnapshotPath $relative })
+        }
+    }
+    if ($PSCmdlet.ShouldProcess($SnapshotPath, 'Copy configured catalog inputs and capture publication bases')) {
+        foreach ($copy in $copies) {
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($copy.Target))
+            [System.IO.File]::Copy($copy.Source, $copy.Target)
+        }
+    }
+    return $publication
+}
+
 function Get-AvmCatalogResponseJson {
     [CmdletBinding()]
     param([object] $Response)
@@ -285,7 +319,11 @@ function Get-AvmCatalogEnrichment {
 
 function Get-AvmCatalogTerraformRepositories {
     [CmdletBinding()]
-    param([securestring] $GitHubToken, [string] $LegacyPath)
+    param(
+        [securestring] $GitHubToken,
+        [string] $LegacyPath,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
 
     $repositories = @{}
     foreach ($provider in @('azurerm', 'azapi', 'azure')) {
@@ -313,8 +351,8 @@ function Get-AvmCatalogTerraformRepositories {
             } while ($received -lt $result.total_count)
         }
     }
-    foreach ($kind in @('Resource', 'Pattern', 'Utility')) {
-        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath "Terraform${kind}Modules.csv")
+    foreach ($output in $Configuration.outputs | Where-Object { $_.kind -ceq 'csv' -and $_.ecosystem -ceq 'terraform' }) {
+        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.file)
         foreach ($row in $table.Rows) {
             $match = [regex]::Match([string]$row.RepoURL, '^https://github\.com/(?<repository>Azure/terraform-(azurerm|azapi|azure)-avm-(res|ptn|utl)-[a-z0-9-]+)(/|$)')
             if ($match.Success) {

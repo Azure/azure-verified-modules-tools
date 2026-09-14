@@ -7,6 +7,7 @@ BeforeAll {
     Import-Module -Name (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     . (Join-Path $catalogScripts 'ModuleCatalog.ps1')
     . (Join-Path $catalogScripts 'ModuleCatalog.Collection.ps1')
+    . (Join-Path $catalogScripts 'ModuleCatalog.Publication.ps1')
     $inputSchema = Read-AvmCatalogJson -Path (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-module-metadata.schema.json')
     $metadataSchemaId = $inputSchema['$id']
 
@@ -90,7 +91,7 @@ BeforeAll {
         foreach ($path in @($fixture.Legacy, $fixture.Bicep, $fixture.Terraform)) {
             $null = [System.IO.Directory]::CreateDirectory($path)
         }
-        $outputs = (Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')).outputs
+        $outputs = @((Read-AvmCatalogConfiguration).outputs | Where-Object { $_.kind -ceq 'csv' })
         $bicepNames = @{
             resource = 'avm/res/storage/storage-account'
             pattern = 'avm/ptn/lz/sub-vending'
@@ -465,6 +466,58 @@ Describe 'Component: module catalog transformations' -Tag Component {
         foreach ($file in $fixture.Headers.Keys) {
             @($bundle.Files["docs/$file"] | ConvertFrom-Csv) | Should -HaveCount 0
         }
+    }
+
+    It 'uses one modified manifest for collection, generation, and publication without legacy hard-coded paths' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+        $raw.repositories.docs = 'Azure/catalog-fixture'
+        $raw.repositories.bicep = 'Azure/bicep-fixture'
+        $raw.repositories.tools = 'Azure/tools-fixture'
+        $raw.destinations.docs.path = 'docs/static/custom-indexes'
+        $raw.destinations.tools.path = 'repository-management/custom-config'
+        $raw.outputs[0].file = 'RenamedBicepResources.csv'
+        ($raw.outputs | Where-Object kind -eq 'catalog').file = 'custom/catalog.json'
+        ($raw.outputs | Where-Object kind -eq 'migration-report').file = 'custom/migration.json'
+        ($raw.outputs | Where-Object kind -eq 'tier-configuration').file = 'tiers.json'
+        ($raw.outputs | Where-Object kind -eq 'publication-plan').file = 'control/publication.json'
+        $configurationPath = Join-Path $fixture.Root 'manifest.json'
+        Save-CatalogJson -Path $configurationPath -Data $raw
+        $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
+        Move-Item -LiteralPath (Join-Path $fixture.Legacy 'BicepResourceModules.csv') `
+            -Destination (Join-Path $fixture.Legacy 'RenamedBicepResources.csv')
+        $inventory = Get-AvmCatalogInventory -BicepRoot $fixture.Bicep -TerraformRoot $fixture.Terraform `
+            -LegacyPath $fixture.Legacy -Configuration $configuration
+        $null = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+
+        $roots = @{ docs = Join-Path $fixture.Root 'docs-checkout'; tools = Join-Path $fixture.Root 'tools-checkout' }
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar', 'tier-configuration') }) {
+            $source = if ($output.kind -eq 'tier-configuration') { Join-Path $fixture.Root 'repository-config.json' } else { Join-Path $fixture.Legacy $output.file }
+            $target = Join-Path $roots[$output.destination] $output.targetPath
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
+            [System.IO.File]::Copy($source, $target)
+        }
+        $inputPath = Join-Path $fixture.Root 'configured-input'
+        $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $inputPath -Confirm:$false
+        Copy-Item -LiteralPath (Join-Path $fixture.Root 'sources') -Destination (Join-Path $inputPath 'sources') -Recurse
+        foreach ($name in @('registry.json', 'github.json')) {
+            Copy-Item -LiteralPath (Join-Path $fixture.Root $name) -Destination (Join-Path $inputPath $name)
+        }
+        Save-CatalogJson -Path (Join-Path $inputPath 'publication.json') -Data $publication
+        & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $inputPath `
+            -OutputPath $fixture.Output -ConfigurationPath $configurationPath | Should -BeExactly ([System.IO.Path]::GetFullPath($fixture.Output))
+        $plan = Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration
+        $plan.docs.repository | Should -BeExactly 'Azure/catalog-fixture'
+        $plan.tools.repository | Should -BeExactly 'Azure/tools-fixture'
+        $plan.docs.baseFiles.Contains('docs/static/custom-indexes/custom/catalog.json') | Should -BeTrue
+        $plan.tools.baseFiles.Contains('repository-management/custom-config/tiers.json') | Should -BeTrue
+        $paths = @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse |
+                ForEach-Object { [System.IO.Path]::GetRelativePath($fixture.Output, $_.FullName).Replace('\', '/') })
+        @($paths | Sort-Object) | Should -Be @($configuration.outputs.bundlePath | Sort-Object)
+        $catalog = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'custom' 'catalog.json')
+        $catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].repository | Should -BeExactly 'Azure/bicep-fixture'
+        $paths | Should -Not -Contain 'docs/v1/modules.json'
+        $paths | Should -Not -Contain 'tools/config.json'
     }
 
     It 'honors WhatIf without creating an output directory' {

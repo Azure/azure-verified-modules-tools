@@ -3,6 +3,8 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ModuleCatalog.Configuration.ps1')
+
 function ConvertTo-AvmCatalogJson {
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowNull()][object] $Value)
@@ -41,18 +43,19 @@ function New-AvmCatalogIdentity {
     param(
         [ValidateSet('bicep', 'terraform')][string] $Ecosystem,
         [string] $Repository,
-        [string] $ModulePath
+        [string] $ModulePath,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
     $kinds = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }
     $provider = $null
     if ($Ecosystem -eq 'bicep') {
         $match = [regex]::Match($ModulePath, '^avm/(?<kind>res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+(/[a-z0-9-]+)*$')
-        if (-not $match.Success -or $Repository -cne 'Azure/bicep-registry-modules') {
+        if (-not $match.Success -or $Repository -cne $Configuration.repositories.bicep) {
             throw [System.ArgumentException]::new("Unsupported Bicep identity: $Repository, $ModulePath")
         }
         $name = $ModulePath
-        $repositoryId = 'bicep-registry-modules'
+        $repositoryId = $Repository.Split('/')[1]
         $repoUrl = "https://github.com/$Repository/tree/main/$ModulePath"
         $reference = "br/public:${ModulePath}:X.Y.Z"
     }
@@ -93,7 +96,11 @@ function New-AvmCatalogIdentity {
 
 function Get-AvmCatalogSources {
     [CmdletBinding()]
-    param([string] $BicepRoot, [string] $TerraformRoot)
+    param(
+        [string] $BicepRoot,
+        [string] $TerraformRoot,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
 
     $sources = [System.Collections.Generic.List[object]]::new()
     foreach ($root in @($BicepRoot, $TerraformRoot)) {
@@ -120,7 +127,7 @@ function Get-AvmCatalogSources {
         }
     }
     foreach ($modulePath in (Get-AvmCatalogOrdinal -Values @($bicepPaths))) {
-        $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath $modulePath
+        $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep -ModulePath $modulePath -Configuration $Configuration
         $directory = Join-Path $BicepRoot $modulePath
         $mainPath = Join-Path $directory 'main.bicep'
         if (-not (Test-Path -LiteralPath $mainPath -PathType Leaf) -or (Get-Item -LiteralPath $mainPath).Name -cne 'main.bicep') {
@@ -178,7 +185,7 @@ function Get-AvmCatalogSources {
             elseif (-not $hasRoot) {
                 throw [System.IO.InvalidDataException]::new("Terraform child has no source-bearing family root: $name/$($scope.Path)")
             }
-            $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository "Azure/$name" -ModulePath $scope.Path
+            $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository "Azure/$name" -ModulePath $scope.Path -Configuration $Configuration
             $identity.Directory = $scope.Directory
             if ($scope.Path -ne '.') {
                 $identity.ParentModule = '.'
@@ -288,17 +295,21 @@ function ConvertTo-AvmCatalogCsv {
 
 function Get-AvmCatalogLegacyIdentity {
     [CmdletBinding()]
-    param([System.Collections.IDictionary] $Row, [string] $Ecosystem)
+    param(
+        [System.Collections.IDictionary] $Row,
+        [string] $Ecosystem,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
 
     if ($Ecosystem -eq 'bicep') {
-        return New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath $Row.ModuleName
+        return New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep -ModulePath $Row.ModuleName -Configuration $Configuration
     }
     $match = [regex]::Match([string]$Row.RepoURL, '^https://github\.com/(?<repository>Azure/terraform-(azurerm|azapi|azure)-avm-(res|ptn|utl)-[a-z0-9-]+)(/tree/[^/]+/(?<path>modules/[a-z0-9_-]+))?/?$')
     if (-not $match.Success) {
         throw [System.ArgumentException]::new('Legacy RepoURL does not identify a supported Terraform repository and module path.')
     }
     $path = if ($match.Groups['path'].Success) { $match.Groups['path'].Value } else { '.' }
-    $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository $match.Groups['repository'].Value -ModulePath $path
+    $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository $match.Groups['repository'].Value -ModulePath $path -Configuration $Configuration
     if ($Row.ModuleName -cne $identity.ModuleName) {
         throw [System.ArgumentException]::new('Legacy ModuleName and RepoURL disagree; an explicit identity correction is required.')
     }
@@ -369,11 +380,12 @@ function Get-AvmCatalogInventory {
         [Parameter(Mandatory)][string] $TerraformRoot,
         [Parameter(Mandatory)][string] $LegacyPath,
         [ValidateSet('dual-source', 'metadata-only')][string] $BicepMode = 'dual-source',
-        [ValidateSet('dual-source', 'metadata-only')][string] $TerraformMode = 'dual-source'
+        [ValidateSet('dual-source', 'metadata-only')][string] $TerraformMode = 'dual-source',
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
-    $configuration = Read-AvmCatalogJson -Path (Join-Path $PSScriptRoot '..' 'config.json')
-    $sources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $TerraformRoot
+    $csvOutputs = @($Configuration.outputs | Where-Object { $_.kind -ceq 'csv' })
+    $sources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $TerraformRoot -Configuration $Configuration
     $sourcesByKey = @{}
     foreach ($source in $sources) {
         $sourcesByKey[$source.Key] = $source
@@ -392,7 +404,7 @@ function Get-AvmCatalogInventory {
         }
     }
 
-    foreach ($output in $configuration.outputs) {
+    foreach ($output in $csvOutputs) {
         $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.file)
         foreach ($column in @('Tier', 'CanonicalType')) {
             if ($table.Headers -contains $column -and $table.Headers -cnotcontains $column) {
@@ -409,7 +421,7 @@ function Get-AvmCatalogInventory {
         foreach ($row in $table.Rows) {
             $identity = $null
             try {
-                $identity = Get-AvmCatalogLegacyIdentity -Row $row -Ecosystem $output.ecosystem
+                $identity = Get-AvmCatalogLegacyIdentity -Row $row -Ecosystem $output.ecosystem -Configuration $Configuration
                 if ($identity.ModuleType -cne $output.moduleType) {
                     throw [System.ArgumentException]::new('Legacy module kind disagrees with its CSV.')
                 }
@@ -507,7 +519,7 @@ function Get-AvmCatalogInventory {
             telemetryIdPrefix = if ($metadata.Contains('telemetryIdPrefix')) { $metadata.telemetryIdPrefix } else { $null }
         }
         if (-not $itemsByKey.ContainsKey($source.Key)) {
-            $output = @($configuration.outputs | Where-Object { $_.ecosystem -eq $source.Ecosystem -and $_.moduleType -eq $source.ModuleType })[0]
+            $output = @($csvOutputs | Where-Object { $_.ecosystem -eq $source.Ecosystem -and $_.moduleType -eq $source.ModuleType })[0]
             $row = [ordered]@{}
             foreach ($header in $tables[$output.file].Headers) {
                 $row[$header] = ''
@@ -539,16 +551,18 @@ function Get-AvmCatalogInventory {
         throw [System.IO.InvalidDataException]::new("Metadata-only mode has $($strictMissing.Count) missing modules and $($strictUnresolved.Count) unresolved legacy entries.")
     }
 
-    $mar = Read-AvmCatalogJson -Path (Join-Path $LegacyPath 'BicepMARModules.json')
+    $marOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind mar
+    $mar = Read-AvmCatalogJson -Path (Join-Path $LegacyPath $marOutput.file)
     if ($mar -isnot [array]) {
-        throw [System.IO.InvalidDataException]::new('BicepMARModules.json must remain an array of module-name strings.')
+        throw [System.IO.InvalidDataException]::new("$($marOutput.file) must remain an array of module-name strings.")
     }
     foreach ($name in $mar) {
         if ($name -isnot [string] -or $name -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9/-]+$') {
-            throw [System.IO.InvalidDataException]::new('BicepMARModules.json contains an unsupported module name.')
+            throw [System.IO.InvalidDataException]::new("$($marOutput.file) contains an unsupported module name.")
         }
     }
     return [pscustomobject]@{
+        Configuration = $Configuration
         Sources = $sources
         Items = @((Get-AvmCatalogOrdinal -Values @($itemsByKey.Keys)) | ForEach-Object { $itemsByKey[$_] })
         Tables = $tables
@@ -657,9 +671,14 @@ function New-AvmCatalogBundle {
         [Parameter(Mandatory)][System.Collections.IDictionary] $Registry,
         [Parameter(Mandatory)][System.Collections.IDictionary] $GitHub,
         [Parameter(Mandatory)][System.Collections.IDictionary] $RepositoryConfiguration,
-        [string] $SchemaPath = (Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-modules-catalog.schema.json')
+        [string] $SchemaPath
     )
 
+    $configuration = $Inventory.Configuration
+    $catalogOutput = Get-AvmCatalogOutput -Configuration $configuration -Kind catalog
+    if (-not $SchemaPath) {
+        $SchemaPath = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))) $catalogOutput.schema
+    }
     $schema = Read-AvmCatalogJson -Path $SchemaPath
     $modules = [System.Collections.Specialized.OrderedDictionary]::new([StringComparer]::Ordinal)
     $canonicalTypes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -743,31 +762,42 @@ function New-AvmCatalogBundle {
         csvRows = [ordered]@{}
     }
     $files = [ordered]@{}
-    foreach ($file in $Inventory.Tables.Keys) {
+    foreach ($output in $configuration.outputs | Where-Object { $_.kind -ceq 'csv' }) {
+        $file = $output.file
         $table = $Inventory.Tables[$file]
-        $files["docs/$file"] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $table.Rows.ToArray()
+        $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $table.Rows.ToArray()
         $report.counts.legacyRows[$file] = $table.OriginalRowCount
         $report.counts.csvRows[$file] = $table.Rows.Count
     }
-    $files['docs/BicepMARModules.json'] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
-    $files['docs/v1/modules.json'] = $json
-    $files['docs/v1/migration-report.json'] = ConvertTo-AvmCatalogJson -Value $report
-    $files['tools/config.json'] = ConvertTo-AvmCatalogJson -Value $tierConfiguration
-    return [pscustomobject]@{ Files = $files; Catalog = $catalog; Report = $report; RepositoryConfiguration = $tierConfiguration }
+    $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
+    $files[$catalogOutput.bundlePath] = $json
+    $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).bundlePath] = ConvertTo-AvmCatalogJson -Value $report
+    $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind tier-configuration).bundlePath] = ConvertTo-AvmCatalogJson -Value $tierConfiguration
+    return [pscustomobject]@{ Configuration = $configuration; Files = $files; Catalog = $catalog; Report = $report; RepositoryConfiguration = $tierConfiguration }
 }
 
 function Write-AvmCatalogBundle {
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)][object] $Bundle, [Parameter(Mandatory)][string] $OutputPath)
+    param(
+        [Parameter(Mandatory)][object] $Bundle,
+        [Parameter(Mandatory)][string] $OutputPath,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
 
     $destination = [System.IO.Path]::GetFullPath($OutputPath)
     if (Test-Path -LiteralPath $destination) {
         throw [System.IO.IOException]::new("Output must be a new directory to prevent partial or stale results: $destination")
     }
+    $allowed = [System.Collections.Generic.HashSet[string]]::new([string[]]$Configuration.outputs.bundlePath, [StringComparer]::Ordinal)
     foreach ($relative in $Bundle.Files.Keys) {
-        if ($relative -cnotmatch '^(docs/(Bicep|Terraform)(Resource|Pattern|Utility)Modules\.csv|docs/BicepMARModules\.json|docs/v1/(modules|migration-report)\.json|tools/config\.json|plan\.json)$' -or
+        if (-not $allowed.Contains($relative) -or
             $Bundle.Files[$relative] -isnot [string] -or $Bundle.Files[$relative].Contains("`r")) {
             throw [System.IO.InvalidDataException]::new("Unexpected catalog output path or encoding: $relative")
+        }
+        foreach ($output in $Configuration.outputs | Where-Object { $_.kind -cne 'publication-plan' }) {
+            if (-not $Bundle.Files.Contains($output.bundlePath)) {
+                throw [System.IO.InvalidDataException]::new("Required catalog output is missing: $($output.bundlePath)")
+            }
         }
     }
     if (-not $PSCmdlet.ShouldProcess($destination, 'Write validated module catalog bundle')) {

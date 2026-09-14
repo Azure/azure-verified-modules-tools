@@ -1,14 +1,30 @@
 {
   "schemaVersion": 1,
-  "documentationRepository": "Azure/Azure-Verified-Modules",
-  "bicepRepository": "Azure/bicep-registry-modules",
-  "toolsRepository": "Azure/azure-verified-modules-tools",
+  "repositories": {
+    "docs": "Azure/Azure-Verified-Modules",
+    "bicep": "Azure/bicep-registry-modules",
+    "tools": "Azure/azure-verified-modules-tools"
+  },
+  "destinations": {
+    "docs": { "repository": "docs", "path": "docs/static/module-indexes" },
+    "tools": { "repository": "tools", "path": "repository-management/repository-config" }
+  },
   "outputs": [
-    { "file": "BicepResourceModules.csv", "ecosystem": "bicep", "moduleType": "resource" },
-    { "file": "BicepPatternModules.csv", "ecosystem": "bicep", "moduleType": "pattern" },
-    { "file": "BicepUtilityModules.csv", "ecosystem": "bicep", "moduleType": "utility" },
-    { "file": "TerraformResourceModules.csv", "ecosystem": "terraform", "moduleType": "resource" },
-    { "file": "TerraformPatternModules.csv", "ecosystem": "terraform", "moduleType": "pattern" },
-    { "file": "TerraformUtilityModules.csv", "ecosystem": "terraform", "moduleType": "utility" }
+    { "kind": "csv", "file": "BicepResourceModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "resource" },
+    { "kind": "csv", "file": "BicepPatternModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "pattern" },
+    { "kind": "csv", "file": "BicepUtilityModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "utility" },
+    { "kind": "csv", "file": "TerraformResourceModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "resource" },
+    { "kind": "csv", "file": "TerraformPatternModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "pattern" },
+    { "kind": "csv", "file": "TerraformUtilityModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "utility" },
+    { "kind": "mar", "file": "BicepMARModules.json", "destination": "docs" },
+    {
+      "kind": "catalog",
+      "file": "v1/modules.json",
+      "destination": "docs",
+      "schema": "src/Avm.Authoring/Resources/Schemas/v1/avm-modules-catalog.schema.json"
+    },
+    { "kind": "migration-report", "file": "v1/migration-report.json", "destination": "docs" },
+    { "kind": "tier-configuration", "file": "config.json", "destination": "tools" },
+    { "kind": "publication-plan", "file": "plan.json", "destination": null }
   ]
 }

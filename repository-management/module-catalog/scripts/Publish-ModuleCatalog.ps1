@@ -15,18 +15,20 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Collection.ps1')
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Publication.ps1')
 
-$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath
+$configuration = Read-AvmCatalogConfiguration
+$tierOutput = Get-AvmCatalogOutput -Configuration $configuration -Kind tier-configuration
+$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration
 if (-not $Publish) {
     Write-Output 'Catalog publication plan validated; no remote changes requested.'
     return
 }
-if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REPOSITORY -cne $configuration.repositories.tools -or
     $env:GITHUB_REF -cne 'refs/heads/main' -or $env:AVM_METADATA_SYNC_ENABLED -cne 'true' -or
     $env:GITHUB_RUN_ID -notmatch '^[0-9]+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^[0-9]+$' -or
     $env:AVM_APP_SLUG -notmatch '^[a-z0-9-]+$' -or -not $env:GH_TOKEN) {
     throw [System.InvalidOperationException]::new('Publication requires the enabled, main-branch tools workflow and its scoped app token.')
 }
-if (-not $PSCmdlet.ShouldProcess('Azure/Azure-Verified-Modules and Azure/azure-verified-modules-tools', 'Publish reviewable catalog branches and pull requests')) {
+if (-not $PSCmdlet.ShouldProcess(($configuration.repositories.docs, $configuration.repositories.tools -join ' and '), 'Publish reviewable catalog branches and pull requests')) {
     return
 }
 
@@ -59,7 +61,7 @@ $processEnvironment = @{
 }
 $prepared = [System.Collections.Generic.List[object]]::new()
 try {
-    $paths = Get-AvmCatalogPublicationPaths
+    $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
     foreach ($role in $paths.Keys) {
         $repository = $paths[$role].repository
         $allowed = @($paths[$role].files.Values)
@@ -70,8 +72,8 @@ try {
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
         if ($role -eq 'tools') {
             Assert-AvmCatalogTierOnlyChange `
-                -Before (Read-AvmCatalogJson -Path (Join-Path $root 'repository-management' 'repository-config' 'config.json')) `
-                -After (Read-AvmCatalogJson -Path (Join-Path $BundlePath 'tools' 'config.json'))
+                -Before (Read-AvmCatalogJson -Path (Join-Path $root $tierOutput.targetPath)) `
+                -After (Read-AvmCatalogJson -Path (Join-Path $BundlePath $tierOutput.bundlePath))
         }
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
             -ArgumentList @('api', '--method', 'GET', '--paginate', '--slurp', "repos/$repository/pulls?state=open&base=main&per_page=100") `
@@ -133,7 +135,7 @@ try {
         $body = [ordered]@{
             title = 'chore: synchronize AVM module catalogs'
             head = $target.Branch; base = 'main'
-            body = "Generated AVM catalog update. Review metadata precedence, unresolved identities, parity, and tier membership before merging.`n`nSource run: https://github.com/Azure/azure-verified-modules-tools/actions/runs/$($env:GITHUB_RUN_ID)"
+            body = "Generated AVM catalog update. Review metadata precedence, unresolved identities, parity, and tier membership before merging.`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
         }
         [System.IO.File]::WriteAllText($bodyPath, (ConvertTo-AvmCatalogJson -Value $body), [System.Text.UTF8Encoding]::new($false))
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
