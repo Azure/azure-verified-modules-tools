@@ -71,7 +71,7 @@ function Invoke-AvmBicepCodeownersSync {
     $snapshot = Get-AvmBicepCodeownersSnapshot -Template $Template
     $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main `
         -GeneratedFiles @{ '.github/CODEOWNERS' = $snapshot.Content } -AllowedPaths @('.github/CODEOWNERS') `
-        -StableBranch 'avm-bot/bicep-codeowners-sync' -OpenPlanPullRequest -KeepBranch -PlanOnly:$PlanOnly `
+        -StableBranch 'avm-bot/bicep-codeowners-sync' -OpenPlanPullRequest -KeepBranch -VerifyCandidate -PlanOnly:$PlanOnly `
         -ExpectedActor ([pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }) `
         -State @{ Template = $Template; Snapshot = $snapshot } -ValidateChange ${function:Test-BicepCodeownersSyncChange} `
         -Title 'chore: sync Bicep module CODEOWNERS' `

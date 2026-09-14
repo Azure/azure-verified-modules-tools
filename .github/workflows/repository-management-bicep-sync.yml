@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Bicep CODEOWNERS Sync
+name: Repository Management - Bicep Sync
 
 on:
   schedule:
@@ -15,12 +15,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: bicep-codeowners-sync
+  group: bicep-sync
   cancel-in-progress: false
 
 jobs:
   sync:
-    name: Repository Management - Bicep CODEOWNERS
+    name: Repository Management - Bicep Sync
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
       github.ref == 'refs/heads/main' &&

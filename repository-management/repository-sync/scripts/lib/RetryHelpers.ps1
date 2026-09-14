@@ -319,12 +319,14 @@ function Invoke-RepositoryGit {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
-        [string] $WorkingDirectory
+        [string] $WorkingDirectory,
+        [int] $MaxRetries = 0
     )
 
     $arguments = @('-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential') + $Arguments
     $result = Invoke-CommandWithRetry -parentCommand git -commands @(@{ Arguments = $arguments }) `
-        -literalArguments -workingDirectory $WorkingDirectory -maxRetries 0 -returnOutput
+        -literalArguments -workingDirectory $WorkingDirectory -maxRetries $MaxRetries `
+        -retryOn (Get-GitHubTransientRetryPatterns) -retryDelayIncremental 5 -returnOutput
     if (-not $result.success) {
         $detail = if ($result.ContainsKey('error')) { $result.error } else { 'command failed' }
         throw [System.InvalidOperationException]::new("Git operation failed: $detail")

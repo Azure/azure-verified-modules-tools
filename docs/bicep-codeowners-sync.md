@@ -1,6 +1,6 @@
 # Bicep CODEOWNERS synchronization
 
-The [workflow](../.github/workflows/repository-management-codeowners-sync.yml)
+The [Repository Management - Bicep Sync workflow](../.github/workflows/repository-management-bicep-sync.yml)
 renders the [source template](../repository-management/bicep-codeowners-sync/CODEOWNERS.template)
 from the official Bicep resource, pattern, and utility CSV indexes. It targets
 only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
@@ -52,10 +52,19 @@ default and can create or update the reviewable app-owned candidate, but never
 merges it.** It is not a read-only operation. Both modes leave the candidate
 open and fail visibly if GitHub reports invalid or inaccessible owners.
 
+After explicit approval for this production operation, a reviewable plan is
+dispatched with:
+
+```powershell
+gh workflow run repository-management-bicep-sync.yml `
+    --repo Azure/azure-verified-modules-tools --ref main -f plan_only=true
+```
+
 Scheduled runs require the repository variable
 `AVM_CODEOWNERS_SYNC_ENABLED=true`. They run at `33 2-23/4 * * *`: 02:33, 06:33,
 10:33, 14:33, 18:33, and 22:33 UTC every day. This is two hours after the existing
-repository-sync slots (`33 */4 * * 1-5`), with weekend runs retained for an
+`Repository Management - Terraform Sync` slots (`repository-management-sync.yml`,
+`33 */4 * * 1-5`), with weekend runs retained for an
 every-four-hours cadence. Concurrency queues runs without cancelling an active
 writer. Leave the enable variable unset or set it to `false` to stop scheduled
 writes; manual plans remain available.
@@ -86,10 +95,12 @@ modify rulesets, or synchronize the target.
 ## Change and merge guards
 
 Both automation entry points use `Invoke-RepositoryFileSync` in the existing
-`repository-sync/scripts/lib/AvmPreCommit.ps1`. The Terraform driver still calls
+shared library directory, in `repository-sync/scripts/lib/RepositoryFileSync.ps1`.
+The Terraform driver still calls
 `Invoke-AvmPreCommitForRepository`, which supplies its original preparation and
-upgrade handling to that shared core. CODEOWNERS supplies the rendered file and
-its static-content/owner-diagnostics validation hook to the same core.
+upgrade handling from `AvmPreCommit.ps1`. CODEOWNERS loads the shared library
+directly, without importing or running the Terraform adapter, and supplies the
+rendered file and its static-content/owner-diagnostics validation hook.
 
 Clone, Git diff, branch/commit/push, candidate creation/reuse, and app merge are
 implemented once there. Both use the existing `Invoke-GitHubCliWithRetry` and
@@ -98,13 +109,36 @@ implemented once there. Both use the existing `Invoke-GitHubCliWithRetry` and
 behavior. Repository file reads and blob checks use the shared `RepoTree.ps1`
 helpers. No separate CODEOWNERS API, retry, diff, or publication engine exists.
 
-Terraform defaults remain unchanged: the normal `avm pre-commit` preparation,
-plan mode without opening a candidate, timestamped branch, `[skip ci]` title,
-app-bypass squash merge, and branch deletion. CODEOWNERS opts into a sparse
+The original Terraform contract is covered directly:
+
+| Contract | Preserved behavior |
+| --- | --- |
+| Return value | Exactly `IssueLog` and `HasChanges`, with the caller's issue array retained |
+| Preparation | Legacy `.avm` file handling, managed-file upgrade decision, and one `AVM1050` module-update retry |
+| No change / plan | No candidate or remote writes; ordinary plans return before staging |
+| Publication | Five transient clone retries, timestamped branch, original bot author, commit/title/body and `[skip ci]` |
+| Merge | Squash/app bypass, original subject/empty body, branch deletion, and existing merge retry policy |
+| Failure | Preparation/publication errors remain failures; cleanup errors warn without replacing the primary outcome |
+
+`Avm.Authoring` is imported before the shared transport first runs, including
+in a fresh PowerShell process. Intentional changes from the original publisher
+are literal-argv Git/CLI calls, disposable-clone credential/hook configuration
+instead of global authentication setup, a 300-second per-command transport
+timeout, and exact-head `--match-head-commit` merging. Full candidate/base/tree/API verification is explicitly opt-in with
+`-VerifyCandidate`; Terraform does not acquire the new CODEOWNERS prerequisites
+or fail merely because unrelated main-branch work advanced.
+
+CODEOWNERS opts into that verification and a sparse
 default-branch checkout limited to its managed file, a stable branch, reviewable
 plans, retained branch, and strict target-only app identity. Neither path
 checks out an existing candidate head. Git credential/hook configuration is
 confined to the disposable clone rather than the user's global settings.
+
+Compatibility tests use mocked remote APIs and a fresh `pwsh -NoProfile` local
+Git probe. They do not establish live Terraform repository-sync or current
+GitHub App/branch-policy behavior, or behavior on a transport operation exceeding
+that timeout; production verification still requires
+operator approval.
 
 No branch or pull request mutation happens when main already matches. Otherwise,
 the only branch is `avm-bot/bicep-codeowners-sync`, with at most one open candidate.

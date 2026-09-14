@@ -9,9 +9,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))
 Import-Module (Join-Path $repositoryRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -ErrorAction Stop
 $sharedLib = Join-Path $repositoryRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
-. (Join-Path $sharedLib 'RetryHelpers.ps1')
-. (Join-Path $sharedLib 'RepoTree.ps1')
-. (Join-Path $sharedLib 'AvmPreCommit.ps1')
+. (Join-Path $sharedLib 'RepositoryFileSync.ps1')
 . (Join-Path $PSScriptRoot 'lib' 'Codeowners.ps1')
 . (Join-Path $PSScriptRoot 'lib' 'CodeownersSync.ps1')
 

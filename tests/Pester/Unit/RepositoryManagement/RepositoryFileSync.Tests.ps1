@@ -3,8 +3,7 @@ BeforeAll {
     $script:shared = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib'
     $script:codeowners = Join-Path $script:root 'repository-management' 'bicep-codeowners-sync'
     Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-    . (Join-Path $script:shared 'RetryHelpers.ps1')
-    . (Join-Path $script:shared 'RepoTree.ps1')
+    . (Join-Path $script:shared 'RepositoryFileSync.ps1')
     . (Join-Path $script:shared 'AvmPreCommit.ps1')
     . (Join-Path $script:shared 'ManagedFilesUpgrade.ps1')
     . (Join-Path $script:codeowners 'scripts' 'lib' 'Codeowners.ps1')
@@ -55,6 +54,7 @@ BeforeAll {
 
 Describe 'Both repository-sync entry points use one existing publication core' {
     BeforeEach {
+        Mock Import-Module {}
         Mock Invoke-RepositoryFileSync { @{ HasChanges = $true; Status = 'Planned'; PullRequestUrl = $null; HeadSha = $null } }
         Mock Get-AvmBicepCodeownersSnapshot { $script:snapshot }
         Mock Invoke-RepositoryGit { throw 'A caller must delegate Git operations to the shared core.' }
@@ -70,18 +70,43 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Should -Invoke Invoke-RepositoryFileSync -Exactly 2
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/terraform-test' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and -not $OpenPlanPullRequest -and -not $KeepBranch -and -not $StableBranch -and
+            $PlanOnly -and -not $OpenPlanPullRequest -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
             $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration'
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and $OpenPlanPullRequest -and $KeepBranch -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
+            $PlanOnly -and $OpenPlanPullRequest -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
             $GeneratedFiles.Count -eq 1 -and $GeneratedFiles['.github/CODEOWNERS'] -ceq $script:snapshot.Content -and
             ($AllowedPaths -join ',') -ceq '.github/CODEOWNERS' -and $ExpectedActor.id -eq 187664033 -and
             $null -ne $ValidateChange -and -not $Prepare
         }
         Should -Invoke Invoke-RepositoryGit -Times 0
         Should -Invoke Invoke-RepositoryGitHub -Times 0
+    }
+
+    It 'preserves the exact legacy return shape for no-change, plan, and apply outcomes' -ForEach @(
+        @{ CoreStatus = 'NoChange'; Changed = $false; Plan = $false }
+        @{ CoreStatus = 'Planned'; Changed = $true; Plan = $true }
+        @{ CoreStatus = 'Merged'; Changed = $true; Plan = $false }
+    ) {
+        $script:coreResult = @{ HasChanges = $Changed; Status = $CoreStatus; PullRequestUrl = 'unused'; HeadSha = 'unused' }
+        Mock Invoke-RepositoryFileSync { $script:coreResult }
+        $issues = @([pscustomobject]@{ message = 'existing issue' })
+        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $Plan -issueLog $issues
+        $result | Should -BeOfType [hashtable]
+        @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
+        $result.HasChanges | Should -Be $Changed
+        [object]::ReferenceEquals($result.IssueLog, $issues) | Should -BeTrue
+    }
+
+    It 'imports the installed module before the shared core can clone in a fresh process' {
+        $script:sequence = [System.Collections.Generic.List[string]]::new()
+        Mock Import-Module { $script:sequence.Add('import') }
+        Mock Invoke-RepositoryFileSync { $script:sequence.Add('clone'); @{ HasChanges = $false } }
+        $null = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+        $script:sequence.ToArray() | Should -Be @('import', 'clone')
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'Avm.Authoring' -and $ErrorAction -eq 'Stop' }
     }
 
     It 'keeps the existing Terraform preparation and upgrade behavior in its adapter' {
@@ -107,6 +132,24 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Test-Path -LiteralPath (Join-Path $script:codeowners 'scripts' 'lib' 'GitHubSync.ps1') | Should -BeFalse
         $adapter = Get-Content -LiteralPath (Join-Path $script:codeowners 'scripts' 'lib' 'CodeownersSync.ps1') -Raw
         $adapter | Should -Not -Match "'pr', 'create'|'pr', 'merge'|'commit-tree'|'push'|/git/refs|Invoke-AvmCodeownersApi"
+    }
+
+    It 'loads the standalone shared library without importing the Terraform adapter' {
+        $scriptPath = Join-Path $script:shared 'RepositoryFileSync.ps1'
+        $loaded = & {
+            param($Path)
+            . $Path
+            (Get-Command Invoke-RepositoryFileSync -CommandType Function).ScriptBlock.File
+        } $scriptPath
+        $loaded | Should -BeExactly $scriptPath
+        $core = Get-Content -LiteralPath $scriptPath -Raw
+        $core | Should -Not -Match 'AvmPreCommit\.ps1|function Invoke-AvmPreCommitForRepository|Invoke-AvmPreCommitWithUpgradeRetry'
+        $terraform = Get-Content -LiteralPath (Join-Path $script:shared 'AvmPreCommit.ps1') -Raw
+        $terraform | Should -Match "Join-Path \`$PSScriptRoot 'RepositoryFileSync.ps1'"
+        $terraform | Should -Not -Match 'function Invoke-RepositoryFileSync|function Assert-RepositorySync|function Get-RepositorySyncComparison'
+        $entry = Get-Content -LiteralPath (Join-Path $script:codeowners 'scripts' 'Invoke-BicepCodeownersSync.ps1') -Raw
+        $entry | Should -Match "'RepositoryFileSync.ps1'"
+        $entry | Should -Not -Match 'AvmPreCommit|ManagedFilesUpgrade'
     }
 }
 

@@ -1,12 +1,20 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
     $script:syncRoot = Join-Path $script:root 'repository-management' 'bicep-codeowners-sync'
-    $script:workflowPath = Join-Path $script:root '.github' 'workflows' 'repository-management-codeowners-sync.yml'
+    $script:workflowPath = Join-Path $script:root '.github' 'workflows' 'repository-management-bicep-sync.yml'
     $script:workflow = Get-Content -LiteralPath $script:workflowPath -Raw
     $script:existing = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml') -Raw
 }
 
 Describe 'Bicep CODEOWNERS workflow contract' {
+    It 'uses the generic Bicep workflow name without retaining a second workflow' {
+        $script:workflow | Should -Match '(?m)^name: Repository Management - Bicep Sync$'
+        $script:workflow | Should -Match '(?m)^  group: bicep-sync$'
+        Test-Path -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-codeowners-sync.yml') |
+            Should -BeFalse
+        $script:existing | Should -Match '(?m)^name: Repository Management - Terraform Sync$'
+    }
+
     It 'runs daily every four hours two hours after the existing repository-sync slots' {
         $script:existing | Should -Match "cron: '33 \*/4 \* \* 1-5'"
         $script:workflow | Should -Match "cron: '33 2-23/4 \* \* \*'"

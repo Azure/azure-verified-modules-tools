@@ -3,7 +3,7 @@ BeforeAll {
     $shared = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
     $codeowners = Join-Path $script:repoRoot 'repository-management' 'bicep-codeowners-sync'
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-    foreach ($name in @('RetryHelpers.ps1', 'RepoTree.ps1', 'AvmPreCommit.ps1', 'ManagedFilesUpgrade.ps1')) {
+    foreach ($name in @('RepositoryFileSync.ps1', 'AvmPreCommit.ps1', 'ManagedFilesUpgrade.ps1')) {
         . (Join-Path $shared $name)
     }
     . (Join-Path $codeowners 'scripts' 'lib' 'Codeowners.ps1')
@@ -80,9 +80,10 @@ BeforeAll {
     }
 
     function Invoke-CoreGit {
-        param([string[]] $Arguments, [string] $WorkingDirectory)
+        param([string[]] $Arguments, [string] $WorkingDirectory, [int] $MaxRetries = 0)
         $script:state.GitCalls.Add($Arguments)
         if ($Arguments[0] -eq 'clone') {
+            $script:state.CloneRetries = $MaxRetries
             $root = $Arguments[-1]
             $script:state.Root = $root
             $null = New-Item -ItemType Directory -Path (Join-Path $root '.github') -Force
@@ -96,7 +97,10 @@ BeforeAll {
         switch ($Arguments[0]) {
             'config' { return '' }
             'sparse-checkout' { return '' }
-            'checkout' { return '' }
+            'checkout' {
+                if ($Arguments -contains '-b') { $script:state.Branch = $Arguments[-1] }
+                return ''
+            }
             'fetch' { return '' }
             'update-ref' { return '' }
             'add' { return '' }
@@ -134,6 +138,9 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             HumanHead = $false
             NoChanges = $false
             RejectPush = $false
+            CloneRetries = -1
+            PrBody = $null
+            CleanupFailureEnabled = $false
             LocalPaths = @('.github/CODEOWNERS')
             RemotePaths = @('.github/CODEOWNERS')
             OwnerErrors = @()
@@ -142,7 +149,7 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             GhCalls = [System.Collections.Generic.List[object]]::new()
             ApiCalls = [System.Collections.Generic.List[string]]::new()
         }
-        Mock Invoke-RepositoryGit { param($Arguments, $WorkingDirectory) Invoke-CoreGit @PSBoundParameters }
+        Mock Invoke-RepositoryGit { param($Arguments, $WorkingDirectory, $MaxRetries) Invoke-CoreGit @PSBoundParameters }
         Mock Invoke-RepositoryGitHubApi { param($Endpoint) Invoke-CoreApi $Endpoint }
         Mock Get-RepositoryBranchHead {
             param($Repository, $Branch)
@@ -158,6 +165,7 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             }
             if ($Arguments[0] -eq 'pr' -and $Arguments[1] -eq 'create') {
                 $script:state.HasPullRequest = $true
+                $script:state.PrBody = Get-Content -LiteralPath $Arguments[([array]::IndexOf($Arguments, '--body-file') + 1)] -Raw
                 return "https://github.com/$($script:state.Repo.full_name)/pull/123"
             }
             if ($Arguments[0] -eq 'pr' -and $Arguments[1] -eq 'merge') {
@@ -183,14 +191,41 @@ Describe 'Existing repository-sync publication core' -Tag Component {
         $script:state.RemotePaths = @('main.tf')
         $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @()
-        $result.Status | Should -Be 'Merged'
+        @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
+        $result.HasChanges | Should -BeTrue
+        $result.IssueLog | Should -HaveCount 0
         $script:state.Branch | Should -Match '^avm-bot/pre-commit-[0-9]{14}$'
+        $script:state.Merged | Should -BeTrue
+        $script:state.CloneRetries | Should -Be 5
+        $clone = @($script:state.GitCalls | Where-Object { $_[0] -eq 'clone' })[0]
+        $clone[0..5] | Should -Be @('clone', '--quiet', '--depth', '1', '--branch', 'main')
+        $clone | Should -Not -Contain '--no-checkout'
+        $clone | Should -Not -Contain '--filter=blob:none'
+        $commit = @($script:state.GitCalls | Where-Object { $_ -contains 'commit' })[0]
+        $commit | Should -Contain 'user.name=azure-verified-modules[bot]'
+        $commit | Should -Contain 'user.email=1049636+azure-verified-modules[bot]@users.noreply.github.com'
+        $commit[-2..-1] | Should -Be @('-m', 'chore: run avm pre-commit [skip ci]')
         $create = @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' })[0]
         $create | Should -Contain 'chore: run avm pre-commit [skip ci]'
+        $create | Should -Contain '--base=main'
+        $create | Should -Contain "--head=$($script:state.Branch)"
+        $create | Should -Not -Contain '--no-maintainer-edit'
+        $script:state.PrBody | Should -BeExactly @"
+Automated ``avm pre-commit`` run from [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools).
+
+This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit so downstream workflows are not retriggered.
+"@
         $merge = @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'merge' })[0]
         $merge | Should -Contain '--delete-branch'
         $merge | Should -Contain '--admin'
         $merge | Should -Contain '--squash'
+        $merge | Should -Contain '--subject'
+        $merge | Should -Contain 'chore: run avm pre-commit [skip ci]'
+        $merge | Should -Contain '--body='
+        $merge | Should -Contain '--match-head-commit'
+        $merge | Should -Contain ('c' * 40)
+        $script:state.ApiCalls | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'merge' -and $MaxRetries -eq 5 }
         Test-Path -LiteralPath $script:state.Root | Should -BeFalse
     }
 
@@ -200,9 +235,74 @@ Describe 'Existing repository-sync publication core' -Tag Component {
         $script:state.RemotePaths = @('main.tf')
         $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @()
-        $result.Status | Should -Be 'Planned'
+        @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
+        $result.HasChanges | Should -BeTrue
         $script:state.GhCalls | Should -HaveCount 0
+        $script:state.ApiCalls | Should -HaveCount 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' }) | Should -HaveCount 0
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
+    }
+
+    It 'preserves Terraform no-change behavior and the caller issue array' {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.NoChanges = $true
+        $issues = @('existing issue')
+        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog $issues
+        @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
+        $result.HasChanges | Should -BeFalse
+        [object]::ReferenceEquals($result.IssueLog, $issues) | Should -BeTrue
+        $script:state.GhCalls | Should -HaveCount 0
+        $script:state.ApiCalls | Should -HaveCount 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'push' }) | Should -HaveCount 0
+    }
+
+    It 'propagates Terraform preparation and publication failures without reporting success' -ForEach @(
+        'clone', 'prepare', 'commit', 'push', 'create', 'merge'
+    ) {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.LocalPaths = @('main.tf')
+        $script:state.RemotePaths = @('main.tf')
+        $script:failureStage = $_
+        if ($_ -eq 'prepare') {
+            Mock Invoke-AvmPreCommitWithUpgradeRetry { throw 'prepare failed' }
+        } elseif ($_ -in @('clone', 'commit', 'push')) {
+            Mock Invoke-RepositoryGit { throw "$script:failureStage failed" } -ParameterFilter { $Arguments -contains $script:failureStage }
+        } else {
+            Mock Invoke-RepositoryGitHub { throw "$script:failureStage failed" } -ParameterFilter { $Arguments -contains $script:failureStage }
+        }
+        { Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @() } |
+            Should -Throw "*Administrative corrective action is required*$script:failureStage failed*"
+        $script:state.Merged | Should -BeFalse
+        if ($script:state.Root) { Test-Path -LiteralPath $script:state.Root | Should -BeFalse }
+    }
+
+    It 'keeps cleanup failure as a warning without masking the Terraform outcome' -ForEach @($false, $true) {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.NoChanges = $true
+        $script:state.CleanupFailureEnabled = $true
+        Mock Remove-Item { throw [System.IO.IOException]::new('cleanup unavailable') } -ParameterFilter {
+            $script:state.CleanupFailureEnabled -and $script:state.Root -and
+            $LiteralPath -ceq (Split-Path -Parent $script:state.Root)
+        }
+        Mock Write-Warning {}
+        if ($_) { Mock Invoke-AvmPreCommitWithUpgradeRetry { throw 'prepare failed' } }
+        try {
+            if ($_) {
+                { Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @() } |
+                    Should -Throw '*prepare failed*'
+            } else {
+                $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+                $result.HasChanges | Should -BeFalse
+            }
+            Should -Invoke Write-Warning -Exactly 1 -ParameterFilter { $Message -like 'Failed to clean up*cleanup unavailable*' }
+        } finally {
+            $script:state.CleanupFailureEnabled = $false
+            if ($script:state.Root) {
+                Microsoft.PowerShell.Management\Remove-Item -LiteralPath (Split-Path -Parent $script:state.Root) -Recurse -Force
+            }
+        }
     }
 
     It 'creates a CODEOWNERS plan using that same diff, Git, and candidate implementation without merging' {
@@ -331,5 +431,48 @@ Describe 'Existing repository-sync publication core' -Tag Component {
 Describe 'Original repository-sync preparation regressions' -Tag Component {
     It 'retains the standalone pre-commit result, metadata, and upgrade cases' {
         { & (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'Test-AvmPreCommit.ps1') } | Should -Not -Throw
+    }
+
+    It 'retains the original managed-file pin fallback and upgrade decisions' {
+        { & (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'Test-ManagedFilesUpgrade.ps1') } | Should -Not -Throw
+    }
+
+    It 'keeps standalone input-contract checks valid after shared-library extraction' {
+        { & (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'Test-RepositorySyncInputs.ps1') } | Should -Not -Throw
+    }
+
+    It 'loads the module dependency before invoking real local Git in a fresh PowerShell process' {
+        $pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+        $child = @'
+$ErrorActionPreference = 'Stop'
+if (Get-Module Avm.Authoring) { throw 'The child must start without Avm.Authoring loaded.' }
+. (Join-Path $env:SYNC_TEST_ROOT 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryFileSync.ps1')
+if (Get-Command Invoke-AvmPreCommitForRepository -ErrorAction SilentlyContinue) { throw 'The shared library loaded the Terraform adapter.' }
+if (-not (Get-Command Invoke-RepositoryFileSync -CommandType Function)) { throw 'The standalone shared core is missing.' }
+. (Join-Path $env:SYNC_TEST_ROOT 'repository-management' 'repository-sync' 'scripts' 'lib' 'AvmPreCommit.ps1')
+function Invoke-RepositoryFileSync {
+    param($Repository, $DefaultBranch, $PlanOnly, $State, $Prepare)
+    if (-not (Get-Module Avm.Authoring)) { throw 'Missing module before clone.' }
+    $probe = Invoke-RepositorySyncProcess -Command git -Arguments @('--version')
+    if ($probe.ExitCode -ne 0 -or $probe.StdOut -notmatch '^git version ') { throw 'Local Git transport failed.' }
+    return @{ HasChanges = $false; Status = 'NoChange' }
+}
+$result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/offline-test' -defaultBranch main -issueLog @()
+if ($result.HasChanges -or $result.Count -ne 2) { throw 'Unexpected legacy result.' }
+'fresh-process-transport-ok'
+'@
+        $modulePath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psm1'
+        $module = Get-Module Avm.Authoring | Where-Object { $_.Path -ceq $modulePath } | Select-Object -First 1
+        $output = & $module {
+            param($Executable, $Code, $Root)
+            Invoke-AvmProcess -FilePath $Executable -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $Code) `
+                -TimeoutSec 60 -EnvVars @{
+                    SYNC_TEST_ROOT = $Root
+                    PSModulePath = (Join-Path $Root 'src') + [System.IO.Path]::PathSeparator + $env:PSModulePath
+                    GH_TOKEN = $null
+                    GITHUB_TOKEN = $null
+                }
+        } $pwsh $child $script:repoRoot
+        $output.StdOut.Trim() | Should -BeExactly 'fresh-process-transport-ok'
     }
 }

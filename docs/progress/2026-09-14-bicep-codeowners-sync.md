@@ -21,6 +21,14 @@ with the existing repository-sync clone/diff/branch/commit/pull-request/merge
 path. Both Terraform preparation and CODEOWNERS rendering must call the same
 shared core, preserving the existing Terraform defaults.
 
+The shared core is mechanically separated into `RepositoryFileSync.ps1`,
+with the Terraform adapter left in `AvmPreCommit.ps1`. The compatibility pass
+also restores the exact return shape, fresh-process module import, five clone
+retries, and warning-only cleanup. Bicep-specific strict checks become an
+explicit opt-in, and the workflow is renamed to `repository-management-bicep-sync.yml`.
+The existing Terraform workflow keeps its filename and runtime configuration;
+only its display name becomes `Repository Management - Terraform Sync`.
+
 [Operator documentation](../bicep-codeowners-sync.md) describes setup, modes,
 the daily four-hour schedule offset by two hours from repository sync, and the
 fail-closed safeguards.
@@ -39,22 +47,34 @@ fail-closed safeguards.
 - [x] Remove the duplicate CODEOWNERS engine and route both callers through repository sync.
 - [x] Prove the shared call path and existing defaults with offline regression tests.
 - [x] Revalidate and prepare the reuse refactor for publication on the existing review.
+- [x] Complete the separate-library extraction and focused original-contract regression cases.
+- [x] Validate and prepare the compatibility corrections and workflow names for publication.
 
 ## Validation
 
-After the reuse refactor,
-`.\build.ps1 -Tasks test-repository-management,pre-commit` passed all 196 focused
-tests, 1,204 unit tests (8 skipped), and 47 component tests. The cases exercise
-both adapters through the shared publisher, original Terraform preparation and
-upgrade regressions, retained plan/title/branch-deletion defaults, strict
-CODEOWNERS scope, stable branch reuse, no-merge plans, and merge/head guards.
-The existing module lint completed with warnings; there were no build errors.
+After extraction and compatibility corrections,
+`.\build.ps1 -Tasks test-repository-management,pre-commit` passed all 204 focused
+tests, 1,212 unit tests (8 skipped), and 59 component tests. Focused cases prove
+the exact legacy return keys, preparation/upgrade fallback, unchanged no-change
+and plan behavior, original publication metadata/flags, five transient clone
+retries, and cleanup warnings preserving successful outcomes and primary errors.
+A genuinely fresh `pwsh -NoProfile` process starts without `Avm.Authoring`,
+loads the shared library without the Terraform adapter, then verifies that the
+adapter imports the module before invoking real local Git through the shared
+transport. Remote APIs are mocked. The existing module lint reported 176
+warnings; there were no build errors.
+
+The three original preparation/result/upgrade helper bodies and all four
+Terraform parameter signatures match the pre-task `473d6a6` source exactly.
+All five generic validation helpers were extracted without body changes. The
+shared command transport, exact-head merge, and disposable-clone configuration
+remain documented intentional changes; no live Terraform sync was authorized.
 
 The separate CODEOWNERS `GitHubSync.ps1`, API/engine tests, and JSON-body
 component suite were removed. `Invoke-RepositorySync.ps1` still calls
 `Invoke-AvmPreCommitForRepository`; its preparation adapter and
-`Invoke-AvmBicepCodeownersSync` now both call `Invoke-RepositoryFileSync` in
-`repository-sync/scripts/lib/AvmPreCommit.ps1`. Both share the existing retry
+`Invoke-AvmBicepCodeownersSync` both call `Invoke-RepositoryFileSync` in
+`repository-sync/scripts/lib/RepositoryFileSync.ps1`. Both share the existing retry
 transport and repository tree/file helpers.
 
 Development used only local mocked tests and live read-only inspection; no
