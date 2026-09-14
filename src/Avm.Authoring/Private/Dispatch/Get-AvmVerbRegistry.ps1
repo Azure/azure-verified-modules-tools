@@ -67,7 +67,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('test')
             Cmdlet  = 'Invoke-AvmTest'
-            Summary = 'Build/validate the current module via the resolved engine.'
+            Summary = 'Build Bicep sources or validate Terraform examples and warn about module coverage.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('test', 'unit')

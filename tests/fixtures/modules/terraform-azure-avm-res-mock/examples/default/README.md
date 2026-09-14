@@ -6,7 +6,13 @@
 module "test" {
   source = "../../"
 
-  location = "westus3"
+  location                 = "westus3"
+  create_example_resources = false
+}
+
+output "resource_ids" {
+  description = "The example resource IDs accessed through the deprecated compatibility output."
+  value       = module.test.resource_ids
 }
 ```
 
@@ -15,7 +21,7 @@ module "test" {
 
 The following requirements are needed by this module:
 
-- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9.0, < 2.0.0)
+- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.15.0, < 2.0.0)
 
 ## Resources
 
@@ -32,7 +38,11 @@ No optional inputs.
 
 ## Outputs
 
-No outputs.
+The following outputs are exported:
+
+### <a name="output_resource_ids"></a> [resource\_ids](#output\_resource\_ids)
+
+Description: The example resource IDs accessed through the deprecated compatibility output.
 
 ## Modules
 

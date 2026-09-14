@@ -1,12 +1,15 @@
 variable "create_example_resources" {
   type        = bool
   default     = false
-  description = <<DESCRIPTION
-Whether to create the example AVM-shaped resources/data sources in this mock module.
+  description = "Deprecated alias for create_mock_resources. Either input enables the mock module's example resources."
+  nullable    = false
 
-Defaults to false so that any apply path (terraform plan in pr-check, terraform test integration
-against real Azure) does not provision real resources. Set to true in the unit test (which uses
-mock_provider blocks) to exercise the full apply path against mocked providers.
-DESCRIPTION
+  deprecated = "Use the create_mock_resources input instead."
+}
+
+variable "create_mock_resources" {
+  type        = bool
+  default     = false
+  description = "Whether to create example Azure resources. Disabled by default; enable only in unit tests with mock providers."
   nullable    = false
 }

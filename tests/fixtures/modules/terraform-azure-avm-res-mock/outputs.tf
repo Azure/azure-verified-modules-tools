@@ -1,3 +1,17 @@
+output "example_resource_counts" {
+  description = "The resource counts used to verify this mock module through a test wrapper."
+  value = {
+    resource_groups           = length(azapi_resource.example_rg)
+    singleton_resource_groups = length(azapi_resource.example_rg_singleton)
+    telemetry                 = length(modtm_telemetry.telemetry)
+  }
+}
+
+output "example_resource_ids" {
+  description = "The IDs of the example resources created by the module, keyed by example_keys."
+  value       = local.example_resource_ids
+}
+
 output "required_interface_values" {
   description = "The required AzAPI interface values exposed by this mock module."
   value = {
@@ -14,8 +28,9 @@ output "resource_id" {
 }
 
 output "resource_ids" {
-  description = "The IDs of the example resources created by the module, keyed by example_keys."
-  value       = { for k, r in azapi_resource.example_rg : k => r.id }
+  deprecated  = "Use the example_resource_ids output instead."
+  description = "Deprecated alias for example_resource_ids."
+  value       = local.example_resource_ids
 }
 
 output "subscription_id" {

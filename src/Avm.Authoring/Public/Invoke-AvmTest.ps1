@@ -1,24 +1,29 @@
 function Invoke-AvmTest {
     <#
     .SYNOPSIS
-        Build/validate every source file in the resolved module under $Path.
+        Build Bicep sources or validate Terraform examples under $Path.
 
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
           - bicep      -> Invoke-AvmBicepTest      ('bicep build --stdout' per file)
-          - terraform  -> Invoke-AvmTerraformTest  ('terraform validate -json' with auto-init)
+          - terraform  -> Invoke-AvmTerraformTest  ('terraform validate -json' per example with auto-init)
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
 
         This verb covers the cheap build-validation pass and runs no
-        tests: it reports FilesProcessed (source files validated) and
+        tests: it reports FilesProcessed (Bicep sources or direct Terraform
+        example configuration files) and
         carries no run counts. The real test tiers are the separate
         'avm test unit', 'avm test integration' and 'avm test e2e'
         verbs, which execute 'terraform test' and report
         RunsTotal/RunsPassed/RunsFailed. In the gauntlets this verb is
         the step named 'validate' for that reason.
+
+        Terraform includes .e2eignore examples and warns when the root module
+        or an immediate modules/ configuration is not reached by a local
+        example. Coverage gaps do not fail validation. No examples is skipped.
 
         Routed by the dispatcher: 'avm test'.
 
@@ -34,8 +39,9 @@ function Invoke-AvmTest {
         lock-pinned version.
 
     .PARAMETER NoInit
-        Terraform-only: skip the auto 'terraform init -backend=false -upgrade' step,
-        which otherwise always runs. Ignored for bicep contexts.
+        Terraform-only: skip each example's 'terraform init -backend=false
+        -upgrade' step and use its existing initialization. Module coverage is
+        not assessed with this switch and reports a warning. Ignored for Bicep.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,

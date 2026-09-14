@@ -57,6 +57,12 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform `avm test` now validates every direct example rather than treating
+  the reusable library as a root module, supporting deprecated variables and
+  outputs. Missing local root/submodule coverage produces warnings only.
+  Coverage uses freshly initialized module manifests, excludes test-only
+  helpers and downloaded copies, and is not assessed with `--no-init`.
+  Examples marked `.e2eignore` are included; no examples reports `skipped`.
 - Managed Mapotf now pins 0.1.12, which resolves downloaded modules through
   Terraform's module manifest so Git and registry subdirectory sources use
   the correct required and optional inputs. It retains batched provider-schema

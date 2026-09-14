@@ -7,7 +7,7 @@
 
 The following requirements are needed by this module:
 
-- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9.0, < 2.0.0)
+- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.15.0, < 2.0.0)
 
 - <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.12)
 
@@ -45,11 +45,15 @@ The following input variables are optional (have default values):
 
 ### <a name="input_create_example_resources"></a> [create\_example\_resources](#input\_create\_example\_resources)
 
-Description: Whether to create the example AVM-shaped resources/data sources in this mock module.
+Description: Deprecated alias for create\_mock\_resources. Either input enables the mock module's example resources.
 
-Defaults to false so that any apply path (terraform plan in pr-check, terraform test integration  
-against real Azure) does not provision real resources. Set to true in the unit test (which uses  
-mock\_provider blocks) to exercise the full apply path against mocked providers.
+Type: `bool`
+
+Default: `false`
+
+### <a name="input_create_mock_resources"></a> [create\_mock\_resources](#input\_create\_mock\_resources)
+
+Description: Whether to create example Azure resources. Disabled by default; enable only in unit tests with mock providers.
 
 Type: `bool`
 
@@ -146,6 +150,14 @@ Default: `{}`
 
 The following outputs are exported:
 
+### <a name="output_example_resource_counts"></a> [example\_resource\_counts](#output\_example\_resource\_counts)
+
+Description: The resource counts used to verify this mock module through a test wrapper.
+
+### <a name="output_example_resource_ids"></a> [example\_resource\_ids](#output\_example\_resource\_ids)
+
+Description: The IDs of the example resources created by the module, keyed by example\_keys.
+
 ### <a name="output_required_interface_values"></a> [required\_interface\_values](#output\_required\_interface\_values)
 
 Description: The required AzAPI interface values exposed by this mock module.
@@ -156,7 +168,7 @@ Description: The ID of the resource created by the module.
 
 ### <a name="output_resource_ids"></a> [resource\_ids](#output\_resource\_ids)
 
-Description: The IDs of the example resources created by the module, keyed by example\_keys.
+Description: Deprecated alias for example\_resource\_ids.
 
 ### <a name="output_subscription_id"></a> [subscription\_id](#output\_subscription\_id)
 
