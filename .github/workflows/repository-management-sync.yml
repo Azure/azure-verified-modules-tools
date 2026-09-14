@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Repository Sync
+name: Repository Management - Terraform Sync
 
 on:
   repository_dispatch:

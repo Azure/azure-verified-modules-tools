@@ -9,6 +9,8 @@ on:
       - repository-management/repository-config/config.json
       - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
       - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
+      - repository-management/repository-sync/scripts/lib/RepositoryFileSync.ps1
+      - repository-management/repository-sync/scripts/lib/RepoTree.ps1
       - repository-management/repository-sync/scripts/lib/ManagedFilesUpgrade.ps1
       - repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1
       - repository-management/repository-sync/scripts/lib/TeamsAndUsers.ps1

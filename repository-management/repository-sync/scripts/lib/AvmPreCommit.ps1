@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'RepositoryFileSync.ps1')
+
 function Assert-AvmPreCommitResult {
     param(
         [AllowNull()]
@@ -127,160 +129,28 @@ function Invoke-AvmPreCommitForRepository {
         [array]$issueLog
     )
 
-    $modeTag = if ($planOnly) { "[PLAN]" } else { "[APPLY]" }
-    $result = @{
-        IssueLog = $issueLog
-        HasChanges = $false
-    }
-
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-pre-commit-" + [System.Guid]::NewGuid().ToString())
     try {
-        gh auth setup-git
-        if ($LASTEXITCODE -ne 0) { throw "gh auth setup-git exited $LASTEXITCODE" }
-
-        Write-Host "$modeTag Cloning $orgAndRepoName into $tempDir..." -ForegroundColor DarkGray
-        $cloneResult = Invoke-GitHubCliWithRetry `
-            -commands @(
-                @{
-                    Arguments = @("repo", "clone", $orgAndRepoName, "`"$tempDir`"", "--", "--quiet", "--depth", "1", "--branch", $defaultBranch)
-                    OutputLog = "gh-clone.output.log"
-                }
-            ) `
-            -errorLog "gh-clone.error.log" `
-            -maxRetries 5 `
-            -retryDelayIncremental 5 `
-            -printOutputOnError
-        if (!$cloneResult.success) {
-            throw "gh repo clone exited $($cloneResult.exitCode): $($cloneResult.error)"
+        Import-Module Avm.Authoring -ErrorAction Stop
+        $prepareState = @{
+            RepoId = $repoId
+            RepositoryConfigDir = $repositoryConfigDir
+            ForceFileUpdate = $forceFileUpdate
         }
-
-        $null = Remove-AvmMetadataFileConflict `
-            -repoRoot $tempDir `
-            -orgAndRepoName $orgAndRepoName `
-            -modeTag $modeTag
-
-        Push-Location $tempDir
-        try {
-            $upgradeDecision = Resolve-AvmManagedFilesUpgradeDecision `
-                -orgAndRepoName $orgAndRepoName `
-                -repoRoot $tempDir `
-                -forceFileUpdate $forceFileUpdate
-            Write-Host "$modeTag $orgAndRepoName - managed files: $($upgradeDecision.Reason)." -ForegroundColor DarkGray
-
-            $preCommitResult = Invoke-AvmPreCommitWithUpgradeRetry `
-                -repoId $repoId `
-                -repositoryConfigDir $repositoryConfigDir `
-                -upgradeManagedFiles $upgradeDecision.Upgrade
-            Assert-AvmPreCommitResult -preCommitResult $preCommitResult
-
-            $status = git status --porcelain
-            $result.HasChanges = -not [string]::IsNullOrWhiteSpace($status)
-            if (-not $result.HasChanges) {
-                Write-Host "$modeTag $orgAndRepoName - avm pre-commit produced no changes."
-                return $result
+        $result = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
+            -PlanOnly:$planOnly -State $prepareState -Prepare {
+                param($context)
+                $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
+                $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
+                $upgrade = Resolve-AvmManagedFilesUpgradeDecision -orgAndRepoName $context.Repository.full_name `
+                    -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
+                Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray
+                $prepared = Invoke-AvmPreCommitWithUpgradeRetry -repoId $context.State.RepoId `
+                    -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade
+                Assert-AvmPreCommitResult -preCommitResult $prepared
             }
-
-            Write-Host "$modeTag $orgAndRepoName - avm pre-commit produced changes:" -ForegroundColor Cyan
-            git status --short
-
-            if ($planOnly) {
-                Write-Host "$modeTag Plan mode is enabled; not opening a pre-commit PR."
-                return $result
-            }
-
-            $commitAuthorName = "azure-verified-modules[bot]"
-            $commitAuthorEmail = "1049636+azure-verified-modules[bot]@users.noreply.github.com"
-            $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
-            $branchName = "avm-bot/pre-commit-$timestamp"
-            $prTitle = "chore: run avm pre-commit [skip ci]"
-            $prBody = @"
-Automated ``avm pre-commit`` run from [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools).
-
-This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit so downstream workflows are not retriggered.
-"@
-
-            git checkout -q -b $branchName
-            if ($LASTEXITCODE -ne 0) { throw "git checkout -b $branchName exited $LASTEXITCODE" }
-
-            git add --all
-            if ($LASTEXITCODE -ne 0) { throw "git add --all exited $LASTEXITCODE" }
-
-            git -c "user.name=$commitAuthorName" -c "user.email=$commitAuthorEmail" commit -q -m $prTitle
-            if ($LASTEXITCODE -ne 0) { throw "git commit exited $LASTEXITCODE" }
-
-            git push --quiet --set-upstream origin $branchName
-            if ($LASTEXITCODE -ne 0) { throw "git push exited $LASTEXITCODE" }
-
-            $prBodyFile = Join-Path $tempDir "pr-body.md"
-            Set-Content -LiteralPath $prBodyFile -Value $prBody -Encoding utf8
-            $prCreateResult = Invoke-GitHubCliWithRetry `
-                -commands @(
-                    @{
-                        Arguments = @(
-                            "pr", "create",
-                            "--repo=$orgAndRepoName",
-                            "--base=$defaultBranch",
-                            "--head=$branchName",
-                            "--title=`"$prTitle`"",
-                            "--body-file=`"$prBodyFile`""
-                        )
-                        OutputLog = "gh-pr-create.output.log"
-                    }
-                ) `
-                -errorLog "gh-pr-create.error.log" `
-                -maxRetries 5 `
-                -retryDelayIncremental 5 `
-                -printOutputOnError `
-                -returnOutput
-            if (!$prCreateResult.success) {
-                throw "gh pr create exited $($prCreateResult.exitCode): $($prCreateResult.error)"
-            }
-
-            $prUrl = (@($prCreateResult.output) | Where-Object { $_ -and $_.ToString().Trim() -ne "" } | Select-Object -Last 1).ToString().Trim()
-            if ([string]::IsNullOrWhiteSpace($prUrl)) { throw "gh pr create returned no URL on stdout" }
-            Write-Host "Opened PR: $prUrl" -ForegroundColor DarkGray
-
-            $prMergeResult = Invoke-GitHubCliWithRetry `
-                -commands @(
-                    @{
-                        Arguments = @(
-                            "pr", "merge", $prUrl,
-                            "--repo=$orgAndRepoName",
-                            "--squash",
-                            "--admin",
-                            "--delete-branch",
-                            "--subject=`"$prTitle`"",
-                            "--body="
-                        )
-                        OutputLog = "gh-pr-merge.output.log"
-                    }
-                ) `
-                -errorLog "gh-pr-merge.error.log" `
-                -maxRetries 5 `
-                -retryDelayIncremental 5 `
-                -printOutputOnError
-            if (!$prMergeResult.success) {
-                throw "gh pr merge exited $($prMergeResult.exitCode): $($prMergeResult.error)"
-            }
-            Write-Host "Merged PR: $prUrl" -ForegroundColor Green
-        } finally {
-            Pop-Location
-        }
+        return @{ IssueLog = $issueLog; HasChanges = $result.HasChanges }
     } catch {
         Write-Error "avm pre-commit failed for $orgAndRepoName. Administrative corrective action is required. $($_.Exception.Message)"
         throw
-    } finally {
-        if (Test-Path $tempDir) {
-            try {
-                Get-ChildItem -Path $tempDir -Recurse -Force | ForEach-Object {
-                    try { $_.Attributes = "Normal" } catch { }
-                }
-                Remove-Item -Recurse -Force $tempDir
-            } catch {
-                Write-Warning "Failed to clean up $tempDir : $_"
-            }
-        }
     }
-
-    return $result
 }
