@@ -40,6 +40,7 @@ BeforeAll {
             state = if ($script:state.Merged) { 'closed' } else { 'open' }
             merged = $script:state.Merged
             draft = $false
+            auto_merge = $null
             maintainer_can_modify = $false
             user = New-CodeownersTestBot
             merged_by = New-CodeownersTestBot
@@ -494,6 +495,7 @@ Describe 'Guarded Bicep CODEOWNERS synchronization' {
         @{ Area = 'pr'; Property = 'maintainer_can_modify'; Value = $true }
         @{ Area = 'pr'; Property = 'state'; Value = 'closed' }
         @{ Area = 'pr'; Property = 'merged'; Value = $true }
+        @{ Area = 'pr'; Property = 'auto_merge'; Value = [pscustomobject]@{ merge_method = 'squash' } }
         @{ Area = 'pr'; Property = 'html_url'; Value = 'https://example.invalid/pull/123' }
     ) {
         Enable-CodeownersTestCandidate
@@ -520,6 +522,19 @@ Describe 'Guarded Bicep CODEOWNERS synchronization' {
         } -ParameterFilter { $Endpoint -like '*/pulls/123' }
         { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*expected AVM App bot*'
         Get-CodeownersTestWrites | Should -HaveCount 0
+    }
+
+    It 'does not update an existing auto-merge candidate during plan-only execution' {
+        Enable-CodeownersTestCandidate
+        $script:state.HeadContent = $script:snapshot.Content.Replace('@alice ', '@previous ')
+        Mock Invoke-AvmCodeownersApi {
+            $candidate = New-CodeownersTestPullRequest
+            $candidate.auto_merge = [pscustomobject]@{ merge_method = 'squash' }
+            $candidate
+        } -ParameterFilter { $Endpoint -like '*/pulls/123' }
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*already has auto-merge enabled*'
+        Get-CodeownersTestWrites | Should -HaveCount 0
+        $script:state.MergeCalls | Should -HaveCount 0
     }
 
     It 'checks every changed-file page even when the metadata claims one file' {

@@ -253,6 +253,9 @@ function Assert-AvmCodeownersPullRequestIdentity {
 
     Set-StrictMode -Version 3.0
     Assert-AvmCodeownersBot -User $PullRequest.user
+    if ($PullRequest.PSObject.Properties['auto_merge'] -and $null -ne $PullRequest.auto_merge) {
+        throw [System.InvalidOperationException]::new('The CODEOWNERS candidate already has auto-merge enabled; refusing to update or merge it. An operator must review that configuration first.')
+    }
     $expectedState = if ($Merged) { 'closed' } else { 'open' }
     if ($PullRequest.number -le 0 -or $PullRequest.state -cne $expectedState -or $PullRequest.draft -or
         [bool]$PullRequest.merged -ne $Merged.IsPresent -or $PullRequest.maintainer_can_modify -or

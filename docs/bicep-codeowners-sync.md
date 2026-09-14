@@ -93,6 +93,8 @@ pre-commit/clone path is deliberately not used.
 No branch or pull request mutation happens when main already matches. Otherwise,
 the only branch is `avm-bot/bicep-codeowners-sync`, with at most one open candidate.
 Existing candidate and commit authors must be the authenticated AVM App bot.
+Candidates with auto-merge already enabled are rejected before any head update,
+so a plan cannot inadvertently advance a separately configured automatic merge.
 Updates retain the old head and current main as ancestors and never force-push
 or delete the branch. Unexpected user work is rejected, not overwritten.
 
