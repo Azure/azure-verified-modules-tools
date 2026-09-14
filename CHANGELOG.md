@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Bicep management `plan_only` is now a strict dry run, and scheduled CODEOWNERS
+  sync no longer uses a separate repository-variable enable gate. Manual
+  metadata backfill reuses that workflow and the shared file publisher, with
+  review-only application and separately opted-in source wiring.
 - Managed Mapotf now pins 0.1.12, which resolves downloaded modules through
   Terraform's module manifest so Git and registry subdirectory sources use
   the correct required and optional inputs. It retains batched provider-schema

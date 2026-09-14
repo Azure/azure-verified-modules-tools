@@ -5,10 +5,11 @@ They never clone, publish, query Azure/GitHub, install dependencies, or change
 legacy CSVs. Keep both sources during the 60-day per-ecosystem migration.
 `reviewed-seeds.json` is deliberately empty: no repository is enabled by default.
 
-Load an Avm.Authoring release exporting `New-AvmModuleMetadataSeed`,
+Load an Avm.Authoring release or trusted source checkout exporting `New-AvmModuleMetadataSeed`,
 `Initialize-AvmModuleMetadata`, and `Test-AvmModuleMetadata`. All schema validation
-uses that release's packaged schema; no remote schema or mutable module code is
-fetched. The sync workflow fails its capability check until this API is released.
+uses its packaged schema; no remote schema or mutable module code is fetched.
+Terraform repository sync uses the released API and fails its capability check
+until that release exists. Bicep management uses the trusted tools `main` checkout.
 
 ## Prepare and review
 
@@ -170,5 +171,30 @@ Backfill runs on the sync's temporary target checkout before ordinary pre-commit
 Its stable `avm-bot/module-metadata-backfill` branch keeps CI enabled and is never
 auto-merged. An existing open review or existing branch is deferred rather than
 force-updated. Plan mode never commits, pushes, or opens a review. Normal sync
-behavior remains unchanged with backfill disabled. The forthcoming Bicep sync can
-call the same local application script; no Bicep fleet trigger is added here.
+behavior remains unchanged with backfill disabled. The shared publisher prepares
+metadata in its disposable clone even for dry runs, but `plan_only` returns
+before committing, pushing, or opening a review. Apply uses a target-only App
+token and `ReviewOnly`; metadata changes never auto-merge.
+
+## Bicep workflow
+
+Use the existing `repository-management-bicep-sync.yml` workflow introduced by
+[#112](https://github.com/Azure/azure-verified-modules-tools/pull/112), not a
+separate backfill workflow. Register a complete reviewed manifest for
+`Azure/bicep-registry-modules` in the same `reviewed-seeds.json` map.
+
+Manual dispatch with `metadata_backfill: true` selects metadata backfill
+**instead of** CODEOWNERS synchronization. `plan_only: true` is a strict dry run;
+`plan_only: false` opens a reviewable metadata change without merging it.
+`metadata_update_source` remains false by default and requires consent on each
+reviewed manifest entry. Scheduled runs only synchronize CODEOWNERS.
+
+The workflow imports the metadata API from its trusted tools `main` checkout,
+validates the seed registration before minting an App token, and reuses
+`Invoke-RepositoryFileSync`. Complete module discovery runs against a full
+disposable checkout; publication permits only the reviewed `metadata.json` and
+opted-in `main.bicep` paths. The stable `avm-bot/bicep-metadata-backfill` branch
+is deferred if a previous branch or review still exists.
+
+No workflow dispatch, production variable change, or live backfill is performed
+by implementing this integration.

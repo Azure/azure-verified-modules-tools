@@ -15,7 +15,8 @@ and the dual-source catalog synchronization workflow. Module-owned
 The one-off backfill is opt-in, preserves existing metadata, and requires
 reviewed values where a child's identity cannot be derived safely. No production
 workflow, fleet backfill, registry publication, or cutover runs in this slice.
-The forthcoming Bicep sync can consume the same initialization interface.
+The Bicep management workflow consumes the same initialization interface; its
+integration is tracked in [Bicep metadata workflow integration](2026-09-14-bicep-metadata-workflow.md).
 
 The 2026-09-10 Bicep owner-team snapshot is an additional one-off backfill
 input. It contains 240 complete team records, including 12 teams with more than
@@ -65,9 +66,11 @@ or its personal-name fields.
   opt-in: the initial Bicep rewrite can change the compiled template, and
   Terraform readers need the transport consumer before strict unused-local
   checks can accept them.
-- Bicep fleet delivery depends on the forthcoming Bicep sync.
-- Release Avm.Authoring with the new metadata API before enabling repository
-  backfill. Review complete seed manifests before registering any repository;
+- Bicep fleet delivery uses the workflow from
+  [#112](https://github.com/Azure/azure-verified-modules-tools/pull/112).
+  The follow-on integration keeps plans read-only and metadata apply review-only.
+- Release Avm.Authoring with the new metadata API before enabling Terraform
+  repository backfill; Bicep uses the trusted tools checkout. Review complete seed manifests before registering any repository;
   the checked-in seed map remains empty.
 - Delivery into the Bicep common static suite and Terraform managed validation
   files remains upstream rollout work. The shared validator and source-literal

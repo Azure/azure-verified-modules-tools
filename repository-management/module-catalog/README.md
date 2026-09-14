@@ -64,7 +64,8 @@ Cross-repository pushes are not transactional: an interrupted publication may
 leave one reviewable update and must be retried after inspection. No automatic
 merge, direct `main` push, permission edit, or obsolete-source deletion is used.
 
-Fleet metadata/backfill review, Bicep sync delivery, Terraform telemetry transport,
+Fleet metadata/backfill review, activation of the existing Bicep management
+workflow's metadata mode, Terraform telemetry transport,
 refreshing the private-source MAR mirror, and the approved per-ecosystem cutover
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team how-to when enabling the workflow; generated catalogs do not belong there.

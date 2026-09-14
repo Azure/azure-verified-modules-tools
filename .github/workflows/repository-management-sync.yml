@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Repository Sync
+name: Repository Management - Terraform Sync
 
 on:
   repository_dispatch:
@@ -109,6 +109,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Install Avm.Authoring
+        id: avm-authoring
         shell: pwsh
         env:
           METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
@@ -129,6 +130,7 @@ jobs:
             . (Join-Path $PWD 'scripts' 'lib' 'AvmPreCommit.ps1')
             $backfillRepository = ([uri]$env:METADATA_BACKFILL_REPOSITORY_URL).AbsolutePath.Trim('/')
             $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $backfillRepository
+            "app-repository=$($backfillRepository.Split('/')[1])" >> $env:GITHUB_OUTPUT
           }
 
       - name: Create GitHub App Token
@@ -138,6 +140,7 @@ jobs:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.avm-authoring.outputs.app-repository }}
 
       - name: Resolve state backend
         id: state-backend

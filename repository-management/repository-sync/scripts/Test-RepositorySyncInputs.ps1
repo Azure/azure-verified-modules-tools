@@ -74,6 +74,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScript
 $workflowPath = Join-Path (Join-Path (Join-Path $repoRoot ".github") "workflows") "repository-management-sync.yml"
 $syncScriptPath = Join-Path $PSScriptRoot "Invoke-RepositorySync.ps1"
 $avmPreCommitPath = Join-Path (Join-Path $PSScriptRoot "lib") "AvmPreCommit.ps1"
+$sharedSyncPath = Join-Path $PSScriptRoot "lib" "RepositoryFileSync.ps1"
 $teamsAndUsersPath = Join-Path (Join-Path $PSScriptRoot "lib") "TeamsAndUsers.ps1"
 
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
@@ -149,6 +150,18 @@ $decisionCallParameters = Get-CommandParameterNames `
 Assert-True `
     -Actual ($decisionCallParameters -contains "forceFileUpdate") `
     -Description "Invoke-AvmPreCommitForRepository to forward forceFileUpdate"
+
+$sharedAst = Get-ScriptAst -Path $sharedSyncPath
+Assert-True `
+    -Actual ($null -ne (Get-FunctionAst -Ast $sharedAst -Name "Invoke-RepositoryFileSync")) `
+    -Description "the shared publisher to live in RepositoryFileSync.ps1"
+Assert-True `
+    -Actual ($null -eq (Get-FunctionAst -Ast $avmPreCommitAst -Name "Invoke-RepositoryFileSync")) `
+    -Description "AvmPreCommit.ps1 to contain only Terraform preparation and its adapter"
+$sharedCallParameters = Get-CommandParameterNames -Ast $preCommitFunction.Body -Name "Invoke-RepositoryFileSync"
+Assert-True `
+    -Actual ($sharedCallParameters -notcontains "VerifyCandidate") `
+    -Description "strict candidate validation to remain opt-in rather than change Terraform defaults"
 
 $teamsAndUsers = Get-Content -LiteralPath $teamsAndUsersPath -Raw
 Assert-True `
