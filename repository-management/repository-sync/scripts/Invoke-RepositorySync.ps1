@@ -182,8 +182,6 @@ $terraformVariables = @{
     identity_resource_group_name = $identityResourceGroupName
     is_protected_repo = $true
     github_teams = $githubTeams
-    codeowners_default_teams = $settings.CodeOwnersDefaultTeams
-    codeowners_file_protection_teams = $settings.CodeOwnersFileProtectionTeams
     topics = $settings.Topics
 }
 
@@ -231,6 +229,8 @@ if(!$repositoryCreationModeEnabled) {
             -orgAndRepoName $orgAndRepoName `
             -repoId $repoId `
             -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
+            -codeOwnersDefaultTeams $settings.CodeOwnersDefaultTeams `
+            -codeOwnersFileProtectionTeams $settings.CodeOwnersFileProtectionTeams `
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `

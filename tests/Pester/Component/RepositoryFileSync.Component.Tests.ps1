@@ -15,6 +15,13 @@ BeforeAll {
     }
     . (Join-Path $codeowners 'scripts' 'lib' 'Codeowners.ps1')
     . (Join-Path $codeowners 'scripts' 'lib' 'CodeownersSync.ps1')
+    $script:terraformOwnership = @{
+        codeOwnersDefaultTeams = @('module-reviewers')
+        codeOwnersFileProtectionTeams = @('engineering-reviewers')
+    }
+    $terraformTemplate = Get-Content -LiteralPath (Join-Path $shared '..' '..' 'CODEOWNERS.template') -Raw
+    $script:terraformContent = $terraformTemplate.Replace('__AVM_CODEOWNERS_RULES__',
+        "* @Azure/module-reviewers`n.github/CODEOWNERS @Azure/engineering-reviewers")
     $script:template = Get-Content -LiteralPath (Join-Path $codeowners 'CODEOWNERS.template') -Raw
     $script:content = $script:template.Replace('__AVM_MODULE_OWNERS__', '/avm/res/test/module/ @alice @Azure/azure-verified-modules-module-owners')
     $script:snapshot = [pscustomobject]@{
@@ -91,8 +98,13 @@ BeforeAll {
             $script:state.CloneRetries = $MaxRetries
             $root = $Arguments[-1]
             $script:state.Root = $root
-            $null = New-Item -ItemType Directory -Path (Join-Path $root '.github') -Force
-            [System.IO.File]::WriteAllText((Join-Path $root '.github' 'CODEOWNERS'), $script:content)
+            $null = New-Item -ItemType Directory -Path $root -Force
+            if ($script:state.CreateGithub) {
+                $null = New-Item -ItemType Directory -Path (Join-Path $root '.github') -Force
+            }
+            if ($null -ne $script:state.InitialCodeowners) {
+                [System.IO.File]::WriteAllText((Join-Path $root '.github' 'CODEOWNERS'), $script:state.InitialCodeowners)
+            }
             [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), 'original')
             $script:state.LocalHead = 'a' * 40
             return ''
@@ -111,7 +123,11 @@ BeforeAll {
             'add' { return '' }
             'rev-parse' { return $script:state.LocalHead }
             'ls-tree' { return "100644 blob $('e' * 40)`t$($Arguments[-1])" }
-            'status' { if ($script:state.NoChanges) { return '' }; return " M $($script:state.LocalPaths[0])" }
+            'status' {
+                $script:state.PreparedCodeownersBytes = [System.IO.File]::ReadAllBytes((Join-Path $WorkingDirectory '.github' 'CODEOWNERS'))
+                if ($script:state.NoChanges) { return '' }
+                return " M $($script:state.LocalPaths[0])"
+            }
             'diff' { return ($script:state.LocalPaths -join [char]0) + [char]0 }
             'write-tree' { return '2' * 40 }
             'push' {
@@ -153,6 +169,9 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             RemotePaths = @('.github/CODEOWNERS')
             OwnerErrors = @()
             Root = $null
+            CreateGithub = $true
+            InitialCodeowners = $script:content
+            PreparedCodeownersBytes = @()
             GitCalls = [System.Collections.Generic.List[object]]::new()
             GhCalls = [System.Collections.Generic.List[object]]::new()
             ApiCalls = [System.Collections.Generic.List[string]]::new()
@@ -195,13 +214,14 @@ Describe 'Existing repository-sync publication core' -Tag Component {
 
     It 'uses the original Terraform preparation and publication defaults through the shared core' {
         $script:state.Repo.full_name = 'Azure/terraform-test'
-        $script:state.LocalPaths = @('main.tf')
-        $script:state.RemotePaths = @('main.tf')
-        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $script:state.LocalPaths = @('main.tf', '.github/CODEOWNERS')
+        $script:state.RemotePaths = @('main.tf', '.github/CODEOWNERS')
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @()
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -BeTrue
         $result.IssueLog | Should -HaveCount 0
+        [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:terraformContent
         $script:state.Branch | Should -Match '^avm-bot/pre-commit-[0-9]{14}$'
         $script:state.Merged | Should -BeTrue
         $script:state.CloneRetries | Should -Be 5
@@ -239,12 +259,13 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
 
     It 'preserves Terraform plan-only behavior without opening or merging a candidate' {
         $script:state.Repo.full_name = 'Azure/terraform-test'
-        $script:state.LocalPaths = @('main.tf')
-        $script:state.RemotePaths = @('main.tf')
-        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $script:state.LocalPaths = @('main.tf', '.github/CODEOWNERS')
+        $script:state.RemotePaths = @('main.tf', '.github/CODEOWNERS')
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @()
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -BeTrue
+        [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:terraformContent
         $script:state.GhCalls | Should -HaveCount 0
         $script:state.ApiCalls | Should -HaveCount 0
         @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' }) | Should -HaveCount 0
@@ -254,11 +275,14 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     It 'preserves Terraform no-change behavior and the caller issue array' {
         $script:state.Repo.full_name = 'Azure/terraform-test'
         $script:state.NoChanges = $true
+        $script:state.InitialCodeowners = $script:terraformContent
+        Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'pass'; Steps = @() } }
         $issues = @('existing issue')
-        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog $issues
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -BeFalse
+        [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:state.InitialCodeowners
         [object]::ReferenceEquals($result.IssueLog, $issues) | Should -BeTrue
         $script:state.GhCalls | Should -HaveCount 0
         $script:state.ApiCalls | Should -HaveCount 0
@@ -266,7 +290,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     }
 
     It 'propagates Terraform preparation and publication failures without reporting success' -ForEach @(
-        'clone', 'prepare', 'commit', 'push', 'create', 'merge'
+        'clone', 'prepare', 'codeowners', 'commit', 'push', 'create', 'merge'
     ) {
         $script:state.Repo.full_name = 'Azure/terraform-test'
         $script:state.LocalPaths = @('main.tf')
@@ -274,12 +298,14 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $script:failureStage = $_
         if ($_ -eq 'prepare') {
             Mock Invoke-AvmPreCommitWithUpgradeRetry { throw 'prepare failed' }
+        } elseif ($_ -eq 'codeowners') {
+            Mock Set-TerraformCodeowners { throw 'codeowners failed' }
         } elseif ($_ -in @('clone', 'commit', 'push')) {
             Mock Invoke-RepositoryGit { throw "$script:failureStage failed" } -ParameterFilter { $Arguments -contains $script:failureStage }
         } else {
             Mock Invoke-RepositoryGitHub { throw "$script:failureStage failed" } -ParameterFilter { $Arguments -contains $script:failureStage }
         }
-        { Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @() } |
             Should -Throw "*Administrative corrective action is required*$script:failureStage failed*"
         $script:state.Merged | Should -BeFalse
@@ -298,10 +324,10 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         if ($_) { Mock Invoke-AvmPreCommitWithUpgradeRetry { throw 'prepare failed' } }
         try {
             if ($_) {
-                { Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @() } |
+                { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @() } |
                     Should -Throw '*prepare failed*'
             } else {
-                $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+                $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
                 $result.HasChanges | Should -BeFalse
             }
             Should -Invoke Write-Warning -Exactly 1 -ParameterFilter { $Message -like 'Failed to clean up*cleanup unavailable*' }
@@ -311,6 +337,34 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
                 & $script:removeItemCommand -LiteralPath (Split-Path -Parent $script:state.Root) -Recurse -Force
             }
         }
+    }
+
+    It 'repairs a legacy Terraform header with LF and UTF-8 without BOM' {
+        $retired = 'avm-terraform-' + 'governance'
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.InitialCodeowners = ([string][char]0xFEFF) + "# This file is managed by $retired.`r`n* @old-owner`r`n"
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @()
+        $result.HasChanges | Should -BeTrue
+        [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:terraformContent
+        $script:state.PreparedCodeownersBytes | Should -Not -Contain 13
+        ($script:state.PreparedCodeownersBytes[0..2] -join ',') | Should -Not -Be '239,187,191'
+        $script:state.GhCalls | Should -HaveCount 0
+    }
+
+    It 'creates Terraform CODEOWNERS when <MissingPath> is missing' -ForEach @(
+        @{ MissingPath = 'the file'; CreateGithub = $true }
+        @{ MissingPath = 'the .github directory'; CreateGithub = $false }
+    ) {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.InitialCodeowners = $null
+        $script:state.CreateGithub = $CreateGithub
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @()
+        $result.HasChanges | Should -BeTrue
+        [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:terraformContent
+        $script:state.GhCalls | Should -HaveCount 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
     It 'creates a CODEOWNERS plan with <RoleMetadata> repository-role metadata without merging' -ForEach @(
@@ -551,7 +605,8 @@ function Invoke-RepositoryFileSync {
     if ($probe.ExitCode -ne 0 -or $probe.StdOut -notmatch '^git version ') { throw 'Local Git transport failed.' }
     return @{ HasChanges = $false; Status = 'NoChange' }
 }
-$result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/offline-test' -defaultBranch main -issueLog @()
+$result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/offline-test' -defaultBranch main -issueLog @() `
+    -codeOwnersDefaultTeams @() -codeOwnersFileProtectionTeams @('engineering-reviewers')
 if ($result.HasChanges -or $result.Count -ne 2) { throw 'Unexpected legacy result.' }
 'fresh-process-transport-ok'
 '@
