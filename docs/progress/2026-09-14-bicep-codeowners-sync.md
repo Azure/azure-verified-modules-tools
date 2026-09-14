@@ -49,6 +49,7 @@ fail-closed safeguards.
 - [x] Revalidate and prepare the reuse refactor for publication on the existing review.
 - [x] Complete the separate-library extraction and focused original-contract regression cases.
 - [x] Validate and prepare the compatibility corrections and workflow names for publication.
+- [x] Fix clean-CI component module discovery and Actions-output assumptions, then validate the actual CI task.
 
 ## Validation
 
@@ -69,6 +70,24 @@ Terraform parameter signatures match the pre-task `473d6a6` source exactly.
 All five generic validation helpers were extracted without body changes. The
 shared command transport, exact-head merge, and disposable-clone configuration
 remain documented intentional changes; no live Terraform sync was authorized.
+
+Remote CI at `24d8958` exposed two test-fixture defects on all three operating
+systems: module-name imports depended on a locally installed module, and the
+cold-process output assertion rejected legitimate Actions debug annotations.
+The fixture now isolates `PSModulePath` to the source checkout and built-in
+modules, restores it afterward, and runs the real cold-start/local-Git probe in
+both local and Actions modes. Production synchronization code is unchanged.
+The child resets its module path after PowerShell startup, which otherwise
+prepends user/global module locations, and verifies both the sole discoverable
+manifest and the loaded module belong to the checkout. Output checks require
+exit code zero and one exact terminal success marker while allowing debug
+annotations before it.
+
+The correction passed `.\build.ps1 -Tasks component,ci,pre-commit`, followed by
+standalone `.\build.ps1 ci` in the exact workflow order: 1,212 unit tests passed
+(8 skipped), 61 component tests passed, and coverage was 88.05% against the
+70% floor. The required pre-commit gate also passed. No production code,
+workflow configuration, template, or generated ownership changed in this fix.
 
 The separate CODEOWNERS `GitHubSync.ps1`, API/engine tests, and JSON-body
 component suite were removed. `Invoke-RepositorySync.ps1` still calls

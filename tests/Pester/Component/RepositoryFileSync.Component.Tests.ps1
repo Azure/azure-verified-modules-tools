@@ -1,5 +1,11 @@
 BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
+    $script:originalModulePath = $env:PSModulePath
+    $script:originalToken = $env:GH_TOKEN
+    $env:PSModulePath = @(
+        (Join-Path $script:repoRoot 'src')
+        (Join-Path $PSHOME 'Modules')
+    ) -join [System.IO.Path]::PathSeparator
     $shared = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
     $codeowners = Join-Path $script:repoRoot 'repository-management' 'bicep-codeowners-sync'
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
@@ -16,8 +22,6 @@ BeforeAll {
         SourceSha = 'f' * 40
         ModuleCount = 1
     }
-    $script:originalToken = $env:GH_TOKEN
-
     function New-CoreActor {
         [pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }
     }
@@ -119,7 +123,10 @@ BeforeAll {
     }
 }
 
-AfterAll { $env:GH_TOKEN = $script:originalToken }
+AfterAll {
+    $env:GH_TOKEN = $script:originalToken
+    $env:PSModulePath = $script:originalModulePath
+}
 
 Describe 'Existing repository-sync publication core' -Tag Component {
     BeforeEach {
@@ -429,6 +436,11 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
 }
 
 Describe 'Original repository-sync preparation regressions' -Tag Component {
+    It 'resolves the checkout module by name from the isolated source-only catalog' {
+        $module = Import-Module Avm.Authoring -PassThru -ErrorAction Stop
+        $module.Path | Should -BeExactly (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psm1')
+    }
+
     It 'retains the standalone pre-commit result, metadata, and upgrade cases' {
         { & (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'Test-AvmPreCommit.ps1') } | Should -Not -Throw
     }
@@ -441,18 +453,27 @@ Describe 'Original repository-sync preparation regressions' -Tag Component {
         { & (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'Test-RepositorySyncInputs.ps1') } | Should -Not -Throw
     }
 
-    It 'loads the module dependency before invoking real local Git in a fresh PowerShell process' {
+    It 'loads the module before local Git in a fresh process with Actions mode <ActionsContext>' -ForEach @(
+        @{ ActionsContext = 'false' }
+        @{ ActionsContext = 'true' }
+    ) {
         $pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
         $child = @'
 $ErrorActionPreference = 'Stop'
+$PSStyle.OutputRendering = 'PlainText'
+$env:PSModulePath = (Join-Path $env:SYNC_TEST_ROOT 'src') + [System.IO.Path]::PathSeparator + (Join-Path $PSHOME 'Modules')
 if (Get-Module Avm.Authoring) { throw 'The child must start without Avm.Authoring loaded.' }
+$available = @(Get-Module -ListAvailable Avm.Authoring)
+if ($available.Count -ne 1 -or $available[0].Path -cne (Join-Path $env:SYNC_TEST_ROOT 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')) { throw 'The child module catalog is not isolated to the checkout.' }
 . (Join-Path $env:SYNC_TEST_ROOT 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryFileSync.ps1')
 if (Get-Command Invoke-AvmPreCommitForRepository -ErrorAction SilentlyContinue) { throw 'The shared library loaded the Terraform adapter.' }
 if (-not (Get-Command Invoke-RepositoryFileSync -CommandType Function)) { throw 'The standalone shared core is missing.' }
 . (Join-Path $env:SYNC_TEST_ROOT 'repository-management' 'repository-sync' 'scripts' 'lib' 'AvmPreCommit.ps1')
 function Invoke-RepositoryFileSync {
     param($Repository, $DefaultBranch, $PlanOnly, $State, $Prepare)
-    if (-not (Get-Module Avm.Authoring)) { throw 'Missing module before clone.' }
+    $module = Get-Module Avm.Authoring
+    if (-not $module) { throw 'Missing module before clone.' }
+    if ($module.Path -cne (Join-Path $env:SYNC_TEST_ROOT 'src' 'Avm.Authoring' 'Avm.Authoring.psm1')) { throw 'The probe did not load the checkout module.' }
     $probe = Invoke-RepositorySyncProcess -Command git -Arguments @('--version')
     if ($probe.ExitCode -ne 0 -or $probe.StdOut -notmatch '^git version ') { throw 'Local Git transport failed.' }
     return @{ HasChanges = $false; Status = 'NoChange' }
@@ -464,15 +485,19 @@ if ($result.HasChanges -or $result.Count -ne 2) { throw 'Unexpected legacy resul
         $modulePath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psm1'
         $module = Get-Module Avm.Authoring | Where-Object { $_.Path -ceq $modulePath } | Select-Object -First 1
         $output = & $module {
-            param($Executable, $Code, $Root)
+            param($Executable, $Code, $Root, $ActionsMode)
             Invoke-AvmProcess -FilePath $Executable -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $Code) `
                 -TimeoutSec 60 -EnvVars @{
                     SYNC_TEST_ROOT = $Root
-                    PSModulePath = (Join-Path $Root 'src') + [System.IO.Path]::PathSeparator + $env:PSModulePath
+                    PSModulePath = (Join-Path $Root 'src') + [System.IO.Path]::PathSeparator + (Join-Path $PSHOME 'Modules')
+                    GITHUB_ACTIONS = $ActionsMode
                     GH_TOKEN = $null
                     GITHUB_TOKEN = $null
                 }
-        } $pwsh $child $script:repoRoot
-        $output.StdOut.Trim() | Should -BeExactly 'fresh-process-transport-ok'
+        } $pwsh $child $script:repoRoot $ActionsContext
+        $output.ExitCode | Should -Be 0
+        $lines = @($output.StdOut.TrimEnd() -split '\r?\n')
+        $lines[-1] | Should -BeExactly 'fresh-process-transport-ok'
+        @($lines | Where-Object { $_ -ceq 'fresh-process-transport-ok' }) | Should -HaveCount 1
     }
 }
