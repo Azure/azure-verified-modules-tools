@@ -170,8 +170,8 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         if ($repo.full_name -cne $Repository -or $repo.default_branch -cne $DefaultBranch -or $repo.fork -or $repo.archived -or $repo.disabled) {
             throw [System.InvalidOperationException]::new('The synchronization target or default branch is unexpected.')
         }
-        if ($ExpectedActor -and ($repo.id -ne $installation.repositories[0].id -or -not $repo.permissions.push)) {
-            throw [System.InvalidOperationException]::new('The app has unexpected repository identity or write permissions.')
+        if ($ExpectedActor -and $repo.id -ne $installation.repositories[0].id) {
+            throw [System.InvalidOperationException]::new('The synchronization target repository ID does not match the app installation.')
         }
     }
     $parent = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-pre-commit-" + [guid]::NewGuid().ToString('n'))

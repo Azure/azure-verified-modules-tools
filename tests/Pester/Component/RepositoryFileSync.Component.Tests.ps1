@@ -313,7 +313,13 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         }
     }
 
-    It 'creates a CODEOWNERS plan using that same diff, Git, and candidate implementation without merging' {
+    It 'creates a CODEOWNERS plan with <RoleMetadata> repository-role metadata without merging' -ForEach @(
+        @{ RoleMetadata = 'push false'; Permissions = [pscustomobject]@{ admin = $false; maintain = $false; push = $false; triage = $false; pull = $true } }
+        @{ RoleMetadata = 'null'; Permissions = $null }
+        @{ RoleMetadata = 'omitted'; Permissions = $null }
+    ) {
+        $script:state.Repo.permissions = $Permissions
+        if ($RoleMetadata -eq 'omitted') { $script:state.Repo.PSObject.Properties.Remove('permissions') }
         $result = Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly
         $result.Status | Should -Be 'Planned'
         $script:state.Branch | Should -Be 'avm-bot/bicep-codeowners-sync'
@@ -322,6 +328,72 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
         @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
         Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Times 0
+    }
+
+    It 'rejects a repository ID that differs from the target-only installation before cloning' {
+        Mock Invoke-RepositoryGitHubApi {
+            [pscustomobject]@{ total_count = 1; repositories = @([pscustomobject]@{ id = 99; full_name = 'Azure/bicep-registry-modules' }) }
+        } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
+            Should -Throw '*repository ID*app installation*'
+        Should -Invoke Invoke-RepositoryGit -Times 0
+    }
+
+    It 'rejects unexpected target <Property> before cloning' -ForEach @(
+        @{ Property = 'full_name'; Value = 'Other/repository' }
+        @{ Property = 'default_branch'; Value = 'release' }
+        @{ Property = 'fork'; Value = $true }
+        @{ Property = 'archived'; Value = $true }
+        @{ Property = 'disabled'; Value = $true }
+    ) {
+        Mock Invoke-RepositoryGitHubApi {
+            [pscustomobject]@{ total_count = 1; repositories = @([pscustomobject]@{ id = 42; full_name = 'Azure/bicep-registry-modules' }) }
+        } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
+        $script:state.Repo.$Property = $Value
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
+            Should -Throw '*target or default branch is unexpected*'
+        Should -Invoke Invoke-RepositoryGit -Times 0
+    }
+
+    It 'rejects an installation with <Scope> before cloning' -ForEach @(
+        @{ Scope = 'multiple reported repositories'; Total = 2; Names = @('Azure/bicep-registry-modules') }
+        @{ Scope = 'multiple returned repositories'; Total = 1; Names = @('Azure/bicep-registry-modules', 'Azure/other') }
+        @{ Scope = 'a different target'; Total = 1; Names = @('Azure/other') }
+    ) {
+        $script:installation = [pscustomobject]@{
+            total_count = $Total
+            repositories = @($Names | ForEach-Object { [pscustomobject]@{ id = 42; full_name = $_ } })
+        }
+        Mock Invoke-RepositoryGitHubApi { $script:installation } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
+            Should -Throw '*authenticated app or its target-only token scope is unexpected*'
+        Should -Invoke Invoke-RepositoryGit -Times 0
+    }
+
+    It 'rejects unexpected app viewer <Property> before cloning' -ForEach @(
+        @{ Property = 'login'; Value = 'human' }
+        @{ Property = 'databaseId'; Value = 7 }
+    ) {
+        $script:viewer = [pscustomobject]@{ login = 'azure-verified-modules[bot]'; databaseId = 187664033 }
+        $script:viewer.$Property = $Value
+        Mock Invoke-RepositoryGitHub { [pscustomobject]@{ data = @{ viewer = $script:viewer } } } -ParameterFilter { $Arguments -contains 'graphql' }
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
+            Should -Throw '*authenticated app or its target-only token scope is unexpected*'
+        Should -Invoke Invoke-RepositoryGit -Times 0
+    }
+
+    It 'propagates a denied <Operation> write without merging' -ForEach @(
+        @{ Operation = 'push' }
+        @{ Operation = 'create' }
+    ) {
+        if ($Operation -eq 'push') {
+            Mock Invoke-RepositoryGit { throw '403 write denied' } -ParameterFilter { $Arguments[0] -eq 'push' }
+        } else {
+            Mock Invoke-RepositoryGitHub { throw '403 write denied' } -ParameterFilter { $Arguments -contains 'create' }
+        }
+        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*403 write denied*'
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -ParameterFilter { $Arguments -contains 'merge' }
+        $script:state.Merged | Should -BeFalse
     }
 
     It 'merges CODEOWNERS with the shared app-bypass implementation pinned to the exact head' {
