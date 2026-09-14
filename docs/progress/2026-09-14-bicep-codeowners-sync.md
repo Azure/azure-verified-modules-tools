@@ -89,6 +89,18 @@ standalone `.\build.ps1 ci` in the exact workflow order: 1,212 unit tests passed
 70% floor. The required pre-commit gate also passed. No production code,
 workflow configuration, template, or generated ownership changed in this fix.
 
+Automatic CI for `99a303c` confirmed the discovery and cold-process cases now
+pass on all three operating systems. It exposed two remaining cleanup-fixture
+failures: CI's Pester rejects unmatched filtered mock calls instead of invoking
+the real command implicitly. Fixture cleanup now invokes a real `Remove-Item`
+cmdlet captured before mocking; the production cleanup/error assertions remain
+unchanged.
+The follow-up passed with CI's exact Pester 6.2.0 version: `component`, then
+`ci,pre-commit`, with 1,212 unit tests passed (8 skipped), 61 component tests
+passed, and 86.34% coverage against the 70% floor. Pester 6.2.0 was restored
+only into the session's test-dependency directory after the exact-version
+validation reported it missing; installed user modules were not changed.
+
 The separate CODEOWNERS `GitHubSync.ps1`, API/engine tests, and JSON-body
 component suite were removed. `Invoke-RepositorySync.ps1` still calls
 `Invoke-AvmPreCommitForRepository`; its preparation adapter and

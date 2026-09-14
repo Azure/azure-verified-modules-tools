@@ -2,6 +2,7 @@ BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $script:originalModulePath = $env:PSModulePath
     $script:originalToken = $env:GH_TOKEN
+    $script:removeItemCommand = Get-Command Microsoft.PowerShell.Management\Remove-Item -CommandType Cmdlet
     $env:PSModulePath = @(
         (Join-Path $script:repoRoot 'src')
         (Join-Path $PSHOME 'Modules')
@@ -307,7 +308,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         } finally {
             $script:state.CleanupFailureEnabled = $false
             if ($script:state.Root) {
-                Microsoft.PowerShell.Management\Remove-Item -LiteralPath (Split-Path -Parent $script:state.Root) -Recurse -Force
+                & $script:removeItemCommand -LiteralPath (Split-Path -Parent $script:state.Root) -Recurse -Force
             }
         }
     }
