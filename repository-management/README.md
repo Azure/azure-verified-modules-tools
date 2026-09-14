@@ -1,7 +1,13 @@
 # Repository management
 
 This area owns the managed files, scheduled repository synchronization, and
-operator-driven repository creation used by AVM Terraform repositories.
+operator-driven repository creation used by AVM Terraform repositories, plus
+shared Bicep/Terraform metadata tooling.
+
+[Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
+indexes and tier membership updates. [Metadata backfill](module-metadata/README.md)
+prepares reviewed, non-overwriting seeds, including all members from the Bicep
+owner-team snapshot. Both workflows require explicit rollout opt-in.
 
 Repository sync and repository creation are intentionally independent.
 

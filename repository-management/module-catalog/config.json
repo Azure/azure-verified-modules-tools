@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "documentationRepository": "Azure/Azure-Verified-Modules",
+  "bicepRepository": "Azure/bicep-registry-modules",
+  "toolsRepository": "Azure/azure-verified-modules-tools",
+  "outputs": [
+    { "file": "BicepResourceModules.csv", "ecosystem": "bicep", "moduleType": "resource" },
+    { "file": "BicepPatternModules.csv", "ecosystem": "bicep", "moduleType": "pattern" },
+    { "file": "BicepUtilityModules.csv", "ecosystem": "bicep", "moduleType": "utility" },
+    { "file": "TerraformResourceModules.csv", "ecosystem": "terraform", "moduleType": "resource" },
+    { "file": "TerraformPatternModules.csv", "ecosystem": "terraform", "moduleType": "pattern" },
+    { "file": "TerraformUtilityModules.csv", "ecosystem": "terraform", "moduleType": "utility" }
+  ]
+}

@@ -34,7 +34,9 @@
 
 [CmdletBinding()]
 param(
-    [string] $Configuration = 'Debug'
+    [string] $Configuration = 'Debug',
+
+    [string[]] $TestName = @()
 )
 
 Set-StrictMode -Version 3.0
@@ -47,6 +49,7 @@ $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
+$script:testNameFilter = $TestName
 
 # Single source of truth for the spec section 18 line-coverage floor. The CI
 # job (`ci` task) runs `coverage` and fails below this number. Adjust here
@@ -78,13 +81,22 @@ function script:Invoke-AvmPester {
         [Parameter(Mandatory)] [object] $Configuration
     )
 
+    if ($script:testNameFilter.Count -gt 0) {
+        $Configuration.Filter.FullName = $script:testNameFilter
+        # Positive Pester filters are ORed; Run.Path already selects the tier.
+        $Configuration.Filter.Tag = @()
+    }
     $previousTestRunId = $env:AVM_TEST_RUN_ID
     $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
     $testRunId = [guid]::NewGuid().ToString()
     try {
         $env:AVM_TEST_RUN_ID = $testRunId
         $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $testRunId
-        Invoke-Pester -Configuration $Configuration
+        $result = Invoke-Pester -Configuration $Configuration
+        if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
+            throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
+        }
+        return $result
     }
     finally {
         if ($null -eq $previousTestRunId) {

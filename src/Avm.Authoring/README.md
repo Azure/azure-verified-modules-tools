@@ -16,6 +16,9 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
+| `Public/Test-AvmModuleMetadata.ps1`                | `avm metadata validate` -> validate root or child metadata using the packaged schema. |
+| `Public/New-AvmModuleMetadataSeed.ps1`             | `avm metadata seed` -> prepare metadata from reviewed legacy records and module source. |
+| `Public/Initialize-AvmModuleMetadata.ps1`          | `avm metadata initialize` -> initialize a reviewed seed without overwriting owner edits. |
 | `Public/Get-AvmTool.ps1`                          | `avm tool list` / `avm tool which` -> inspect locked tools and cache/PATH state.   |
 | `Public/Install-AvmTool.ps1`                      | `avm tool install` -> download, SHA256-verify, and cache a locked tool.            |
 | `Public/Invoke-AvmFormat.ps1`                     | `avm format` -> route to the bicep / terraform engine and format module sources.   |
@@ -50,6 +53,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Tools/Find-AvmToolOnPath.ps1`            | PATH fallback resolver used by `Get-AvmTool` when no cache hit is present.         |
 | `Private/Tools/Resolve-AvmTool.ps1`               | Cache-first path resolver used by the engines (cache -> optional PATH -> throw).   |
 | `Resources/PSScriptAnalyzerSettings.psd1`         | Lint rules consumed by `./build.ps1 lint`.                                         |
+| `Resources/Schemas/v1/`                           | Authoritative, packaged module metadata and catalog JSON schemas.                 |
 | `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
 
 ### Exception taxonomy

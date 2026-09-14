@@ -405,6 +405,33 @@ Each source layer applies broadcast templates before concrete paths, so an
 explicit path in that layer is more specific. Later overlays still win over
 earlier layers, and exclusions are evaluated against the expanded target paths.
 
+### Module-owned metadata
+
+Root and child Bicep/Terraform modules may adopt a strict `metadata.json` beside
+their source. The authoritative v1 input and catalog schemas are packaged under
+`Resources/Schemas/v1/` in this repository; validators never fetch a module's
+`$schema` URL at runtime. Root metadata owns tier and GitHub owner handles.
+Children carry only their own identity, description, and optional telemetry
+prefix; catalog generation inherits ownership and tier from the family root.
+Resource and pattern modules require telemetry, while telemetry-free utilities
+may omit the prefix. Bicep prefixes are limited to 50 characters and Terraform
+prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
+
+`avm metadata validate` requires the caller's ecosystem, module kind, and child
+scope. `-CheckSource` also verifies Bicep literal name/description declarations.
+`avm metadata initialize` accepts a reviewed seed, never overwrites existing
+metadata, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
+load or Terraform JSON reader locals. It does not replace telemetry transport.
+The one-time source rewrite can change compiled Bicep output; subsequent
+owner/tier/canonical metadata edits do not. Terraform source wiring remains
+opt-in until its transport consumes the new locals.
+
+The catalog workflow lives in this tools repository. During dual-source rollout,
+valid module metadata overrides legacy rows; invalid present metadata is an
+error, not a fallback. Fleet backfill and eventual per-ecosystem cutover remain
+explicit operator actions. Metadata is owner-authored, not a managed-file
+overlay that can be replaced on every repository sync.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

@@ -116,6 +116,61 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     }
 }
 
+function Get-AvmRepositoryMetadataBackfillContext {
+    param([string]$orgAndRepoName)
+
+    $toolsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..' '..'))
+    $adapterRoot = Join-Path $toolsRoot 'repository-management' 'module-metadata'
+    . (Join-Path $adapterRoot 'MetadataBackfill.ps1')
+    Import-Module Avm.Authoring -ErrorAction Stop
+    Assert-AvmMetadataBackfillCapability
+    $seedPath = Resolve-AvmMetadataBackfillSeedManifest -ToolsRoot $toolsRoot -Repository $orgAndRepoName
+    $manifest = Read-AvmMetadataBackfillJson -Path $seedPath
+    if ($manifest.repository -cne $orgAndRepoName -or $manifest.ecosystem -cne 'terraform' -or
+        $manifest.reviewed -isnot [bool] -or -not $manifest.reviewed) {
+        throw [System.ArgumentException]::new('Repository sync requires a reviewed Terraform seed manifest for the selected repository.')
+    }
+    return @{
+        SeedPath = $seedPath
+        ScriptPath = Join-Path $adapterRoot 'Invoke-ModuleMetadataBackfill.ps1'
+    }
+}
+
+function Get-AvmMetadataBackfillReview {
+    param(
+        [string]$orgAndRepoName,
+        [string]$branchName
+    )
+
+    $existing = Invoke-GitHubCliWithRetry `
+        -commands @(@{
+            Arguments = @('pr', 'list', "--repo=$orgAndRepoName", '--state=open', "--head=$branchName", '--json=number,url')
+            OutputLog = 'gh-metadata-backfill-pr.output.log'
+        }) `
+        -errorLog 'gh-metadata-backfill-pr.error.log' -returnOutput
+    if (-not $existing.success) {
+        throw [System.InvalidOperationException]::new("Cannot check existing metadata backfill reviews: $($existing.error)")
+    }
+    $reviews = @(($existing.output -join "`n") | ConvertFrom-Json -ErrorAction Stop)
+    if ($reviews.Count -gt 0) {
+        return @{ Exists = $true; Reason = "An open metadata backfill review already exists: $($reviews[0].url)" }
+    }
+    $branches = Invoke-GitHubCliWithRetry `
+        -commands @(@{
+            Arguments = @('api', "repos/$orgAndRepoName/git/matching-refs/heads/$branchName")
+            OutputLog = 'gh-metadata-backfill-branch.output.log'
+        }) `
+        -errorLog 'gh-metadata-backfill-branch.error.log' -returnOutput
+    if (-not $branches.success) {
+        throw [System.InvalidOperationException]::new("Cannot check existing metadata backfill branches: $($branches.error)")
+    }
+    $refs = @(($branches.output -join "`n") | ConvertFrom-Json -ErrorAction Stop)
+    if (@($refs | Where-Object { $_.ref -ceq "refs/heads/$branchName" }).Count -gt 0) {
+        return @{ Exists = $true; Reason = "Backfill branch '$branchName' already exists; review or clean it up manually. It will not be updated." }
+    }
+    return @{ Exists = $false; Reason = '' }
+}
+
 function Invoke-AvmPreCommitForRepository {
     param(
         [string]$orgAndRepoName,
@@ -124,6 +179,8 @@ function Invoke-AvmPreCommitForRepository {
         [string]$defaultBranch,
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
+        [bool]$metadataBackfill = $false,
+        [bool]$metadataUpdateSource = $false,
         [array]$issueLog
     )
 
@@ -131,6 +188,24 @@ function Invoke-AvmPreCommitForRepository {
     $result = @{
         IssueLog = $issueLog
         HasChanges = $false
+    }
+
+    if ($metadataUpdateSource -and -not $metadataBackfill) {
+        throw [System.ArgumentException]::new('metadataUpdateSource requires explicit metadataBackfill opt-in.')
+    }
+    $backfillContext = $null
+    $backfillBranch = 'avm-bot/module-metadata-backfill'
+    if ($metadataBackfill) {
+        if ($env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+            throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
+        }
+        $backfillContext = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $orgAndRepoName
+        $review = Get-AvmMetadataBackfillReview -orgAndRepoName $orgAndRepoName -branchName $backfillBranch
+        if ($review.Exists) {
+            Write-Warning "$modeTag $orgAndRepoName - $($review.Reason)"
+            $result.BackfillDeferred = $true
+            return $result
+        }
     }
 
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-pre-commit-" + [System.Guid]::NewGuid().ToString())
@@ -161,6 +236,19 @@ function Invoke-AvmPreCommitForRepository {
 
         Push-Location $tempDir
         try {
+            $backfillHasPlannedChanges = $false
+            if ($metadataBackfill) {
+                $backfillResult = & $backfillContext.ScriptPath `
+                    -RepositoryRoot $tempDir -Repository $orgAndRepoName `
+                    -SeedManifestPath $backfillContext.SeedPath `
+                    -UpdateSource:$metadataUpdateSource -WhatIf:$planOnly
+                if ($backfillResult.Status -notin @('pass', 'planned')) {
+                    throw [System.InvalidOperationException]::new("Metadata backfill returned '$($backfillResult.Status)'.")
+                }
+                $backfillHasPlannedChanges = @($backfillResult.Modules | Where-Object { $_.PlannedFiles.Count -gt 0 }).Count -gt 0
+                $result.MetadataBackfill = $backfillResult
+            }
+
             $upgradeDecision = Resolve-AvmManagedFilesUpgradeDecision `
                 -orgAndRepoName $orgAndRepoName `
                 -repoRoot $tempDir `
@@ -174,7 +262,7 @@ function Invoke-AvmPreCommitForRepository {
             Assert-AvmPreCommitResult -preCommitResult $preCommitResult
 
             $status = git status --porcelain
-            $result.HasChanges = -not [string]::IsNullOrWhiteSpace($status)
+            $result.HasChanges = -not [string]::IsNullOrWhiteSpace($status) -or $backfillHasPlannedChanges
             if (-not $result.HasChanges) {
                 Write-Host "$modeTag $orgAndRepoName - avm pre-commit produced no changes."
                 return $result
@@ -190,14 +278,26 @@ function Invoke-AvmPreCommitForRepository {
 
             $commitAuthorName = "azure-verified-modules[bot]"
             $commitAuthorEmail = "1049636+azure-verified-modules[bot]@users.noreply.github.com"
-            $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
-            $branchName = "avm-bot/pre-commit-$timestamp"
-            $prTitle = "chore: run avm pre-commit [skip ci]"
-            $prBody = @"
+            if ($metadataBackfill) {
+                $branchName = $backfillBranch
+                $prTitle = 'chore: backfill module metadata'
+                $prBody = @"
+One-off metadata backfill from the reviewed seed manifest in [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools), followed by the ordinary authoring pre-commit checks.
+
+Existing metadata is preserved. Source reader changes require both the reviewed seed flag and explicit source-wiring opt-in. Review every root and child identity, description, owner handle, and telemetry prefix before merging.
+
+CI remains enabled. This change is never automatically merged. Legacy metadata sources remain in place for the 60-day dual-source migration.
+"@
+            } else {
+                $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
+                $branchName = "avm-bot/pre-commit-$timestamp"
+                $prTitle = "chore: run avm pre-commit [skip ci]"
+                $prBody = @"
 Automated ``avm pre-commit`` run from [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools).
 
 This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit so downstream workflows are not retriggered.
 "@
+            }
 
             git checkout -q -b $branchName
             if ($LASTEXITCODE -ne 0) { throw "git checkout -b $branchName exited $LASTEXITCODE" }
@@ -239,6 +339,12 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             $prUrl = (@($prCreateResult.output) | Where-Object { $_ -and $_.ToString().Trim() -ne "" } | Select-Object -Last 1).ToString().Trim()
             if ([string]::IsNullOrWhiteSpace($prUrl)) { throw "gh pr create returned no URL on stdout" }
             Write-Host "Opened PR: $prUrl" -ForegroundColor DarkGray
+
+            if ($metadataBackfill) {
+                $result.BackfillReviewUrl = $prUrl
+                Write-Host "Metadata backfill awaits human review and CI: $prUrl" -ForegroundColor Yellow
+                return $result
+            }
 
             $prMergeResult = Invoke-GitHubCliWithRetry `
                 -commands @(

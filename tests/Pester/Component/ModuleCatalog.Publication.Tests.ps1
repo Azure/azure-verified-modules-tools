@@ -1,0 +1,173 @@
+#Requires -Version 7.4
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
+
+BeforeAll {
+    $repoRoot = Join-Path $PSScriptRoot '..' '..' '..'
+    $catalogScripts = Join-Path $repoRoot 'repository-management' 'module-catalog' 'scripts'
+    . (Join-Path $catalogScripts 'ModuleCatalog.ps1')
+    . (Join-Path $catalogScripts 'ModuleCatalog.Publication.ps1')
+    $schemaPath = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-modules-catalog.schema.json'
+    $catalogSchemaId = (Read-AvmCatalogJson -Path $schemaPath)['$id']
+    $workflow = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'module-metadata-sync.yml'))
+
+    function New-CatalogPublicationFixture {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = [System.IO.Directory]::CreateDirectory($root)
+        $paths = Get-AvmCatalogPublicationPaths
+        $plan = [ordered]@{ schemaVersion = 1; docs = $null; tools = $null; outputHashes = [ordered]@{} }
+        foreach ($role in $paths.Keys) {
+            $plan[$role] = [ordered]@{ repository = $paths[$role].repository; baseFiles = [ordered]@{} }
+            foreach ($relative in $paths[$role].files.Keys) {
+                $target = $paths[$role].files[$relative]
+                $plan[$role].baseFiles[$target] = '1' * 64
+                $file = Join-Path $root $relative
+                $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
+                $text = if ($relative.EndsWith('.csv')) {
+                    "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,Tier,CanonicalType`n"
+                }
+                elseif ($relative -eq 'docs/v1/modules.json') {
+                    ConvertTo-AvmCatalogJson -Value ([ordered]@{ '$schema' = $catalogSchemaId; schemaVersion = 1; modules = [ordered]@{} })
+                }
+                elseif ($relative -eq 'docs/BicepMARModules.json') {
+                    "[]`n"
+                }
+                elseif ($relative -eq 'tools/config.json') {
+                    "{`"repositoryGroups`": []}`n"
+                }
+                else {
+                    "{`"schemaVersion`": 1}`n"
+                }
+                [System.IO.File]::WriteAllText($file, $text, [System.Text.UTF8Encoding]::new($false))
+                $plan.outputHashes[$relative] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        }
+        [System.IO.File]::WriteAllText((Join-Path $root 'plan.json'), (ConvertTo-AvmCatalogJson -Value $plan))
+        return $root
+    }
+}
+
+Describe 'Component: module catalog publication boundaries' -Tag Component {
+    It 'validates a complete fixed-path hashed bundle without network or remote changes' {
+        $root = New-CatalogPublicationFixture
+        $plan = Test-AvmCatalogPublicationBundle -Path $root
+        $plan.docs.repository | Should -BeExactly 'Azure/Azure-Verified-Modules'
+        $plan.tools.repository | Should -BeExactly 'Azure/azure-verified-modules-tools'
+        $plan.outputHashes.Count | Should -Be 10
+    }
+
+    It 'rejects altered output bytes before preparing any remote update' {
+        $root = New-CatalogPublicationFixture
+        [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'BicepResourceModules.csv'), 'tampered')
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*hash mismatch*'
+    }
+
+    It 'refuses non-catalog files and paths outside the output allow-list' {
+        $root = New-CatalogPublicationFixture
+        [System.IO.File]::WriteAllText((Join-Path $root 'unexpected.ps1'), 'throw "must not execute"')
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*Unexpected file*'
+        { Assert-AvmCatalogSafePath -Root $root -RelativePath '../outside.json' } | Should -Throw '*fixed relative file paths*'
+    }
+
+    It 'blocks a stale base rather than overwriting new main-branch input' {
+        $root = Join-Path $TestDrive 'base'
+        $null = [System.IO.Directory]::CreateDirectory($root)
+        $file = Join-Path $root 'input.json'
+        [System.IO.File]::WriteAllText($file, '{"value":1}')
+        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        { Assert-AvmCatalogPublicationBase -Root $root -BaseFiles @{ 'input.json' = $hash; 'new.json' = $null } } | Should -Not -Throw
+        [System.IO.File]::WriteAllText($file, '{"value":2}')
+        { Assert-AvmCatalogPublicationBase -Root $root -BaseFiles @{ 'input.json' = $hash } } | Should -Throw '*base changed*'
+    }
+
+    It 'permits only tier membership edits and refuses settings or non-tier group changes' {
+        $before = [ordered]@{ repositoryGroups = @(
+                [ordered]@{ name = 'azure-verified-modules-tier-1'; repositories = @('old'); topics = @('avm-tier-1') },
+                [ordered]@{ name = 'canary'; repositories = @('keep'); settings = @{ value = 1 } }
+            ) }
+        $after = ConvertFrom-Json -InputObject (ConvertTo-AvmCatalogJson -Value $before) -AsHashtable -Depth 100
+        $after.repositoryGroups[0].repositories = @('new')
+        { Assert-AvmCatalogTierOnlyChange -Before $before -After $after } | Should -Not -Throw
+        $after.repositoryGroups[1].settings.value = 2
+        { Assert-AvmCatalogTierOnlyChange -Before $before -After $after } | Should -Throw '*only tier repository memberships*'
+    }
+
+    It 'parses every catalog script without executing fetched module code' {
+        foreach ($file in @(Get-ChildItem -LiteralPath $catalogScripts -Filter '*.ps1' -File)) {
+            $tokens = $null
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+            @($errors) | Should -HaveCount 0 -Because $file.Name
+            $forbidden = @($ast.FindAll({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.CommandAst] -and
+                        $node.GetCommandName() -in @('Invoke-Expression', 'Start-Process', 'Install-Module', 'Install-PSResource', 'terraform', 'bicep')
+                    }, $true))
+            $forbidden | Should -HaveCount 0 -Because $file.Name
+        }
+    }
+}
+
+Describe 'Component: module catalog workflow safety' -Tag Component {
+    It 'uses pinned actions, read-only workflow permissions, protected app credentials and no persisted checkout token' {
+        $actions = [regex]::Matches($workflow, '(?m)^\s+uses:\s+([^\r\n]+)')
+        $actions.Count | Should -BeGreaterThan 0
+        foreach ($action in $actions) {
+            $action.Groups[1].Value | Should -Match '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@[0-9a-f]{40}\s+# v[0-9.]+$'
+        }
+        $workflow | Should -Match '(?m)^permissions:\n  contents: read\n'
+        $checkoutCount = [regex]::Matches($workflow, 'uses: actions/checkout@').Count
+        [regex]::Matches($workflow, 'persist-credentials: false').Count | Should -Be $checkoutCount
+        [regex]::Matches($workflow, 'environment: avm').Count | Should -Be 2
+        $workflow | Should -Match 'vars.AVM_APP_CLIENT_ID'
+        $workflow | Should -Match 'secrets.AVM_APP_PRIVATE_KEY'
+        $workflow | Should -Not -Match '(?m)^\s+(id-token|contents|pull-requests): write'
+    }
+
+    It 'defaults manual runs to plan-only and requires the explicit enable variable for production publication' {
+        $workflow | Should -Match "(?s)plan_only:.*?type: boolean\s+default: true"
+        $workflow | Should -Match "cron: '0 1 \* \* \*'"
+        $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
+        $publication | Should -Match "vars.AVM_METADATA_SYNC_ENABLED == 'true'"
+        $publication | Should -Match "github.ref == 'refs/heads/main'"
+        $publication | Should -Match 'inputs.plan_only == false'
+        $workflow | Should -Not -Match 'pull_request_target|repository_dispatch|workflow_run'
+        $publication | Should -Match '(?s)repositories: \|\s+Azure-Verified-Modules\s+azure-verified-modules-tools\s+permission-contents: write\s+permission-pull-requests: write'
+        $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
+    }
+
+    It 'allows collection across installed module repositories with no write permissions' {
+        $collection = $workflow.Substring(0, $workflow.IndexOf("  publish:`n"))
+        $collection | Should -Match 'permission-contents: read'
+        $collection | Should -Match 'permission-members: read'
+        $collection | Should -Not -Match '(?m)^\s+repositories:'
+        $collection | Should -Not -Match 'permission-[a-z-]+: write'
+    }
+
+    It 'keeps expression interpolation outside every PowerShell run block and uses only trusted tools scripts' {
+        $lines = $workflow -split "`n"
+        $blocks = [System.Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match '^(?<indent>\s*)run: \|$') {
+                $indent = $matches.indent.Length
+                $body = [System.Collections.Generic.List[string]]::new()
+                for ($next = $index + 1; $next -lt $lines.Count; $next++) {
+                    if ($lines[$next].Trim().Length -gt 0 -and ($lines[$next].Length - $lines[$next].TrimStart().Length) -le $indent) {
+                        break
+                    }
+                    $body.Add($lines[$next])
+                }
+                $blocks.Add($body -join "`n")
+            }
+        }
+        $blocks | Should -HaveCount 4
+        foreach ($block in $blocks) {
+            $block | Should -Not -Match '\$\{\{'
+            $block | Should -Match "'tools' 'repository-management' 'module-catalog' 'scripts'"
+        }
+        $publisher = [System.IO.File]::ReadAllText((Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1'))
+        $publisher | Should -Not -Match "'--force'|--force-with-lease|pr merge|--auto|HEAD:refs/heads/main|git config --global"
+        $publisher | Should -Match 'HEAD:refs/heads/\$\(\$target.Branch\)'
+        $publisher | Should -Match 'GIT_CONFIG_VALUE_3'
+        $publisher | Should -Match 'contains human commits'
+    }
+}

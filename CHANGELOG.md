@@ -21,6 +21,15 @@ section when cutting a release.
 
 ### Added
 
+- Shared Bicep/Terraform `metadata.json` preparation, validation, and
+  non-overwriting initialization through `avm metadata seed`, `avm metadata
+  validate`, and `avm metadata initialize`.
+  Versioned input/output schemas are centrally packaged with Avm.Authoring.
+  Optional source wiring uses scoped Bicep `loadJsonContent` and native
+  Terraform `jsondecode(file(...))`, without replacing telemetry transport.
+- Opt-in metadata backfill and a tools-owned dual-source catalog workflow.
+  Legacy indexes remain available during migration; production rollout and
+  cutover are operator-controlled.
 - Per-module and per-example `avm.tflint.override.hcl` files. They layer after
   the corresponding all-scope override and use validated, collision-free staged
   config paths.

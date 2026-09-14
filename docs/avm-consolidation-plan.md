@@ -39,7 +39,7 @@ A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bi
 | Observability                          | Every task emits structured logs and a machine-readable summary suitable for GitHub annotations.    |
 | Parallel coexistence                   | Existing `./avm`, `./avm.ps1`, `Makefile`, and `utilities/tools/*.ps1` entry points remain untouched in their current repos. Contributors install the new module alongside and test it directly. Phase 6 deletes the old entry points once adoption is broad. No shim layer exists at any point. |
 | Boundary validation only               | Validate at the CLI boundary (verb args, repo detection); trust internal modules.                  |
-| One source of truth per concern        | The AVM CSV stays the canonical module index; PSRule baselines stay canonical for Azure best practice. |
+| One source of truth per concern        | Module-owned `metadata.json` becomes authoritative per adopted module; generated CSVs remain compatible indexes during dual-source rollout. PSRule baselines stay canonical for Azure best practice. |
 
 ---
 
@@ -420,7 +420,10 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `avm governance workflow toggle` → `Switch-WorkflowState`.
   - `avm governance reaper run` → port of `tf-repo-mgmt/reaper/ReaperScript.ps1`.
 - A unified `GitHubClient` helper that replaces the per-script REST calls (`Get-GitHubModuleWorkflowList`, `Get-GitHubIssueList`, …).
-- AVM CSV stays the canonical source of truth; the CLI's `Get-AvmCsv` cmdlet wraps it.
+- Module-owned `metadata.json` becomes the metadata source of truth through
+  the staged dual-source migration. This repository owns schemas and catalog
+  sync; CSV indexes remain compatible generated outputs. Legacy rows are
+  retained until the explicit per-ecosystem cutover.
 
 **Exit criteria**: every `platform.*.yml` workflow can be expressed as `pwsh -c "avm governance …"` instead of `pwsh -File utilities/pipelines/platform/…`.
 

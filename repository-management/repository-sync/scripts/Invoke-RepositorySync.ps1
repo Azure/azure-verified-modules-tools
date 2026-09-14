@@ -31,9 +31,18 @@ param(
         "azurecla-write"
     ),
     [switch]$forceFileUpdate,
+    [switch]$metadataBackfill,
+    [switch]$metadataUpdateSource,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @()
 )
+
+if ($metadataUpdateSource -and -not $metadataBackfill) {
+    throw [System.ArgumentException]::new('metadataUpdateSource requires explicit metadataBackfill opt-in.')
+}
+if ($metadataBackfill -and $env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+    throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
+}
 
 Write-Host "Running repo sync script"
 
@@ -51,6 +60,14 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "CodeQlDefaultSetup.ps1")
 . (Join-Path $libDir "TeamsAndUsers.ps1")
 . (Join-Path $libDir "TerraformOperations.ps1")
+
+if ($metadataBackfill) {
+    if ($repositoryCreationModeEnabled) {
+        throw [System.ArgumentException]::new('One-off metadata backfill only supports existing module repositories.')
+    }
+    $backfillRepo = ([uri]$repoUrl).AbsolutePath.Trim('/')
+    $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $backfillRepo
+}
 
 if (!$repositoryCreationModeEnabled) {
     $null = Resolve-RepositorySyncStateIdentity `
@@ -234,6 +251,8 @@ if(!$repositoryCreationModeEnabled) {
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
+            -metadataBackfill $metadataBackfill.IsPresent `
+            -metadataUpdateSource $metadataUpdateSource.IsPresent `
             -issueLog $issueLog
         $issueLog = $preCommitResult.IssueLog
     }

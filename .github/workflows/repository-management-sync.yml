@@ -21,6 +21,14 @@ on:
         description: 'Force the latest managed-file release onto the selected repositories, even without a new major release.'
         default: false
         type: boolean
+      metadata_backfill:
+        description: 'ONE-OFF: apply checked-in reviewed metadata seeds. Manual only; changes require human review and are never auto-merged.'
+        default: false
+        type: boolean
+      metadata_update_source:
+        description: 'ONE-OFF: also add source readers only where the reviewed seed permits it. Requires metadata_backfill.'
+        default: false
+        type: boolean
       sync_project_items:
         description: 'Whether to add each repository''s issues and PRs to the AVM All Up GitHub Project.'
         default: true
@@ -102,11 +110,25 @@ jobs:
 
       - name: Install Avm.Authoring
         shell: pwsh
+        env:
+          METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
+          METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
+          METADATA_BACKFILL_REPOSITORY_URL: ${{ matrix.repoUrl }}
         run: |
           Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
           Import-Module Avm.Authoring
           if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
             throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
+          }
+          if ($env:METADATA_UPDATE_SOURCE_ENABLED -eq 'true' -and $env:METADATA_BACKFILL_ENABLED -ne 'true') {
+            throw 'metadata_update_source requires explicit metadata_backfill opt-in.'
+          }
+          if ($env:METADATA_BACKFILL_ENABLED -eq 'true') {
+            . (Join-Path $PWD '..' 'module-metadata' 'MetadataBackfill.ps1')
+            Assert-AvmMetadataBackfillCapability
+            . (Join-Path $PWD 'scripts' 'lib' 'AvmPreCommit.ps1')
+            $backfillRepository = ([uri]$env:METADATA_BACKFILL_REPOSITORY_URL).AbsolutePath.Trim('/')
+            $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $backfillRepository
           }
 
       - name: Create GitHub App Token
@@ -174,10 +196,14 @@ jobs:
 
           $planOnly = $false
           $forceFileUpdate = $false
+          $metadataBackfill = $false
+          $metadataUpdateSource = $false
 
           if($triggerType -eq "workflow_dispatch") {
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
             $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
+            $metadataBackfill = $env:METADATA_BACKFILL_ENABLED -eq 'true'
+            $metadataUpdateSource = $env:METADATA_UPDATE_SOURCE_ENABLED -eq 'true'
           }
 
           Write-Output "Token: $env:GH_TOKEN"
@@ -210,7 +236,9 @@ jobs:
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
-            -forceFileUpdate:$forceFileUpdate
+            -forceFileUpdate:$forceFileUpdate `
+            -metadataBackfill:$metadataBackfill `
+            -metadataUpdateSource:$metadataUpdateSource
 
         shell: pwsh
         env:
@@ -227,6 +255,8 @@ jobs:
           ARM_USE_OIDC: true
           TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
+          METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
+          METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
 
       - name: Upload Issue Logs Json
         if: always() && hashFiles('issue.log.json') != ''

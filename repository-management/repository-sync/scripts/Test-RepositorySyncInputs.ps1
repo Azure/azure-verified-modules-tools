@@ -89,6 +89,23 @@ Assert-True `
 Assert-True `
     -Actual ($workflow -notmatch 'force_user_removal|forceUserRemoval') `
     -Description "the removed force-user-removal workflow input and logic to stay absent"
+foreach ($inputName in @('metadata_backfill', 'metadata_update_source')) {
+    Assert-True `
+        -Actual ($workflow -match "(?m)^      $inputName`:\r?\n        description: .+\r?\n        default: false\r?\n        type: boolean$") `
+        -Description "$inputName to be a false-by-default boolean workflow input"
+}
+Assert-True `
+    -Actual ($workflow.Contains("METADATA_BACKFILL_ENABLED: `${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}")) `
+    -Description "metadata_backfill to be gated to workflow_dispatch in a runtime environment variable"
+Assert-True `
+    -Actual ($workflow.Contains("`$metadataBackfill = `$env:METADATA_BACKFILL_ENABLED -eq 'true'")) `
+    -Description "metadata_backfill to use runtime environment values rather than expression injection"
+Assert-True `
+    -Actual ($workflow.Contains('-metadataBackfill:$metadataBackfill') -and $workflow.Contains('-metadataUpdateSource:$metadataUpdateSource')) `
+    -Description "the workflow to forward both explicit metadata switches"
+Assert-True `
+    -Actual ($workflow.Contains('Assert-AvmMetadataBackfillCapability')) `
+    -Description "the workflow to require a released metadata API before cloud operations"
 
 $syncAst = Get-ScriptAst -Path $syncScriptPath
 $syncParameterNames = @(
@@ -97,6 +114,8 @@ $syncParameterNames = @(
 )
 Assert-True -Actual ($syncParameterNames -contains "forceFileUpdate") -Description "Invoke-RepositorySync.ps1 to expose forceFileUpdate"
 Assert-True -Actual ($syncParameterNames -notcontains "forceUserRemoval") -Description "Invoke-RepositorySync.ps1 to omit forceUserRemoval"
+Assert-True -Actual ($syncParameterNames -contains "metadataBackfill") -Description "Invoke-RepositorySync.ps1 to expose metadataBackfill"
+Assert-True -Actual ($syncParameterNames -contains "metadataUpdateSource") -Description "Invoke-RepositorySync.ps1 to expose metadataUpdateSource"
 
 $preCommitCallParameters = Get-CommandParameterNames `
     -Ast $syncAst `
@@ -104,6 +123,9 @@ $preCommitCallParameters = Get-CommandParameterNames `
 Assert-True `
     -Actual ($preCommitCallParameters -contains "forceFileUpdate") `
     -Description "Invoke-RepositorySync.ps1 to forward forceFileUpdate"
+Assert-True `
+    -Actual ($preCommitCallParameters -contains "metadataBackfill" -and $preCommitCallParameters -contains "metadataUpdateSource") `
+    -Description "Invoke-RepositorySync.ps1 to forward metadata opt-ins"
 
 $avmPreCommitAst = Get-ScriptAst -Path $avmPreCommitPath
 $preCommitFunction = Get-FunctionAst `
@@ -117,6 +139,9 @@ $preCommitParameterNames = @(
 Assert-True `
     -Actual ($preCommitParameterNames -contains "forceFileUpdate") `
     -Description "Invoke-AvmPreCommitForRepository to expose forceFileUpdate"
+Assert-True `
+    -Actual ($preCommitParameterNames -contains "metadataBackfill" -and $preCommitParameterNames -contains "metadataUpdateSource") `
+    -Description "Invoke-AvmPreCommitForRepository to expose false-by-default metadata opt-ins"
 
 $decisionCallParameters = Get-CommandParameterNames `
     -Ast $preCommitFunction.Body `

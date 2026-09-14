@@ -46,6 +46,10 @@ Every integration test **must** be tagged `-Tag 'Integration'`. The
 ./build.ps1 integration
 ```
 
+Use `-TestName 'Integration: module metadata*'` to run only the metadata
+reader checks against real Bicep/Terraform binaries. These compile Bicep and plan
+provider-free Terraform fixtures; they never deploy resources.
+
 In CI this tier is driven by the `integration` job in the `ci` workflow, which
 runs on `pull_request` and `workflow_dispatch` (not on merge to `main`). The
 job can target a single fixture per matrix leg via
