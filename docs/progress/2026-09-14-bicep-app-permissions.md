@@ -42,8 +42,8 @@ Full local gates remain unverified: `.\build.ps1 ci` stops before coverage
 because analyzer-created runspaces prepend the workstation module paths,
 causing Pester 5.7.1 to reload over the already-loaded 6.2.0 assembly. The
 combined invocation did not reach `pre-commit`. No build code or global module
-installations were changed. The requester authorized publication with this
-limitation; clean hosted CI must pass before the fix is considered merge-ready.
+installations were changed. Full validation runs in clean hosted CI, which must
+pass before merge.
 
 ## Dependencies
 
