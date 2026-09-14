@@ -1,18 +1,16 @@
 function Initialize-AvmModuleMetadata {
     <#
     .SYNOPSIS
-        Initialize module-owned metadata from a reviewed seed without overwriting it.
+        Create metadata.json without overwriting an existing file.
     .DESCRIPTION
-        Validates the complete seed before writing UTF-8/LF metadata.json.
+        Validates the metadata values before writing UTF-8/LF metadata.json.
         Existing metadata is validated and preserved instead of regenerated.
         Optional source wiring adds native JSON readers without changing the
         telemetry transport. WhatIf performs validation and returns the plan.
     .PARAMETER Path
         Existing module directory to initialize.
-    .PARAMETER SeedPath
-        Strict JSON file containing the full metadata seed.
     .PARAMETER InputObject
-        Metadata seed dictionary, as an alternative to SeedPath.
+        Metadata values supplied by the caller.
     .PARAMETER Ecosystem
         The containing module's ecosystem: bicep or terraform.
     .PARAMETER ModuleType
@@ -25,20 +23,17 @@ function Initialize-AvmModuleMetadata {
     .PARAMETER SkipModuleVersionCheck
         Skip the standard installed-module version check for offline backfill.
     .EXAMPLE
-        Initialize-AvmModuleMetadata -Path . -SeedPath seed.json -Ecosystem terraform -ModuleType resource -WhatIf
+        Initialize-AvmModuleMetadata -Path . -InputObject $metadata -Ecosystem terraform -ModuleType resource -WhatIf
     .OUTPUTS
         A result with Status, Changed, PlannedFiles, and Metadata.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Metadata is the shared metadata.json contract name.')]
-    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium', DefaultParameterSetName = 'File')]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
     param(
         [string] $Path = $PWD.Path,
 
-        [Parameter(Mandatory, ParameterSetName = 'File')]
-        [string] $SeedPath,
-
-        [Parameter(Mandatory, ParameterSetName = 'Object')]
+        [Parameter(Mandatory)]
         [System.Collections.IDictionary] $InputObject,
 
         [Parameter(Mandatory)]
@@ -79,14 +74,12 @@ function Initialize-AvmModuleMetadata {
     $json = if ($existing) {
         Read-AvmMetadataJson -Path $metadataPath
     }
-    elseif ($PSCmdlet.ParameterSetName -eq 'Object') {
+    else {
         ConvertTo-Json -InputObject $InputObject -Depth 50
     }
-    else {
-        Read-AvmMetadataJson -Path $SeedPath
-    }
     $validation = Test-AvmMetadataContent -Json $json -Ecosystem $Ecosystem `
-        -ModuleType $ModuleType -ChildModule:$ChildModule
+        -ModuleType $ModuleType -ChildModule:$ChildModule `
+        -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
     if ($validation.Issues.Count -gt 0) {
         throw [System.ArgumentException]::new(($validation.Issues.Message -join ' '))
     }

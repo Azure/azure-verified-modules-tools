@@ -10,14 +10,6 @@ on:
         description: 'Dry run only: inspect changes without committing, pushing, opening, or merging pull requests.'
         default: true
         type: boolean
-      metadata_backfill:
-        description: 'ONE-OFF: backfill reviewed module metadata instead of synchronizing CODEOWNERS. Never auto-merges.'
-        default: false
-        type: boolean
-      metadata_update_source:
-        description: 'ONE-OFF: also add source readers where the reviewed seed permits it. Requires metadata_backfill.'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -34,27 +26,13 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: avm
-    timeout-minutes: 55
+    timeout-minutes: 20
     steps:
       - name: Checkout trusted tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-
-      - name: Validate metadata backfill opt-in
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.metadata_backfill || inputs.metadata_update_source) }}
-        shell: pwsh
-        env:
-          METADATA_BACKFILL: ${{ inputs.metadata_backfill }}
-          METADATA_UPDATE_SOURCE: ${{ inputs.metadata_update_source }}
-        run: |
-          if ($env:METADATA_BACKFILL -ne 'true') {
-            throw 'metadata_update_source requires explicit metadata_backfill opt-in.'
-          }
-          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-          . (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'module-metadata' 'MetadataBackfillSync.ps1')
-          $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName 'Azure/bicep-registry-modules' -Ecosystem bicep
 
       - name: Create target-scoped GitHub App token
         id: app-token
@@ -67,25 +45,15 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Synchronize Bicep repository files
+      - name: Generate and synchronize CODEOWNERS
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           AVM_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
-          METADATA_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
-          METADATA_UPDATE_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
         run: |
           if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
             throw 'The configured GitHub App is not azure-verified-modules.'
           }
-          if ($env:METADATA_BACKFILL -eq 'true') {
-            & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'module-metadata' 'Invoke-BicepMetadataBackfillSync.ps1') `
-              -PlanOnly:($env:PLAN_ONLY -eq 'true') -UpdateSource:($env:METADATA_UPDATE_SOURCE -eq 'true')
-          } else {
-            if ($env:METADATA_UPDATE_SOURCE -eq 'true') {
-              throw 'metadata_update_source requires explicit metadata_backfill opt-in.'
-            }
-            & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-codeowners-sync' 'scripts' 'Invoke-BicepCodeownersSync.ps1') `
-              -PlanOnly:($env:PLAN_ONLY -eq 'true')
-          }
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-codeowners-sync' 'scripts' 'Invoke-BicepCodeownersSync.ps1') `
+            -PlanOnly:($env:PLAN_ONLY -eq 'true')

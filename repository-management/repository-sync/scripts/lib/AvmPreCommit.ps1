@@ -154,7 +154,7 @@ function Invoke-AvmPreCommitForRepository {
             VerifyCandidate = $true
             ExpectedActor = Get-AvmMetadataBackfillActor
             Title = 'chore: backfill module metadata'
-            Body = 'One-off metadata backfill from reviewed tools-repository seeds, followed by ordinary authoring pre-commit. Existing metadata is preserved. Review every root and child before merging. CI stays enabled; this change is never automatically merged.'
+            Body = 'Create missing metadata.json files from existing indexes and module source. Existing metadata is preserved. CI stays enabled and this change is never automatically merged.'
         }
     }
 
@@ -171,10 +171,11 @@ function Invoke-AvmPreCommitForRepository {
             -PlanOnly:$planOnly -State $prepareState @publication -Prepare {
                 param($context)
                 $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
-                $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
                 if ($context.State.BackfillContext) {
                     $context.State.BackfillResult = Invoke-AvmMetadataBackfillPreparation -Context $context
+                    return
                 }
+                $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
                 $upgrade = Resolve-AvmManagedFilesUpgradeDecision -orgAndRepoName $context.Repository.full_name `
                     -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
                 Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray

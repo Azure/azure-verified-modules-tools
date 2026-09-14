@@ -22,11 +22,11 @@ on:
         default: false
         type: boolean
       metadata_backfill:
-        description: 'ONE-OFF: apply checked-in reviewed metadata seeds. Manual only; changes require human review and are never auto-merged.'
+        description: 'ONE-OFF: create missing metadata.json files from existing indexes and source. Existing files are never overwritten.'
         default: false
         type: boolean
       metadata_update_source:
-        description: 'ONE-OFF: also add source readers only where the reviewed seed permits it. Requires metadata_backfill.'
+        description: 'ONE-OFF: also add source readers for newly created metadata files. Requires metadata_backfill.'
         default: false
         type: boolean
       sync_project_items:
@@ -103,6 +103,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Terraform
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: latest
@@ -116,8 +117,12 @@ jobs:
           METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
           METADATA_BACKFILL_REPOSITORY_URL: ${{ matrix.repoUrl }}
         run: |
-          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
-          Import-Module Avm.Authoring
+          if ($env:METADATA_BACKFILL_ENABLED -eq 'true') {
+            Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+          } else {
+            Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
+            Import-Module Avm.Authoring
+          }
           if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
             throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
           }
@@ -127,9 +132,7 @@ jobs:
           if ($env:METADATA_BACKFILL_ENABLED -eq 'true') {
             . (Join-Path $PWD '..' 'module-metadata' 'MetadataBackfill.ps1')
             Assert-AvmMetadataBackfillCapability
-            . (Join-Path $PWD 'scripts' 'lib' 'AvmPreCommit.ps1')
             $backfillRepository = ([uri]$env:METADATA_BACKFILL_REPOSITORY_URL).AbsolutePath.Trim('/')
-            $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $backfillRepository
             "app-repository=$($backfillRepository.Split('/')[1])" >> $env:GITHUB_OUTPUT
           }
 
@@ -143,6 +146,7 @@ jobs:
           repositories: ${{ steps.avm-authoring.outputs.app-repository }}
 
       - name: Resolve state backend
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
         id: state-backend
         shell: pwsh
         env:
@@ -181,6 +185,7 @@ jobs:
 
       # Only state lock recovery uses this CLI login; providers retain ARM_* below.
       - name: Azure Login for state (OIDC)
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ steps.state-backend.outputs.client-id }}
@@ -188,6 +193,7 @@ jobs:
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
 
       - name: Download Labels CSV File
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
         run: |
           ./scripts/Get-AvmLabels.ps1
         shell: pwsh
@@ -214,7 +220,10 @@ jobs:
           Write-Output "Plan Only: $planOnly"
           Write-Output "Force File Update: $forceFileUpdate"
 
-          $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
+          $testSubscriptionIds = @()
+          if (-not $metadataBackfill) {
+            $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
+          }
 
           $repoMetaDataJson = $env:REPO_META_DATA_JSON
           $repoMetaData = $null
@@ -222,9 +231,14 @@ jobs:
             $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
           }
 
-          Write-Host "Authenticating gh cli"
-          gh auth login -h "GitHub.com"
+          if (-not $metadataBackfill) {
+            Write-Host "Authenticating gh cli"
+            gh auth login -h "GitHub.com"
+          }
           Write-Host "Running repo sync"
+          if ($metadataBackfill) {
+            Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+          }
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
             -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
@@ -287,7 +301,7 @@ jobs:
         shell: pwsh
 
       - name: Add Repository Items to AVM All Up Project
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || (inputs.sync_project_items && !inputs.metadata_backfill)) }}
         run: |
 
           $triggerType = "${{ github.event_name }}"

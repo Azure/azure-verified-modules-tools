@@ -60,14 +60,14 @@ function Get-AvmVerbRegistry {
             Summary = 'Validate root or child module metadata against the shared schema.'
         }
         [pscustomobject]@{
-            Path    = [string[]]@('metadata', 'seed')
-            Cmdlet  = 'New-AvmModuleMetadataSeed'
-            Summary = 'Prepare reviewed metadata from legacy records and module source.'
+            Path    = [string[]]@('metadata', 'show')
+            Cmdlet  = 'Get-AvmModuleMetadata'
+            Summary = 'Show metadata values from the module or existing indexes and source.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('metadata', 'initialize')
             Cmdlet  = 'Initialize-AvmModuleMetadata'
-            Summary = 'Backfill metadata from a reviewed seed without overwriting owner edits.'
+            Summary = 'Create metadata.json without overwriting an existing file.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('format')

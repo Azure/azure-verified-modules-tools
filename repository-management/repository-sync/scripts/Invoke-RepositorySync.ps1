@@ -65,8 +65,24 @@ if ($metadataBackfill) {
     if ($repositoryCreationModeEnabled) {
         throw [System.ArgumentException]::new('One-off metadata backfill only supports existing module repositories.')
     }
-    $backfillRepo = ([uri]$repoUrl).AbsolutePath.Trim('/')
-    $null = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $backfillRepo
+    $uri = [uri]$repoUrl
+    if ($uri.Scheme -cne 'https' -or $uri.Host -cne 'github.com') {
+        throw [System.ArgumentException]::new('Metadata creation requires an HTTPS GitHub repository URL.')
+    }
+    $backfillRepo = $uri.AbsolutePath.Trim('/')
+    $tree = Get-RepositoryDefaultBranchTree -orgAndRepoName $backfillRepo
+    if (-not $tree.Success) {
+        throw [System.InvalidOperationException]::new('Cannot resolve the target repository for metadata creation.')
+    }
+    return Invoke-AvmPreCommitForRepository `
+        -orgAndRepoName $backfillRepo `
+        -repoId $repoId `
+        -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
+        -defaultBranch $tree.DefaultBranch `
+        -planOnly $planOnly `
+        -metadataBackfill $true `
+        -metadataUpdateSource $metadataUpdateSource.IsPresent `
+        -issueLog @()
 }
 
 if (!$repositoryCreationModeEnabled) {

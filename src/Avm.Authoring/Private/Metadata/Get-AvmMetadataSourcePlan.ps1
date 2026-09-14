@@ -25,7 +25,7 @@ function Get-AvmMetadataSourcePlan {
         $literals = Get-AvmBicepMetadataLiteral -Source $source
         if ($literals.name -cne $Metadata.moduleDisplayName -or
             $literals.description -cne $Metadata.moduleDescription) {
-            throw [System.ArgumentException]::new('The seed must match the existing main.bicep metadata name and description literals.')
+            throw [System.ArgumentException]::new('The metadata values must match the existing main.bicep name and description.')
         }
         if (-not $Metadata.Contains('telemetryIdPrefix')) {
             if ([regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
@@ -48,7 +48,7 @@ function Get-AvmMetadataSourcePlan {
         $prefixPattern = $headPattern + [regex]::Escape($Metadata.telemetryIdPrefix) + '(?=\.)'
         $prefixMatches = [regex]::Matches($code, $prefixPattern)
         if ($prefixMatches.Count -ne 1) {
-            throw [System.ArgumentException]::new('Expected one avmTelemetry deployment using the seed telemetryIdPrefix; review this Bicep source before backfill.')
+            throw [System.ArgumentException]::new('Expected one avmTelemetry deployment using the supplied telemetryIdPrefix; inspect this Bicep source before changing it.')
         }
         $prefixMatch = $prefixMatches[0]
         $prefixIndex = $prefixMatch.Index + $prefixMatch.Groups['head'].Length

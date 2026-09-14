@@ -568,6 +568,26 @@ Describe 'Component: module catalog transformations' -Tag Component {
         ($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly 'Proposed'
     }
 
+    It 'reports unowned metadata as Orphaned but preserves existing Deprecated status in CSV and JSON' -TestCases @(
+        @{ Previous = 'Available'; Expected = 'Orphaned' }
+        @{ Previous = 'Deprecated'; Expected = 'Deprecated' }
+    ) {
+        param($Previous, $Expected)
+        $fixture = New-CatalogFixture -AdoptAll
+        $file = 'BicepResourceModules.csv'
+        $row = $fixture.Original[$file]
+        $row.ModuleStatus = $Previous
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
+        $path = Join-Path $fixture.Modules[0].Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $path
+        $metadata.owners = @{ individuals = @(); team = '' }
+        Save-CatalogJson -Path $path -Data $metadata
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly $Expected
+        ($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly $Expected
+    }
+
     It 'excludes Bicep examples and nested Terraform helper scopes from module discovery' {
         $fixture = New-CatalogFixture -AdoptAll
         foreach ($directory in @(

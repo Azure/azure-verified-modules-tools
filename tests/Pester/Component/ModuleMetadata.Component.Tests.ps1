@@ -148,7 +148,6 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         @{ Case = 'wrong ecosystem'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.storage-storageaccount' }
         @{ Case = 'wrong telemetry kind'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.storage-storageaccount' }
         @{ Case = 'missing telemetry'; Property = 'telemetryIdPrefix'; Remove = $true }
-        @{ Case = 'no owners'; Property = 'owners'; Value = @{ individuals = @(); team = '' } }
         @{ Case = 'owner PII'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner'; displayName = 'Personal Name' }) } }
         @{ Case = 'duplicate handle casing'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner' }, @{ githubHandle = 'Owner' }) } }
         @{ Case = 'invalid team'; Property = 'owners'; Value = @{ individuals = @(); team = 'Azure/team' } }
@@ -192,6 +191,47 @@ Describe 'Component: shared module metadata schema' -Tag Component {
             $expected = if ($kind -eq 'utility') { 'pass' } else { 'fail' }
             (Test-AvmModuleMetadata @parameters).Status | Should -Be $expected
         }
+    }
+
+    It 'allows empty owners without inventing a team or person' {
+        $fixture = New-MetadataFixture
+        $fixture.Data.owners = @{ individuals = @(); team = '' }
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+    }
+
+    It 'omits telemetry only for Bicep children that are unpublished and uninstrumented' {
+        $fixture = New-MetadataFixture -Ecosystem bicep -ChildModule
+        $fixture.Data.Remove('telemetryIdPrefix')
+        [System.IO.File]::WriteAllText($fixture.SourcePath, "metadata name = 'Storage Accounts'`nmetadata description = 'Deploys a Storage Account.'`n")
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
+    }
+
+    It 'accepts existing underscore telemetry identifiers without changing their value' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.telemetryIdPrefix = '46d3xbcp.res.authz-policyassignment_mgscope'
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.telemetryIdPrefix | Should -BeExactly $fixture.Data.telemetryIdPrefix
+    }
+
+    It 'limits the exact legacy Resource Graph prefix to its existing Bicep resource identity' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.telemetryIdPrefix = '46d3xbcp.resourcegraph-query'
+        $fixture.Data.canonicalType = 'Microsoft.ResourceGraph/queries'
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+        $fixture.Data.canonicalType = 'Microsoft.Storage/storageAccounts'
+        Save-MetadataFixture -Fixture $fixture
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
     It 'does not confuse the reduced child shape with a root' {
@@ -297,7 +337,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         @(Get-ChildItem -LiteralPath $fixture.Root -Force -File).Count | Should -Be 1
     }
 
-    It 'preserves existing owner-authored metadata even when a seed changes' {
+    It 'preserves existing owner-authored metadata even when proposed values change' {
         $fixture = New-MetadataFixture
         Save-MetadataFixture -Fixture $fixture
         $before = [System.IO.File]::ReadAllText($fixture.MetadataPath)
@@ -309,7 +349,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly $before
     }
 
-    It 'rejects an invalid seed before writing anything' {
+    It 'rejects invalid metadata values before writing anything' {
         $fixture = New-MetadataFixture
         $fixture.Data.Remove('owners')
         $parameters = $fixture.Parameters
@@ -318,20 +358,12 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
     }
 
-    It 'does not repair invalid existing metadata from an old seed' {
+    It 'does not replace invalid existing metadata with generated values' {
         $fixture = New-MetadataFixture
         [System.IO.File]::WriteAllText($fixture.MetadataPath, '{}')
         $parameters = $fixture.Parameters
         { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
         [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly '{}'
-    }
-
-    It 'accepts a strict JSON seed file' {
-        $fixture = New-MetadataFixture
-        $seedPath = Join-Path $TestDrive 'metadata-seed.json'
-        [System.IO.File]::WriteAllText($seedPath, ($fixture.Data | ConvertTo-Json -Depth 20))
-        $parameters = $fixture.Parameters
-        (Initialize-AvmModuleMetadata @parameters -SeedPath $seedPath).Changed | Should -BeTrue
     }
 
     It 'wires only the scoped Bicep telemetry value and is idempotent' {
@@ -394,7 +426,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $fixture = New-MetadataFixture -Ecosystem bicep -ModuleType utility
         $fixture.Data.Remove('telemetryIdPrefix')
         $parameters = $fixture.Parameters
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw '*emits telemetry*'
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw '*requires telemetryIdPrefix*'
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
         Save-MetadataFixture -Fixture $fixture
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'fail'

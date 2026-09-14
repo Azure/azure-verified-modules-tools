@@ -57,7 +57,7 @@ Describe 'Bicep CODEOWNERS workflow contract' {
 
     It 'never interpolates workflow inputs directly into executable PowerShell' {
         $runs = [regex]::Matches($script:workflow, '(?m)^        run: \|\r?\n(?<body>(?:^          .*(?:\r?\n|$)|^\s*\r?\n)+)')
-        $runs.Count | Should -Be 2
+        $runs.Count | Should -Be 1
         foreach ($block in $runs) {
             $run = $block.Groups['body'].Value
             $run | Should -Not -Match '\$\{\{'
@@ -69,14 +69,10 @@ Describe 'Bicep CODEOWNERS workflow contract' {
         $runs[-1].Groups['body'].Value | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
     }
 
-    It 'keeps metadata backfill manual-only and validates seeds before minting a token' {
-        $script:workflow | Should -Match '(?s)metadata_backfill:.*?default: false\s+type: boolean'
-        $script:workflow | Should -Match '(?s)metadata_update_source:.*?default: false\s+type: boolean'
-        $script:workflow | Should -Match "METADATA_BACKFILL:.*github.event_name == 'workflow_dispatch' && inputs.metadata_backfill"
-        $script:workflow | Should -Match 'Invoke-BicepMetadataBackfillSync.ps1'
-        $script:workflow.IndexOf('Validate metadata backfill opt-in') |
-            Should -BeLessThan $script:workflow.IndexOf('Create target-scoped GitHub App token')
-        $script:workflow | Should -Match 'Get-AvmRepositoryMetadataBackfillContext.*-Ecosystem bicep'
+    It 'has no Bicep metadata backfill or intermediate approval-file path' {
+        $script:workflow | Should -Not -Match 'metadata_backfill|metadata_update_source|Seed|MetadataBackfill'
+        Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'module-metadata' 'Invoke-BicepMetadataBackfillSync.ps1') |
+            Should -BeFalse
     }
 
     It 'keeps the local export entry point independent of remote synchronization' {

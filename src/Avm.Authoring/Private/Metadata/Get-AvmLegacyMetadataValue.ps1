@@ -1,4 +1,4 @@
-function Get-AvmMetadataSeedLegacyValue {
+function Get-AvmLegacyMetadataValue {
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -22,7 +22,7 @@ function Get-AvmMetadataSeedLegacyValue {
         }
     }
     if ($values.Count -gt 1) {
-        throw [System.ArgumentException]::new("Conflicting legacy values for '$($Name[0])'; supply a reviewed override.")
+        throw [System.ArgumentException]::new("Conflicting existing values for '$($Name[0])'; specify the correct value.")
     }
     foreach ($value in $values) {
         return $value

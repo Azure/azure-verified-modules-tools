@@ -1,13 +1,15 @@
 <#
 .SYNOPSIS
-    Apply an explicitly reviewed, complete seed manifest to an existing checkout.
+    Create missing metadata.json files from existing indexes and module source.
 #>
 #Requires -Version 7.4
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
     [Parameter(Mandatory)][string] $RepositoryRoot,
     [Parameter(Mandatory)][string] $Repository,
-    [Parameter(Mandatory)][string] $SeedManifestPath,
+    [Parameter(Mandatory)][ValidateSet('bicep', 'terraform')][string] $Ecosystem,
+    [string[]] $LegacyCsvPath = @(),
+    [object[]] $LegacyRecord = @(),
     [switch] $UpdateSource
 )
 
@@ -19,12 +21,21 @@ if (-not (Get-Module -Name Avm.Authoring)) {
 }
 Assert-AvmMetadataBackfillCapability
 $root = Resolve-AvmMetadataBackfillRoot -Path $RepositoryRoot
-$manifest = Read-AvmMetadataBackfillJson -Path $SeedManifestPath
-$plans = @(Get-AvmMetadataBackfillPlan -Root $root -Manifest $manifest -Repository $Repository -UpdateSource:$UpdateSource)
+$records = [System.Collections.Generic.List[object]]::new()
+foreach ($record in $LegacyRecord) { $records.Add($record) }
+foreach ($csv in $LegacyCsvPath) {
+    foreach ($row in Import-Csv -LiteralPath $csv) {
+        $record = @{}
+        foreach ($property in $row.PSObject.Properties) { $record[$property.Name] = $property.Value }
+        $records.Add($record)
+    }
+}
+$plans = @(Get-AvmMetadataBackfillPlan -Root $root -Repository $Repository -Ecosystem $Ecosystem `
+        -LegacyRecord $records.ToArray() -UpdateSource:$UpdateSource)
 $results = [System.Collections.Generic.List[object]]::new()
-$apply = $PSCmdlet.ShouldProcess($root, "Initialize metadata for all $($plans.Count) reviewed modules")
+$apply = $PSCmdlet.ShouldProcess($root, "Create missing metadata.json files for $($plans.Count) modules")
 if ($apply) {
-    $null = Get-AvmMetadataBackfillModule -Root $root -Ecosystem $manifest.ecosystem -Repository $Repository
+    $null = Get-AvmMetadataBackfillModule -Root $root -Ecosystem $Ecosystem -Repository $Repository
 }
 foreach ($plan in $plans) {
     $changed = $false

@@ -1,11 +1,11 @@
-function New-AvmModuleMetadataSeed {
+function Get-AvmModuleMetadata {
     <#
     .SYNOPSIS
-        Prepare an offline metadata seed from legacy values and checked-out source.
+        Read existing metadata or derive its values from module source and indexes.
     .DESCRIPTION
-        Returns a validated seed or explicit unresolved-field diagnostics without
+        Returns validated metadata or explicit missing-field diagnostics without
         writing files. Existing metadata takes precedence. InputObject validates
-        an exact reviewed seed independently of any existing metadata file.
+        supplied values independently of any existing metadata file.
     .PARAMETER Path
         Existing module directory. No cloning, source rewriting, or network lookup.
     .PARAMETER ModuleId
@@ -19,19 +19,18 @@ function New-AvmModuleMetadataSeed {
     .PARAMETER LegacyRecord
         Matching legacy CSV records. Only metadata fields and GitHub handles are read.
     .PARAMETER Override
-        Reviewed metadata field overrides for values that cannot be inferred losslessly.
+        Explicit metadata values for fields that cannot be determined from source.
     .PARAMETER OwnerGitHubHandle
-        Additional root owner handles from a reviewed ownership snapshot.
+        Additional root owner handles from an ownership snapshot.
     .PARAMETER InputObject
         Exact metadata dictionary to validate and normalize without inferring fields.
     .PARAMETER SkipModuleVersionCheck
         Skip the installed-module version check for offline preparation.
     .EXAMPLE
-        New-AvmModuleMetadataSeed -Path . -ModuleId avm-res-storage-storageaccount -Ecosystem terraform -ModuleType resource -LegacyRecord $row -Override @{ moduleDescription = 'Deploys a Storage Account.' } -SkipModuleVersionCheck
+        Get-AvmModuleMetadata -Path . -ModuleId avm-res-storage-storageaccount -Ecosystem terraform -ModuleType resource -LegacyRecord $row -SkipModuleVersionCheck
     .OUTPUTS
         A result with Status, Issues, Metadata (only when valid), and Candidate.
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Returns an in-memory seed without writing files or state.')]
     [CmdletBinding(DefaultParameterSetName = 'Legacy')]
     [OutputType([pscustomobject])]
     param(
@@ -75,7 +74,7 @@ function New-AvmModuleMetadataSeed {
         }
     }
     else {
-        $converted = ConvertTo-AvmMetadataSeed -Path $Path -ModuleId $ModuleId -Ecosystem $Ecosystem `
+        $converted = ConvertTo-AvmModuleMetadata -Path $Path -ModuleId $ModuleId -Ecosystem $Ecosystem `
             -ModuleType $ModuleType -ChildModule:$ChildModule -LegacyRecord $LegacyRecord `
             -Override $Override -OwnerGitHubHandle $OwnerGitHubHandle
         $candidate = $converted.Candidate
@@ -84,7 +83,8 @@ function New-AvmModuleMetadataSeed {
         }
     }
     $validation = Test-AvmMetadataContent -Json (ConvertTo-Json -InputObject $candidate -Depth 50) `
-        -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule
+        -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule `
+        -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
     foreach ($issue in $validation.Issues) {
         $issues.Add($issue)
     }

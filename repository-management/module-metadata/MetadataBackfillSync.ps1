@@ -10,24 +10,46 @@ function Get-AvmMetadataBackfillActor {
     return [pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }
 }
 
-function Get-AvmRepositoryMetadataBackfillContext {
-    param(
-        [Parameter(Mandatory)][string] $orgAndRepoName,
-        [ValidateSet('bicep', 'terraform')][string] $Ecosystem = 'terraform'
-    )
+function ConvertFrom-AvmMetadataIndex {
+    param([Parameter(Mandatory)][string] $Content)
 
+    foreach ($row in ConvertFrom-Csv -InputObject $Content) {
+        $record = @{}
+        foreach ($property in $row.PSObject.Properties) { $record[$property.Name] = $property.Value }
+        $record
+    }
+}
+
+function Get-AvmRepositoryMetadataBackfillContext {
+    param([Parameter(Mandatory)][string] $orgAndRepoName)
+
+    if ($orgAndRepoName -cnotmatch '^Azure/terraform-(azurerm|azapi|azure)-(?<id>avm-(?<kind>res|ptn|utl)-[a-z0-9-]+)$') {
+        throw [System.ArgumentException]::new('Metadata backfill requires a supported Azure Terraform module repository.')
+    }
+    $moduleId = $Matches.id
+    $moduleType = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$Matches.kind]
     $toolsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..'))
-    Import-Module Avm.Authoring -ErrorAction Stop
     Assert-AvmMetadataBackfillCapability
-    $seedPath = Resolve-AvmMetadataBackfillSeedManifest -ToolsRoot $toolsRoot -Repository $orgAndRepoName
-    $manifest = Read-AvmMetadataBackfillJson -Path $seedPath
-    if ($manifest.repository -cne $orgAndRepoName -or $manifest.ecosystem -cne $Ecosystem -or
-        $manifest.reviewed -isnot [bool] -or -not $manifest.reviewed) {
-        throw [System.ArgumentException]::new("Repository sync requires a reviewed $Ecosystem seed manifest for the selected repository.")
+    . (Join-Path $toolsRoot 'repository-management' 'module-catalog' 'scripts' 'ModuleCatalog.ps1')
+    $configuration = Read-AvmCatalogConfiguration
+    $index = @($configuration.outputs | Where-Object {
+            $_.kind -ceq 'csv' -and $_.ecosystem -ceq 'terraform' -and $_.moduleType -ceq $moduleType
+        })[0]
+    $source = Invoke-RepositoryGitHubApi -Endpoint "repos/$($configuration.repositories.docs)/commits/main"
+    if ($source.sha -cnotmatch '^[0-9a-f]{40}$') {
+        throw [System.IO.InvalidDataException]::new('The metadata index commit is missing or invalid.')
+    }
+    $file = Get-RepositoryFileAtCommit -Repository $configuration.repositories.docs -Path $index.targetPath -Sha $source.sha
+    $records = @(ConvertFrom-AvmMetadataIndex -Content $file.Content)
+    $matching = @($records | Where-Object { $_['ModuleName'] -ceq $moduleId -or $_['RepoURL'] -ceq "https://github.com/$orgAndRepoName" })
+    if ($matching.Count -eq 0) {
+        $localIndex = Join-Path $toolsRoot 'repository-management' 'repository-sync' 'config' 'repository-metadata.csv'
+        $records += @(ConvertFrom-AvmMetadataIndex -Content (Get-Content -LiteralPath $localIndex -Raw) |
+                Where-Object { $_['moduleId'] -ceq $moduleId })
     }
     return @{
-        SeedPath = $seedPath
-        Manifest = $manifest
+        LegacyRecord = $records
+        SourceSha = $source.sha
         ScriptPath = Join-Path $PSScriptRoot 'Invoke-ModuleMetadataBackfill.ps1'
     }
 }
@@ -43,7 +65,7 @@ function Get-AvmMetadataBackfillReview {
     }
     $head = Get-RepositoryBranchHead -Repository $orgAndRepoName -Branch $branchName
     if ($head) {
-        return @{ Exists = $true; Reason = "Backfill branch '$branchName' already exists; review or clean it up manually. It will not be updated." }
+        return @{ Exists = $true; Reason = "Backfill branch '$branchName' already exists; it will not be overwritten." }
     }
     return @{ Exists = $false; Reason = '' }
 }
@@ -53,52 +75,10 @@ function Invoke-AvmMetadataBackfillPreparation {
 
     $backfill = $Context.State.BackfillContext
     $result = & $backfill.ScriptPath -RepositoryRoot $Context.Root `
-        -Repository $Context.Repository.full_name -SeedManifestPath $backfill.SeedPath `
+        -Repository $Context.Repository.full_name -Ecosystem terraform -LegacyRecord $backfill.LegacyRecord `
         -UpdateSource:$Context.State.UpdateSource -Confirm:$false
     if ($result.Status -cne 'pass') {
-        throw [System.InvalidOperationException]::new("Metadata backfill preparation returned '$($result.Status)'.")
+        throw [System.InvalidOperationException]::new("Metadata file creation returned '$($result.Status)'.")
     }
     return $result
-}
-
-function Invoke-AvmBicepMetadataBackfillSync {
-    [CmdletBinding(SupportsShouldProcess)]
-    param([switch] $PlanOnly, [switch] $UpdateSource)
-
-    Assert-AvmMetadataBackfillTrigger
-    $repository = 'Azure/bicep-registry-modules'
-    $backfill = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $repository -Ecosystem bicep
-    $branch = 'avm-bot/bicep-metadata-backfill'
-    if (-not $PSCmdlet.ShouldProcess($repository, 'Prepare reviewed Bicep metadata backfill')) {
-        return [pscustomobject]@{ Status = 'Preview'; HasChanges = $false; PullRequestUrl = $null; HeadSha = $null }
-    }
-    $review = Get-AvmMetadataBackfillReview -orgAndRepoName $repository -branchName $branch
-    if ($review.Exists) {
-        Write-Warning $review.Reason
-        return [pscustomobject]@{ Status = 'Deferred'; HasChanges = $false; PullRequestUrl = $null; HeadSha = $null }
-    }
-    $paths = [System.Collections.Generic.List[string]]::new()
-    foreach ($entry in $backfill.Manifest.modules) {
-        $paths.Add("$($entry.path)/metadata.json")
-        if ($UpdateSource -and $entry.updateSource) {
-            $paths.Add("$($entry.path)/main.bicep")
-        }
-    }
-    if ($paths.Count -eq 0) {
-        throw [System.ArgumentException]::new('Bicep metadata backfill requires a nonempty reviewed seed manifest.')
-    }
-    $state = @{ BackfillContext = $backfill; UpdateSource = $UpdateSource.IsPresent }
-    $result = Invoke-RepositoryFileSync -Repository $repository -DefaultBranch main `
-        -PlanOnly:$PlanOnly -ReviewOnly -StableBranch $branch -VerifyCandidate -FullCheckout `
-        -ExpectedActor (Get-AvmMetadataBackfillActor) -AllowedPaths $paths.ToArray() -State $state `
-        -Prepare {
-            param($context)
-            $context.State.BackfillResult = Invoke-AvmMetadataBackfillPreparation -Context $context
-        } `
-        -Title 'chore: backfill Bicep module metadata' `
-        -Body 'One-off Bicep metadata backfill from reviewed tools-repository seeds. All snapshot owner handles are retained and children inherit root ownership. Existing metadata is preserved. Review every changed module before merging. CI remains enabled and this change is never automatically merged.'
-    if ($state.ContainsKey('BackfillResult')) {
-        $result['ModuleCount'] = @($state.BackfillResult.Modules).Count
-    }
-    return [pscustomobject]$result
 }

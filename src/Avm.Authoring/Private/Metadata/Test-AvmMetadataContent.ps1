@@ -14,7 +14,9 @@ function Test-AvmMetadataContent {
         [ValidateSet('resource', 'pattern', 'utility')]
         [string] $ModuleType,
 
-        [switch] $ChildModule
+        [switch] $ChildModule,
+
+        [Nullable[bool]] $TelemetryRequired = $null
     )
 
     Set-StrictMode -Version 3.0
@@ -53,14 +55,17 @@ function Test-AvmMetadataContent {
     if ($metadata.Contains('telemetryIdPrefix')) {
         $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
         $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
-        if (-not $metadata.telemetryIdPrefix.StartsWith("$marker.$kind.", [System.StringComparison]::Ordinal)) {
+        $legacyResourceGraph = $Ecosystem -eq 'bicep' -and $ModuleType -eq 'resource' -and
+        $metadata.canonicalType -ceq 'Microsoft.ResourceGraph/queries' -and
+        $metadata.telemetryIdPrefix -ceq '46d3xbcp.resourcegraph-query'
+        if (-not $legacyResourceGraph -and -not $metadata.telemetryIdPrefix.StartsWith("$marker.$kind.", [System.StringComparison]::Ordinal)) {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                         -Message "telemetryIdPrefix must start with '$marker.$kind.' for this module."))
         }
     }
-    elseif ($ModuleType -ne 'utility') {
+    elseif (($null -eq $TelemetryRequired -and $ModuleType -ne 'utility') -or $TelemetryRequired -eq $true) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
-                    -Message 'Resource and pattern modules require telemetryIdPrefix.'))
+                    -Message 'This module requires telemetryIdPrefix.'))
     }
 
     if (-not $ChildModule) {

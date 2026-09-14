@@ -106,7 +106,7 @@ Assert-True `
     -Description "the workflow to forward both explicit metadata switches"
 Assert-True `
     -Actual ($workflow.Contains('Assert-AvmMetadataBackfillCapability')) `
-    -Description "the workflow to require a released metadata API before cloud operations"
+    -Description "the workflow to require a supported metadata API before file creation"
 
 $syncAst = Get-ScriptAst -Path $syncScriptPath
 $syncParameterNames = @(
@@ -118,9 +118,16 @@ Assert-True -Actual ($syncParameterNames -notcontains "forceUserRemoval") -Descr
 Assert-True -Actual ($syncParameterNames -contains "metadataBackfill") -Description "Invoke-RepositorySync.ps1 to expose metadataBackfill"
 Assert-True -Actual ($syncParameterNames -contains "metadataUpdateSource") -Description "Invoke-RepositorySync.ps1 to expose metadataUpdateSource"
 
-$preCommitCallParameters = Get-CommandParameterNames `
-    -Ast $syncAst `
-    -Name "Invoke-AvmPreCommitForRepository"
+$preCommitCallParameters = @(
+    $syncAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -ceq 'Invoke-AvmPreCommitForRepository'
+    }, $true) |
+        ForEach-Object { $_.CommandElements } |
+        Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } |
+        ForEach-Object { $_.ParameterName }
+)
 Assert-True `
     -Actual ($preCommitCallParameters -contains "forceFileUpdate") `
     -Description "Invoke-RepositorySync.ps1 to forward forceFileUpdate"

@@ -1,4 +1,4 @@
-function Get-AvmMetadataSeedSource {
+function Get-AvmMetadataSource {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -29,7 +29,7 @@ function Get-AvmMetadataSeedSource {
             if ($token.Groups['symbol'].Value -ceq 'avmTelemetry') {
                 $telemetryPresent = $true
                 $tail = Get-AvmBicepCommentFreeSource -Source $source.Substring($token.Index + $token.Length)
-                $prefix = [regex]::Match($tail, "^\s*(?:if\s*\([^\r\n]*\)\s*)?\{\s*name\s*:\s*'(?<prefix>46d3xbcp\.(?:res|ptn|utl)\.[a-z0-9-]+)\.")
+                $prefix = [regex]::Match($tail, "^\s*(?:if\s*\([^\r\n]*\)\s*)?\{\s*name\s*:\s*'(?<prefix>46d3xbcp\.(?:(?:res|ptn|utl)\.[a-z0-9_-]+|resourcegraph-query))\.")
                 if ($prefix.Success) {
                     $null = $prefixes.Add($prefix.Groups['prefix'].Value)
                 }
@@ -39,7 +39,7 @@ function Get-AvmMetadataSeedSource {
                 continue
             }
             $type = $token.Groups['type'].Value
-            if ($type -cmatch '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w+)+$') {
+            if ($type -cmatch '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w*)+$') {
                 $null = $types.Add($type)
             }
             else {
@@ -53,7 +53,7 @@ function Get-AvmMetadataSeedSource {
             if ($source.Contains('46d3xtrf', [System.StringComparison]::Ordinal)) {
                 $telemetryPresent = $true
             }
-            $pattern = '(?m)(?<assignment>^[\t ]*(?:avm_telemetry_id_prefix|telemetry_id_prefix)[\t ]*=[\t ]*"(?<prefix>46d3xtrf\.(?:res|ptn|utl)\.[a-z0-9-]+)"[\t ]*(?=(?:#|//|$)))|/\*[\s\S]*?\*/|#[^\r\n]*|//[^\r\n]*|"(?:\\.|[^"\\])*"|<<-?(?<delimiter>[A-Za-z_]\w*)\r?\n[\s\S]*?^\s*\k<delimiter>[\t ]*\r?$'
+            $pattern = '(?m)(?<assignment>^[\t ]*(?:avm_telemetry_id_prefix|telemetry_id_prefix)[\t ]*=[\t ]*"(?<prefix>46d3xtrf\.(?:res|ptn|utl)\.[a-z0-9_-]+)"[\t ]*(?=(?:#|//|$)))|/\*[\s\S]*?\*/|#[^\r\n]*|//[^\r\n]*|"(?:\\.|[^"\\])*"|<<-?(?<delimiter>[A-Za-z_]\w*)\r?\n[\s\S]*?^\s*\k<delimiter>[\t ]*\r?$'
             foreach ($token in [regex]::Matches($source, $pattern)) {
                 if ($token.Groups['assignment'].Success) {
                     $null = $prefixes.Add($token.Groups['prefix'].Value)

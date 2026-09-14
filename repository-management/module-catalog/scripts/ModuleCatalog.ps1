@@ -333,7 +333,7 @@ function Get-AvmCatalogLegacyCanonicalType {
     elseif (-not $canonical -and $Identity.Ecosystem -eq 'bicep') {
         $canonical = $Identity.ModulePath.Substring('avm/ptn/'.Length)
     }
-    $pattern = if ($Identity.ModuleType -eq 'resource') { '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w+)+$' } else { '^[a-z0-9-]+(/[a-z0-9-]+)+$' }
+    $pattern = if ($Identity.ModuleType -eq 'resource') { '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w*)+$' } else { '^[a-z0-9-]+(/[a-z0-9-]+)+$' }
     if (-not $canonical -or $canonical -cnotmatch $pattern) {
         throw [System.ArgumentException]::new('Legacy data cannot determine canonicalType without a reviewed mapping.')
     }
@@ -694,7 +694,10 @@ function New-AvmCatalogBundle {
             throw [System.IO.InvalidDataException]::new("Registry snapshot is incomplete: $($item.Identity.Key)")
         }
         $record.registry = $Registry[$item.Identity.Key]
-        $record.moduleStatus = if ($record.owners.individuals.Count -eq 0 -and -not $record.owners.team) {
+        $record.moduleStatus = if ([string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
+            'Deprecated'
+        }
+        elseif ($record.owners.individuals.Count -eq 0 -and -not $record.owners.team) {
             'Orphaned'
         }
         elseif ($record.registry.status -eq 'available') {

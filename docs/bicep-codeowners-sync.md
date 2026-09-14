@@ -3,9 +3,9 @@
 The [Repository Management - Bicep Sync workflow](../.github/workflows/repository-management-bicep-sync.yml)
 renders the [source template](../repository-management/bicep-codeowners-sync/CODEOWNERS.template)
 from the official Bicep resource, pattern, and utility CSV indexes. It targets
-only `Azure/bicep-registry-modules/.github/CODEOWNERS` in its default mode.
-Manual metadata backfill uses the same workflow and shared publisher; see
-[metadata backfill](../repository-management/module-metadata/README.md#bicep-workflow).
+only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
+Bicep metadata files are added directly through a repository change, not this
+workflow.
 
 ## Ownership and template
 
@@ -71,7 +71,7 @@ Scheduled CODEOWNERS runs apply at `33 2-23/4 * * *`: 02:33, 06:33,
 every-four-hours cadence. Concurrency queues runs without cancelling an active
 writer. There is no separate repository-variable enable gate. Disable the
 workflow through the normal operator controls when scheduled writes must stop.
-Metadata backfill is never selected by a scheduled run.
+There is no Bicep metadata-backfill mode.
 
 ## Operator setup and rollout
 
@@ -136,8 +136,7 @@ CODEOWNERS opts into that verification and a sparse
 default-branch checkout limited to its managed file, a stable branch, strict dry
 runs, retained branch, and target-only app identity. Metadata backfill uses
 `-ReviewOnly` for apply runs: it opens a verified candidate but never merges.
-Bicep backfill uses a full checkout for complete module discovery while limiting
-changed paths to the reviewed metadata/source files. Neither path
+There is no Bicep workflow backfill adapter. Neither path
 checks out an existing candidate head. Git credential/hook configuration is
 confined to the disposable clone rather than the user's global settings.
 

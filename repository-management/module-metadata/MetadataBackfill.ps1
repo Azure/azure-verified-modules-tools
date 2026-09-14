@@ -3,7 +3,7 @@ function Assert-AvmMetadataBackfillCapability {
     param()
 
     $commands = [ordered]@{
-        'New-AvmModuleMetadataSeed'    = @('InputObject', 'Override', 'OwnerGitHubHandle', 'ChildModule', 'SkipModuleVersionCheck')
+        'Get-AvmModuleMetadata' = @('LegacyRecord', 'Override', 'OwnerGitHubHandle', 'ChildModule', 'SkipModuleVersionCheck')
         'Initialize-AvmModuleMetadata' = @('InputObject', 'ChildModule', 'UpdateSource', 'WhatIf', 'SkipModuleVersionCheck')
         'Test-AvmModuleMetadata'       = @('ChildModule', 'CheckSource', 'SkipModuleVersionCheck')
     }
@@ -13,6 +13,60 @@ function Assert-AvmMetadataBackfillCapability {
             throw [System.InvalidOperationException]::new("Metadata backfill requires a published Avm.Authoring release containing $name and the shared metadata API. Publish/install that release before enabling backfill; this adapter never downloads module code or schemas.")
         }
     }
+}
+
+function Get-AvmMetadataBackfillPlan {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Repository,
+        [Parameter(Mandatory)][ValidateSet('bicep', 'terraform')][string] $Ecosystem,
+        [object[]] $LegacyRecord = @(),
+        [switch] $UpdateSource
+    )
+
+    $modules = @(Get-AvmMetadataBackfillModule -Root $Root -Ecosystem $Ecosystem -Repository $Repository)
+    $plans = [System.Collections.Generic.List[object]]::new()
+    $errors = [System.Collections.Generic.List[string]]::new()
+    foreach ($module in $modules) {
+        $parameters = @{
+            Ecosystem = $Ecosystem
+            ModuleType = $module.ModuleType
+            ChildModule = $null -ne $module.ParentPath
+            SkipModuleVersionCheck = $true
+        }
+        try {
+            $rows = @(Get-AvmMetadataBackfillLegacyRecord -Record $LegacyRecord -Module $module -Repository $Repository -Ecosystem $Ecosystem)
+            $values = @{}
+            if ($Ecosystem -eq 'terraform' -and
+                @($rows | Where-Object { $_['ModuleDescription'] -or $_['Description'] }).Count -eq 0) {
+                $description = Get-AvmMetadataBackfillDescription -Root $Root -ModulePath $module.Path
+                if ($description) { $values.moduleDescription = $description }
+            }
+            $metadata = Get-AvmModuleMetadata @parameters -Path $module.FullPath -ModuleId $module.ModuleId `
+                -LegacyRecord $rows -Override $values
+            if ($metadata.Status -ne 'pass') {
+                throw [System.ArgumentException]::new(($metadata.Issues.Message -join ' '))
+            }
+            $fileExists = Test-Path -LiteralPath (Join-Path $module.FullPath 'metadata.json') -PathType Leaf
+            $plan = Initialize-AvmModuleMetadata @parameters -Path $module.FullPath `
+                -InputObject $metadata.Metadata -UpdateSource:($UpdateSource -and -not $fileExists) -WhatIf
+            $plans.Add([pscustomobject]@{
+                    Path = $module.Path
+                    FullPath = $module.FullPath
+                    Parameters = $parameters
+                    Metadata = $metadata.Metadata
+                    UpdateSource = $UpdateSource -and -not $fileExists
+                    PlannedFiles = $plan.PlannedFiles
+                })
+        }
+        catch {
+            $errors.Add("$($module.Path): $($_.Exception.Message)")
+        }
+    }
+    if ($errors.Count -gt 0) {
+        throw [System.ArgumentException]::new("Metadata could not be created from the available information. No files were written.`n$($errors -join "`n")")
+    }
+    return $plans.ToArray()
 }
 
 function Read-AvmMetadataBackfillJson {
@@ -259,117 +313,9 @@ function Get-AvmMetadataBackfillModule {
     return $modules.ToArray()
 }
 
-function Get-AvmMetadataBackfillPlan {
-    param(
-        [Parameter(Mandatory)][string] $Root,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Manifest,
-        [Parameter(Mandatory)][string] $Repository,
-        [switch] $UpdateSource
-    )
 
-    Assert-AvmMetadataBackfillShape -Value $Manifest -Required @('schemaVersion', 'repository', 'ecosystem', 'reviewed', 'modules') -Label 'Seed manifest'
-    if ($Manifest.schemaVersion -isnot [long] -and $Manifest.schemaVersion -isnot [int]) {
-        throw [System.ArgumentException]::new('Seed manifest schemaVersion must be the integer 1.')
-    }
-    if ($Manifest.schemaVersion -ne 1 -or $Manifest.reviewed -isnot [bool] -or -not $Manifest.reviewed -or
-        $Manifest.repository -cne $Repository -or $Manifest.ecosystem -cnotin @('bicep', 'terraform') -or
-        $Manifest.modules -isnot [array]) {
-        throw [System.ArgumentException]::new('Seed manifest must be v1, reviewed: true, and match the explicit repository and supported ecosystem.')
-    }
-    $modules = @(Get-AvmMetadataBackfillModule -Root $Root -Ecosystem $Manifest.ecosystem -Repository $Repository)
-    $byPath = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
-    foreach ($entry in $Manifest.modules) {
-        Assert-AvmMetadataBackfillShape -Value $entry -Required @('path', 'moduleType', 'parentPath', 'updateSource', 'metadata') -Label 'Module seed'
-        if ($entry.path -isnot [string] -or $entry.updateSource -isnot [bool] -or $entry.metadata -isnot [System.Collections.IDictionary]) {
-            throw [System.ArgumentException]::new('Each module seed requires a string path, boolean updateSource, and metadata object.')
-        }
-        $null = Resolve-AvmMetadataBackfillPath -Root $Root -RelativePath $entry.path
-        if (-not $byPath.TryAdd($entry.path, $entry)) {
-            throw [System.ArgumentException]::new("Duplicate seed for '$($entry.path)'.")
-        }
-        if (@($modules.Path) -cnotcontains $entry.path) {
-            throw [System.ArgumentException]::new("Seed '$($entry.path)' does not target a discovered source module.")
-        }
-    }
-    $missing = @($modules | Where-Object { -not $byPath.ContainsKey($_.Path) })
-    if ($missing.Count -gt 0) {
-        throw [System.ArgumentException]::new("Missing seeds for discovered modules: $($missing.Path -join ', '). No module files were written.")
-    }
 
-    $outcomes = [System.Collections.Generic.List[object]]::new()
-    $errors = [System.Collections.Generic.List[string]]::new()
-    foreach ($module in $modules) {
-        $entry = $byPath[$module.Path]
-        if ($entry.moduleType -cne $module.ModuleType -or $entry.parentPath -cne $module.ParentPath) {
-            $errors.Add("$($module.Path): moduleType/parentPath does not match discovery.")
-            continue
-        }
-        $parameters = @{
-            Ecosystem              = $Manifest.ecosystem
-            ModuleType             = $module.ModuleType
-            ChildModule            = $null -ne $module.ParentPath
-            SkipModuleVersionCheck = $true
-        }
-        try {
-            $seed = New-AvmModuleMetadataSeed @parameters -InputObject $entry.metadata
-            if ($seed.Status -ne 'pass') {
-                throw [System.ArgumentException]::new(($seed.Issues.Message -join ' '))
-            }
-            $sourceCheck = New-AvmModuleMetadataSeed @parameters -Path $module.FullPath -ModuleId $module.ModuleId -Override $entry.metadata
-            if ($sourceCheck.Status -ne 'pass') {
-                throw [System.ArgumentException]::new(($sourceCheck.Issues.Message -join ' '))
-            }
-            $wireSource = $UpdateSource -and $entry.updateSource
-            $plan = Initialize-AvmModuleMetadata @parameters -Path $module.FullPath -InputObject $entry.metadata `
-                -UpdateSource:$wireSource -WhatIf
-            if ($plan.Status -ne 'pass') {
-                throw [System.ArgumentException]::new("Initializer returned '$($plan.Status)'.")
-            }
-            $outcomes.Add([pscustomobject]@{
-                    Path         = $module.Path
-                    FullPath     = $module.FullPath
-                    Parameters   = $parameters
-                    Metadata     = $entry.metadata
-                    UpdateSource = $wireSource
-                    PlannedFiles = $plan.PlannedFiles
-                })
-        }
-        catch {
-            $errors.Add("$($module.Path): $($_.Exception.Message)")
-        }
-    }
-    if ($errors.Count -gt 0) {
-        throw [System.ArgumentException]::new("Metadata backfill preflight failed; no module files were written.`n$($errors -join "`n")")
-    }
-    return $outcomes.ToArray()
-}
 
-function Resolve-AvmMetadataBackfillSeedManifest {
-    param(
-        [Parameter(Mandatory)][string] $ToolsRoot,
-        [Parameter(Mandatory)][string] $Repository
-    )
-
-    $root = Resolve-AvmMetadataBackfillRoot -Path $ToolsRoot
-    $mapPath = Resolve-AvmMetadataBackfillPath -Root $root -RelativePath 'repository-management/module-metadata/reviewed-seeds.json'
-    $map = Read-AvmMetadataBackfillJson -Path $mapPath
-    Assert-AvmMetadataBackfillShape -Value $map -Required @('schemaVersion', 'repositories') -Label 'Reviewed seed map'
-    if ($map.schemaVersion -ne 1 -or $map.repositories -isnot [System.Collections.IDictionary]) {
-        throw [System.ArgumentException]::new('Invalid reviewed seed map; expected v1 and a repositories object.')
-    }
-    if (@($map.repositories.Keys) -cnotcontains $Repository) {
-        throw [System.ArgumentException]::new("No reviewed metadata seed manifest is registered for '$Repository'. Prepare, review, and check in a manifest under repository-management/module-metadata/seeds before opting in.")
-    }
-    $relative = $map.repositories[$Repository]
-    if ($relative -isnot [string] -or -not $relative.StartsWith('repository-management/module-metadata/seeds/', [System.StringComparison]::Ordinal)) {
-        throw [System.ArgumentException]::new('Reviewed seed manifests must be checked-in JSON files under repository-management/module-metadata/seeds/.')
-    }
-    $path = Resolve-AvmMetadataBackfillPath -Root $root -RelativePath $relative
-    if ([System.IO.Path]::GetExtension($path) -cne '.json' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw [System.ArgumentException]::new('Reviewed seed map must point to a JSON file.')
-    }
-    return $path
-}
 
 function Get-AvmMetadataBackfillDescription {
     param(
@@ -405,8 +351,8 @@ function Get-AvmMetadataBackfillDescription {
         $paragraph = $paragraphs[$Source.paragraph - 1]
     }
     else {
-        $prose = @($paragraphs | Where-Object { $_ -notmatch '^#{1,6} [^\n]+$' })
-        if ($prose.Count -ne 1) {
+        $prose = @($paragraphs | Where-Object { $_ -notmatch '(?m)^[\t ]*(?:#|[-*+] |\d+\. |>|```|~~~)|[<>`|]|\[[^\]]*\]\(' })
+        if ($prose.Count -eq 0) {
             return
         }
         $paragraph = $prose[0]

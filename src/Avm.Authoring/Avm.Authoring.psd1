@@ -30,7 +30,7 @@
         'Invoke-AvmTestIntegration',
         'Invoke-AvmTestUnit',
         'Invoke-AvmTransform',
-        'New-AvmModuleMetadataSeed',
+        'Get-AvmModuleMetadata',
         'Test-AvmModuleMetadata',
         'Update-AvmAuthoring'
     )

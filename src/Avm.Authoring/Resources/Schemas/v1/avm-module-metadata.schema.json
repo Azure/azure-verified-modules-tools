@@ -10,10 +10,10 @@
   "allOf": [
     {
       "if": {
-        "properties": { "canonicalType": { "pattern": "^Microsoft\\." } },
-        "required": [ "canonicalType" ]
+        "properties": { "telemetryIdPrefix": { "const": "46d3xbcp.resourcegraph-query" } },
+        "required": [ "telemetryIdPrefix" ]
       },
-      "then": { "required": [ "telemetryIdPrefix" ] }
+      "then": { "properties": { "canonicalType": { "const": "Microsoft.ResourceGraph/queries" } } }
     }
   ],
   "definitions": {
@@ -28,14 +28,17 @@
       "type": "string",
       "description": "ARM resource type, or the shared pattern/utility taxonomy path.",
       "anyOf": [
-        { "pattern": "^Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w+)+$" },
+        { "pattern": "^Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+$" },
         { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)+$" }
       ]
     },
     "telemetryIdPrefix": {
       "type": "string",
       "description": "Stable telemetry prefix. The ecosystem and module kind must also match the containing module.",
-      "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9-]+$",
+      "anyOf": [
+        { "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "const": "46d3xbcp.resourcegraph-query", "description": "Preserve the existing published Resource Graph identifier without rewriting telemetry." }
+      ],
       "if": { "pattern": "^46d3xbcp\\." },
       "then": { "maxLength": 50 },
       "else": { "maxLength": 59 }
@@ -72,21 +75,17 @@
           "description": "Optional shared GitHub team handle, for example @Azure/avm-core-modules.",
           "pattern": "^(@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*)?$"
         }
-      },
-      "anyOf": [
-        {
-          "properties": { "individuals": { "minItems": 1 } },
-          "required": [ "individuals" ]
-        },
-        {
-          "properties": { "team": { "minLength": 1 } },
-          "required": [ "team" ]
-        }
-      ]
+      }
     },
     "root": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "canonicalType": { "pattern": "^Microsoft\\." } } },
+          "then": { "required": [ "telemetryIdPrefix" ] }
+        }
+      ],
       "required": [
         "$schema",
         "schemaVersion",

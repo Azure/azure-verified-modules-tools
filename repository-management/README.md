@@ -5,9 +5,10 @@ operator-driven repository creation used by AVM Terraform repositories, plus
 shared Bicep/Terraform metadata tooling.
 
 [Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
-indexes and tier membership updates. [Metadata backfill](module-metadata/README.md)
-prepares reviewed, non-overwriting seeds, including all members from the Bicep
-owner-team snapshot. Both workflows require explicit rollout opt-in.
+indexes and tier membership updates. [Metadata file creation](module-metadata/README.md)
+uses existing indexes and source without intermediate approval files.
+Terraform supports this operation in its sync; Bicep files are added directly
+to the module repository.
 
 Repository sync and repository creation are intentionally independent.
 

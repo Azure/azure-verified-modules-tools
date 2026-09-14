@@ -69,7 +69,8 @@ function Test-AvmModuleMetadata {
     else {
         try {
             $result = Test-AvmMetadataContent -Json (Read-AvmMetadataJson -Path $metadataPath) `
-                -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule
+                -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule `
+                -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
             $metadata = $result.Metadata
             foreach ($issue in $result.Issues) {
                 $issues.Add($issue)

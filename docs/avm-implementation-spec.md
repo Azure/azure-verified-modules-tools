@@ -413,14 +413,20 @@ their source. The authoritative v1 input and catalog schemas are packaged under
 `$schema` URL at runtime. Root metadata owns tier and GitHub owner handles.
 Children carry only their own identity, description, and optional telemetry
 prefix; catalog generation inherits ownership and tier from the family root.
-Resource and pattern modules require telemetry, while telemetry-free utilities
-may omit the prefix. Bicep prefixes are limited to 50 characters and Terraform
+Roots and directly published resource/pattern modules require telemetry.
+Uninstrumented Bicep children without a version file may omit the prefix under
+BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
 prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
+Existing underscore identifiers and the exact historical Resource Graph
+identifier are preserved; file creation does not repair deployed telemetry.
+Empty owner lists are allowed. Unowned modules are reported as Orphaned, while
+existing Deprecated status is retained.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies Bicep literal name/description declarations.
-`avm metadata initialize` accepts a reviewed seed, never overwrites existing
-metadata, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
+`avm metadata show` reads or derives metadata from existing data.
+`avm metadata initialize` writes supplied metadata values, never overwrites
+existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
 load or Terraform JSON reader locals. It does not replace telemetry transport.
 The one-time source rewrite can change compiled Bicep output; subsequent
 owner/tier/canonical metadata edits do not. Terraform source wiring remains
@@ -431,6 +437,9 @@ valid module metadata overrides legacy rows; invalid present metadata is an
 error, not a fallback. Fleet backfill and eventual per-ecosystem cutover remain
 explicit operator actions. Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
+Terraform sync creates missing files directly from existing indexes and source,
+without an intermediate approval file or repository registration. Bicep files
+are added directly to the module repository rather than through Bicep Sync.
 
 ### Files inside the user's home
 

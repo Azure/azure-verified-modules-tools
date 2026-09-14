@@ -46,7 +46,7 @@ try {
     foreach ($source in $bicepSources) {
         $directory = Join-Path $bicep $source.ModulePath
         $null = [System.IO.Directory]::CreateDirectory($directory)
-        foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File | Where-Object { $_.Name -in @('main.bicep', 'metadata.json') })) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File | Where-Object { $_.Name -in @('main.bicep', 'metadata.json', 'version.json') })) {
             [System.IO.File]::Copy($file.FullName, (Join-Path $directory $file.Name))
         }
     }

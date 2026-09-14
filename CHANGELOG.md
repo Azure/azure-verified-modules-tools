@@ -21,8 +21,8 @@ section when cutting a release.
 
 ### Added
 
-- Shared Bicep/Terraform `metadata.json` preparation, validation, and
-  non-overwriting initialization through `avm metadata seed`, `avm metadata
+- Shared Bicep/Terraform `metadata.json` reading, validation, and
+  non-overwriting initialization through `avm metadata show`, `avm metadata
   validate`, and `avm metadata initialize`.
   Versioned input/output schemas are centrally packaged with Avm.Authoring.
   Optional source wiring uses scoped Bicep `loadJsonContent` and native
@@ -66,14 +66,19 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform metadata backfill creates missing files directly from existing
+  indexes/source and uses the selected tools checkout. The intermediate approval
+  files and registration list are removed. Bicep file creation is a direct
+  repository change, not a Bicep Sync workflow operation.
+- Metadata supports real one-character ARM child types, existing underscore
+  telemetry identifiers, empty owners, and unpublished Bicep children without
+  telemetry. Source identifiers and existing Deprecated status are preserved.
 - Catalog `config.json` now declares every artifact and destination, including
   the combined catalog and publication plan. Collection, generation, workflow
   repository selection, and publication consume the same validated manifest;
   manifest changes invalidate previously collected publication bundles.
 - Bicep management `plan_only` is now a strict dry run, and scheduled CODEOWNERS
-  sync no longer uses a separate repository-variable enable gate. Manual
-  metadata backfill reuses that workflow and the shared file publisher, with
-  review-only application and separately opted-in source wiring.
+  sync no longer uses a separate repository-variable enable gate.
 - Managed Mapotf now pins 0.1.12, which resolves downloaded modules through
   Terraform's module manifest so Git and registry subdirectory sources use
   the correct required and optional inputs. It retains batched provider-schema

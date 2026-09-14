@@ -47,7 +47,7 @@
   "definitions": {
     "canonicalType": {
       "type": "string",
-      "pattern": "^(Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w+)+|[a-z0-9-]+(/[a-z0-9-]+)+)$"
+      "pattern": "^(Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+|[a-z0-9-]+(/[a-z0-9-]+)+)$"
     },
     "nullableText": { "type": [ "string", "null" ] },
     "version": {
@@ -128,7 +128,7 @@
       "properties": {
         "ecosystem": { "enum": [ "bicep", "terraform" ] },
         "moduleType": { "enum": [ "resource", "pattern", "utility" ] },
-        "moduleStatus": { "enum": [ "Available", "Proposed", "Orphaned" ] },
+        "moduleStatus": { "enum": [ "Available", "Proposed", "Orphaned", "Deprecated" ] },
         "moduleName": { "type": "string", "minLength": 1 },
         "modulePath": { "type": "string", "minLength": 1 },
         "repository": {
@@ -168,13 +168,7 @@
             "properties": {
               "tier": { "enum": [ "core", "maintained" ] },
               "moduleDisplayName": { "minLength": 1 },
-              "moduleDescription": { "minLength": 1 },
-              "owners": {
-                "anyOf": [
-                  { "properties": { "individuals": { "minItems": 1 } } },
-                  { "properties": { "team": { "minLength": 1 } } }
-                ]
-              }
+              "moduleDescription": { "minLength": 1 }
             }
           }
         },
