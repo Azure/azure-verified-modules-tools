@@ -244,6 +244,44 @@ Describe "Invoke-GitHubCliWithRetry transient failures" {
     }
 }
 
+Describe 'Existing retry transport literal-argv mode' {
+    BeforeEach {
+        Mock Invoke-RepositorySyncProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '{"ok":true}'; StdErr = '' } }
+    }
+
+    It 'passes quotes and spaces literally through the existing GitHub wrapper' {
+        $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = @('api', '--raw-field', 'literal "quotes" and $(data)') }) `
+            -literalArguments -returnOutputParsedFromJson
+        $result.output.ok | Should -BeTrue
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+            $Command -ceq 'gh' -and $Arguments.Count -eq 3 -and $Arguments[2] -ceq 'literal "quotes" and $(data)'
+        }
+    }
+
+    It 'uses the same retry classification for literal commands' {
+        $script:literalAttempts = 0
+        Mock Invoke-RepositorySyncProcess {
+            $script:literalAttempts++
+            if ($script:literalAttempts -eq 1) { return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'connection reset' } }
+            [pscustomobject]@{ ExitCode = 0; StdOut = '{"ok":true}'; StdErr = '' }
+        }
+        $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = @('api', 'repos/Azure/example') }) `
+            -literalArguments -maxRetries 1 -retryDelayIncremental 0 -returnOutputParsedFromJson
+        $result.output.ok | Should -BeTrue
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 2
+    }
+
+    It 'preserves explicit empty JSON lists without accepting null or empty API responses' {
+        Mock Invoke-RepositorySyncProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' } }
+        $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = @('api', 'repos/Azure/example/pulls') }) `
+            -literalArguments -returnOutputParsedFromJson
+        $result.output | Should -HaveCount 0
+        Mock Invoke-RepositorySyncProcess { [pscustomobject]@{ ExitCode = 0; StdOut = 'null'; StdErr = '' } }
+        { Invoke-GitHubCliWithRetry -commands @(@{ Arguments = @('api', 'repos/Azure/example') }) `
+            -literalArguments -returnOutputParsedFromJson } | Should -Throw '*null JSON*'
+    }
+}
+
 Describe "State lock recovery identity" {
     BeforeEach {
         Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }

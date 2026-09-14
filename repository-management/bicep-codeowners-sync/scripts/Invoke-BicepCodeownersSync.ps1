@@ -8,8 +8,12 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))
 Import-Module (Join-Path $repositoryRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -ErrorAction Stop
+$sharedLib = Join-Path $repositoryRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
+. (Join-Path $sharedLib 'RetryHelpers.ps1')
+. (Join-Path $sharedLib 'RepoTree.ps1')
+. (Join-Path $sharedLib 'AvmPreCommit.ps1')
 . (Join-Path $PSScriptRoot 'lib' 'Codeowners.ps1')
-. (Join-Path $PSScriptRoot 'lib' 'GitHubSync.ps1')
+. (Join-Path $PSScriptRoot 'lib' 'CodeownersSync.ps1')
 
 $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'CODEOWNERS.template') -Raw
 $action = if ($PlanOnly) { 'Open or update the CODEOWNERS plan pull request without merging' } else { 'Synchronize and app-bypass merge only .github/CODEOWNERS' }

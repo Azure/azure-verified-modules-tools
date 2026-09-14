@@ -85,10 +85,26 @@ modify rulesets, or synchronize the target.
 
 ## Change and merge guards
 
-The sync reuses `Avm.Authoring`'s argv-safe `Invoke-AvmProcess` and the existing
-managed-file sync's `Get-AvmGitBlobSha` comparison. Its literal template
-replacement follows the repository-sync convention; the broad multi-file
-pre-commit/clone path is deliberately not used.
+Both automation entry points use `Invoke-RepositoryFileSync` in the existing
+`repository-sync/scripts/lib/AvmPreCommit.ps1`. The Terraform driver still calls
+`Invoke-AvmPreCommitForRepository`, which supplies its original preparation and
+upgrade handling to that shared core. CODEOWNERS supplies the rendered file and
+its static-content/owner-diagnostics validation hook to the same core.
+
+Clone, Git diff, branch/commit/push, candidate creation/reuse, and app merge are
+implemented once there. Both use the existing `Invoke-GitHubCliWithRetry` and
+`Invoke-CommandWithRetry` transport. Its opt-in literal-argv mode uses
+`Avm.Authoring`'s `Invoke-AvmProcess`; existing legacy retry callers retain their
+behavior. Repository file reads and blob checks use the shared `RepoTree.ps1`
+helpers. No separate CODEOWNERS API, retry, diff, or publication engine exists.
+
+Terraform defaults remain unchanged: the normal `avm pre-commit` preparation,
+plan mode without opening a candidate, timestamped branch, `[skip ci]` title,
+app-bypass squash merge, and branch deletion. CODEOWNERS opts into a sparse
+default-branch checkout limited to its managed file, a stable branch, reviewable
+plans, retained branch, and strict target-only app identity. Neither path
+checks out an existing candidate head. Git credential/hook configuration is
+confined to the disposable clone rather than the user's global settings.
 
 No branch or pull request mutation happens when main already matches. Otherwise,
 the only branch is `avm-bot/bicep-codeowners-sync`, with at most one open candidate.

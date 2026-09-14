@@ -16,6 +16,11 @@ Manual plans open or update the candidate without merging; the separate local
 export performs no remote mutations. Static ownership and the automation header
 come from a reviewed template.
 
+The requested reuse refactor replaces the separate CODEOWNERS orchestration
+with the existing repository-sync clone/diff/branch/commit/pull-request/merge
+path. Both Terraform preparation and CODEOWNERS rendering must call the same
+shared core, preserving the existing Terraform defaults.
+
 [Operator documentation](../bicep-codeowners-sync.md) describes setup, modes,
 the daily four-hour schedule offset by two hours from repository sync, and the
 fail-closed safeguards.
@@ -31,14 +36,26 @@ fail-closed safeguards.
 - [x] Export the initial template-backed snapshot for the Bicep prerequisite.
 - [x] Run the focused repository-management tests and local pre-commit gate.
 - [x] Prepare the implementation and validated handoff for feature-branch publication.
+- [x] Remove the duplicate CODEOWNERS engine and route both callers through repository sync.
+- [x] Prove the shared call path and existing defaults with offline regression tests.
+- [x] Revalidate and prepare the reuse refactor for publication on the existing review.
 
 ## Validation
 
-`.\build.ps1 test-repository-management` passed all 240 focused tests.
-`.\build.ps1 pre-commit` passed layout, lint, 1,248 unit tests (8 skipped), and
-33 component tests, including the JSON request-file and cleanup cases. The
-unchanged module lint required its existing transient analyzer retry and
-reported 200 pre-existing warnings; there were no build errors.
+After the reuse refactor,
+`.\build.ps1 -Tasks test-repository-management,pre-commit` passed all 196 focused
+tests, 1,204 unit tests (8 skipped), and 47 component tests. The cases exercise
+both adapters through the shared publisher, original Terraform preparation and
+upgrade regressions, retained plan/title/branch-deletion defaults, strict
+CODEOWNERS scope, stable branch reuse, no-merge plans, and merge/head guards.
+The existing module lint completed with warnings; there were no build errors.
+
+The separate CODEOWNERS `GitHubSync.ps1`, API/engine tests, and JSON-body
+component suite were removed. `Invoke-RepositorySync.ps1` still calls
+`Invoke-AvmPreCommitForRepository`; its preparation adapter and
+`Invoke-AvmBicepCodeownersSync` now both call `Invoke-RepositoryFileSync` in
+`repository-sync/scripts/lib/AvmPreCommit.ps1`. Both share the existing retry
+transport and repository tree/file helpers.
 
 Development used only local mocked tests and live read-only inspection; no
 target synchronization, target writes, workflow dispatches, ruleset edits, or

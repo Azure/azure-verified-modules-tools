@@ -240,7 +240,9 @@ function Invoke-GitHubCliWithRetry {
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutput,
-        [switch]$returnOutputParsedFromJson
+        [switch]$returnOutputParsedFromJson,
+        [switch]$literalArguments,
+        [string]$workingDirectory
     )
 
     return Invoke-CommandWithRetry `
@@ -254,7 +256,80 @@ function Invoke-GitHubCliWithRetry {
         -printOutput:$printOutput.IsPresent `
         -printOutputOnError:$printOutputOnError.IsPresent `
         -returnOutput:$returnOutput.IsPresent `
-        -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent
+        -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent `
+        -literalArguments:$literalArguments.IsPresent `
+        -workingDirectory $workingDirectory
+}
+
+function Invoke-RepositorySyncProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Command,
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [string] $WorkingDirectory
+    )
+
+    $module = Get-Module Avm.Authoring | Select-Object -First 1
+    if (-not $module) {
+        throw [System.InvalidOperationException]::new('Import Avm.Authoring before invoking repository-sync commands.')
+    }
+    $executable = (Get-Command -Name $Command -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    return & $module {
+        param($Executable, $Arguments, $Directory)
+        Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
+            -TimeoutSec 300 -IgnoreExitCode -EnvVars @{
+                GH_HOST = 'github.com'
+                GITHUB_TOKEN = $null
+                GH_DEBUG = $null
+                GH_PROMPT_DISABLED = '1'
+            }
+    } $executable $Arguments $WorkingDirectory
+}
+
+function Invoke-RepositoryGitHub {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [switch] $AsJson,
+        [int] $MaxRetries = 5
+    )
+
+    $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = $Arguments }) `
+        -literalArguments -maxRetries $MaxRetries -retryDelayIncremental 5 `
+        -returnOutput:(!$AsJson) -returnOutputParsedFromJson:$AsJson
+    if (-not $result.success) {
+        $detail = if ($result.ContainsKey('error')) { $result.error } else { 'retry attempts exhausted' }
+        throw [System.InvalidOperationException]::new("GitHub operation failed: $detail")
+    }
+    return $result.output
+}
+
+function Invoke-RepositoryGitHubApi {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Endpoint)
+
+    return Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'api', '--hostname', 'github.com', '--method', 'GET',
+        '--header', 'Accept: application/vnd.github+json',
+        '--header', 'X-GitHub-Api-Version: 2022-11-28', $Endpoint
+    )
+}
+
+function Invoke-RepositoryGit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [string] $WorkingDirectory
+    )
+
+    $arguments = @('-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential') + $Arguments
+    $result = Invoke-CommandWithRetry -parentCommand git -commands @(@{ Arguments = $arguments }) `
+        -literalArguments -workingDirectory $WorkingDirectory -maxRetries 0 -returnOutput
+    if (-not $result.success) {
+        $detail = if ($result.ContainsKey('error')) { $result.error } else { 'command failed' }
+        throw [System.InvalidOperationException]::new("Git operation failed: $detail")
+    }
+    return $result.output
 }
 
 # Terraform colourises its diagnostics even when stdout and stderr are
@@ -319,7 +394,9 @@ function Invoke-CommandWithRetry {
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutput,
-        [switch]$returnOutputParsedFromJson
+        [switch]$returnOutputParsedFromJson,
+        [switch]$literalArguments,
+        [string]$workingDirectory
     )
 
     $retryCount = 0
@@ -339,19 +416,27 @@ function Invoke-CommandWithRetry {
             }
 
             Write-Host "Running $parentCommand with arguments: $($arguments -join ' ')"
-            $process = Start-Process `
-                -FilePath $parentCommand `
-                -ArgumentList $arguments `
-                -RedirectStandardOutput $localLogPath `
-                -RedirectStandardError $errorLog `
-                -PassThru `
-                -NoNewWindow `
-                -Wait
+            if ($literalArguments) {
+                $process = Invoke-RepositorySyncProcess -Command $parentCommand -Arguments $arguments -WorkingDirectory $workingDirectory
+                $standardOutput = [string]$process.StdOut
+                $standardError = [string]$process.StdErr
+            } else {
+                $process = Start-Process `
+                    -FilePath $parentCommand `
+                    -ArgumentList $arguments `
+                    -RedirectStandardOutput $localLogPath `
+                    -RedirectStandardError $errorLog `
+                    -PassThru `
+                    -NoNewWindow `
+                    -Wait
+                $standardOutput = [string](Get-Content -Path $localLogPath -Raw)
+                $standardError = [string](Get-Content -Path $errorLog -Raw)
+            }
 
             if ($process.ExitCode -ne 0) {
                 Write-Host "$parentCommand failed with exit code $($process.ExitCode)."
 
-                $errorOutput = @(Remove-AnsiEscapeCode -text @(Get-Content -Path $errorLog))
+                $errorOutput = @(Remove-AnsiEscapeCode -text @($standardError -split '\r?\n'))
                 $flattenedError = ConvertTo-FlatErrorText -text $errorOutput
 
                 if ($retryOn -contains "*") {
@@ -416,17 +501,17 @@ function Invoke-CommandWithRetry {
 
                 if ($shouldRetry) {
                     Write-Host "Retrying $parentCommand due to error:"
-                    Get-Content -Path $errorLog | Write-Host
+                    Write-Host $standardError
                     $retryCount++
                     break
                 } else {
                     Write-Host "$parentCommand failed with exit code $($process.ExitCode). Check the logs for details."
                     if ($printOutputOnError) {
                         Write-Host "Output Log:"
-                        Get-Content -Path $localLogPath | Write-Host
+                        Write-Host $standardOutput
                     }
                     Write-Host "Error Log:"
-                    Get-Content -Path $errorLog | Write-Host
+                    Write-Host $standardError
                     $returnOutputs += @{
                         success  = $false
                         exitCode = $process.ExitCode
@@ -437,11 +522,20 @@ function Invoke-CommandWithRetry {
             } else {
                 if ($printOutput) {
                     Write-Host "Output Log:"
-                    Get-Content -Path $localLogPath | Write-Host
+                    Write-Host $standardOutput
                 }
                 if ($returnOutputParsedFromJson) {
-                    $outputContent = Get-Content -Path $localLogPath -Raw
-                    $parsedOutput = $outputContent | ConvertFrom-Json
+                    if ($literalArguments) {
+                        if ([string]::IsNullOrWhiteSpace($standardOutput)) {
+                            throw [System.IO.InvalidDataException]::new('GitHub returned empty JSON.')
+                        }
+                        $parsedOutput = ConvertFrom-Json -InputObject $standardOutput -NoEnumerate -ErrorAction Stop
+                        if ($null -eq $parsedOutput) {
+                            throw [System.IO.InvalidDataException]::new('GitHub returned null JSON.')
+                        }
+                    } else {
+                        $parsedOutput = $standardOutput | ConvertFrom-Json
+                    }
                     $returnOutputs += @{
                         success = $true
                         output  = $parsedOutput
@@ -449,7 +543,7 @@ function Invoke-CommandWithRetry {
                 } elseif ($returnOutput) {
                     $returnOutputs += @{
                         success = $true
-                        output  = (Get-Content -Path $localLogPath -Raw).TrimEnd()
+                        output  = $standardOutput.TrimEnd()
                     }
                 } else {
                     $returnOutputs += @{
@@ -464,6 +558,10 @@ function Invoke-CommandWithRetry {
                 $returnOutputs = @( @{
                         success = $false
                     })
+                if ($literalArguments) {
+                    $returnOutputs[0].exitCode = $process.ExitCode
+                    $returnOutputs[0].error = $standardError
+                }
                 return $returnOutputs
             }
             Write-Host "Retrying $parentCommand commands (attempt $retryCount of $maxRetries)..."
