@@ -363,15 +363,15 @@ Describe 'Invoke-AvmTerraformTest' {
                 Should -Throw -ExceptionType ([AvmProcessException]) -ExpectedMessage '*examples/default*code 2*'
             Should -Invoke Remove-Item -Exactly 1
         }
+    }
 
-        It 'does not remove a data directory when creating it failed' {
-            InModuleScope 'Avm.Authoring' {
-                Mock New-Item { throw [System.IO.IOException]::new('The directory already exists.') }
-                { Invoke-AvmTerraformTest -Context $script:validationContext } |
-                    Should -Throw -ExpectedMessage '*already exists*'
-                Should -Invoke Invoke-AvmProcess -Exactly 0
-                Should -Invoke Remove-Item -Exactly 0
-            }
+    It 'does not remove a data directory when creating it failed' {
+        InModuleScope 'Avm.Authoring' {
+            Mock New-Item { throw [System.IO.IOException]::new('The directory already exists.') }
+            { Invoke-AvmTerraformTest -Context $script:validationContext } |
+                Should -Throw -ExpectedMessage '*already exists*'
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+            Should -Invoke Remove-Item -Exactly 0
         }
     }
 }

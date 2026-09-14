@@ -47,9 +47,14 @@ Describe 'Terraform CODEOWNERS filesystem contract' -Tag Component {
     It 'refuses reparse-point targets before writing' {
         Set-TerraformCodeowners -RepositoryRoot $script:root -Content 'keep'
         $script:target = Join-Path $script:root '.github' 'CODEOWNERS'
+        $script:githubPath = Split-Path -Parent $script:target
+        $script:githubDirectory = Get-Item -LiteralPath $script:githubPath -Force
+        Mock Get-Item { $script:githubDirectory } -ParameterFilter { $LiteralPath -ceq $script:githubPath }
         Mock Get-Item { [pscustomobject]@{ Attributes = [System.IO.FileAttributes]::ReparsePoint; PSIsContainer = $false } } `
             -ParameterFilter { $LiteralPath -ceq $script:target }
         { Set-TerraformCodeowners -RepositoryRoot $script:root -Content $script:content } | Should -Throw '*through a link*'
+        Should -Invoke Get-Item -Exactly 1 -ParameterFilter { $LiteralPath -ceq $script:githubPath }
+        Should -Invoke Get-Item -Exactly 1 -ParameterFilter { $LiteralPath -ceq $script:target }
         Get-Content -LiteralPath $script:target -Raw | Should -BeExactly 'keep'
     }
 }
