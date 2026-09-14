@@ -4,7 +4,7 @@
 BeforeAll {
     $repoRoot = Join-Path $PSScriptRoot '..' '..' '..'
     $moduleRoot = Join-Path $repoRoot 'src' 'Avm.Authoring'
-    Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psm1') -Force
+    Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
     $script:adapterRoot = Join-Path $repoRoot 'repository-management' 'module-metadata'
     $script:prepare = Join-Path $script:adapterRoot 'New-ModuleMetadataBackfillSeed.ps1'
     $script:initialize = Join-Path $script:adapterRoot 'Invoke-ModuleMetadataBackfill.ps1'
@@ -416,6 +416,49 @@ resource ignored 'Microsoft.Compute/virtualMachines@2025-01-01' = {}
 }
 
 Describe 'Component: metadata backfill application' -Tag Component {
+    It 'blocks the whole batch when an ancestor or later child is disabled: <Scope>, WhatIf=<DryRun>' -TestCases @(
+        @{ Scope = 'ancestor'; DryRun = $false; Ecosystem = 'terraform' }
+        @{ Scope = 'ancestor'; DryRun = $true; Ecosystem = 'bicep' }
+        @{ Scope = 'child'; DryRun = $false; Ecosystem = 'bicep' }
+        @{ Scope = 'child'; DryRun = $true; Ecosystem = 'terraform' }
+    ) {
+        param($Scope, $DryRun, $Ecosystem)
+        $fixture = New-BackfillFixture -Ecosystem $Ecosystem -Child
+        $override = if ($Ecosystem -eq 'terraform') { New-BackfillChildOverride $fixture }
+        $manifest = (Invoke-BackfillPreparation $fixture $override).Manifest
+        foreach ($entry in $manifest.modules) { $entry.updateSource = $true }
+        $path = Save-BackfillManifest $fixture $manifest
+        $sourceName = if ($Ecosystem -eq 'bicep') { 'main.bicep' } else { 'main.tf' }
+        $sourcePath = Join-Path $fixture.ModuleRoot $sourceName
+        $sourceBefore = Get-Content $sourcePath -Raw
+        $disabledRoot = if ($Scope -eq 'ancestor') { $fixture.Base } else { $fixture.ChildRoot }
+        Write-BackfillFile (Join-Path $disabledRoot '.avm' '.disable') ''
+        { & $script:initialize -RepositoryRoot $fixture.Root -Repository $fixture.Parameters.Repository `
+                -SeedManifestPath $path -UpdateSource -WhatIf:$DryRun } | Should -Throw '*disabled*'
+        Test-Path (Join-Path $fixture.ModuleRoot 'metadata.json') | Should -BeFalse
+        Test-Path (Join-Path $fixture.ChildRoot 'metadata.json') | Should -BeFalse
+        Test-Path (Join-Path $fixture.ModuleRoot 'main.metadata.tf') | Should -BeFalse
+        Test-Path (Join-Path $fixture.ChildRoot 'main.metadata.tf') | Should -BeFalse
+        (Get-Content $sourcePath -Raw) | Should -BeExactly $sourceBefore
+    }
+
+    It 'keeps Terraform metadata-only when source wiring lacks a reviewed entry opt-in' {
+        $fixture = New-BackfillFixture
+        $telemetryPath = Join-Path $fixture.Root 'main.telemetry.tf'
+        $transport = "resource `"modtm_telemetry`" `"telemetry`" {`n  tags = { module = `"storage`" }`n}`n"
+        Write-BackfillFile $telemetryPath $transport
+        $manifest = (Invoke-BackfillPreparation $fixture).Manifest
+        $manifest.modules[0].updateSource | Should -BeFalse
+        $path = Save-BackfillManifest $fixture $manifest
+        $result = & $script:initialize -RepositoryRoot $fixture.Root -Repository $fixture.Parameters.Repository `
+            -SeedManifestPath $path -UpdateSource
+        $result.Modules[0].UpdateSource | Should -BeFalse
+        $result.Modules[0].PlannedFiles | Should -Contain 'metadata.json'
+        $result.Modules[0].PlannedFiles | Should -Not -Contain 'main.metadata.tf'
+        Test-Path (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+        (Get-Content $telemetryPath -Raw) | Should -BeExactly $transport
+    }
+
     It 'preflights every module before writing any file: <Fault>' -TestCases @(
         @{ Fault = 'missing child' }, @{ Fault = 'invalid child' }, @{ Fault = 'root fields on child' }, @{ Fault = 'wrong parent' }
     ) {

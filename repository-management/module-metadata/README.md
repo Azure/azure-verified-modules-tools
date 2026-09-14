@@ -140,6 +140,8 @@ Remove `-WhatIf` only after reviewing the plan. Every intended seed, existing
 metadata file, parent relationship, and requested source change is preflighted
 before writing any module file. Missing children, unsupported paths, absolute
 target paths, traversal, casing collisions, and reparse points fail closed.
+The shared `.avm/.disable` ancestor sentinel blocks the whole batch, including
+`-WhatIf`, before any metadata or source file is written.
 Existing metadata is validated and never overwritten, even if a seed changes.
 Run with exclusive access to the checkout; filesystem errors during application
 are reported, not hidden or rolled back.

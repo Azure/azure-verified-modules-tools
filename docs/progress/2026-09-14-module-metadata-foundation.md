@@ -38,7 +38,7 @@ or its personal-name fields.
 ## Validation
 
 - `.\build.ps1 pre-commit`: 1,108 unit tests passed, 8 platform-specific
-  cases skipped; 224 component tests passed; zero errors. Existing analyzer
+  cases skipped; 229 component tests passed; zero errors. Existing analyzer
   warnings remain non-blocking. Coverage includes both schema shapes, unlimited
   owner arrays, exact telemetry limits, strict JSON/UTF-8, inheritance,
   compatibility, complete-batch preflight, publication boundaries, and `-WhatIf`.
@@ -47,11 +47,14 @@ or its personal-name fields.
   1.15.8 evaluates root metadata and child tier inheritance in a provider-free
   plan with no resource changes.
 - `.\build.ps1 build`: staged 24 public functions and both versioned schemas.
+- `.\build.ps1 coverage`: 78.46%, above the 70% CI floor.
 - The shipped snapshot reader imported the supplied capture read-only:
   240 teams, 280 memberships, 12 teams above two members, maximum four.
   Its projection retains no personal-name or database-ID fields.
 - Catalog regressions cover real Bicep helper-folder conventions, UTC
   publication months, provider variants, all owner handles, and orphaned status.
+- Final backfill handoff adds manifest-import, complete-batch disable sentinel,
+  and reviewed-entry source-wiring regressions without changing runtime behavior.
 
 ## Blockers or dependencies
 
