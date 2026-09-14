@@ -31,7 +31,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Placeholder for the ARM-JSON walker that replaces `Set-ModuleReadMe.ps1`.          |
 | `Engines/Terraform/Format-AvmTerraformModule.ps1` | Runs `terraform fmt -recursive` over the module root.                              |
 | `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |
-| `Engines/Terraform/Invoke-AvmTerraformTest.ps1`   | Runs `terraform validate -no-color -json` (with optional auto `terraform init`).   |
+| `Engines/Terraform/Invoke-AvmTerraformTest.ps1`   | Validates examples and warns about uncovered local modules.                      |
 | `Engines/Terraform/Invoke-AvmTerraformDocs.ps1`   | Runs `terraform-docs markdown table` in inject mode against the module README.     |
 | `Private/`                                        | Module-internal helpers organised by feature. Dot-sourced but not exported.        |
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
@@ -110,8 +110,8 @@ avm context         # Get-AvmModuleContext (current working directory)
 avm tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm format          # Invoke-AvmFormat (engine resolved from module context)
 avm lint            # Invoke-AvmLint   (bicep lint; scoped AVM TFLint rulesets for terraform)
-avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json)
-avm test --no-init  # Skip the implicit 'terraform init -backend=false -upgrade' (it otherwise always runs)
+avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json per example)
+avm test --no-init  # Use initialized examples; module coverage is not assessed
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
 avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
 avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
@@ -120,6 +120,11 @@ Remove-Module Avm.Authoring
 ```
 
 The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
+
+Terraform validation includes every direct example, even `.e2eignore` examples.
+It warns if the checkout's root module or a direct `modules/` configuration is
+not reached by an example. Registry/Git copies and test-only helper modules do
+not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
 The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.0.0.
 All three packaged configurations require GitHub Artifact Attestation; there is

@@ -101,8 +101,10 @@ the `Avm.Authoring` verb you call instead.
 
 > (¹) Bare `avm test` (no tier) runs
 > `terraform init -backend=false -upgrade`
-> then `terraform validate -json` against the module root, and is the
-> validate-only step wired into `pre-commit` and `pr-check`. The
+> then `terraform validate -json` against each direct `examples/*`
+> configuration, including `.e2eignore` examples. Libraries remain child
+> modules, so deprecated outputs are valid. This is the validate-only step
+> used by `pr-check`. The
 > `terraform test`-based tiers are separate commands: `avm test unit`
 > runs `tests/unit/*.tftest.hcl`, `avm test integration` runs
 > `tests/integration/*.tftest.hcl`, and `avm test e2e` deploys each
@@ -114,6 +116,20 @@ the `Avm.Authoring` verb you call instead.
 > `$env:AVM_E2E_RETRY_PATTERN`. `avm test e2e --example <name>` targets a
 > single example (leaf or `examples/<name>`) and `avm test e2e --list`
 > emits a JSON array of runnable example names for building a CI matrix.
+
+Example validation warns when the checkout's root module or a direct
+`modules/*` configuration is not reached by any successfully validated example.
+Direct and transitive local references count; downloaded Registry/Git copies
+and test-only helper references do not. The check measures module reachability,
+not input-combination or runtime coverage, and missing coverage never fails the
+command.
+
+Each example initializes with a fresh, process-local `TF_DATA_DIR`, removed
+after validation, so stale module-manifest entries cannot claim coverage.
+Existing example data directories are left untouched; initialization may still
+update each example's dependency lock file. `--no-init` uses existing
+initialization but warns that coverage was not assessed. No examples returns
+`skipped` with warnings instead of validating the library as a root.
 
 ### From `./avm <command>` / `./avm.ps1 <command>`
 
@@ -280,7 +296,7 @@ exactly this status today.
 | --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `avm format`          | `terraform fmt`         | `fmt -recursive -list=true -write=true <root>`                                                                               |   ✅   | Returns `Changed` list of rewritten files.                                                                                                       |
 | `avm lint`            | `terraform` + `tflint`  | in a cleaned temporary copy, per root / direct `modules/*` / direct `examples/*`: `terraform init -upgrade -input=false`, optional `tflint-pre.ps1` for examples, `tflint --init`, then `--config <scope-config> --format=json --minimum-failure-severity=warning` |   ✅   | AVM rules use canonical `avm_*` names and are default-enabled; packaged configs contain deliberate scope disables and native notice-severity overrides. Root `avm.tflint.override.hcl`, all-module `avm.tflint_module.override.hcl`, all-example `avm.tflint_example.override.hcl`, and per-target `modules/<name>/avm.tflint.override.hcl` or `examples/<name>/avm.tflint.override.hcl` files merge in increasing specificity. A convention rule rejects nested Terraform module or example roots. Hooks and generated Terraform files cannot mutate the source repository. AVM notices, including `avm_interface_*_deprecated`, are emitted inline as non-failing warnings. `tflint-pre.sh` is rejected with PowerShell migration guidance. Exit `2` means findings. |
-| `avm test`            | `terraform validate`    | `init -backend=false -upgrade -input=false -no-color` then `validate -no-color -json` from `cwd=<root>`                |   ✅   | Bare `avm test` is validate-only and is the step wired into `pre-commit` / `pr-check`. Upgrade mode may update dependency lock selections.                                                            |
+| `avm test`            | `terraform validate`    | per direct `examples/*`: `init -backend=false -upgrade -input=false -no-color` then `validate -no-color -json`, with isolated module data |   ✅   | Includes `.e2eignore` examples. Warns about uncovered local modules; no examples is `skipped`. `--no-init` skips initialization and coverage. Upgrade mode may update example dependency locks. |
 | `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess. `setup.sh` / `teardown.sh` hooks are rejected. |
 | `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented). `setup.sh` / `teardown.sh` hooks are rejected.                            |
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |

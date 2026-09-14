@@ -13,6 +13,15 @@ if ($args.Count -eq 0) {
     exit 64
 }
 
+if ($env:AVM_STUB_TERRAFORM_TRACE) {
+    [ordered]@{
+        Command = $args[0]
+        Directory = (Get-Location).Path
+        DataDirectory = $env:TF_DATA_DIR
+    } | ConvertTo-Json -Compress |
+        Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+}
+
 switch ($args[0]) {
     '--version' {
         Write-Output "Terraform v$toolVersion"
@@ -24,6 +33,18 @@ switch ($args[0]) {
         exit 0
     }
     'init' {
+        if ($env:TF_DATA_DIR) {
+            $modulesDirectory = Join-Path $env:TF_DATA_DIR 'modules'
+            $null = New-Item -ItemType Directory -Path $modulesDirectory -Force
+            $fixture = Join-Path (Get-Location).Path '.avm-stub-modules.json'
+            $manifest = if (Test-Path -LiteralPath $fixture -PathType Leaf) {
+                Get-Content -LiteralPath $fixture -Raw
+            }
+            else {
+                '{"Modules":[{"Key":"","Source":"","Dir":"."}]}'
+            }
+            Set-Content -LiteralPath (Join-Path $modulesDirectory 'modules.json') -Value $manifest -Encoding utf8NoBOM
+        }
         Write-Output ''
         Write-Output 'Initializing the backend...'
         Write-Output ''
@@ -31,8 +52,16 @@ switch ($args[0]) {
         exit 0
     }
     'validate' {
-        Write-Output '{"format_version":"1.0","valid":true,"error_count":0,"warning_count":0,"diagnostics":[]}'
-        exit 0
+        $fixture = Join-Path (Get-Location).Path '.avm-stub-validation.json'
+        $payload = if (Test-Path -LiteralPath $fixture -PathType Leaf) {
+            Get-Content -LiteralPath $fixture -Raw
+        }
+        else {
+            '{"format_version":"1.0","valid":true,"error_count":0,"warning_count":0,"diagnostics":[]}'
+        }
+        Write-Output $payload
+        if (($payload | ConvertFrom-Json).valid) { exit 0 }
+        exit 1
     }
     'test' {
         # Emit a minimal newline-delimited JSON stream that the suite engine
