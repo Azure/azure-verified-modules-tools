@@ -78,6 +78,17 @@ writes; manual plans remain available.
 
 ## Operator setup and rollout
 
+**Metadata rollout ordering:** land
+[Azure/bicep-registry-modules#7349](https://github.com/Azure/bicep-registry-modules/pull/7349)
+before allowing the metadata-protecting Bicep generator to run. The old registry
+governance tests reject its additional final metadata rule. Keep Bicep Sync
+disabled throughout this incompatible interval, starting before
+[#113](https://github.com/Azure/azure-verified-modules-tools/pull/113) merges:
+that separate metadata implementation intentionally removes the old
+`AVM_CODEOWNERS_SYNC_ENABLED` gate. Setting that variable to `false` is not
+sufficient afterward. Disabling and re-enabling the workflow require operator
+approval; this change does neither.
+
 - Use the existing `avm` environment's `AVM_APP_CLIENT_ID` and
   `AVM_APP_PRIVATE_KEY`. Restrict that environment to trusted tools `main`.
   The existing AVM App must be installed on the target with Contents and Pull
