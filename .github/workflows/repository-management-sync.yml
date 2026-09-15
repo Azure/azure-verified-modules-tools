@@ -214,14 +214,24 @@ jobs:
             $metadataUpdateSource = $env:METADATA_UPDATE_SOURCE_ENABLED -eq 'true'
           }
 
-          Write-Output "Token: $env:GH_TOKEN"
           Write-Output "Repositories: $repositories"
           Write-Output "Plan Only: $planOnly"
           Write-Output "Force File Update: $forceFileUpdate"
 
           $testSubscriptionIds = @()
+          $bamiSettings = @{}
           if (-not $metadataBackfill) {
             $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
+            $bamiSettings = @{
+              TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
+              TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
+              TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $env:TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+              TEST_BAMI_SUBSCRIPTION_IDS = $env:TEST_BAMI_SUBSCRIPTION_IDS
+              TEST_BAMI_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_MANAGEMENT_GROUP_ID
+              TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
+              TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
+              TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+            }
           }
 
           $repoMetaDataJson = $env:REPO_META_DATA_JSON
@@ -252,6 +262,8 @@ jobs:
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
+            -bamiTestTenantSyncEnabled ($env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true' -and -not $metadataBackfill) `
+            -bamiSettings $bamiSettings `
             -forceFileUpdate:$forceFileUpdate `
             -metadataBackfill:$metadataBackfill `
             -metadataUpdateSource:$metadataUpdateSource
@@ -270,6 +282,15 @@ jobs:
           ARM_USE_AZUREAD: true
           ARM_USE_OIDC: true
           TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
+          AVM_BAMI_TEST_TENANT_SYNC_ENABLED: ${{ github.repository == 'Azure/azure-verified-modules-tools' && github.ref == 'refs/heads/main' && vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true' }}
+          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
           METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
           METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}

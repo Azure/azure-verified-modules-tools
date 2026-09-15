@@ -3,6 +3,7 @@
     {
       "name": "default",
       "order": -1,
+      "testTenant": "legacy",
       "repositories": [
         "*"
       ],
@@ -43,6 +44,7 @@
     {
       "name": "canary-ring-0",
       "order": 20,
+      "testTenant": "bami",
       "managedFiles": [
         "canary-ring-0"
       ],
@@ -53,6 +55,7 @@
     {
       "name": "canary-ring-1",
       "order": 10,
+      "testTenant": "bami",
       "managedFiles": [
         "canary-ring-1"
       ],

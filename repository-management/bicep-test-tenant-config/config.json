@@ -1,0 +1,20 @@
+{
+  "moduleGroups": [
+    {
+      "name": "default",
+      "order": -1,
+      "modules": [
+        "*"
+      ],
+      "testTenant": "legacy"
+    },
+    {
+      "name": "canary",
+      "order": 10,
+      "modules": [
+        "avm/res/dev-test-lab/lab"
+      ],
+      "testTenant": "bami"
+    }
+  ]
+}

@@ -31,7 +31,7 @@ This document is a plan, not approval to run production commands.
 | Prerequisite | [#119: Terraform CODEOWNERS generation](https://github.com/Azure/azure-verified-modules-tools/pull/119) | Merged | Supplies the generator used by the ownership-policy change. |
 | Prerequisite | [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343) | Merged | Required by the existing Bicep CODEOWNERS merge check. |
 | Safety gate | [Disable Bicep Sync](../.github/workflows/repository-management-bicep-sync.yml) with operator approval | Required before either tools change merges | Removing the old enable-variable gate can activate six scheduled apply runs per day. Keep the workflow disabled until every change below is merged. |
-| 1 | [Azure/Azure-Verified-Modules#2929: pipeline template](https://github.com/Azure/Azure-Verified-Modules/pull/2929) | Open; reported checks passed | Makes future generated Bicep pipelines exclude metadata-only publishing. |
+| 1 | [Azure/Azure-Verified-Modules#2929: pipeline template](https://github.com/Azure/Azure-Verified-Modules/pull/2929) | Merged; current main retains the exclusion | Makes future generated Bicep pipelines exclude metadata-only publishing. |
 | 2 | [#113: metadata implementation](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Open; Opus follow-up and local gate passed | Makes the schemas available before Bicep files reference them. Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
 | 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Open; merge blocked pending completion of requirements | Adds metadata, its engineering-only ownership rule, compatible governance tests, and existing pipeline exclusions together. |
 | 4 | [#120: engineering review for metadata](https://github.com/Azure/azure-verified-modules-tools/pull/120) | Open; conflicts resolved and local gate passed | Makes both tools generators preserve the new ownership rule, after the Bicep governance tests accept it. Obtain fresh checks after earlier tools changes merge. |
@@ -80,6 +80,13 @@ The Bicep workflow no longer has `AVM_CODEOWNERS_SYNC_ENABLED`. Enabling that
 workflow permits its scheduled CODEOWNERS apply runs; it is not a preview-only
 switch. This change remains intentional; the required rollout pause uses
 GitHub's workflow disable control rather than restoring that variable.
+
+The separate BAMI activation gate, `AVM_BAMI_TEST_TENANT_SYNC_ENABLED`, is
+retained. It controls test-tenant/identity propagation, not metadata backfill or
+catalog publication. Bicep variable propagation additionally requires the
+manual `enable_test_tenant_sync` input. Metadata-only Terraform backfill skips
+both legacy/BAMI tenant parsing and identity/state operations, even for a
+BAMI-selected repository.
 
 Ordinary installed authoring commands receive the new metadata checks through
 a separately approved Avm.Authoring release. Merging tools does not update

@@ -2,10 +2,12 @@
 
 The [Repository Management - Bicep Sync workflow](../.github/workflows/repository-management-bicep-sync.yml)
 renders the [source template](../repository-management/bicep-codeowners-sync/CODEOWNERS.template)
-from the official Bicep resource, pattern, and utility CSV indexes. It targets
-only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
+from the official Bicep resource, pattern, and utility CSV indexes. Its CODEOWNERS
+job targets only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
 Bicep metadata files are added directly through a repository change, not this
 workflow.
+The separate BAMI test-tenant job publishes nonsecret execution variables only
+when both the manual input and `AVM_BAMI_TEST_TENANT_SYNC_ENABLED` allow it.
 
 ## Ownership and template
 
@@ -69,9 +71,11 @@ Scheduled CODEOWNERS runs apply at `33 2-23/4 * * *`: 02:33, 06:33,
 `Repository Management - Terraform Sync` slots (`repository-management-sync.yml`,
 `33 */4 * * 1-5`), with weekend runs retained for an
 every-four-hours cadence. Concurrency queues runs without cancelling an active
-writer. There is no separate repository-variable enable gate. Disable the
+writer. CODEOWNERS has no separate repository-variable enable gate. Disable the
 workflow through the normal operator controls when scheduled writes must stop.
 There is no Bicep metadata-backfill mode.
+The retained BAMI activation gate applies only to the separate test-tenant job.
+`plan_only=true` also prevents that job from writing variables.
 For metadata adoption, the [rollout plan](metadata-rollout.md) requires disabling
 this workflow before the tools changes merge and keeping it disabled until the
 target governance tests and generated ownership rules agree.

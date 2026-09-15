@@ -59,7 +59,45 @@ Describe 'Component: Terraform metadata workflow scope' -Tag Component {
         $workflow | Should -Match 'inputs.sync_project_items && !inputs.metadata_backfill'
         $driver.IndexOf('return Invoke-AvmPreCommitForRepository') |
             Should -BeLessThan $driver.IndexOf('$env:ARM_USE_AZUREAD = "true"')
+        $driver.IndexOf('return Invoke-AvmPreCommitForRepository') |
+            Should -BeLessThan $driver.IndexOf('Resolve-RepositoryTestTenantSettings')
+        $workflow | Should -Match "-bamiTestTenantSyncEnabled \(\`$env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true' -and -not \`$metadataBackfill\)"
         $workflow | Should -Not -Match 'reviewed-seeds|SeedManifestPath'
+    }
+
+    It 'does not parse legacy or BAMI tenant values during metadata backfill' {
+        $workflow = Get-Content (Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml') -Raw
+        $start = $workflow.IndexOf('          $testSubscriptionIds = @()')
+        $start | Should -BeGreaterThan 0
+        $end = $workflow.IndexOf('          $repoMetaDataJson', $start)
+        $end | Should -BeGreaterThan $start
+        $source = $workflow.Substring($start, $end - $start)
+        $probe = [scriptblock]::Create($source + "`n[pscustomobject]@{ Subscriptions = `$testSubscriptionIds; Bami = `$bamiSettings }")
+        $savedSubscriptions = $env:TEST_SUBSCRIPTION_IDS
+        $savedBamiSubscriptions = $env:TEST_BAMI_SUBSCRIPTION_IDS
+        $savedBamiTenant = $env:TEST_BAMI_TENANT_ID
+        try {
+            $metadataBackfill = $true
+            $env:TEST_SUBSCRIPTION_IDS = 'invalid JSON must not be parsed'
+            $env:TEST_BAMI_SUBSCRIPTION_IDS = 'invalid BAMI JSON must not be parsed'
+            $env:TEST_BAMI_TENANT_ID = 'unused-bami-tenant'
+            $result = & $probe
+            $result.Subscriptions | Should -HaveCount 0
+            $result.Bami.Count | Should -Be 0
+
+            $metadataBackfill = $false
+            $env:TEST_SUBSCRIPTION_IDS = '["legacy-subscription"]'
+            $result = & $probe
+            @($result.Subscriptions) | Should -Be @('legacy-subscription')
+            $result.Bami.Count | Should -Be 8
+            $result.Bami.TEST_BAMI_TENANT_ID | Should -BeExactly 'unused-bami-tenant'
+            $result.Bami.TEST_BAMI_SUBSCRIPTION_IDS | Should -BeExactly 'invalid BAMI JSON must not be parsed'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('TEST_SUBSCRIPTION_IDS', $savedSubscriptions)
+            [Environment]::SetEnvironmentVariable('TEST_BAMI_SUBSCRIPTION_IDS', $savedBamiSubscriptions)
+            [Environment]::SetEnvironmentVariable('TEST_BAMI_TENANT_ID', $savedBamiTenant)
+        }
     }
 }
 

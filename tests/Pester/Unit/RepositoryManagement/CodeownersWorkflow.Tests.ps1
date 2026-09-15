@@ -57,7 +57,7 @@ Describe 'Bicep CODEOWNERS workflow contract' {
 
     It 'never interpolates workflow inputs directly into executable PowerShell' {
         $runs = [regex]::Matches($script:workflow, '(?m)^        run: \|\r?\n(?<body>(?:^          .*(?:\r?\n|$)|^\s*\r?\n)+)')
-        $runs.Count | Should -Be 1
+        $runs.Count | Should -Be 2
         foreach ($block in $runs) {
             $run = $block.Groups['body'].Value
             $run | Should -Not -Match '\$\{\{'
@@ -66,7 +66,9 @@ Describe 'Bicep CODEOWNERS workflow contract' {
             $null = [System.Management.Automation.Language.Parser]::ParseInput($run, [ref]$tokens, [ref]$parseErrors)
             $parseErrors | Should -HaveCount 0
         }
-        $runs[-1].Groups['body'].Value | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
+        $codeownersRuns = @($runs | Where-Object { $_.Groups['body'].Value -match 'Invoke-BicepCodeownersSync' })
+        $codeownersRuns | Should -HaveCount 1
+        $codeownersRuns[0].Groups['body'].Value | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
     }
 
     It 'has no Bicep metadata backfill or intermediate approval-file path' {
