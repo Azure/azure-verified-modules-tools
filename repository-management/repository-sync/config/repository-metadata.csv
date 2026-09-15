@@ -213,7 +213,7 @@ avm-utl-compute-orchestratedvirtualmachinescaleset-azapi-replicator,,,utl module
 avm-utl-compute-windowsvirtualmachine-azapi-replicator,,,utl module that helps users to migrate azurerm_windows_virtual_machine into azapi_resource,,lonegunmanb,lonegunmanb,,,true
 avm-utl-containerregistry-containerregistry-azapi-replicator,,,utl module that helps users to migrate azurerm_container_registry into azapi_resource,,lonegunmanb,lonegunmanb,,,true
 avm-utl-interfaces,,,AVM Interfaces,,matt-FFFFFF,Matt White,,,false
-avm-utl-naming,,,AVM Naming,,Nepomuceno,Gabriel Monteiro Nepomuceno,,,false
+avm-utl-naming,,,AVM Naming,,jaredfholgate,Jared Holgate,,,false
 avm-utl-network-ip-addresses,,,AVM Network IP Addresses,IPv4 CIDR,jaredfholgate,Jared Holgate,,,false
 avm-utl-network-subnet-azapi-replicator,,,utl module that helps users to migrate azurerm_subnet into azapi_resource,,lonegunmanb,lonegunmanb,,,true
 avm-utl-network-virtualnetwork-azapi-replicator,,,utl module that helps users to migrate azurerm_virtual_network into azapi_resource,,lonegunmanb,lonegunmanb,,,true
