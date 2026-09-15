@@ -437,7 +437,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'composes all eight steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
+    It 'composes all nine steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
