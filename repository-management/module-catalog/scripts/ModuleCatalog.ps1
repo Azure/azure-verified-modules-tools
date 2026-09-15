@@ -721,7 +721,6 @@ function New-AvmCatalogBundle {
             $owners = @($record.owners.individuals)
             $values = @{
                 ModuleDisplayName = $record.moduleDisplayName
-                AlternativeNames = $record.alternativeNames -join ', '
                 ModuleName = $record.moduleName
                 ParentModule = if ($null -eq $record.parentModule) { 'n/a' } elseif ($record.ecosystem -eq 'terraform') { $item.Identity.RepositoryId } else { $record.parentModule }
                 ModuleStatus = $record.moduleStatus
@@ -734,12 +733,15 @@ function New-AvmCatalogBundle {
                 SecondaryModuleOwnerDisplayName = if ($names.Count -gt 1) { $names[1] } else { '' }
                 ModuleOwnersGHTeam = $record.owners.team
                 Description = $record.moduleDescription
-                Comments = $record.comments
                 FirstPublishedIn = [string]$record.registry.firstPublishedIn
                 ProviderNamespace = [string]$record.providerNamespace
                 ResourceType = [string]$record.resourceType
                 Tier = $record.tier
                 CanonicalType = $record.canonicalType
+            }
+            if ($null -eq $record.parentModule) {
+                $values['AlternativeNames'] = $record.alternativeNames -join ', '
+                $values['Comments'] = $record.comments
             }
             foreach ($column in @($item.Row.Keys)) {
                 if ($values.ContainsKey($column)) {

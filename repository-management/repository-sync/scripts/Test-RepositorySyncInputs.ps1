@@ -151,6 +151,11 @@ Assert-True `
     -Actual ($preCommitParameterNames -contains "metadataBackfill" -and $preCommitParameterNames -contains "metadataUpdateSource") `
     -Description "Invoke-AvmPreCommitForRepository to expose false-by-default metadata opt-ins"
 
+foreach ($parameter in @("codeOwnersDefaultTeams", "codeOwnersFileProtectionTeams")) {
+    Assert-True -Actual ($preCommitCallParameters -contains $parameter) -Description "the sync driver to forward $parameter"
+    Assert-True -Actual ($preCommitParameterNames -contains $parameter) -Description "the preparation adapter to accept $parameter"
+}
+
 $decisionCallParameters = Get-CommandParameterNames `
     -Ast $preCommitFunction.Body `
     -Name "Resolve-AvmManagedFilesUpgradeDecision"

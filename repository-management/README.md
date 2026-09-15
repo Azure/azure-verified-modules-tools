@@ -19,6 +19,21 @@ The current snapshot came from the legacy Terraform governance repository at com
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
 
+## Terraform CODEOWNERS
+
+Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)
+from [repository configuration](repository-config/config.json). Matching groups,
+including the wildcard `default` group, contribute `codeOwnersTeams` for the
+default `*` rule and `codeOwnersFileProtectionTeams` for the final
+`.github/CODEOWNERS` rule. Teams are deduplicated and qualified with the target
+organization; a group targeting one repository can supply its specific owners.
+An empty team list omits that rule.
+
+The generated file replaces stale content or creates a missing file after
+`avm pre-commit` succeeds, in the same temporary checkout and publication flow.
+Plan-only runs show local drift without publishing. Edit the configuration or
+template here, not the generated files in individual module repositories.
+
 ## Staged managed-file rollout rings
 
 Managed files live in [`Azure/azure-verified-modules-managed-files`](https://github.com/Azure/azure-verified-modules-managed-files)

@@ -1,5 +1,6 @@
 . (Join-Path $PSScriptRoot 'RepositoryFileSync.ps1')
 . (Join-Path $PSScriptRoot '..' '..' '..' 'module-metadata' 'MetadataBackfillSync.ps1')
+. (Join-Path $PSScriptRoot 'TerraformCodeowners.ps1')
 
 function Assert-AvmPreCommitResult {
     param(
@@ -124,6 +125,14 @@ function Invoke-AvmPreCommitForRepository {
         [string]$orgAndRepoName,
         [string]$repoId,
         [string]$repositoryConfigDir,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [ValidateNotNull()]
+        [string[]]$codeOwnersDefaultTeams,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [ValidateNotNull()]
+        [string[]]$codeOwnersFileProtectionTeams,
         [string]$defaultBranch,
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
@@ -160,12 +169,19 @@ function Invoke-AvmPreCommitForRepository {
 
     try {
         Import-Module Avm.Authoring -ErrorAction Stop
+        $codeowners = $null
+        if (-not $metadataBackfill) {
+            $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
+            $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
+                -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
+        }
         $prepareState = @{
             RepoId = $repoId
             RepositoryConfigDir = $repositoryConfigDir
             ForceFileUpdate = $forceFileUpdate
             BackfillContext = $backfillContext
             UpdateSource = $metadataUpdateSource
+            CodeownersContent = $codeowners
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
             -PlanOnly:$planOnly -State $prepareState @publication -Prepare {
@@ -182,6 +198,7 @@ function Invoke-AvmPreCommitForRepository {
                 $prepared = Invoke-AvmPreCommitWithUpgradeRetry -repoId $context.State.RepoId `
                     -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade
                 Assert-AvmPreCommitResult -preCommitResult $prepared
+                Set-TerraformCodeowners -RepositoryRoot $context.Root -Content $context.State.CodeownersContent
             }
         $result.HasChanges = $published.HasChanges
         if ($metadataBackfill) {

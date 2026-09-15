@@ -8,6 +8,10 @@ BeforeAll {
     . (Join-Path $script:shared 'ManagedFilesUpgrade.ps1')
     . (Join-Path $script:codeowners 'scripts' 'lib' 'Codeowners.ps1')
     . (Join-Path $script:codeowners 'scripts' 'lib' 'CodeownersSync.ps1')
+    $script:terraformOwnership = @{
+        codeOwnersDefaultTeams = @('module-reviewers')
+        codeOwnersFileProtectionTeams = @('engineering-reviewers')
+    }
     $script:template = Get-Content -LiteralPath (Join-Path $script:codeowners 'CODEOWNERS.template') -Raw
     $script:content = $script:template.Replace('__AVM_MODULE_OWNERS__', '/avm/res/test/module/ @alice @Azure/azure-verified-modules-module-owners')
     $script:snapshot = [pscustomobject]@{
@@ -57,12 +61,13 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Mock Import-Module {}
         Mock Invoke-RepositoryFileSync { @{ HasChanges = $true; Status = 'Planned'; PullRequestUrl = $null; HeadSha = $null } }
         Mock Get-AvmBicepCodeownersSnapshot { $script:snapshot }
+        Mock Set-TerraformCodeowners {}
         Mock Invoke-RepositoryGit { throw 'A caller must delegate Git operations to the shared core.' }
         Mock Invoke-RepositoryGitHub { throw 'A caller must delegate publication to the shared core.' }
     }
 
     It 'routes the existing Terraform driver and CODEOWNERS adapter through the same core function' {
-        $legacy = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $legacy = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @('existing issue')
         $generated = Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly
         $legacy.IssueLog | Should -Be @('existing issue')
@@ -71,7 +76,9 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/terraform-test' -and $DefaultBranch -ceq 'main' -and
             $PlanOnly -and -not $ReviewOnly -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
-            $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration'
+            $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration' -and
+            $State.CodeownersContent -cmatch '(?m)^\* @Azure/module-reviewers$' -and
+            $State.CodeownersContent -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$'
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
@@ -92,7 +99,7 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         $script:coreResult = @{ HasChanges = $Changed; Status = $CoreStatus; PullRequestUrl = 'unused'; HeadSha = 'unused' }
         Mock Invoke-RepositoryFileSync { $script:coreResult }
         $issues = @([pscustomobject]@{ message = 'existing issue' })
-        $result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $Plan -issueLog $issues
         $result | Should -BeOfType [hashtable]
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
@@ -104,7 +111,7 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         $script:sequence = [System.Collections.Generic.List[string]]::new()
         Mock Import-Module { $script:sequence.Add('import') }
         Mock Invoke-RepositoryFileSync { $script:sequence.Add('clone'); @{ HasChanges = $false } }
-        $null = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
         $script:sequence.ToArray() | Should -Be @('import', 'clone')
         Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'Avm.Authoring' -and $ErrorAction -eq 'Stop' }
     }
@@ -118,17 +125,53 @@ Describe 'Both repository-sync entry points use one existing publication core' {
             & $Prepare @{ Root = 'isolated-clone'; Repository = @{ full_name = 'Azure/terraform-test' }; State = $State; PlanOnly = $PlanOnly }
             @{ HasChanges = $true; Status = 'Planned' }
         }
-        $null = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -forceFileUpdate $true -issueLog @()
         Should -Invoke Resolve-AvmManagedFilesUpgradeDecision -Exactly 1 -ParameterFilter { $forceFileUpdate -and $repoRoot -eq 'isolated-clone' }
         Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Exactly 1 -ParameterFilter {
             $repoId -eq 'avm-res-test' -and $repositoryConfigDir -eq 'configuration' -and $upgradeManagedFiles
         }
+        Should -Invoke Set-TerraformCodeowners -Exactly 1 -ParameterFilter {
+            $RepositoryRoot -ceq 'isolated-clone' -and
+            $Content -cmatch '(?m)^\* @Azure/module-reviewers$' -and
+            $Content -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$'
+        }
+    }
+
+    It 'does not write CODEOWNERS when the authoring gauntlet fails' {
+        Mock Remove-AvmMetadataFileConflict { $false }
+        Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $false; Reason = 'current pin' } }
+        Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'fail'; Steps = @() } }
+        Mock Invoke-RepositoryFileSync {
+            param($Prepare, $State, $PlanOnly)
+            & $Prepare @{ Root = 'isolated-clone'; Repository = @{ full_name = 'Azure/terraform-test' }; State = $State; PlanOnly = $PlanOnly }
+        }
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog @() } |
+            Should -Throw "*avm pre-commit returned status 'fail'*"
+        Should -Invoke Set-TerraformCodeowners -Times 0
+    }
+
+    It 'requires explicit ownership inputs instead of silently dropping file protection' {
+        $command = Get-Command Invoke-AvmPreCommitForRepository
+        foreach ($name in @('codeOwnersDefaultTeams', 'codeOwnersFileProtectionTeams')) {
+            $parameter = $command.Parameters[$name]
+            @($parameter.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory }) |
+                Should -HaveCount 1
+        }
+    }
+
+    It 'rejects invalid ownership before the shared core can clone or publish' {
+        { Invoke-AvmPreCommitForRepository -codeOwnersDefaultTeams @('bad team') -codeOwnersFileProtectionTeams @('reviewers') `
+            -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @() } | Should -Throw '*team slug*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 
     It 'retains the production driver call and removes the parallel CODEOWNERS engine' {
         $driver = Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1') -Raw
         $driver | Should -Match 'Invoke-AvmPreCommitForRepository'
+        $driver | Should -Match '-codeOwnersDefaultTeams\s+\$settings\.CodeOwnersDefaultTeams'
+        $driver | Should -Match '-codeOwnersFileProtectionTeams\s+\$settings\.CodeOwnersFileProtectionTeams'
         Test-Path -LiteralPath (Join-Path $script:codeowners 'scripts' 'lib' 'GitHubSync.ps1') | Should -BeFalse
         $adapter = Get-Content -LiteralPath (Join-Path $script:codeowners 'scripts' 'lib' 'CodeownersSync.ps1') -Raw
         $adapter | Should -Not -Match "'pr', 'create'|'pr', 'merge'|'commit-tree'|'push'|/git/refs|Invoke-AvmCodeownersApi"

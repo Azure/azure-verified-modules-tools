@@ -72,6 +72,9 @@ every-four-hours cadence. Concurrency queues runs without cancelling an active
 writer. There is no separate repository-variable enable gate. Disable the
 workflow through the normal operator controls when scheduled writes must stop.
 There is no Bicep metadata-backfill mode.
+For metadata adoption, the [rollout plan](metadata-rollout.md) requires disabling
+this workflow before the tools changes merge and keeping it disabled until the
+target governance tests and generated ownership rules agree.
 
 ## Operator setup and rollout
 

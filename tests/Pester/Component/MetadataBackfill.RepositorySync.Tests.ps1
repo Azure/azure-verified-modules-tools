@@ -84,6 +84,7 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
             }
         }
         Mock Remove-AvmMetadataFileConflict { $false }
+        Mock Set-TerraformCodeowners {}
         Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $false; Reason = 'unchanged' } }
         Mock Invoke-AvmPreCommitWithUpgradeRetry {
             $script:events.Add('pre-commit')
@@ -93,6 +94,8 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
             orgAndRepoName = 'Azure/terraform-azurerm-avm-res-example-resource'
             repoId = 'avm-res-example-resource'
             repositoryConfigDir = $TestDrive
+            codeOwnersDefaultTeams = @()
+            codeOwnersFileProtectionTeams = @('azure-verified-modules-engineering-owners')
             defaultBranch = 'main'
             planOnly = $false
             issueLog = @()
@@ -113,6 +116,7 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
         $result = Invoke-AvmPreCommitForRepository @script:parameters -metadataBackfill $true
         $script:events | Should -Be @('clone', 'metadata')
         Should -Invoke Remove-AvmMetadataFileConflict -Times 0
+        Should -Invoke Set-TerraformCodeowners -Times 0
         Should -Invoke Resolve-AvmManagedFilesUpgradeDecision -Times 0
         Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Times 0
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {

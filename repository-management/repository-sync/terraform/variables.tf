@@ -129,28 +129,6 @@ variable "github_copilot_agent_firewall_allow_list" {
   ]
 }
 
-variable "codeowners_default_teams" {
-  type        = list(string)
-  description = <<DESCRIPTION
-List of GitHub team slugs (relative to `github_repository_owner`) that should
-be required reviewers for all files in the repository via the CODEOWNERS file.
-Tier 1 modules should set this to the engineering owners team; other tiers
-should leave it empty.
-DESCRIPTION
-  default     = []
-}
-
-variable "codeowners_file_protection_teams" {
-  type        = list(string)
-  description = <<DESCRIPTION
-List of GitHub team slugs (relative to `github_repository_owner`) that should
-be required reviewers for changes to the `.github/CODEOWNERS` file itself.
-Defaults to the engineering owners team so the CODEOWNERS file is protected
-on every repository.
-DESCRIPTION
-  default     = ["azure-verified-modules-engineering-owners"]
-}
-
 variable "topics" {
   type        = list(string)
   description = <<DESCRIPTION

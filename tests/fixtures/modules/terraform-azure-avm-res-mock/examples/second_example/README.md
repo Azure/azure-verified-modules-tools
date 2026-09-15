@@ -6,7 +6,13 @@
 module "test" {
   source = "../../"
 
-  location = "westus3"
+  location              = "westus3"
+  create_mock_resources = false
+}
+
+output "example_resource_ids" {
+  description = "The example resource IDs accessed through the current output."
+  value       = module.test.example_resource_ids
 }
 ```
 
@@ -15,7 +21,7 @@ module "test" {
 
 The following requirements are needed by this module:
 
-- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9.0, < 2.0.0)
+- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.15.0, < 2.0.0)
 
 - <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.4)
 
@@ -42,7 +48,11 @@ No optional inputs.
 
 ## Outputs
 
-No outputs.
+The following outputs are exported:
+
+### <a name="output_example_resource_ids"></a> [example\_resource\_ids](#output\_example\_resource\_ids)
+
+Description: The example resource IDs accessed through the current output.
 
 ## Modules
 

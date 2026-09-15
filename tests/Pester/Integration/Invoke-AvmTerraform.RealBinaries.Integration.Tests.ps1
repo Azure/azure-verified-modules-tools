@@ -254,6 +254,30 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $drift.Count | Should -Be 0 -Because "pre-commit must be a no-op on a canonical module; drift:`n$($drift -join "`n")"
         }
 
+        It 'validates examples that consume deprecated module interfaces without failing' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the AzAPI fixture carries deprecated Terraform interfaces'
+                return
+            }
+
+            $validationCopy = Join-Path $script:WorkRoot "$name-deprecated-validation"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $validationCopy -Recurse -Force
+
+            $result = Invoke-AvmTest -Path $validationCopy -Ecosystem terraform
+
+            $result.Status | Should -Be 'pass' -Because ($result.Issues | ConvertTo-Json -Depth 4 -Compress)
+            @($result.Issues | Where-Object Severity -eq 'error').Count | Should -Be 0
+            @($result.Issues | Where-Object {
+                    $_.Code -in @('terraform.module-coverage', 'terraform.module-coverage-unavailable')
+                }).Count | Should -Be 0 -Because 'the examples reach the local checkout root despite its deprecated interfaces'
+            $warnings = @($result.Issues | Where-Object Severity -eq 'warning')
+            @($warnings | Where-Object Message -Match 'Use the create_mock_resources input instead').Count |
+                Should -BeGreaterThan 0
+            @($warnings | Where-Object Message -Match 'Use the example_resource_ids output instead').Count |
+                Should -BeGreaterThan 0
+        }
+
         It 'removes legacy AVM headers and their telemetry helper locals' {
             if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
             if ($name -ne 'terraform-azure-avm-res-mock') {
@@ -611,6 +635,26 @@ locals {
             (Test-Path -LiteralPath $modules) | Should -BeTrue
             (Get-Content -LiteralPath $modules -Raw) |
                 Should -Match 'tests/unit/setup' -Because 'init must record the run-block helper module'
+        }
+
+        It 'unit tier preserves deprecated aliases and safe defaults through a child-module wrapper' {
+            if ($script:SkipReason) { Set-ItResult -Skipped -Because $script:SkipReason; return }
+            if ($name -ne 'terraform-azure-avm-res-mock') {
+                Set-ItResult -Skipped -Because 'only the AzAPI fixture carries deprecated Terraform interfaces'
+                return
+            }
+
+            $cold = Join-Path $script:WorkRoot "$name-deprecated-unit"
+            Copy-Item -LiteralPath $script:OriginalModule -Destination $cold -Recurse -Force
+            (Test-Path -LiteralPath (Join-Path $cold '.terraform')) | Should -BeFalse
+
+            $result = Invoke-AvmTestUnit -Path $cold -Ecosystem terraform
+
+            $result.Status | Should -Be 'pass' -Because ($result.Issues | ConvertTo-Json -Depth 4 -Compress)
+            $result.RunsTotal | Should -Be 4
+            $result.RunsFailed | Should -Be 0
+            (Get-Content -LiteralPath (Join-Path $cold '.terraform' 'modules' 'modules.json') -Raw) |
+                Should -Match 'tests/wrapper'
         }
     }
 }

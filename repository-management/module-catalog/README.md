@@ -52,7 +52,9 @@ configuration supplied inside the generated bundle.
 missing metadata and unresolved legacy entries. Dual-source is the default:
 present metadata must pass the packaged validator, including Bicep literals;
 invalid present metadata never falls back. Reduced children require family-root
-metadata and inherit owners, tier, alternative names, and comments.
+metadata and inherit owners and tier. The JSON catalog also includes the
+family's alternative names and comments; child CSV cells for those two fields
+stay unchanged, including blanks. Newly discovered child rows leave them blank.
 
 The six CSVs retain their existing columns and unmigrated values, then append
 `Tier,CanonicalType`. Only existing columns are projected for adopted rows; full
@@ -87,3 +89,5 @@ Terraform metadata creation, the direct Bicep metadata file change, Terraform te
 refreshing the private-source MAR mirror, and the approved per-ecosystem cutover
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team how-to when enabling the workflow; generated catalogs do not belong there.
+Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
+order, required workflow pauses, and the first module/catalog runs.

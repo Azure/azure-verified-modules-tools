@@ -210,6 +210,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.ModuleDisplayName | Should -BeExactly 'Authoritative module'
         $row.Description | Should -BeExactly 'Deploys reviewed module.'
+        $row.AlternativeNames | Should -BeExactly 'Alias one, Alias two'
+        $row.Comments | Should -BeExactly 'Reviewed comment.'
         $row.Tier | Should -BeExactly 'core'
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
@@ -270,16 +272,71 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $entry.terraform[0].tier | Should -BeExactly 'core'
         $entry.terraform[0].owners.individuals | Should -HaveCount 3
         $entry.bicep[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
+        $entry.bicep[0].comments | Should -BeExactly 'Reviewed comment.'
+        $entry.terraform[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
+        $entry.terraform[0].comments | Should -BeExactly 'Reviewed comment.'
         $row = @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -like '*//modules/*' })[0]
         $row.ParentModule | Should -BeExactly 'avm-res-storage-storageaccount'
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
+        foreach ($file in @('BicepResourceModules.csv', 'TerraformResourceModules.csv')) {
+            $childRows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
+            $childRows | Should -Not -BeNullOrEmpty
+            foreach ($childRow in $childRows) {
+                $childRow.AlternativeNames | Should -BeExactly ''
+                $childRow.Comments | Should -BeExactly ''
+            }
+        }
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         foreach ($canonical in @('Microsoft.Storage/storageAccounts', 'Microsoft.Storage/storageAccounts/blobServices/containers')) {
             foreach ($ecosystem in @('bicep', 'terraform')) {
                 $publishedOwners = @($published.modules[$canonical][$ecosystem][0].owners.individuals | ForEach-Object { $_.githubHandle })
                 ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three'
             }
+        }
+    }
+
+    It 'preserves <Ecosystem> child CSV aliases and comments when existing cells are <CellContent>' -TestCases @(
+        @{ Ecosystem = 'bicep'; CellContent = 'populated' }
+        @{ Ecosystem = 'bicep'; CellContent = 'empty' }
+        @{ Ecosystem = 'terraform'; CellContent = 'populated' }
+        @{ Ecosystem = 'terraform'; CellContent = 'empty' }
+    ) {
+        param($Ecosystem, $CellContent)
+        $fixture = New-CatalogFixture -AdoptAll
+        $repository = if ($Ecosystem -eq 'bicep') { 'Azure/bicep-registry-modules' } else { 'Azure/terraform-azurerm-avm-res-storage-storageaccount' }
+        $modulePath = if ($Ecosystem -eq 'bicep') { 'avm/res/storage/storage-account/blob-service' } else { 'modules/blob-service' }
+        $file = if ($Ecosystem -eq 'bicep') { 'BicepResourceModules.csv' } else { 'TerraformResourceModules.csv' }
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem $Ecosystem -Repository $repository `
+            -ModulePath $modulePath -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
+        $legacyRow = [ordered]@{}
+        foreach ($header in $fixture.Headers[$file]) {
+            $legacyRow[$header] = $fixture.Original[$file][$header]
+        }
+        $legacyRow.ModuleName = $child.Identity.ModuleName
+        $legacyRow.RepoURL = $child.Identity.RepoURL
+        $legacyRow.ParentModule = if ($Ecosystem -eq 'bicep') { 'avm/res/storage/storage-account' } else { 'avm-res-storage-storageaccount' }
+        $legacyRow.ResourceType = 'storageAccounts/blobServices'
+        $legacyRow.AlternativeNames = if ($CellContent -eq 'populated') { ' Child alias, "quoted", another alias ' } else { '' }
+        $legacyRow.Comments = if ($CellContent -eq 'populated') { " Child-only note, `"quoted`".`nKeep this second line. " } else { '' }
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $legacyRow)))
+
+        foreach ($mode in @('dual-source', 'metadata-only')) {
+            $inventory = Get-CatalogFixtureInventory -Fixture $fixture -BicepMode $mode -TerraformMode $mode
+            $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+            $childRows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+            $childRows | Should -HaveCount 1
+            $childRows[0].AlternativeNames | Should -BeExactly $legacyRow.AlternativeNames
+            $childRows[0].Comments | Should -BeExactly $legacyRow.Comments
+            $childRows[0].Tier | Should -BeExactly 'core'
+            $childRows[0].PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
+            $childRows[0].SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
+            $entry = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices'][$Ecosystem][0]
+            $entry.owners.individuals | Should -HaveCount 3
+            $entry.tier | Should -BeExactly 'core'
+            $entry.alternativeNames | Should -Be @('Alias one', 'Alias two')
+            $entry.comments | Should -BeExactly 'Reviewed comment.'
         }
     }
 
