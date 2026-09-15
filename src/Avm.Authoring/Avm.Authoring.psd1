@@ -13,6 +13,7 @@
         'Get-AvmModuleContext',
         'Get-AvmTool',
         'Get-AvmVersion',
+        'Initialize-AvmModuleMetadata',
         'Install-AvmTool',
         'Invoke-Avm',
         'Invoke-AvmCheckConvention',
@@ -29,6 +30,8 @@
         'Invoke-AvmTestIntegration',
         'Invoke-AvmTestUnit',
         'Invoke-AvmTransform',
+        'Get-AvmModuleMetadata',
+        'Test-AvmModuleMetadata',
         'Update-AvmAuthoring'
     )
     CmdletsToExport      = @()

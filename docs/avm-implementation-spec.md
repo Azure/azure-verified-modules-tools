@@ -405,6 +405,54 @@ Each source layer applies broadcast templates before concrete paths, so an
 explicit path in that layer is more specific. Later overlays still win over
 earlier layers, and exclusions are evaluated against the expanded target paths.
 
+### Module-owned metadata
+
+Root and child Bicep/Terraform modules may adopt a strict `metadata.json` beside
+their source. The authoritative v1 input and catalog schemas are packaged under
+`Resources/Schemas/v1/` in this repository; validators never fetch a module's
+`$schema` URL at runtime. Root metadata owns tier and GitHub owner handles.
+Children carry only their own identity, description, and optional telemetry
+prefix; catalog generation inherits ownership and tier from the family root.
+Roots and directly published resource/pattern modules require telemetry.
+Uninstrumented Bicep children without a version file may omit the prefix under
+BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
+prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
+Existing underscore identifiers and the exact historical Resource Graph
+identifier are preserved; file creation does not repair deployed telemetry.
+Empty owner lists are allowed. Unowned modules are reported as Orphaned, while
+existing Deprecated status is retained.
+
+`avm metadata validate` requires the caller's ecosystem, module kind, and child
+scope. `-CheckSource` also verifies Bicep literal name/description declarations.
+`-InputObject` validates supplied metadata values without reading a file.
+`avm metadata show` only reads and validates an existing `metadata.json`; it
+never derives values or reads CSV indexes.
+`avm metadata initialize` writes supplied metadata values, never overwrites
+existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
+load or Terraform JSON reader locals. It does not replace telemetry transport.
+The one-time source rewrite can change compiled Bicep output; subsequent
+owner/tier/canonical metadata edits do not. Terraform source wiring remains
+opt-in until its transport consumes the new locals.
+
+`avm pre-commit` and `avm pr-check` finish with read-only metadata validation for
+the selected root and its module children. Invalid existing metadata fails the
+check. Missing files produce explicit warnings during rollout, without creating
+files or reading indexes. Explicit `avm metadata validate` and `show` still fail
+for missing files. Test, example, and internal helper directories are excluded.
+
+The catalog workflow lives in this tools repository. During dual-source rollout,
+valid module metadata overrides legacy rows; invalid present metadata is an
+error, not a fallback. Fleet backfill and eventual per-ecosystem cutover remain
+explicit operator actions. Metadata is owner-authored, not a managed-file
+overlay that can be replaced on every repository sync.
+Terraform sync creates missing files directly from existing indexes and source,
+without an intermediate approval file or repository registration. Bicep files
+are added directly to the module repository rather than through Bicep Sync.
+CSV conversion and backfill-only source inference live exclusively under
+`repository-management/module-metadata/`, outside the packaged module. That
+temporary directory and its sync hooks can be removed after reconciliation
+without changing the permanent metadata API or normal authoring checks.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

@@ -1,0 +1,167 @@
+---
+name: '[AVM] Module metadata catalog sync'
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      plan_only:
+        description: 'Generate artifacts only. Non-plan publication requires the trusted main branch.'
+        type: boolean
+        default: true
+      bicep_mode:
+        description: 'Bicep migration mode. Metadata-only rejects every missing or unresolved module.'
+        type: choice
+        options:
+          - dual-source
+          - metadata-only
+        default: dual-source
+      terraform_mode:
+        description: 'Terraform migration mode. Metadata-only rejects every missing or unresolved module.'
+        type: choice
+        options:
+          - dual-source
+          - metadata-only
+        default: dual-source
+
+permissions:
+  contents: read
+
+concurrency:
+  group: module-metadata-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  collect:
+    name: '[AVM] Collect and validate catalog'
+    if: github.repository == 'Azure/azure-verified-modules-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: avm
+    steps:
+      - name: '[AVM] Checkout trusted tools'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+          persist-credentials: false
+
+      - name: '[AVM] Read the trusted catalog manifest'
+        id: manifest
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogConfiguration.ps1'
+          & $script -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false | Out-Null
+
+      - name: '[AVM] Checkout public legacy catalogs as data'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.manifest.outputs.documentation-repository }}
+          ref: main
+          path: input-docs
+          persist-credentials: false
+
+      - name: '[AVM] Checkout Bicep sources as data'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.manifest.outputs.bicep-repository }}
+          ref: main
+          path: input-bicep
+          persist-credentials: false
+
+      - name: '[AVM] Create read-only collection token'
+        id: reader
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.manifest.outputs.owner }}
+          # Read across the app's installed module repositories, not only tools.
+          permission-contents: read
+          permission-members: read
+
+      - name: '[AVM] Collect immutable source and registry snapshot'
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogSnapshot.ps1'
+          & $script -DocumentationRoot (Join-Path $env:GITHUB_WORKSPACE 'input-docs') `
+            -BicepRoot (Join-Path $env:GITHUB_WORKSPACE 'input-bicep') `
+            -SnapshotPath (Join-Path $env:RUNNER_TEMP 'catalog-input') -Confirm:$false
+
+      - name: '[AVM] Generate validated outputs without network access'
+        env:
+          AVM_OFFLINE: '1'
+          BICEP_MODE: ${{ inputs.bicep_mode || 'dual-source' }}
+          TERRAFORM_MODE: ${{ inputs.terraform_mode || 'dual-source' }}
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Invoke-ModuleCatalog.ps1'
+          & $script -InputPath (Join-Path $env:RUNNER_TEMP 'catalog-input') `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'module-catalog') `
+            -BicepMode $env:BICEP_MODE -TerraformMode $env:TERRAFORM_MODE -Confirm:$false
+
+      - name: '[AVM] Upload catalog and migration artifacts'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: module-metadata-catalog
+          path: ${{ runner.temp }}/module-catalog
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: '[AVM] Publish reviewable catalog updates'
+    needs: collect
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.plan_only == false))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: avm
+    steps:
+      - name: '[AVM] Checkout trusted publication code'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+          persist-credentials: false
+
+      - name: '[AVM] Read the trusted publication manifest'
+        id: manifest
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogConfiguration.ps1'
+          & $script -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false | Out-Null
+
+      - name: '[AVM] Download this run catalog bundle'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: module-metadata-catalog
+          path: ${{ runner.temp }}/module-catalog
+
+      - name: '[AVM] Validate the publication allow-list and output hashes'
+        env:
+          AVM_OFFLINE: '1'
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
+          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog')
+
+      - name: '[AVM] Create narrowly scoped publication token'
+        id: writer
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.manifest.outputs.owner }}
+          repositories: ${{ steps.manifest.outputs.publication-repositories }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: '[AVM] Create or update review branches only'
+        env:
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          AVM_APP_SLUG: ${{ steps.writer.outputs.app-slug }}
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
+          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish -Confirm:$false

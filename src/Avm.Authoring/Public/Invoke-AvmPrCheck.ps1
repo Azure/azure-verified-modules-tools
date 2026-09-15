@@ -3,7 +3,7 @@ function Invoke-AvmPrCheck {
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
         sync -> format -> transform -> lint -> check policy ->
-        check convention -> validate -> docs.
+        check convention -> validate -> docs -> metadata.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -17,6 +17,9 @@ function Invoke-AvmPrCheck {
         credentialled policy evaluation and read-only drift checks used to
         verify that pre-commit output is current. Before any step runs, git
         status must report a clean working tree.
+        The final metadata check validates local root and child metadata without
+        creating files or reading indexes. Missing metadata produces a warning
+        during rollout; invalid existing metadata fails the chain.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a
@@ -141,6 +144,12 @@ function Invoke-AvmPrCheck {
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
+        [pscustomobject]@{
+            Name = 'metadata'
+            Cmdlet = 'Test-AvmMetadataModules'
+            ContextOnly = $true
+            ExtraArgs = @{ Context = $context; WarnIfMissing = $true }
+        }
     )
 
     $steps = New-Object System.Collections.Generic.List[object]
@@ -159,12 +168,16 @@ function Invoke-AvmPrCheck {
 
         try {
             $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
+            $stepParameters = @{}
+            if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
+                $stepParameters = @{
+                    Path = $context.Root
+                    Ecosystem = $context.Ecosystem
+                    AllowPathFallback = $AllowPathFallback
+                }
+            }
             $stepResult = Invoke-AvmNestedCommand {
-                & $def.Cmdlet `
-                    -Path $context.Root `
-                    -Ecosystem $context.Ecosystem `
-                    -AllowPathFallback:$AllowPathFallback `
-                    @extraArgs
+                & $def.Cmdlet @stepParameters @extraArgs
             }
 
             if ($stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status') {

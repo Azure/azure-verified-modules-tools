@@ -2,11 +2,16 @@ BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $script:driver = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1'
     Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    $libRoot = Join-Path (Split-Path $script:driver -Parent) 'lib'
+    . (Join-Path $libRoot 'RepoTree.ps1')
+    . (Join-Path $libRoot 'AvmPreCommit.ps1')
+    . (Join-Path $libRoot 'TestTenant.ps1')
 }
 
 Describe 'Repository sync activation gate' -Tag Component {
     BeforeEach {
         $script:previousAzureAdFlag = $env:ARM_USE_AZUREAD
+        $script:previousGitHubEvent = $env:GITHUB_EVENT_NAME
         $script:terraformRoot = Join-Path $TestDrive ('terraform-' + [guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:terraformRoot
         $script:configPath = Join-Path $TestDrive 'repository-config.json'
@@ -26,6 +31,7 @@ Describe 'Repository sync activation gate' -Tag Component {
     }
 
     AfterEach {
+        [Environment]::SetEnvironmentVariable('GITHUB_EVENT_NAME', $script:previousGitHubEvent)
         if ($null -eq $script:previousAzureAdFlag) {
             Remove-Item Env:\ARM_USE_AZUREAD -ErrorAction SilentlyContinue
         }
@@ -86,6 +92,40 @@ Describe 'Repository sync activation gate' -Tag Component {
         $script:arguments.repositoryCreationModeEnabled = $true
         { & $script:driver @script:arguments } | Should -Throw '*ordinary-sync-process-boundary*'
         Should -Invoke Start-Process -Exactly 1 -ParameterFilter { $FilePath -eq 'terraform' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'keeps metadata backfill outside enabled BAMI identity and state operations with plan <RequestedPlanOnly>' -TestCases @(
+        @{ RequestedPlanOnly = $true }
+        @{ RequestedPlanOnly = $false }
+    ) {
+        param($RequestedPlanOnly)
+
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:ARM_USE_AZUREAD = 'unchanged-by-metadata'
+        $script:arguments.metadataBackfill = $true
+        $script:arguments.planOnly = $RequestedPlanOnly
+        $script:arguments.bamiTestTenantSyncEnabled = $true
+        $script:arguments.bamiSettings = @{ invalid = 'must not be inspected' }
+        Mock Get-RepositoryDefaultBranchTree { @{ Success = $true; DefaultBranch = 'main' } }
+        Mock Invoke-AvmPreCommitForRepository { @{ HasChanges = $true; IssueLog = @() } }
+        Mock Resolve-RepositoryTestTenantSettings { throw 'Metadata must not resolve a test tenant.' }
+        Mock Invoke-AvmBamiRepositoryIdentity { throw 'Metadata must not prepare a BAMI identity.' }
+        Mock Resolve-RepositorySyncStateIdentity { throw 'Metadata must not access Azure state.' }
+        Mock Clear-TerraformWorkspace { throw 'Metadata must not clean Terraform state.' }
+
+        $result = & $script:driver @script:arguments
+
+        $result.HasChanges | Should -BeTrue
+        $env:ARM_USE_AZUREAD | Should -BeExactly 'unchanged-by-metadata'
+        Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
+            $metadataBackfill -and $planOnly -eq $RequestedPlanOnly
+        }
+        Should -Invoke Resolve-RepositoryTestTenantSettings -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Resolve-RepositorySyncStateIdentity -Exactly 0
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 }

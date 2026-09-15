@@ -75,14 +75,14 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Should -Invoke Invoke-RepositoryFileSync -Exactly 2
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/terraform-test' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and -not $OpenPlanPullRequest -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
+            $PlanOnly -and -not $ReviewOnly -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
             $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration' -and
             $State.CodeownersContent -cmatch '(?m)^\* @Azure/module-reviewers$' -and
             $State.CodeownersContent -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$'
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and $OpenPlanPullRequest -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
+            $PlanOnly -and -not $ReviewOnly -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
             $GeneratedFiles.Count -eq 1 -and $GeneratedFiles['.github/CODEOWNERS'] -ceq $script:snapshot.Content -and
             ($AllowedPaths -join ',') -ceq '.github/CODEOWNERS' -and $ExpectedActor.id -eq 187664033 -and
             $null -ne $ValidateChange -and -not $Prepare

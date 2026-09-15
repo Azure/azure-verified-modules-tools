@@ -21,6 +21,15 @@ section when cutting a release.
 
 ### Added
 
+- Shared Bicep/Terraform `metadata.json` reading, validation, and
+  non-overwriting initialization through `avm metadata show`, `avm metadata
+  validate`, and `avm metadata initialize`.
+  Versioned input/output schemas are centrally packaged with Avm.Authoring.
+  Optional source wiring uses scoped Bicep `loadJsonContent` and native
+  Terraform `jsondecode(file(...))`, without replacing telemetry transport.
+- Opt-in metadata backfill and a tools-owned dual-source catalog workflow.
+  Legacy indexes remain available during migration; production rollout and
+  cutover are operator-controlled.
 - Per-module and per-example `avm.tflint.override.hcl` files. They layer after
   the corresponding all-scope override and use validated, collision-free staged
   config paths.
@@ -57,6 +66,27 @@ section when cutting a release.
 
 ### Changed
 
+- Catalog CSV publication uses `test-` filenames beside the canonical inputs;
+  existing CSVs remain unchanged until a separate replacement change. Removed
+  catalog enable and Terraform sync pause variable gates; backfill still
+  requires explicit manual dispatch.
+- Metadata authoring is independent of CSV migration. `avm metadata show` only
+  reads existing metadata, and `validate` also accepts supplied values.
+  Both authoring chains validate local metadata and warn on missing files
+  during rollout. One-off conversion and backfill remain outside the module.
+- Terraform metadata backfill creates missing files directly from existing
+  indexes/source and uses the selected tools checkout. The intermediate approval
+  files and registration list are removed. Bicep file creation is a direct
+  repository change, not a Bicep Sync workflow operation.
+- Metadata supports real one-character ARM child types, existing underscore
+  telemetry identifiers, empty owners, and unpublished Bicep children without
+  telemetry. Source identifiers and existing Deprecated status are preserved.
+- Catalog `config.json` now declares every artifact and destination, including
+  the combined catalog and publication plan. Collection, generation, workflow
+  repository selection, and publication consume the same validated manifest;
+  manifest changes invalidate previously collected publication bundles.
+- Bicep management `plan_only` is now a strict dry run, and scheduled CODEOWNERS
+  sync no longer uses a separate repository-variable enable gate.
 - Terraform `avm test` now validates every direct example rather than treating
   the reusable library as a root module, supporting deprecated variables and
   outputs. Missing local root/submodule coverage produces warnings only.

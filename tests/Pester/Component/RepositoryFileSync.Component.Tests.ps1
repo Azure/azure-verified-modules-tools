@@ -367,7 +367,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
-    It 'creates a CODEOWNERS plan with <RoleMetadata> repository-role metadata without merging' -ForEach @(
+    It 'keeps a CODEOWNERS dry run read-only with <RoleMetadata> repository-role metadata' -ForEach @(
         @{ RoleMetadata = 'push false'; Permissions = [pscustomobject]@{ admin = $false; maintain = $false; push = $false; triage = $false; pull = $true } }
         @{ RoleMetadata = 'null'; Permissions = $null }
         @{ RoleMetadata = 'omitted'; Permissions = $null }
@@ -376,12 +376,44 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         if ($RoleMetadata -eq 'omitted') { $script:state.Repo.PSObject.Properties.Remove('permissions') }
         $result = Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly
         $result.Status | Should -Be 'Planned'
-        $script:state.Branch | Should -Be 'avm-bot/bicep-codeowners-sync'
+        $script:state.Branch | Should -BeNullOrEmpty
         @($script:state.GitCalls | Where-Object { $_[0] -eq 'status' }) | Should -HaveCount 1
-        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 1
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
+        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' -or $_ -contains 'push' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 0
         @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
         Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Times 0
+    }
+
+    It 'publishes a verified review-only metadata candidate without requiring merge capability' {
+        $script:state.Repo.allow_squash_merge = $false
+        $script:state.LocalPaths = @('metadata.json')
+        $script:state.RemotePaths = @('metadata.json')
+        $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main `
+            -StableBranch 'avm-bot/bicep-metadata-backfill' -ExpectedActor (New-CoreActor) `
+            -AllowedPaths @('metadata.json') -FullCheckout -VerifyCandidate -ReviewOnly `
+            -Title 'chore: backfill Bicep module metadata' -Prepare {
+                param($context)
+                [System.IO.File]::WriteAllText((Join-Path $context.Root 'metadata.json'), '{}')
+            }
+        $result.Status | Should -Be 'ReviewRequired'
+        $result.PullRequestUrl | Should -Be 'https://github.com/Azure/bicep-registry-modules/pull/123'
+        $script:state.Merged | Should -BeFalse
+        $clone = @($script:state.GitCalls | Where-Object { $_[0] -eq 'clone' })[0]
+        $clone | Should -Not -Contain '--no-checkout'
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'sparse-checkout' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'merge' }) | Should -HaveCount 0
+    }
+
+    It 'keeps review-only plans strictly read-only even when changes exist' {
+        $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main `
+            -StableBranch 'avm-bot/bicep-metadata-backfill' -ExpectedActor (New-CoreActor) `
+            -AllowedPaths @('.github/CODEOWNERS') -VerifyCandidate -ReviewOnly -PlanOnly `
+            -GeneratedFiles @{ '.github/CODEOWNERS' = $script:content }
+        $result.Status | Should -Be 'Planned'
+        $result.PullRequestUrl | Should -BeNullOrEmpty
+        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' -or $_ -contains 'push' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
     }
 
     It 'rejects a repository ID that differs from the target-only installation before cloning' {
@@ -445,7 +477,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         } else {
             Mock Invoke-RepositoryGitHub { throw '403 write denied' } -ParameterFilter { $Arguments -contains 'create' }
         }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*403 write denied*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*403 write denied*'
         Should -Invoke Invoke-RepositoryGitHub -Times 0 -ParameterFilter { $Arguments -contains 'merge' }
         $script:state.Merged | Should -BeFalse
     }
@@ -471,16 +503,16 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     It 'reuses an identical stable candidate without a second commit, push, or creation' {
         $script:state.RemoteHead = 'b' * 40
         $script:state.HasPullRequest = $true
-        (Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly).Status | Should -Be 'Planned'
+        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' -or $_ -contains 'commit' -or $_ -contains 'commit-tree' }) | Should -HaveCount 0
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 0
     }
 
     It 'updates a stable candidate as a descendant of both heads without checking out old head code' {
         $script:state.RemoteHead = 'b' * 40
         $script:state.HasPullRequest = $true
         $script:state.OldTree = '3' * 40
-        (Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly).Status | Should -Be 'Planned'
+        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
         $commit = @($script:state.GitCalls | Where-Object { $_ -contains 'commit-tree' })[0]
         $commit | Should -Contain ('a' * 40)
         $commit | Should -Contain ('b' * 40)
@@ -492,20 +524,20 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $script:state.HasPullRequest = $true
         $script:state.AutoMerge = @{ merge_method = 'squash' }
         $script:state.OldTree = '3' * 40
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*auto-merge enabled*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*auto-merge enabled*'
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
     It 'preserves human work on an existing candidate branch' {
         $script:state.RemoteHead = 'b' * 40
         $script:state.HumanHead = $true
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*expected app bot*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*expected app bot*'
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
     It 'rejects prepared changes outside the supplied file scope before publishing' {
         $script:state.LocalPaths += 'unrelated.ps1'
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*outside*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*outside*'
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
@@ -515,9 +547,9 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
     }
 
-    It 'leaves a plan reviewable while surfacing GitHub owner diagnostics' {
+    It 'leaves an apply candidate reviewable while surfacing GitHub owner diagnostics' {
         $script:state.OwnerErrors = @(@{ message = 'Unknown owner alice' })
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*candidate remains open*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*candidate remains open*'
         $script:state.HasPullRequest | Should -BeTrue
         $script:state.Merged | Should -BeFalse
     }
@@ -531,7 +563,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
 
     It 'propagates non-fast-forward failures without forcing an update' {
         $script:state.RejectPush = $true
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } | Should -Throw '*non-fast-forward*'
+        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*non-fast-forward*'
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
     }
 

@@ -15,6 +15,8 @@
     ./build.ps1 build
 .EXAMPLE
     ./build.ps1 ?      # list tasks
+.EXAMPLE
+    ./build.ps1 integration -TestName 'Integration: module metadata*'
 #>
 
 #Requires -Version 7.4
@@ -22,7 +24,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [string[]] $Tasks = @('.')
+    [string[]] $Tasks = @('.'),
+
+    [string[]] $TestName = @()
 )
 
 Set-StrictMode -Version 3.0
@@ -45,6 +49,6 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
     throw "Build script not found: $buildScript"
 }
 
-$buildArgs = @{ Task = $Tasks; File = $buildScript }
+$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName }
 
 Invoke-Build @buildArgs

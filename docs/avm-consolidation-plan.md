@@ -39,7 +39,7 @@ A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bi
 | Observability                          | Every task emits structured logs and a machine-readable summary suitable for GitHub annotations.    |
 | Parallel coexistence                   | Existing `./avm`, `./avm.ps1`, `Makefile`, and `utilities/tools/*.ps1` entry points remain untouched in their current repos. Contributors install the new module alongside and test it directly. Phase 6 deletes the old entry points once adoption is broad. No shim layer exists at any point. |
 | Boundary validation only               | Validate at the CLI boundary (verb args, repo detection); trust internal modules.                  |
-| One source of truth per concern        | The AVM CSV stays the canonical module index; PSRule baselines stay canonical for Azure best practice. |
+| One source of truth per concern        | Module-owned `metadata.json` becomes authoritative per adopted module; generated CSVs remain compatible indexes during dual-source rollout. PSRule baselines stay canonical for Azure best practice. |
 
 ---
 
@@ -137,8 +137,8 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
-| `avm pre-commit`              | Composition (as wired today): `format` → `lint` → `test` → `docs`        | Composition (as wired today): `format` → `lint` → `test` → `docs`          |
-| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 8-step chain |
+| `avm pre-commit`              | `format` → `lint` → `validate` → `docs` → `metadata`                    | `sync` → `check convention` → `transform` → `format` → `docs` → `metadata` |
+| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs` → `metadata`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |
 | `avm index update`            | `Invoke-AvmJsonModuleIndexGeneration.ps1`                                | Update governance index entry                                              |
@@ -420,7 +420,13 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `avm governance workflow toggle` → `Switch-WorkflowState`.
   - `avm governance reaper run` → port of `tf-repo-mgmt/reaper/ReaperScript.ps1`.
 - A unified `GitHubClient` helper that replaces the per-script REST calls (`Get-GitHubModuleWorkflowList`, `Get-GitHubIssueList`, …).
-- AVM CSV stays the canonical source of truth; the CLI's `Get-AvmCsv` cmdlet wraps it.
+- Module-owned `metadata.json` becomes the metadata source of truth through
+  the staged dual-source migration. This repository owns schemas and catalog
+  sync; CSV indexes remain compatible generated outputs. Legacy rows are
+  retained until the explicit per-ecosystem cutover.
+  Permanent authoring commands never read CSV inputs. Temporary backfill lives
+  outside the module; ordinary checks validate local metadata and warn on
+  missing files during rollout.
 
 **Exit criteria**: every `platform.*.yml` workflow can be expressed as `pwsh -c "avm governance …"` instead of `pwsh -File utilities/pipelines/platform/…`.
 

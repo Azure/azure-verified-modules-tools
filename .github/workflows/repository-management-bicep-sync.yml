@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       plan_only:
-        description: 'Create or update the CODEOWNERS pull request for review, but never merge it. Test-tenant sync plans without variable writes.'
+        description: 'Dry run only: inspect changes without committing, pushing, opening, or merging pull requests, or changing test-tenant variables.'
         default: true
         type: boolean
       enable_test_tenant_sync:
@@ -27,8 +27,7 @@ jobs:
     name: Repository Management - Bicep Sync
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' || vars.AVM_CODEOWNERS_SYNC_ENABLED == 'true')
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20

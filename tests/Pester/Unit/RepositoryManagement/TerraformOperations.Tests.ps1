@@ -178,7 +178,7 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
         $workflow | Should -Match 'cancel-in-progress: false'
-        $workflow | Should -Match "vars\.AVM_SYNC_PAUSED != 'true' \|\| github\.event_name == 'workflow_dispatch'"
+        $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
     }
 
     It 'removes the runtime resource-group parameter from both script surfaces' {

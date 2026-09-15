@@ -120,11 +120,12 @@ function Invoke-RepositoryFileSync {
         [Parameter(Mandatory)] [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')] [string] $Repository,
         [Parameter(Mandatory)] [string] $DefaultBranch,
         [switch] $PlanOnly,
+        [switch] $ReviewOnly,
         [scriptblock] $Prepare,
         [hashtable] $GeneratedFiles = @{},
         [string[]] $AllowedPaths = @(),
+        [switch] $FullCheckout,
         [string] $StableBranch,
-        [switch] $OpenPlanPullRequest,
         [switch] $KeepBranch,
         [switch] $VerifyCandidate,
         [object] $ExpectedActor,
@@ -179,9 +180,10 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     $null = New-Item -ItemType Directory -Path $parent
     try {
         $clone = @('clone', '--quiet', '--depth', '1', '--branch', $DefaultBranch)
-        if ($AllowedPaths.Count -gt 0) { $clone += @('--filter=blob:none', '--no-checkout') }
+        $sparseCheckout = $AllowedPaths.Count -gt 0 -and -not $FullCheckout
+        if ($sparseCheckout) { $clone += @('--filter=blob:none', '--no-checkout') }
         $null = Invoke-RepositoryGit -Arguments ($clone + @("https://github.com/$Repository.git", $root)) -WorkingDirectory $parent -MaxRetries 5
-        if ($AllowedPaths.Count -gt 0) {
+        if ($sparseCheckout) {
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments (@('sparse-checkout', 'set', '--no-cone', '--') + $AllowedPaths)
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', $DefaultBranch)
         }
@@ -214,7 +216,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             $result.HasChanges = -not [string]::IsNullOrWhiteSpace($status)
             if (-not $result.HasChanges) { return $result }
             Write-Host $status
-            if ($PlanOnly -and -not $OpenPlanPullRequest) { $result.Status = 'Planned'; return $result }
+            if ($PlanOnly) { $result.Status = 'Planned'; return $result }
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('add', '--all')
             $paths = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('diff', '--cached', '--no-renames', '--name-only', '-z')
             $context.ChangedPaths = @($paths.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries))
@@ -293,7 +295,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             $result.PullRequestUrl = $context.PullRequest.html_url
             $result.HeadSha = $context.HeadSha
             if ($VerifyCandidate) { Assert-RepositorySyncCandidate -Context $context }
-            if ($PlanOnly) { $result.Status = 'Planned'; return $result }
+            if ($ReviewOnly) { $result.Status = 'ReviewRequired'; return $result }
             if ($VerifyCandidate -and -not $repo.allow_squash_merge) { throw [System.InvalidOperationException]::new('Squash merging is unavailable on the synchronization target.') }
             $merge = @(
                 'pr', 'merge', $result.PullRequestUrl, "--repo=$Repository", '--squash', '--admin',

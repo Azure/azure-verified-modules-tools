@@ -55,6 +55,21 @@ function Get-AvmVerbRegistry {
             Summary = 'Classify the current directory as a Bicep or Terraform module.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('metadata', 'validate')
+            Cmdlet  = 'Test-AvmModuleMetadata'
+            Summary = 'Validate root or child module metadata against the shared schema.'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('metadata', 'show')
+            Cmdlet  = 'Get-AvmModuleMetadata'
+            Summary = 'Read and validate an existing module metadata.json file.'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('metadata', 'initialize')
+            Cmdlet  = 'Initialize-AvmModuleMetadata'
+            Summary = 'Create metadata.json without overwriting an existing file.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('format')
             Cmdlet  = 'Invoke-AvmFormat'
             Summary = 'Format the current module via the resolved engine.'
