@@ -146,6 +146,7 @@ avm-res-managedidentity-userassignedidentity,Microsoft.ManagedIdentity,userAssig
 avm-res-managedservices-registrationdefinition,Microsoft.ManagedServices,registrationDefinitions,Managed Services Registration Definition,,,,,,false
 avm-res-management-managementgroup,Microsoft.Management,managementGroups,Management Groups,,herms14,Hermes Miraflor II,,,false
 avm-res-management-servicegroup,Microsoft.Management,serviceGroups,Service Group,,haflidif,Haflidi Fridthjofsson,,,false
+avm-res-mission-approval,Microsoft.Mission,approvals,Azure Enclave Approval,,SvenAelterman,Sven Aelterman,,,false
 avm-res-mission-community,Microsoft.Mission,communities,Azure Enclave Community,,SvenAelterman,Sven Aelterman,,,false
 avm-res-netapp-netappaccount,Microsoft.NetApp,netAppAccounts,Azure NetApp File,,jtracey93,Jack Tracey,,,false
 avm-res-network-applicationgateway,Microsoft.Network,applicationGateways,Application Gateway,App GW,mofaizal,Mohamed Faizal,,,false
