@@ -802,9 +802,26 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:variablesJob | Should -Match '(?m)^          owner: Azure$'
         $script:variablesJob | Should -Match '(?m)^          repositories: bicep-registry-modules$'
         $permissions = @([regex]::Matches($script:variablesJob, '(?m)^          permission-[^\n]+$') | ForEach-Object { $_.Value.Trim() })
-        $permissions | Should -Be @('permission-variables: write')
+        $permissions | Should -Be @('permission-actions-variables: write')
         $script:variablesJob | Should -Match 'GH_TOKEN: \$\{\{ steps\.variables-token\.outputs\.token \}\}'
         $script:variablesJob | Should -Not -Match 'steps\.app-token|permission-secrets|permission-contents|permission-pull-requests|permission-workflows|id-token:'
+    }
+
+    It 'uses the pinned action with only the intended Variables token inputs' {
+        $tokenSteps = @([regex]::Matches($script:variablesJob, '(?ms)^      - name: Create target-scoped Variables token\n.*?(?=^      - |\z)'))
+        $tokenSteps | Should -HaveCount 1
+        $token = $tokenSteps[0].Value
+        $token | Should -Match '(?m)^        id: variables-token$'
+        $token | Should -Match '(?m)^        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 '
+        $inputs = @([regex]::Matches($token, '(?m)^          [^\n]+$') | ForEach-Object { $_.Value.Trim() })
+        $inputs | Should -Be @(
+            'client-id: ${{ vars.AVM_APP_CLIENT_ID }}'
+            'private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}'
+            'owner: Azure'
+            'repositories: bicep-registry-modules'
+            'permission-actions-variables: write'
+        )
+        $script:workflow | Should -Not -Match '(?m)^\s+permission-variables:'
     }
 
     It 'pins both actions and checks out trusted main without persisted credentials' {

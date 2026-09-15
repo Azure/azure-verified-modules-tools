@@ -87,9 +87,14 @@ false), and the **repository variable**
 environment: [environment-level variables are unavailable during job admission](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence).
 Those gates also apply to planning. `plan_only=true` is the default and never
 writes variables; publication additionally requires `plan_only=false`.
-The App must separately be approved for Variables write on
+The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
 workflow, or pull-request write permission.
+The pinned action's [generic permission-input parser](https://github.com/actions/create-github-app-token/blob/bcd2ba49218906704ab6c1aa796996da409d3eb1/lib/get-permissions-from-inputs.js)
+maps `permission-actions-variables: write` to `actions_variables: write`.
+Its manifest omits this input, so an undeclared-input warning can occur; the
+runner still passes it to the action. Do not use `permission-variables` or omit
+the explicit scope.
 
 The existing CODEOWNERS job still runs on manual dispatch. Setting
 `plan_only=false` also permits that job's existing merge behavior; review both

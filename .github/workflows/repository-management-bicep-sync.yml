@@ -89,7 +89,7 @@ jobs:
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: Azure
           repositories: bicep-registry-modules
-          permission-variables: write
+          permission-actions-variables: write
 
       - name: Plan or publish nonsecret Bicep test tenant variables
         shell: pwsh
