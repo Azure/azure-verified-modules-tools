@@ -82,6 +82,47 @@ for the intended subject
 That credential and runtime login remain unproved; do not reuse the
 Tools-controller credential or enable publication to work around this gate.
 
+### Bicep variable publication
+
+The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
+Tools `main`, manual dispatch with `enable_test_tenant_sync=true` (default
+false), and the **repository variable**
+`AVM_BAMI_TEST_TENANT_SYNC_ENABLED=true`. Keep this control out of the `avm`
+environment: [environment-level variables are unavailable during job admission](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence).
+Those gates also apply to planning. `plan_only=true` is the default and never
+writes variables; publication additionally requires `plan_only=false`.
+The App must separately be approved for Variables write on
+`Azure/bicep-registry-modules`. Its variable token has no content, secret,
+or pull-request write permission.
+
+The existing CODEOWNERS job still runs on manual dispatch. Setting
+`plan_only=false` also permits that job's existing merge behavior; review both
+effects before dispatching. No workflow is enabled by changing the central
+canary configuration alone.
+
+[Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
+defaults to a read-only plan. Standalone publication requires an explicit,
+operator-approved `-Apply`; `-PlanOnly:$false` is rejected, and `-Apply -WhatIf`
+is write-free. The script uses the fixed central config and eight named
+environment variables, plus `GH_TOKEN`; it accepts no target or config-path
+override.
+
+All eight values are required even for plans and deactivation. The publisher
+checks snapshots around writes, verifies all five execution values, publishes
+the selector last, and verifies the result. While any module currently selects
+BAMI, execution-value changes are refused. Retargeting requires first
+publishing an all-legacy central selection; that run changes only the selector
+and preserves the existing execution values. A subsequent inactive run can
+publish the new bundle and desired selection.
+
+Do not run other variable writers alongside the serialized workflow. GitHub
+variables cannot be updated conditionally as one transaction: snapshot checks
+detect observed edits but cannot eliminate races between reads and writes.
+Failures never trigger write retries or rollback. Even a matching readback
+after a lost response is reported as an error, so a failed run may already have
+published the selector. Inspect the consumer before retrying. `Published`
+means verified variable contents, not working Azure authentication.
+
 ## Terraform CODEOWNERS
 
 Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)

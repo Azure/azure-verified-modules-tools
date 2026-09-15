@@ -11,7 +11,7 @@ state. That bootstrap state is separate from the live repo-sync state blobs.
 
 ## Authentication and configuration
 
-All runtime settings below are GitHub **`avm` environment variables**, not secrets.
+The identity and storage settings below are GitHub **`avm` environment variables**, not secrets.
 
 | Settings | Purpose |
 | --- | --- |
@@ -56,7 +56,8 @@ and module test identities are unaffected.
 
 ## BAMI candidate identities
 
-`AVM_BAMI_TEST_TENANT_SYNC_ENABLED` in the Tools `avm` environment defaults off.
+The Tools **repository variable** `AVM_BAMI_TEST_TENANT_SYNC_ENABLED` defaults
+off. Do not shadow this shared workflow-admission control in the `avm` environment.
 While off, BAMI-selected repositories report `PendingTestTenantActivation`
 without cleanup, Terraform, or repository mutations. Existing test settings
 remain untouched, whether they are already BAMI or still legacy. Disabling the
