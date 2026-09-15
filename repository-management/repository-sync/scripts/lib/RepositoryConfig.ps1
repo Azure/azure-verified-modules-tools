@@ -9,6 +9,8 @@
 # Returns a hashtable so the orchestrator can pull fields by name rather than
 # unpacking positional return values.
 
+. (Join-Path $PSScriptRoot '..' '..' '..' 'shared' 'GroupSettings.ps1')
+
 function Resolve-RepositorySettings {
     param(
         [object]$repositoryConfig,
@@ -81,32 +83,18 @@ function Resolve-RepositorySettings {
         jobWorkflowRef = "github_job_workflow_ref"
     }
 
-    $claimOverrideEntries = @()
-    $claimDeclarationIndex = 0
-    foreach ($repositoryGroup in $repositoryGroups) {
-        if ($repositoryGroup.PSObject.Properties.Name -contains 'workloadIdentityFederationSubjectClaimOverrides' -and $repositoryGroup.workloadIdentityFederationSubjectClaimOverrides) {
-            $order = 0
-            if ($repositoryGroup.PSObject.Properties.Name -contains 'order' -and $null -ne $repositoryGroup.order) {
-                $order = [int]$repositoryGroup.order
-            }
-            foreach ($claimOverride in $repositoryGroup.workloadIdentityFederationSubjectClaimOverrides.PSObject.Properties) {
-                if (-not $supportedClaimOverrides.ContainsKey($claimOverride.Name)) {
-                    throw "Repository group '$($repositoryGroup.name)' sets unsupported workloadIdentityFederationSubjectClaimOverrides key '$($claimOverride.Name)'. Supported keys: $($supportedClaimOverrides.Keys -join ', ')."
+    $workloadIdentityFederationSubjectClaimOverrides = @{}
+    foreach ($entry in @(Get-AvmOrderedGroup -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId)) {
+        $repositoryGroup = $entry.Group
+        if ($repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']) {
+            $overrides = ConvertTo-AvmSettingDictionary -Value $repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']
+            foreach ($claim in $overrides.Keys) {
+                if (-not $supportedClaimOverrides.ContainsKey($claim)) {
+                    throw "Repository group '$($repositoryGroup.name)' sets unsupported workloadIdentityFederationSubjectClaimOverrides key '$claim'. Supported keys: $($supportedClaimOverrides.Keys -join ', ')."
                 }
-                $claimOverrideEntries += [pscustomobject]@{
-                    Claim = $claimOverride.Name
-                    Value = $claimOverride.Value
-                    Order = $order
-                    Index = $claimDeclarationIndex
-                }
+                $workloadIdentityFederationSubjectClaimOverrides[$claim] = $overrides[$claim]
             }
         }
-        $claimDeclarationIndex++
-    }
-
-    $workloadIdentityFederationSubjectClaimOverrides = @{}
-    foreach ($claimOverrideEntry in ($claimOverrideEntries | Sort-Object -Property Order, Index)) {
-        $workloadIdentityFederationSubjectClaimOverrides[$claimOverrideEntry.Claim] = $claimOverrideEntry.Value
     }
 
     # A job_workflow_ref claim always carries a fully-qualified git ref
@@ -128,5 +116,6 @@ function Resolve-RepositorySettings {
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics
         WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
+        TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
     }
 }

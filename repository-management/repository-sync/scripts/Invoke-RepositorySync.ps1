@@ -32,7 +32,9 @@ param(
     ),
     [switch]$forceFileUpdate,
     [string]$managementGroupId = "",
-    [array]$testSubscriptionIds = @()
+    [array]$testSubscriptionIds = @(),
+    [bool]$bamiTestTenantSyncEnabled = $false,
+    [hashtable]$bamiSettings = @{}
 )
 
 Write-Host "Running repo sync script"
@@ -51,6 +53,7 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "CodeQlDefaultSetup.ps1")
 . (Join-Path $libDir "TeamsAndUsers.ps1")
 . (Join-Path $libDir "TerraformOperations.ps1")
+. (Join-Path $libDir "TestTenant.ps1")
 
 if (!$repositoryCreationModeEnabled) {
     $null = Resolve-RepositorySyncStateIdentity `
@@ -79,6 +82,13 @@ if(!$repositoryCreationModeEnabled){
 
 $repositoryConfig = Get-Content -Path $repoConfigFilePath -Raw | ConvertFrom-Json
 $settings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId $repoId
+$selectedTestTenant = if ($repositoryCreationModeEnabled) { 'legacy' } else { $settings.TestTenant }
+$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant `
+    -Enabled $bamiTestTenantSyncEnabled -BamiValues $bamiSettings
+if ($testTenant.Status -ceq 'PendingTestTenantActivation') {
+    Write-Warning "${repoId}: BAMI activation is disabled. Repository settings are unchanged; select legacy in configuration for an explicit rollback."
+    return [pscustomobject]@{ Status = $testTenant.Status; RepoId = $repoId; TestTenant = 'bami' }
+}
 Write-Host "$([Environment]::NewLine)Checking $($repoId)"
 
 if(!$skipCleanup) {
@@ -90,6 +100,32 @@ $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
 $orgAndRepoName = "$orgName/$repoName"
 
+$candidateSettings = $null
+if ($testTenant.TestTenant -ceq 'bami') {
+    $candidateParameters = @{
+        RepoId = $repoId
+        Repository = $orgAndRepoName
+        BamiValues = $testTenant.Settings
+        Backend = @{
+            TenantId = $stateTenantId
+            SubscriptionId = $stateSubscriptionId
+            ClientId = $stateClientId
+            StorageAccountName = $stateStorageAccountName
+            ContainerName = $stateContainerName
+        }
+        Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
+        PlanOnly = $planOnly
+    }
+    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
+        $candidateParameters.JobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
+    }
+    $candidate = Invoke-AvmBamiRepositoryIdentity @candidateParameters
+    if ($candidate.Status -cne 'Ready') {
+        Write-Warning "${orgAndRepoName}: $($candidate.Status). The consumer update is pending; no repository settings were changed."
+        return $candidate
+    }
+    $candidateSettings = $candidate.ConsumerSettings
+}
 Write-Host "$([Environment]::NewLine)<--->" -ForegroundColor Green
 Write-Host "$([Environment]::NewLine)Updating: $orgAndRepoName.$([Environment]::NewLine)" -ForegroundColor Green
 Write-Host "<--->$([Environment]::NewLine)" -ForegroundColor Green
@@ -183,6 +219,10 @@ $terraformVariables = @{
     is_protected_repo = $true
     github_teams = $githubTeams
     topics = $settings.Topics
+}
+
+if ($null -ne $candidateSettings) {
+    $terraformVariables["bami_test_settings"] = $candidateSettings
 }
 
 # Only emit the override when a group actually sets it. Writing a null would

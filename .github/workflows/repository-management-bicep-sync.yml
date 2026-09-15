@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       plan_only:
-        description: 'Create or update the CODEOWNERS pull request for review, but never merge it.'
+        description: 'Create or update the CODEOWNERS pull request for review, but never merge it. Test-tenant sync plans without variable writes.'
         default: true
+        type: boolean
+      enable_test_tenant_sync:
+        description: 'Opt in to nonsecret BAMI variable sync after operator setup and approval (also requires AVM_BAMI_TEST_TENANT_SYNC_ENABLED).'
+        default: false
         type: boolean
 
 permissions:
@@ -58,3 +62,55 @@ jobs:
           }
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-codeowners-sync' 'scripts' 'Invoke-BicepCodeownersSync.ps1') `
             -PlanOnly:($env:PLAN_ONLY -eq 'true')
+
+  sync-test-tenant-variables:
+    name: Repository Management - Bicep Nonsecret Test Tenant Sync
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.enable_test_tenant_sync == true &&
+      vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: avm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Create target-scoped Variables token
+        id: variables-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: bicep-registry-modules
+          permission-variables: write
+
+      - name: Plan or publish nonsecret Bicep test tenant variables
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.variables-token.outputs.token }}
+          AVM_APP_SLUG: ${{ steps.variables-token.outputs.app-slug }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+        run: |
+          if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
+            throw 'The configured GitHub App is not azure-verified-modules.'
+          }
+          if ($env:PLAN_ONLY -cnotin @('true', 'false')) {
+            throw 'PLAN_ONLY must be true or false.'
+          }
+          $options = if ($env:PLAN_ONLY -ceq 'false') { @{ Apply = $true } } else { @{ PlanOnly = $true } }
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') @options

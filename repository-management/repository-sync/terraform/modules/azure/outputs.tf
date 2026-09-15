@@ -5,3 +5,7 @@ output "client_id" {
 output "tenant_id" {
   value = data.azapi_client_config.current.tenant_id
 }
+
+output "identity_resource_id" {
+  value = azapi_resource.identity.id
+}

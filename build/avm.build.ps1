@@ -313,6 +313,77 @@ task infra {
     Write-Build Green '  infra OK: Terraform AVM bootstrap validated (no deployment)'
 }
 
+task 'test-tenant-terraform' {
+    Import-Module $script:manifestPath -Force
+    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RetryHelpers.ps1')
+    foreach ($directory in @('terraform', 'bami-identity')) {
+        $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
+        $formatPaths = @('main.tf', 'variables.tf', 'tests')
+        if ($directory -eq 'terraform') {
+            $formatPaths += @('locals.tf', 'modules/azure/outputs.tf')
+        }
+        else {
+            $formatPaths += @('terraform.tf', 'outputs.tf')
+        }
+        foreach ($arguments in @(
+            (@('fmt', '-check', '-diff') + $formatPaths),
+            @('init', '-backend=false', '-input=false', '-no-color'),
+            @('validate', '-no-color'),
+            @('test', '-json', '-verbose')
+        )) {
+            $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments -WorkingDirectory $root -TimeoutSec 600 `
+                -EnvVars @{ GH_TOKEN = $null; TF_IN_AUTOMATION = 'true'; TF_INPUT = 'false' }
+            if ($result.ExitCode -ne 0) {
+                throw [System.InvalidOperationException]::new("Tenant Terraform $directory $($arguments[0]) failed: $($result.StdOut) $($result.StdErr)")
+            }
+            Write-Build Green "  $directory $($arguments[0]) OK"
+            if ($arguments[0] -eq 'test') {
+                $resultDirectory = Join-Path $script:outRoot 'test-results'
+                $null = [System.IO.Directory]::CreateDirectory($resultDirectory)
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $resultDirectory "$directory.terraform.jsonl"),
+                    $result.StdOut,
+                    [System.Text.UTF8Encoding]::new($false)
+                )
+                $events = @($result.StdOut -split '\r?\n' | Where-Object { $_ } | ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable -Depth 100 })
+                $summary = @($events | Where-Object { $_['type'] -eq 'test_summary' })
+                if ($summary.Count -ne 1) {
+                    throw [System.IO.InvalidDataException]::new('Terraform did not return a complete mocked-test summary.')
+                }
+                Write-Host $summary[0]['@message']
+                if ($directory -eq 'bami-identity') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
+                    $plans = @($events | Where-Object { $_['type'] -eq 'test_plan' })
+                    if ($plans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider candidate plan.')
+                    }
+                    $changes = $plans[0]['test_plan']['resource_changes']
+                    $resources = @($changes | ForEach-Object {
+                        @{ address = $_['address']; mode = $_['mode']; values = $_['change']['after'] }
+                    })
+                    $candidatePlan = @{
+                        errored = $false
+                        resource_changes = $changes
+                        planned_values = @{ root_module = @{ resources = $resources } }
+                    }
+                    try {
+                        Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
+                            -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo'
+                        Write-Build Green '  actual candidate plan passes the delegation guard'
+                    }
+                    catch [System.InvalidOperationException] {
+                        if ($_.Exception.Message -notlike 'Candidate activation requires the reviewed Owner/UAA/RBAC Administrator delegation fix*') {
+                            throw
+                        }
+                        Write-Build Yellow '  actual candidate plan correctly BLOCKED: delegation fix remains an activation prerequisite'
+                    }
+                }
+            }
+        }
+    }
+}
+
 task test {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 

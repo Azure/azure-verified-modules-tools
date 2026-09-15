@@ -56,13 +56,17 @@ Describe 'Bicep CODEOWNERS workflow contract' {
     }
 
     It 'never interpolates workflow inputs directly into executable PowerShell' {
-        $run = [regex]::Match($script:workflow, '(?s)        run: \|\r?\n(.*)$').Groups[1].Value
-        $run | Should -Not -Match '\$\{\{'
-        $run | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
-        $tokens = $null
-        $parseErrors = $null
-        $null = [System.Management.Automation.Language.Parser]::ParseInput($run, [ref]$tokens, [ref]$parseErrors)
-        $parseErrors | Should -HaveCount 0
+        $blocks = [regex]::Matches($script:workflow, '(?m)^        run: \|\r?\n((?:          [^\r\n]*(?:\r?\n|$)|[ \t]*\r?\n)+)')
+        $blocks.Count | Should -BeGreaterThan 0
+        $script:workflow | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
+        foreach ($block in $blocks) {
+            $run = $block.Groups[1].Value
+            $run | Should -Not -Match '\$\{\{'
+            $tokens = $null
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseInput($run, [ref]$tokens, [ref]$parseErrors)
+            $parseErrors | Should -HaveCount 0
+        }
     }
 
     It 'keeps the local export entry point independent of remote synchronization' {
