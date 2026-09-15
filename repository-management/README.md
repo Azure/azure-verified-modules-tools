@@ -23,7 +23,7 @@ wins a tie. Missing settings retain `legacy`.
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
 only one behavioral setting: `testTenant`. Initially only
-`avm/res/network/front-door` selects `bami`.
+`avm/res/dev-test-lab/lab` selects `bami`.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -52,29 +52,25 @@ Unselected repositories retain their existing settings. See the
 
 Bicep variable sync copies only the five execution fields: tenant, Bicep
 client, subscription pool, management group, and persistent subscription.
-It leaves all legacy values untouched. It derives `TEST_BAMI_MODULE_CONFIG`
-from the central groups and publishes that metadata last:
+It leaves all legacy values untouched. For temporary BAMI testing, it derives
+the repository variable `TEST_BAMI_MODULE_PATHS` from the central groups and
+publishes that JSON array last:
 
 ```json
-{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}
+["avm/res/dev-test-lab/lab"]
 ```
 
-The [resolver action](test-tenant/actions/resolve-test-tenant/action.yml) must
-be referenced at a reviewed literal commit SHA.
+The array contains only canonical module paths whose resolved `testTenant` is
+`bami`. Missing or `[]` means legacy. Consumers directly check array membership
+for their canonical module path and alias the existing execution variables;
+there is no runtime Tools resolver action, consumer routing file, or per-module
+workflow-file synchronization. Selecting `legacy` in the central groups removes
+the path from the array. The five execution values remain strings, including
+the compact subscription-pool JSON.
 
-| Action contract | Value |
-| --- | --- |
-| `module-path` input | Canonical `avm/{res,ptn,utl}/{provider}/{module}`, or a safe descendant/test path |
-| `module-config` input | `TEST_BAMI_MODULE_CONFIG`; absent means legacy |
-| `bami-settings` input | JSON object containing the five execution variables |
-| `test-tenant` output | Exactly `legacy` or `bami` |
-| `settings-json` output | Complete normalized BAMI tuple, or `{}` for legacy |
-
-The shared `Resolve-AvmTestTenant` helper in
-[TestTenant.ps1](shared/TestTenant.ps1) takes `ModulePath`, `ModuleConfigJson`,
-and `BamiSettingsJson`, returning `TestTenant` and `Settings`. Settings values
-are strings, including the compact subscription-pool JSON. Invalid metadata or
-an incomplete explicit BAMI tuple fails rather than falling back field by field.
+Tools rejects malformed arrays, duplicate/noncanonical paths, and incomplete
+candidate bundles before publication. Reserved-subscription and identity
+separation checks are unchanged.
 Successful variable readback is not proof of Azure authentication or permissions.
 Bicep activation also requires its own execution-identity federated credential
 for the intended subject
@@ -93,12 +89,15 @@ Those gates also apply to planning. `plan_only=true` is the default and never
 writes variables; publication additionally requires `plan_only=false`.
 The App must separately be approved for Variables write on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
-or pull-request write permission.
+workflow, or pull-request write permission.
 
 The existing CODEOWNERS job still runs on manual dispatch. Setting
 `plan_only=false` also permits that job's existing merge behavior; review both
 effects before dispatching. No workflow is enabled by changing the central
 canary configuration alone.
+Merging does not activate BAMI with the gate off, but BAMI-selected Terraform
+canaries remain pending and skip normal repository sync; it is not a
+zero-behavior-change merge.
 
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
 defaults to a read-only plan. Standalone publication requires an explicit,
@@ -109,11 +108,11 @@ override.
 
 All eight values are required even for plans and deactivation. The publisher
 checks snapshots around writes, verifies all five execution values, publishes
-the selector last, and verifies the result. While any module currently selects
-BAMI, execution-value changes are refused. Retargeting requires first
-publishing an all-legacy central selection; that run changes only the selector
-and preserves the existing execution values. A subsequent inactive run can
-publish the new bundle and desired selection.
+the module-path array last, and verifies the result. A nonempty existing array
+freezes the execution values. Retargeting requires first publishing `[]` from
+an all-legacy central selection; that deactivation changes only the array and
+preserves the existing execution values. A subsequent inactive run can publish
+the new bundle and desired selection.
 
 Do not run other variable writers alongside the serialized workflow. GitHub
 variables cannot be updated conditionally as one transaction: snapshot checks

@@ -88,7 +88,7 @@ function Set-AvmBicepTestTenantVariable {
         $observation = if ($differences.Count -gt 0) {
             "Readback does not match the expected publication: $($differences -join ', ')."
         }
-        elseif ($Name -ceq 'TEST_BAMI_MODULE_CONFIG') {
+        elseif ($Name -ceq 'TEST_BAMI_MODULE_PATHS') {
             'Readback confirms the requested selector and unchanged execution values are present; routing may already be active.'
         }
         else {
@@ -121,14 +121,14 @@ function Invoke-AvmBicepTestTenantSync {
     }
     $bundle = Get-AvmBamiSettings -Values $Values
     $projection = Get-AvmBamiSettings -Values $bundle -BicepOnly
-    $selectorName = 'TEST_BAMI_MODULE_CONFIG'
-    $selector = ConvertTo-AvmBicepModuleConfig -Configuration $Configuration
-    $desiredConfig = ConvertFrom-AvmTestTenantModuleConfig -Json $selector
+    $selectorName = 'TEST_BAMI_MODULE_PATHS'
+    $selector = ConvertTo-AvmBicepModulePaths -Configuration $Configuration
+    $desiredPaths = ConvertFrom-AvmBicepModulePaths -Json $selector
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $existingSelector = if ($null -ne $snapshot[$selectorName]) { $snapshot[$selectorName].Value } else { '' }
-    $existingConfig = ConvertFrom-AvmTestTenantModuleConfig -Json $existingSelector
-    $active = @($existingConfig.modules.Values | Where-Object { $_ -ceq 'bami' }).Count -gt 0
-    $activating = @($desiredConfig.modules.Values | Where-Object { $_ -ceq 'bami' }).Count -gt 0
+    $existingPaths = ConvertFrom-AvmBicepModulePaths -Json $existingSelector
+    $active = $existingPaths.Count -gt 0
+    $activating = $desiredPaths.Count -gt 0
     $valueChanges = @(
         foreach ($name in $projection.Keys) {
             if ($null -eq $snapshot[$name] -or $snapshot[$name].Value -cne $projection[$name]) { $name }

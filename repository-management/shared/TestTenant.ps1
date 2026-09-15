@@ -43,46 +43,37 @@ function ConvertFrom-AvmTestTenantJson {
 function Get-AvmBicepModulePath {
     [CmdletBinding()]
     [OutputType([string])]
-    param(
-        [Parameter(Mandatory)] [string] $ModulePath,
-        [switch] $Exact
-    )
+    param([Parameter(Mandatory)] [string] $ModulePath)
 
-    $segments = $ModulePath.Split('/')
-    if ($segments.Count -lt 4 -or ($Exact -and $segments.Count -ne 4) -or
-        @($segments | Where-Object { $_ -in @('.', '..') -or $_ -cnotmatch '^[a-zA-Z0-9_.-]+$' }).Count -gt 0) {
-        throw [System.ArgumentException]::new('Module paths must be canonical avm/{res,ptn,utl}/{provider}/{module} paths or safe descendants.')
-    }
-    $root = $segments[0..3] -join '/'
-    if ($root -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$') {
+    if ($ModulePath -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$') {
         throw [System.ArgumentException]::new('Module paths must use canonical lowercase top-level AVM module names.')
     }
-    return $root
+    return $ModulePath
 }
 
-function ConvertFrom-AvmTestTenantModuleConfig {
+function ConvertFrom-AvmBicepModulePaths {
     [CmdletBinding()]
+    [OutputType([string[]])]
     param([AllowEmptyString()] [string] $Json = '')
 
     if ([string]::IsNullOrWhiteSpace($Json)) {
-        return [ordered]@{ default = 'legacy'; modules = [ordered]@{} }
+        return ,([string[]]@())
     }
-    $config = ConvertTo-AvmSettingDictionary -Value (ConvertFrom-AvmTestTenantJson -Json $Json)
-    if ($config.Count -ne 2 -or $config['default'] -isnot [string] -or $config['default'] -cne 'legacy' -or
-        -not $config.Contains('modules')) {
-        throw [System.ArgumentException]::new('Test tenant metadata must contain only default (legacy) and modules.')
+    $paths = ConvertFrom-AvmTestTenantJson -Json $Json
+    if ($paths -isnot [System.Collections.IList]) {
+        throw [System.ArgumentException]::new('TEST_BAMI_MODULE_PATHS must be a JSON array of canonical module paths.')
     }
-    $modules = ConvertTo-AvmSettingDictionary -Value $config['modules']
-    foreach ($path in $modules.Keys) {
-        $null = Get-AvmBicepModulePath -ModulePath $path -Exact
-        if ($modules[$path] -isnot [string] -or $modules[$path] -cnotin @('legacy', 'bami')) {
-            throw [System.ArgumentException]::new("Module '$path' testTenant must be exactly 'legacy' or 'bami'.")
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($path in $paths) {
+        if ($path -isnot [string] -or -not $seen.Add($path)) {
+            throw [System.ArgumentException]::new('TEST_BAMI_MODULE_PATHS must contain unique module-path strings.')
         }
+        $null = Get-AvmBicepModulePath -ModulePath $path
     }
-    return [ordered]@{ default = 'legacy'; modules = $modules }
+    return ,([string[]]$paths)
 }
 
-function ConvertTo-AvmBicepModuleConfig {
+function ConvertTo-AvmBicepModulePaths {
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)] [object] $Configuration)
@@ -118,7 +109,7 @@ function ConvertTo-AvmBicepModuleConfig {
                 if ($path -isnot [string]) {
                     throw [System.ArgumentException]::new('Bicep module selectors must be strings.')
                 }
-                $null = Get-AvmBicepModulePath -ModulePath $path -Exact
+                $null = Get-AvmBicepModulePath -ModulePath $path
                 $null = $paths.Add($path)
             }
         }
@@ -127,11 +118,14 @@ function ConvertTo-AvmBicepModuleConfig {
         throw [System.ArgumentException]::new('Bicep configuration requires a default legacy group.')
     }
     $null = Resolve-AvmGroupTestTenant -Groups $groups -SelectorProperty 'modules' -Item '*'
-    $modules = [ordered]@{}
-    foreach ($path in @($paths | Sort-Object)) {
-        $modules[$path] = Resolve-AvmGroupTestTenant -Groups $groups -SelectorProperty 'modules' -Item $path
-    }
-    return ConvertTo-Json -InputObject ([ordered]@{ default = 'legacy'; modules = $modules }) -Depth 5 -Compress
+    $selected = @(
+        foreach ($path in @($paths | Sort-Object)) {
+            if ((Resolve-AvmGroupTestTenant -Groups $groups -SelectorProperty 'modules' -Item $path) -ceq 'bami') {
+                $path
+            }
+        }
+    )
+    return ConvertTo-Json -InputObject $selected -Compress
 }
 
 function Get-AvmBamiSettings {
@@ -202,30 +196,4 @@ function Get-AvmBamiSettings {
         throw [System.ArgumentException]::new('BAMI controller and Bicep execution client IDs must be separate identities.')
     }
     return $result
-}
-
-function Resolve-AvmTestTenant {
-    [CmdletBinding()]
-    [OutputType([pscustomobject])]
-    param(
-        [Parameter(Mandatory)] [string] $ModulePath,
-        [AllowEmptyString()] [string] $ModuleConfigJson = '',
-        [AllowEmptyString()] [string] $BamiSettingsJson = ''
-    )
-
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-
-    $path = Get-AvmBicepModulePath -ModulePath $ModulePath
-    $config = ConvertFrom-AvmTestTenantModuleConfig -Json $ModuleConfigJson
-    $tenant = if ($config.modules.Contains($path)) { $config.modules[$path] } else { $config.default }
-    $settings = [ordered]@{}
-    if ($tenant -ceq 'bami') {
-        if ([string]::IsNullOrWhiteSpace($BamiSettingsJson)) {
-            throw [System.ArgumentException]::new('An explicit BAMI selection requires the complete BAMI execution bundle.')
-        }
-        $values = ConvertTo-AvmSettingDictionary -Value (ConvertFrom-AvmTestTenantJson -Json $BamiSettingsJson)
-        $settings = Get-AvmBamiSettings -Values $values -BicepOnly
-    }
-    return [pscustomobject]@{ TestTenant = $tenant; Settings = $settings }
 }

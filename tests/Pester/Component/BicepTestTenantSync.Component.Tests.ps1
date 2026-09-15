@@ -80,12 +80,12 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
             $variableName = $ArgumentList[13].Substring(5)
             $variableName | Should -BeIn @(
                 'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-                'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID', 'TEST_BAMI_MODULE_CONFIG'
+                'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID', 'TEST_BAMI_MODULE_PATHS'
             )
             $entryState.WriteNames.Add($variableName)
             $entryState.Variables[$variableName] = & $newVariable -Name $variableName `
                 -Value $ArgumentList[15].Substring(6) -Revision $entryState.WriteNames.Count
-            if ($entryState.LostSelectorResponse -and $variableName -ceq 'TEST_BAMI_MODULE_CONFIG') {
+            if ($entryState.LostSelectorResponse -and $variableName -ceq 'TEST_BAMI_MODULE_PATHS') {
                 return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Response lost (HTTP 502)' }
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
@@ -113,9 +113,9 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
         $script:entryState.WriteNames | Should -HaveCount 6
-        $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_CONFIG'
-        $script:entryState.Variables.TEST_BAMI_MODULE_CONFIG.value |
-            Should -BeExactly '{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}'
+        $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_PATHS'
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
+            Should -BeExactly '["avm/res/dev-test-lab/lab"]'
         foreach ($variableName in @(
             'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID',
             'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
@@ -151,7 +151,7 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         { & $script:entryPath -Apply } |
             Should -Throw '*Readback confirms the requested selector and unchanged execution values are present*'
         $script:entryState.WriteNames | Should -HaveCount 6
-        $script:entryState.Variables.TEST_BAMI_MODULE_CONFIG.value |
-            Should -BeExactly '{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}'
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
+            Should -BeExactly '["avm/res/dev-test-lab/lab"]'
     }
 }

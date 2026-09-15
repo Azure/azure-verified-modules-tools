@@ -3,7 +3,7 @@ BeforeAll {
     . (Join-Path $script:root 'repository-management' 'shared' 'TestTenant.ps1')
     . (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
     . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
-    $script:map = '{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}'
+    $script:pathsJson = '["avm/res/dev-test-lab/lab"]'
     $script:config = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-config' 'config.json') | ConvertFrom-Json
 }
 
@@ -90,25 +90,35 @@ Describe 'Tools-owned Bicep configuration' {
             ConvertFrom-Json -AsHashtable
     }
 
-    It 'compiles exactly the front-door canary and default legacy' {
-        ConvertTo-AvmBicepModuleConfig -Configuration $script:bicep | Should -BeExactly $script:map
+    It 'compiles only the lab canary as a JSON array' {
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:pathsJson
     }
 
     It 'shares group order and declaration precedence' {
-        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = @('avm/res/network/front-door'); testTenant = 'legacy' }
-        $compiled = ConvertTo-AvmBicepModuleConfig -Configuration $script:bicep | ConvertFrom-Json -AsHashtable
-        $compiled.modules['avm/res/network/front-door'] | Should -BeExactly 'legacy'
+        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = @('avm/res/dev-test-lab/lab'); testTenant = 'legacy' }
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly '[]'
+        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = @('avm/res/dev-test-lab/lab'); testTenant = 'bami' }
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:pathsJson
+    }
+
+    It 'deduplicates selected paths and omits every resolved legacy path' {
+        $script:bicep.moduleGroups += @(
+            @{ name = 'more'; order = 10; modules = @('avm/res/storage/storage-account', 'avm/res/dev-test-lab/lab'); testTenant = 'bami' }
+            @{ name = 'legacy'; modules = @('avm/res/network/virtual-network'); testTenant = 'legacy' }
+        )
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep |
+            Should -BeExactly '["avm/res/dev-test-lab/lab","avm/res/storage/storage-account"]'
     }
 
     It 'rejects additional settings and nested or wildcard canary selectors' {
         foreach ($key in @('teams', 'managedFiles', 'profile', 'subscription')) {
             $changed = $script:bicep | ConvertTo-Json -Depth 10 | ConvertFrom-Json -AsHashtable
             $changed.moduleGroups[1][$key] = @()
-            { ConvertTo-AvmBicepModuleConfig -Configuration $changed } | Should -Throw '*only name*'
+            { ConvertTo-AvmBicepModulePaths -Configuration $changed } | Should -Throw '*only name*'
         }
-        foreach ($path in @('avm/res/network/front-door/.test', 'avm/res/network/*', '*', 'AVM/res/network/front-door')) {
+        foreach ($path in @('avm/res/dev-test-lab/lab/.test', 'avm/res/dev-test-lab/*', '*', 'AVM/res/dev-test-lab/lab')) {
             $script:bicep.moduleGroups[1].modules = @($path)
-            { ConvertTo-AvmBicepModuleConfig -Configuration $script:bicep } | Should -Throw
+            { ConvertTo-AvmBicepModulePaths -Configuration $script:bicep } | Should -Throw
         }
     }
 }
@@ -185,73 +195,44 @@ Describe 'Complete BAMI input bundle' {
     }
 }
 
-Describe 'Central Bicep consumer resolution' {
-    BeforeEach {
-        $script:execution = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings) -BicepOnly
-        $script:executionJson = $script:execution | ConvertTo-Json -Compress
-    }
-
-    It 'keeps absent metadata and nonselected modules legacy with no candidate dependency' {
-        $result = Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door'
-        $result.TestTenant | Should -BeExactly 'legacy'
-        $result.Settings.Count | Should -Be 0
-        $result = Resolve-AvmTestTenant -ModulePath 'avm/res/network/virtual-network' -ModuleConfigJson $script:map -BamiSettingsJson 'invalid'
-        $result.TestTenant | Should -BeExactly 'legacy'
-        $result.Settings.Count | Should -Be 0
-    }
-
-    It 'inherits safe descendant and test paths from the canonical module' {
-        foreach ($path in @('avm/res/network/front-door', 'avm/res/network/front-door/.test/common', 'avm/res/network/front-door/main.bicep')) {
-            $result = Resolve-AvmTestTenant -ModulePath $path -ModuleConfigJson $script:map -BamiSettingsJson $script:executionJson
-            $result.TestTenant | Should -BeExactly 'bami'
-            $result.Settings.TEST_BAMI_BICEP_CLIENT_ID | Should -Be $script:execution.TEST_BAMI_BICEP_CLIENT_ID
-            $result.Settings.Count | Should -Be 5
+Describe 'Bicep module-path array validation' {
+    It 'keeps missing and empty arrays inactive without scalar unrolling' {
+        foreach ($json in @('', '  ', '[]')) {
+            $paths = ConvertFrom-AvmBicepModulePaths -Json $json
+            $paths -is [string[]] | Should -BeTrue
+            $paths.Count | Should -Be 0
         }
     }
 
-    It 'rejects incomplete explicit BAMI without per-field fallback' {
-        { Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door' -ModuleConfigJson $script:map } |
-            Should -Throw '*complete*'
-        foreach ($key in @($script:execution.Keys)) {
-            $partial = [ordered]@{}
-            foreach ($name in $script:execution.Keys) { if ($name -ne $key) { $partial[$name] = $script:execution[$name] } }
-            { Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door' -ModuleConfigJson $script:map -BamiSettingsJson ($partial | ConvertTo-Json) } |
-                Should -Throw
-        }
+    It 'preserves single and multiple canonical module paths as arrays' {
+        $paths = ConvertFrom-AvmBicepModulePaths -Json $script:pathsJson
+        $paths -is [string[]] | Should -BeTrue
+        $paths.Count | Should -Be 1
+        $paths[0] | Should -BeExactly 'avm/res/dev-test-lab/lab'
+        $paths | Should -Not -Contain 'avm/res/network/virtual-network'
+        $paths = ConvertFrom-AvmBicepModulePaths -Json '["avm/res/dev-test-lab/lab","avm/res/storage/storage-account"]'
+        $paths.Count | Should -Be 2
     }
 
-    It 'rejects explicit BAMI when disposable tests target the Persistent subscription' {
-        $subscriptions = $script:execution.TEST_BAMI_SUBSCRIPTION_IDS | ConvertFrom-Json
-        $subscriptions[0].id = $script:execution.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
-        $script:execution.TEST_BAMI_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject $subscriptions -Compress
-        {
-            Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door/.test/common' -ModuleConfigJson $script:map `
-                -BamiSettingsJson ($script:execution | ConvertTo-Json -Compress)
-        } | Should -Throw '*Persistent*test pool*'
-    }
-
-    It 'rejects malformed, unknown or ambiguous selector metadata' {
+    It 'rejects non-array shapes, invalid entries and duplicates' {
         foreach ($json in @(
-                '{}', '[]', 'null', 'invalid', '{"default":"bami","modules":{}}',
-                '{"default":"legacy","modules":{"avm/res/network/front-door":"future"}}',
-                '{"default":"legacy","modules":{"avm/res/network/front-door":true}}',
-                '{"default":"legacy","modules":{"avm/res/network/front-door/.test":"bami"}}',
-                '{"default":"legacy","modules":{},"catalog":[]}',
-                '{"default":"legacy","modules":{"avm/res/network/front-door":"legacy","avm/res/network/front-door":"bami"}}'
+                '{}', 'null', 'invalid', 'true', '42', '"avm/res/dev-test-lab/lab"',
+                '[true]', '[null]', '[{}]', '[[]]',
+                '{"default":"legacy","modules":{}}',
+                '["avm/res/dev-test-lab/lab","avm/res/dev-test-lab/lab"]'
             )) {
-            { Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door' -ModuleConfigJson $json -BamiSettingsJson $script:executionJson } |
-                Should -Throw
+            { ConvertFrom-AvmBicepModulePaths -Json $json } | Should -Throw
         }
     }
 
-    It 'rejects traversal, absolute, ambiguous and noncanonical module paths' {
+    It 'rejects descendants, traversal, absolute and noncanonical array entries' {
         foreach ($path in @(
-                '/avm/res/network/front-door', 'C:\avm\res\network\front-door', 'avm\res\network\front-door',
-                'avm/res/network/front-door/../virtual-network', 'avm/res/network/front-door/./main.bicep',
-                'avm/res/network/front-door//test', 'AVM/res/network/front-door', 'avm/res/network', 'src/avm/res/network/front-door',
-                'avm/res/network/front-door/', 'avm/res/network/front-door/%2e%2e'
+                '/avm/res/dev-test-lab/lab', 'C:\avm\res\dev-test-lab\lab', 'avm\res\dev-test-lab\lab',
+                'avm/res/dev-test-lab/lab/../other', 'avm/res/dev-test-lab/lab/.test',
+                'avm/res/dev-test-lab/lab//test', 'AVM/res/dev-test-lab/lab', 'avm/res/dev-test-lab',
+                'avm/res/dev-test-lab/lab/', 'avm/res/dev-test-lab/*'
             )) {
-            { Resolve-AvmTestTenant -ModulePath $path } | Should -Throw
+            { ConvertFrom-AvmBicepModulePaths -Json (ConvertTo-Json -InputObject @($path) -Compress) } | Should -Throw
         }
     }
 }

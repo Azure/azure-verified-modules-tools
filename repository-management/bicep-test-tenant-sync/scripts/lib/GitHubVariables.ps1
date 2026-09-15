@@ -8,7 +8,7 @@ function Get-AvmBicepTestTenantVariableNames {
     'TEST_BAMI_SUBSCRIPTION_IDS'
     'TEST_BAMI_MANAGEMENT_GROUP_ID'
     'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
-    'TEST_BAMI_MODULE_CONFIG'
+    'TEST_BAMI_MODULE_PATHS'
 }
 
 function Invoke-AvmBicepTestTenantVariableApi {
@@ -18,7 +18,7 @@ function Invoke-AvmBicepTestTenantVariableApi {
         [ValidateSet(
             'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
             'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID',
-            'TEST_BAMI_MODULE_CONFIG', IgnoreCase = $false
+            'TEST_BAMI_MODULE_PATHS', IgnoreCase = $false
         )] [string] $Name,
         [AllowEmptyString()] [string] $Value,
         [ValidateRange(1, 10000)] [int] $Page = 1

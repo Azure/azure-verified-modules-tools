@@ -12,7 +12,7 @@
       "name": "canary",
       "order": 10,
       "modules": [
-        "avm/res/network/front-door"
+        "avm/res/dev-test-lab/lab"
       ],
       "testTenant": "bami"
     }

@@ -8,7 +8,6 @@ on:
       - .github/workflows/repository-management-sync.yml
       - repository-management/repository-config/config.json
       - repository-management/shared/**
-      - repository-management/test-tenant/**
       - repository-management/bicep-test-tenant-config/**
       - repository-management/bicep-test-tenant-sync/**
       - repository-management/repository-sync/bami-identity/**

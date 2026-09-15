@@ -10,9 +10,9 @@ BeforeAll {
         'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
         'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
     )
-    $script:selectorName = 'TEST_BAMI_MODULE_CONFIG'
-    $script:canarySelector = '{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}'
-    $script:legacySelector = '{"default":"legacy","modules":{}}'
+    $script:selectorName = 'TEST_BAMI_MODULE_PATHS'
+    $script:canarySelector = '["avm/res/dev-test-lab/lab"]'
+    $script:legacySelector = '[]'
 
     function New-BicepSyncTestBundle {
         [ordered]@{
@@ -101,7 +101,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $script:onRead = $null
         $script:beforeWrite = $null
         $script:afterWrite = $null
-        Mock ConvertTo-AvmBicepModuleConfig { $script:desiredSelector }
+        Mock ConvertTo-AvmBicepModulePaths { $script:desiredSelector }
         Mock Get-AvmBicepTestTenantSnapshot {
             $script:reads++
             $script:events.Add("read:$script:reads")
@@ -131,7 +131,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 1
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
-        Should -Invoke ConvertTo-AvmBicepModuleConfig -Exactly 1 -ParameterFilter {
+        Should -Invoke ConvertTo-AvmBicepModulePaths -Exactly 1 -ParameterFilter {
             [object]::ReferenceEquals($Configuration, $script:configuration)
         }
         $result | ConvertTo-Json -Depth 5 | Should -Not -Match '11111111|22222222|33333333|44444444|55555555|rg-bami-test'
@@ -191,7 +191,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'rejects invalid central configuration before reading or changing the consumer' {
-        Mock ConvertTo-AvmBicepModuleConfig { throw [System.ArgumentException]::new('Invalid central test tenant configuration.') }
+        Mock ConvertTo-AvmBicepModulePaths { throw [System.ArgumentException]::new('Invalid central test tenant configuration.') }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
             Should -Throw '*Invalid central*'
         Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
@@ -274,11 +274,20 @@ Describe 'Guarded nonsecret Bicep variable publication' {
 
     It 'permits a selector-only change when the active execution bundle is unchanged' {
         Initialize-BicepSyncTestCandidate
-        $script:desiredSelector = '{"default":"legacy","modules":{"avm/res/storage/storage-account":"bami"}}'
+        $script:desiredSelector = '["avm/res/storage/storage-account"]'
         $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply
         $result.Status | Should -BeExactly 'Published'
         @($script:attempts.Name) | Should -Be @($script:selectorName)
         $script:attempts[0].Method | Should -BeExactly 'PATCH'
+    }
+
+    It 'treats blank and empty lists as inactive before publishing a new selection' -ForEach @('', '[]') {
+        Initialize-BicepSyncTestCandidate -Selector $_
+        $script:values.TEST_BAMI_TENANT_ID = '77777777-7777-4777-8777-777777777777'
+        $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply
+        $result.Status | Should -BeExactly 'Published'
+        @($script:attempts.Name) | Should -Be @('TEST_BAMI_TENANT_ID', $script:selectorName)
+        $script:consumer[$script:selectorName].Value | Should -BeExactly $script:canarySelector
     }
 
     It 'deactivates without changing active values, then permits retargeting in a later inactive run' {
@@ -314,11 +323,11 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'rejects malformed existing routing even for an all-legacy request' -ForEach @(
-        '{', '[]', '{}', 'null',
-        '{"default":"bami","modules":{}}',
-        '{"default":"legacy","modules":{"avm/res/network/front-door":"other"}}',
-        '{"default":"legacy","modules":{"avm/res/network/*":"bami"}}',
-        '{"default":"legacy","modules":{"avm/res/Network/front-door":"bami"}}'
+        '{', '{}', 'null', '[null]',
+        '"avm/res/dev-test-lab/lab"',
+        '["avm/res/dev-test-lab/lab",false]',
+        '["avm/res/dev-test-lab/*"]',
+        '["avm/res/Dev-test-lab/lab"]'
     ) {
         Set-BicepSyncTestValue -Name $script:selectorName -Value $_
         $script:desiredSelector = $script:legacySelector
@@ -364,7 +373,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             if ($Name -ceq $script:selectorName) { throw [System.IO.IOException]::new('Selector write failed.') }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
-            Should -Throw '*not acknowledged*Readback does not match*TEST_BAMI_MODULE_CONFIG*'
+            Should -Throw '*not acknowledged*Readback does not match*TEST_BAMI_MODULE_PATHS*'
         $script:attempts | Should -HaveCount 6
         $script:consumer[$script:selectorName] | Should -BeNullOrEmpty
         foreach ($name in $script:executionNames) {
@@ -449,14 +458,14 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             Set-BicepSyncTestValue -Name $script:selectorName -Value $script:canarySelector -Revision 'outside'
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
-            Should -Throw '*This run did not write the selector*Readback mismatch*TEST_BAMI_MODULE_CONFIG*'
+            Should -Throw '*This run did not write the selector*Readback mismatch*TEST_BAMI_MODULE_PATHS*'
         $script:attempts | Should -HaveCount 1
         $script:consumer[$script:selectorName].Value | Should -BeExactly $script:canarySelector
     }
 
     It 'detects drift at the complete readback, immediately before the selector, and after publication' -ForEach @(
         @{ Read = 2; ExpectedWrites = 0; Stage = 'complete execution-value readback' }
-        @{ Read = 3; ExpectedWrites = 0; Stage = 'pre-write TEST_BAMI_MODULE_CONFIG' }
+        @{ Read = 3; ExpectedWrites = 0; Stage = 'pre-write TEST_BAMI_MODULE_PATHS' }
         @{ Read = 5; ExpectedWrites = 1; Stage = 'final publication readback' }
     ) {
         Initialize-BicepSyncTestCandidate -Selector $script:legacySelector
@@ -509,7 +518,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             if ($Name -ceq $script:selectorName) { Set-BicepSyncTestValue -Name $Name -Value $script:legacySelector -Revision 'outside' }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
-            Should -Throw '*Readback mismatch*TEST_BAMI_MODULE_CONFIG*'
+            Should -Throw '*Readback mismatch*TEST_BAMI_MODULE_PATHS*'
         $script:attempts | Should -HaveCount 1
         $script:consumer[$script:selectorName].Value | Should -BeExactly $script:legacySelector
     }
@@ -553,15 +562,15 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
     }
 
     It 'uses POST for creation and PATCH for updates without shell interpolation or extra scopes' -ForEach @('POST', 'PATCH') {
-        $payload = '{"default":"legacy","modules":{}}'
-        $null = Invoke-AvmBicepTestTenantVariableApi -Method $_ -Name 'TEST_BAMI_MODULE_CONFIG' -Value $payload
+        $payload = '[]'
+        $null = Invoke-AvmBicepTestTenantVariableApi -Method $_ -Name 'TEST_BAMI_MODULE_PATHS' -Value $payload
         $script:expectedMethod = $_
         $script:expectedEndpoint = 'repos/Azure/bicep-registry-modules/actions/variables'
-        if ($_ -ceq 'PATCH') { $script:expectedEndpoint += '/TEST_BAMI_MODULE_CONFIG' }
+        if ($_ -ceq 'PATCH') { $script:expectedEndpoint += '/TEST_BAMI_MODULE_PATHS' }
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
             $Arguments[4] -ceq $script:expectedMethod -and $Arguments[11] -ceq $script:expectedEndpoint -and
-            $Arguments[12] -ceq '--raw-field' -and $Arguments[13] -ceq 'name=TEST_BAMI_MODULE_CONFIG' -and
-            $Arguments[14] -ceq '--raw-field' -and $Arguments[15] -ceq 'value={"default":"legacy","modules":{}}' -and
+            $Arguments[12] -ceq '--raw-field' -and $Arguments[13] -ceq 'name=TEST_BAMI_MODULE_PATHS' -and
+            $Arguments[14] -ceq '--raw-field' -and $Arguments[15] -ceq 'value=[]' -and
             $Arguments.Count -eq 16 -and ($Arguments -join '|') -cnotmatch 'fixture-installation-token|/secrets'
         }
     }
@@ -622,7 +631,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         $snapshot.TEST_BAMI_TENANT_ID.UpdatedAt | Should -BeExactly '2026-09-15T00:00:00.0000000Z'
         $snapshot.Contains('ARM_TENANT_ID') | Should -BeFalse
         $snapshot.Contains('TEST_BAMI_CONTROLLER_CLIENT_ID') | Should -BeFalse
-        $snapshot.TEST_BAMI_MODULE_CONFIG | Should -BeNullOrEmpty
+        $snapshot.TEST_BAMI_MODULE_PATHS | Should -BeNullOrEmpty
     }
 
     It 'distinguishes genuinely absent variables from unreadable collection responses' {
@@ -662,12 +671,12 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
             }
             New-BicepSyncApiResponse -Data @{
                 total_count = 101
-                variables = @((New-BicepSyncApiVariable -Name 'TEST_BAMI_MODULE_CONFIG' -Value $script:legacySelector))
+                variables = @((New-BicepSyncApiVariable -Name 'TEST_BAMI_MODULE_PATHS' -Value $script:legacySelector))
             }
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
         $snapshot.TEST_BAMI_TENANT_ID.Value | Should -BeExactly 'fixture-value'
-        $snapshot.TEST_BAMI_MODULE_CONFIG.Value | Should -BeExactly $script:legacySelector
+        $snapshot.TEST_BAMI_MODULE_PATHS.Value | Should -BeExactly $script:legacySelector
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 2
     }
 
@@ -707,10 +716,10 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
     }
 
     It 'reaches the shared process boundary once with argv and no streaming or write retry' {
-        $null = Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'TEST_BAMI_MODULE_CONFIG' -Value $script:legacySelector
+        $null = Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'TEST_BAMI_MODULE_PATHS' -Value $script:legacySelector
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             [System.IO.Path]::IsPathRooted($FilePath) -and $ArgumentList -is [string[]] -and
-            $ArgumentList[15] -ceq 'value={"default":"legacy","modules":{}}' -and
+            $ArgumentList[15] -ceq 'value=[]' -and
             $EnvVars.GH_TOKEN -ceq 'fixture-installation-token' -and $EnvVars.GH_HOST -ceq 'github.com' -and
             $null -eq $EnvVars.GITHUB_TOKEN -and $null -eq $EnvVars.GH_DEBUG -and
             $EnvVars.GH_PROMPT_DISABLED -ceq '1' -and $IgnoreExitCode -and -not $StreamOutput -and $TimeoutSec -eq 60
@@ -795,7 +804,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $permissions = @([regex]::Matches($script:variablesJob, '(?m)^          permission-[^\n]+$') | ForEach-Object { $_.Value.Trim() })
         $permissions | Should -Be @('permission-variables: write')
         $script:variablesJob | Should -Match 'GH_TOKEN: \$\{\{ steps\.variables-token\.outputs\.token \}\}'
-        $script:variablesJob | Should -Not -Match 'steps\.app-token|permission-secrets|permission-contents|permission-pull-requests|id-token:'
+        $script:variablesJob | Should -Not -Match 'steps\.app-token|permission-secrets|permission-contents|permission-pull-requests|permission-workflows|id-token:'
     }
 
     It 'pins both actions and checks out trusted main without persisted credentials' {
@@ -836,9 +845,9 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $implementation = Get-Content -LiteralPath (Join-Path $script:syncScripts 'lib' 'TestTenantSync.ps1') -Raw
         $implementation | Should -Match 'Get-AvmBamiSettings -Values \$Values'
         $implementation | Should -Match 'Get-AvmBamiSettings -Values \$bundle -BicepOnly'
-        $implementation | Should -Match 'ConvertTo-AvmBicepModuleConfig -Configuration \$Configuration'
-        $implementation | Should -Match 'ConvertFrom-AvmTestTenantModuleConfig -Json \$existingSelector'
-        $implementation | Should -Not -Match 'function (Get-AvmBamiSettings|ConvertTo-AvmBicepModuleConfig|ConvertFrom-AvmTestTenantModuleConfig)'
+        $implementation | Should -Match 'ConvertTo-AvmBicepModulePaths -Configuration \$Configuration'
+        $implementation | Should -Match 'ConvertFrom-AvmBicepModulePaths -Json \$existingSelector'
+        $implementation | Should -Not -Match 'function (Get-AvmBamiSettings|ConvertTo-AvmBicepModulePaths|ConvertFrom-AvmBicepModulePaths)'
     }
 
     It 'retains serialized workflow writers without cancelling in-flight publication' {
