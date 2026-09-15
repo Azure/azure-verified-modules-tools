@@ -16,12 +16,14 @@ function Resolve-RepositoryTestTenantSettings {
         throw [System.ArgumentException]::new('testTenant must be exactly legacy or bami.')
     }
     $settings = $null
-    $effective = 'legacy'
+    $status = 'Ready'
     if ($TestTenant -ceq 'bami' -and $Enabled) {
         $settings = Get-AvmBamiSettings -Values $BamiValues
-        $effective = 'bami'
     }
-    return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $effective; Settings = $settings }
+    elseif ($TestTenant -ceq 'bami') {
+        $status = 'PendingTestTenantActivation'
+    }
+    return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = $status; Settings = $settings }
 }
 
 function Get-AvmBamiIdentityStateKey {
@@ -139,6 +141,7 @@ function ConvertTo-AvmBamiConsumerSettings {
         [Parameter(Mandatory)] [object] $Repository
     )
 
+    $Settings = Get-AvmBamiSettings -Values $Settings
     $clientId = [guid]::Empty
     $expectedIdentity = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($Repository.full_name.Replace('/', '-').Replace('windows', 'w5s'))"
     if ($Identity['client_id'] -isnot [string] -or -not [guid]::TryParseExact($Identity['client_id'], 'D', [ref] $clientId) -or
@@ -153,6 +156,8 @@ function ConvertTo-AvmBamiConsumerSettings {
         client_id = $clientId.ToString()
         controller_client_id = $Settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
         bicep_client_id = $Settings['TEST_BAMI_BICEP_CLIENT_ID']
+        admin_subscription_id = $Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
+        persistent_subscription_id = $Settings['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID']
         test_subscription_ids = ConvertFrom-AvmTestTenantJson -Json $Settings['TEST_BAMI_SUBSCRIPTION_IDS']
     }
 }

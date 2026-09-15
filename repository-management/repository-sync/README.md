@@ -57,8 +57,11 @@ and module test identities are unaffected.
 ## BAMI candidate identities
 
 `AVM_BAMI_TEST_TENANT_SYNC_ENABLED` in the Tools `avm` environment defaults off.
-Until explicitly enabled, canary configuration does not retarget existing test
-settings. Enabling it permits selected repositories to use the
+While off, BAMI-selected repositories report `PendingTestTenantActivation`
+without cleanup, Terraform, or repository mutations. Existing test settings
+remain untouched, whether they are already BAMI or still legacy. Disabling the
+gate is **not rollback**: only selecting `legacy` in configuration restores the
+legacy tuple. Enabling the gate permits selected repositories to use the
 [complete BAMI bundle](../README.md#test-tenant-selection) on trusted `main`
 runs, including subsequent scheduled syncs.
 

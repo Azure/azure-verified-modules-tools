@@ -51,6 +51,19 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
     }
 
+    It 'rejects reserved-subscription overlap before provisioning or repository reads' {
+        foreach ($field in @('TEST_BAMI_ADMIN_SUBSCRIPTION_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID')) {
+            $script:parameters.BamiValues = New-AvmTestBamiSettings
+            $script:parameters.BamiValues.TEST_BAMI_SUBSCRIPTION_IDS[0].id = $script:parameters.BamiValues[$field]
+            { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*test pool*'
+        }
+        $script:parameters.BamiValues = New-AvmTestBamiSettings
+        $script:parameters.BamiValues.TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $script:parameters.BamiValues.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*must be different*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
+    }
+
     It 'plans new candidates without applying for an unknown client ID or publishing a placeholder' {
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
         $result.Status | Should -BeExactly 'PendingCandidateIdentity'

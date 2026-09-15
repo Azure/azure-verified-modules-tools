@@ -82,8 +82,13 @@ if(!$repositoryCreationModeEnabled){
 
 $repositoryConfig = Get-Content -Path $repoConfigFilePath -Raw | ConvertFrom-Json
 $settings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId $repoId
-$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $settings.TestTenant `
-    -Enabled ($bamiTestTenantSyncEnabled -and !$repositoryCreationModeEnabled) -BamiValues $bamiSettings
+$selectedTestTenant = if ($repositoryCreationModeEnabled) { 'legacy' } else { $settings.TestTenant }
+$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant `
+    -Enabled $bamiTestTenantSyncEnabled -BamiValues $bamiSettings
+if ($testTenant.Status -ceq 'PendingTestTenantActivation') {
+    Write-Warning "${repoId}: BAMI activation is disabled. Repository settings are unchanged; select legacy in configuration for an explicit rollback."
+    return [pscustomobject]@{ Status = $testTenant.Status; RepoId = $repoId; TestTenant = 'bami' }
+}
 Write-Host "$([Environment]::NewLine)Checking $($repoId)"
 
 if(!$skipCleanup) {
@@ -121,10 +126,6 @@ if ($testTenant.TestTenant -ceq 'bami') {
     }
     $candidateSettings = $candidate.ConsumerSettings
 }
-elseif ($testTenant.SelectedTestTenant -ceq 'bami') {
-    Write-Host 'BAMI test tenant activation is disabled; retaining legacy test settings.'
-}
-
 Write-Host "$([Environment]::NewLine)<--->" -ForegroundColor Green
 Write-Host "$([Environment]::NewLine)Updating: $orgAndRepoName.$([Environment]::NewLine)" -ForegroundColor Green
 Write-Host "<--->$([Environment]::NewLine)" -ForegroundColor Green

@@ -12,21 +12,30 @@ BeforeAll {
 }
 
 Describe 'Terraform selection activation' {
-    It 'keeps legacy and nonactivated canaries unchanged without reading candidate fields' {
-        foreach ($selection in @('legacy', 'bami')) {
-            $result = Resolve-RepositoryTestTenantSettings -TestTenant $selection
-            $result.TestTenant | Should -BeExactly 'legacy'
-            $result.SelectedTestTenant | Should -BeExactly $selection
-            $result.Settings | Should -BeNullOrEmpty
-        }
+    It 'keeps explicitly legacy selections on their normal path without candidate dependencies' {
+        $result = Resolve-RepositoryTestTenantSettings -TestTenant legacy
+        $result.TestTenant | Should -BeExactly 'legacy'
+        $result.Status | Should -BeExactly 'Ready'
+        $result.Settings | Should -BeNullOrEmpty
         (Resolve-RepositoryTestTenantSettings -TestTenant legacy -Enabled $true -BamiValues @{ invalid = 'ignored' }).TestTenant |
             Should -BeExactly 'legacy'
+    }
+
+    It 'blocks disabled BAMI selections without silently converting them to legacy' {
+        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami
+        $result.TestTenant | Should -BeExactly 'bami'
+        $result.SelectedTestTenant | Should -BeExactly 'bami'
+        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
+        $result.Settings | Should -BeNullOrEmpty
+        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $false
+        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
     }
 
     It 'requires all candidate settings before activation and never chooses a partial legacy tuple' {
         { Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $true -BamiValues @{} } | Should -Throw
         $result = Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $true -BamiValues (New-AvmTestBamiSettings)
         $result.TestTenant | Should -BeExactly 'bami'
+        $result.Status | Should -BeExactly 'Ready'
         $result.Settings.Count | Should -Be 8
         foreach ($value in @('BAMI', 'future', $true, 1)) {
             { Resolve-RepositoryTestTenantSettings -TestTenant $value } | Should -Throw '*exactly*'
@@ -107,6 +116,8 @@ Describe 'Candidate plan and output safety' {
         $result = ConvertTo-AvmBamiConsumerSettings -Identity (New-AvmTestBamiIdentity) -Settings $script:settings -Repository $script:repository
         $result.client_id | Should -Be '10000000-0000-4000-8000-000000000006'
         $result.tenant_id | Should -Be $script:settings.TEST_BAMI_TENANT_ID
+        $result.admin_subscription_id | Should -Be $script:settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+        $result.persistent_subscription_id | Should -Be $script:settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
         $result.test_subscription_ids.Count | Should -Be 28
         foreach ($client in @($script:settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $script:settings.TEST_BAMI_BICEP_CLIENT_ID, [guid]::Empty.ToString())) {
             $identity = New-AvmTestBamiIdentity
@@ -120,6 +131,13 @@ Describe 'Candidate plan and output safety' {
             { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $script:repository } |
                 Should -Throw '*dedicated test identity*'
         }
+    }
+
+    It 'revalidates reserved subscriptions before constructing the internal root override' {
+        $invalid = New-AvmTestBamiSettings
+        $invalid.TEST_BAMI_SUBSCRIPTION_IDS[0].id = $invalid.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        { ConvertTo-AvmBamiConsumerSettings -Identity (New-AvmTestBamiIdentity) -Settings $invalid -Repository $script:repository } |
+            Should -Throw '*Persistent*test pool*'
     }
 }
 

@@ -136,6 +136,24 @@ Describe 'Complete BAMI input bundle' {
         }
     }
 
+    It 'excludes Persistent from a still-unique 28-subscription pool in both modes' {
+        $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[0].id = $script:bundle.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS.Count | Should -Be 28
+        @($script:bundle.TEST_BAMI_SUBSCRIPTION_IDS.id | Select-Object -Unique).Count | Should -Be 28
+        foreach ($bicepOnly in @($false, $true)) {
+            { Get-AvmBamiSettings -Values $script:bundle -BicepOnly:$bicepOnly } |
+                Should -Throw '*Persistent*test pool*'
+        }
+    }
+
+    It 'excludes Admin from the full pool and keeps Admin separate from Persistent' {
+        $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[0].id = $script:bundle.TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+        { Get-AvmBamiSettings -Values $script:bundle } | Should -Throw '*administration*test pool*'
+        $script:bundle = New-AvmTestBamiSettings
+        $script:bundle.TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $script:bundle.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        { Get-AvmBamiSettings -Values $script:bundle } | Should -Throw '*administration*Persistent*different*'
+    }
+
     It 'rejects malformed GUIDs, group resource IDs and shared controller identity' {
         foreach ($key in @('TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID',
                 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID')) {
@@ -200,6 +218,16 @@ Describe 'Central Bicep consumer resolution' {
             { Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door' -ModuleConfigJson $script:map -BamiSettingsJson ($partial | ConvertTo-Json) } |
                 Should -Throw
         }
+    }
+
+    It 'rejects explicit BAMI when disposable tests target the Persistent subscription' {
+        $subscriptions = $script:execution.TEST_BAMI_SUBSCRIPTION_IDS | ConvertFrom-Json
+        $subscriptions[0].id = $script:execution.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        $script:execution.TEST_BAMI_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject $subscriptions -Compress
+        {
+            Resolve-AvmTestTenant -ModulePath 'avm/res/network/front-door/.test/common' -ModuleConfigJson $script:map `
+                -BamiSettingsJson ($script:execution | ConvertTo-Json -Compress)
+        } | Should -Throw '*Persistent*test pool*'
     }
 
     It 'rejects malformed, unknown or ambiguous selector metadata' {

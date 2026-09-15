@@ -71,10 +71,12 @@ run "bami_uses_complete_tuple_and_retains_legacy_identity" {
 
   variables {
     bami_test_settings = {
-      tenant_id            = "10000000-0000-4000-8000-000000000001"
-      client_id            = "10000000-0000-4000-8000-000000000006"
-      controller_client_id = "10000000-0000-4000-8000-000000000002"
-      bicep_client_id      = "10000000-0000-4000-8000-000000000004"
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000006"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
       test_subscription_ids = [for number in range(1, 29) : {
         name = "test-${number}"
         id   = format("00000000-0000-4000-8000-%012d", number)
@@ -101,10 +103,12 @@ run "controller_cannot_be_test_identity" {
 
   variables {
     bami_test_settings = {
-      tenant_id            = "10000000-0000-4000-8000-000000000001"
-      client_id            = "10000000-0000-4000-8000-000000000002"
-      controller_client_id = "10000000-0000-4000-8000-000000000002"
-      bicep_client_id      = "10000000-0000-4000-8000-000000000004"
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000002"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
       test_subscription_ids = [for number in range(1, 29) : {
         name = "test-${number}"
         id   = format("00000000-0000-4000-8000-%012d", number)
@@ -119,11 +123,73 @@ run "incomplete_subscription_pool_is_rejected" {
 
   variables {
     bami_test_settings = {
-      tenant_id             = "10000000-0000-4000-8000-000000000001"
-      client_id             = "10000000-0000-4000-8000-000000000006"
-      controller_client_id  = "10000000-0000-4000-8000-000000000002"
-      bicep_client_id       = "10000000-0000-4000-8000-000000000004"
-      test_subscription_ids = []
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000006"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
+      test_subscription_ids      = []
+    }
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "persistent_subscription_is_not_disposable" {
+  command = plan
+
+  variables {
+    bami_test_settings = {
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000006"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
+      test_subscription_ids = [for number in range(1, 29) : {
+        name = "test-${number}"
+        id   = number == 1 ? "10000000-0000-4000-8000-000000000005" : format("00000000-0000-4000-8000-%012d", number)
+      }]
+    }
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "administration_subscription_is_not_disposable" {
+  command = plan
+
+  variables {
+    bami_test_settings = {
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000006"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
+      test_subscription_ids = [for number in range(1, 29) : {
+        name = "test-${number}"
+        id   = number == 1 ? "10000000-0000-4000-8000-000000000003" : format("00000000-0000-4000-8000-%012d", number)
+      }]
+    }
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "administration_and_persistent_subscriptions_must_differ" {
+  command = plan
+
+  variables {
+    bami_test_settings = {
+      tenant_id                  = "10000000-0000-4000-8000-000000000001"
+      client_id                  = "10000000-0000-4000-8000-000000000006"
+      controller_client_id       = "10000000-0000-4000-8000-000000000002"
+      bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+      admin_subscription_id      = "10000000-0000-4000-8000-000000000005"
+      persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
+      test_subscription_ids = [for number in range(1, 29) : {
+        name = "test-${number}"
+        id   = format("00000000-0000-4000-8000-%012d", number)
+      }]
     }
   }
   expect_failures = [var.bami_test_settings]

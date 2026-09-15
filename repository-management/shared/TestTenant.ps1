@@ -186,6 +186,17 @@ function Get-AvmBamiSettings {
         }
         [ordered]@{ name = $entry['name']; id = $id.ToString() }
     }
+    if ($seenIds.Contains($result['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'])) {
+        throw [System.ArgumentException]::new('The BAMI Persistent subscription must not be in the disposable test pool.')
+    }
+    if (-not $BicepOnly) {
+        if ($result['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'] -ceq $result['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID']) {
+            throw [System.ArgumentException]::new('The BAMI administration and Persistent subscriptions must be different.')
+        }
+        if ($seenIds.Contains($result['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])) {
+            throw [System.ArgumentException]::new('The BAMI administration subscription must not be in the disposable test pool.')
+        }
+    }
     $result['TEST_BAMI_SUBSCRIPTION_IDS'] = ConvertTo-Json -InputObject @($normalized) -Depth 4 -Compress
     if (-not $BicepOnly -and $result['TEST_BAMI_CONTROLLER_CLIENT_ID'] -ceq $result['TEST_BAMI_BICEP_CLIENT_ID']) {
         throw [System.ArgumentException]::new('BAMI controller and Bicep execution client IDs must be separate identities.')

@@ -31,4 +31,16 @@ Describe 'Test tenant action output' -Tag Component {
         & $script:action -ModulePath 'avm/res/network/front-door' -OutputPath $output -WhatIf
         Test-Path -LiteralPath $output | Should -BeFalse
     }
+
+    It 'never emits activation outputs for a test pool containing Persistent' {
+        $output = Join-Path $TestDrive 'persistent-overlap-output'
+        $bundle = New-AvmTestBamiSettings
+        $bundle.TEST_BAMI_SUBSCRIPTION_IDS[0].id = $bundle.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        {
+            & $script:action -ModulePath 'avm/res/network/front-door' `
+                -ModuleConfigJson '{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}' `
+                -BamiSettingsJson ($bundle | ConvertTo-Json -Depth 5) -OutputPath $output
+        } | Should -Throw '*Persistent*test pool*'
+        Test-Path -LiteralPath $output | Should -BeFalse
+    }
 }

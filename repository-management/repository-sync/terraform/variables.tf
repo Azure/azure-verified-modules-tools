@@ -6,10 +6,12 @@ variable "repository_creation_mode_enabled" {
 
 variable "bami_test_settings" {
   type = object({
-    tenant_id            = string
-    client_id            = string
-    controller_client_id = string
-    bicep_client_id      = string
+    tenant_id                  = string
+    client_id                  = string
+    controller_client_id       = string
+    bicep_client_id            = string
+    admin_subscription_id      = string
+    persistent_subscription_id = string
     test_subscription_ids = list(object({
       name = string
       id   = string
@@ -23,12 +25,16 @@ variable "bami_test_settings" {
       alltrue([
         for id in [
           var.bami_test_settings.tenant_id, var.bami_test_settings.client_id,
-          var.bami_test_settings.controller_client_id, var.bami_test_settings.bicep_client_id
+          var.bami_test_settings.controller_client_id, var.bami_test_settings.bicep_client_id,
+          var.bami_test_settings.admin_subscription_id, var.bami_test_settings.persistent_subscription_id
         ] : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id)) && lower(id) != "00000000-0000-0000-0000-000000000000"
       ]) &&
       lower(var.bami_test_settings.client_id) != lower(var.bami_test_settings.controller_client_id) &&
       lower(var.bami_test_settings.client_id) != lower(var.bami_test_settings.bicep_client_id) &&
       lower(var.bami_test_settings.controller_client_id) != lower(var.bami_test_settings.bicep_client_id) &&
+      lower(var.bami_test_settings.admin_subscription_id) != lower(var.bami_test_settings.persistent_subscription_id) &&
+      !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.admin_subscription_id)) &&
+      !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.persistent_subscription_id)) &&
       length(var.bami_test_settings.test_subscription_ids) == 28 &&
       length(distinct([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)])) == 28 &&
       length(distinct([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.name)])) == 28 &&
@@ -39,7 +45,7 @@ variable "bami_test_settings" {
         lower(subscription.id) != "00000000-0000-0000-0000-000000000000"
       ])
     )
-    error_message = "BAMI requires complete GUID settings, 28 unique subscriptions, and separate repository, controller, and Bicep client IDs."
+    error_message = "BAMI requires complete GUID settings, separate execution/controller identities, and 28 unique test subscriptions excluding the distinct administration and Persistent subscriptions."
   }
 }
 

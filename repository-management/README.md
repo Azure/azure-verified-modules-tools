@@ -39,6 +39,10 @@ environment. There is one current BAMI tenant, not a profile catalog.
 | `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
 | `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | Bicep persistent-resource subscription |
 
+Admin and Persistent must be different subscriptions, and neither may appear
+in the disposable test pool. The shared Bicep-only guard also rejects
+Persistent overlap without copying Admin into the Bicep projection.
+
 Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
