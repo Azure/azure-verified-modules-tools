@@ -1,4 +1,4 @@
-function ConvertTo-AvmModuleMetadata {
+function ConvertTo-AvmMetadataBackfillCandidate {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -18,16 +18,16 @@ function ConvertTo-AvmModuleMetadata {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    $Override = ConvertFrom-AvmMetadataJson -Json (ConvertTo-Json -InputObject $Override -Depth 50)
     $issues = [System.Collections.Generic.List[object]]::new()
-    $schemaPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'Resources', 'Schemas', 'v1', 'avm-module-metadata.schema.json'
+    $authoring = (Get-Command Test-AvmModuleMetadata -Module Avm.Authoring -ErrorAction Stop).Module
+    $schemaPath = Join-Path $authoring.ModuleBase 'Resources' 'Schemas' 'v1' 'avm-module-metadata.schema.json'
     $schema = Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json -AsHashtable
     $shape = if ($ChildModule) { 'child' } else { 'root' }
     $allowed = @($schema.definitions[$shape].properties.Keys)
     $metadata = [ordered]@{ '$schema' = $schema.'$id'; schemaVersion = 1 }
     foreach ($key in $Override.Keys) {
         if ($allowed -cnotcontains $key) {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OVERRIDE' -Message "Unsupported $shape override field '$key'."))
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OVERRIDE' -Message "Unsupported $shape override field '$key'."))
         }
         else {
             $metadata[$key] = $Override[$key]
@@ -36,10 +36,10 @@ function ConvertTo-AvmModuleMetadata {
 
     $source = $null
     try {
-        $source = Get-AvmMetadataSource -Path $Path -Ecosystem $Ecosystem
+        $source = Get-AvmMetadataBackfillSource -Path $Path -Ecosystem $Ecosystem
     }
     catch [System.ArgumentException] {
-        $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -Message $_.Exception.Message))
+        $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_SOURCE' -Message $_.Exception.Message))
     }
     $fields = [ordered]@{
         moduleDisplayName = @('ModuleDisplayName')
@@ -55,7 +55,7 @@ function ConvertTo-AvmModuleMetadata {
             $literalName = if ($field -eq 'moduleDisplayName') { 'name' } else { 'description' }
             $value = $source.Literals[$literalName]
             if ($metadata.Contains($field) -and $metadata[$field] -cne $value) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -Message "$field must match the existing Bicep literal; the backfill does not rewrite metadata literals."))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_SOURCE' -Message "$field must match the existing Bicep literal; the backfill does not rewrite metadata literals."))
             }
             $metadata[$field] = $value
             continue
@@ -64,7 +64,7 @@ function ConvertTo-AvmModuleMetadata {
             continue
         }
         try {
-            $value = Get-AvmLegacyMetadataValue -Record $LegacyRecord -Name $fields[$field]
+            $value = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name $fields[$field]
             if ($null -ne $value) {
                 if ($field -eq 'alternativeNames') {
                     $metadata[$field] = @($value.Split(',').Trim() | Where-Object { $_.Length -gt 0 } | Select-Object -Unique)
@@ -75,26 +75,26 @@ function ConvertTo-AvmModuleMetadata {
             }
         }
         catch [System.ArgumentException] {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_LEGACY' -Message "$field : $($_.Exception.Message)"))
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_LEGACY' -Message "$field : $($_.Exception.Message)"))
         }
     }
 
     if (-not $metadata.Contains('canonicalType')) {
         try {
-            $canonicalType = Get-AvmLegacyMetadataValue -Record $LegacyRecord -Name @('CanonicalType')
+            $canonicalType = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('CanonicalType')
             if ($canonicalType) {
                 $metadata.canonicalType = $canonicalType
             }
         }
         catch [System.ArgumentException] {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_LEGACY' -Message $_.Exception.Message))
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_LEGACY' -Message $_.Exception.Message))
         }
     }
     if (-not $metadata.Contains('canonicalType')) {
         if ($ModuleType -eq 'resource') {
             try {
-                $provider = Get-AvmLegacyMetadataValue -Record $LegacyRecord -Name @('ProviderNamespace')
-                $resourceType = Get-AvmLegacyMetadataValue -Record $LegacyRecord -Name @('ProviderResourceType', 'ResourceType')
+                $provider = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('ProviderNamespace')
+                $resourceType = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('ProviderResourceType', 'ResourceType')
                 if ($provider -and $resourceType) {
                     $metadata.canonicalType = "$provider/$resourceType"
                 }
@@ -104,7 +104,7 @@ function ConvertTo-AvmModuleMetadata {
                 }
             }
             catch [System.ArgumentException] {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_LEGACY' -Message "canonicalType : $($_.Exception.Message)"))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_LEGACY' -Message "canonicalType : $($_.Exception.Message)"))
             }
         }
         elseif ($Ecosystem -eq 'bicep' -and $ModuleId -cmatch '^avm/(ptn|utl)/(?<taxonomy>[a-z0-9-]+(?:/[a-z0-9-]+)+)$') {
@@ -118,7 +118,7 @@ function ConvertTo-AvmModuleMetadata {
     if ($null -ne $source) {
         if ($source.TelemetryPrefixes.Count -eq 1) {
             if ($Override.Contains('telemetryIdPrefix') -and $Override.telemetryIdPrefix -cne $source.TelemetryPrefixes[0]) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' -Message 'telemetryIdPrefix conflicts with the existing source prefix; preserve it or review the source separately.'))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_TELEMETRY' -Message 'telemetryIdPrefix conflicts with the existing source prefix; preserve it or review the source separately.'))
             }
             $metadata.telemetryIdPrefix = $source.TelemetryPrefixes[0]
         }
@@ -129,7 +129,7 @@ function ConvertTo-AvmModuleMetadata {
                 $metadata.telemetryIdPrefix = "46d3xtrf.$kind.$($Matches.logical)"
             }
             elseif ($source.TelemetryPresent) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' -Message 'Existing telemetry cannot be read losslessly; supply a telemetryIdPrefix and leave source wiring disabled until reviewed.'))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_TELEMETRY' -Message 'Existing telemetry cannot be read losslessly; supply a telemetryIdPrefix and leave source wiring disabled until reviewed.'))
             }
         }
     }
@@ -148,19 +148,19 @@ function ConvertTo-AvmModuleMetadata {
                     @('SecondaryModuleOwnerGHHandle', 'SecondaryOwnerGitHubHandle')
                 )) {
                 try {
-                    $handle = Get-AvmLegacyMetadataValue -Record @($row) -Name $names
+                    $handle = Get-AvmMetadataBackfillValue -Record @($row) -Name $names
                     if ($handle) {
                         $candidates.Add($handle)
                     }
                 }
                 catch [System.ArgumentException] {
-                    $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
+                    $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
                 }
             }
         }
         if ($ownerOverride -isnot [System.Collections.IDictionary] -or
             @($ownerOverride.Keys | Where-Object { $_ -cnotin @('individuals', 'team') }).Count -gt 0) {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner overrides accept individuals and team only, never personal names.'))
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner overrides accept individuals and team only, never personal names.'))
             $ownerOverride = @{}
         }
         foreach ($owner in @($ownerOverride['individuals'])) {
@@ -169,7 +169,7 @@ function ConvertTo-AvmModuleMetadata {
             }
             if ($owner -isnot [System.Collections.IDictionary] -or @($owner.Keys) -cnotcontains 'githubHandle' -or
                 @($owner.Keys | Where-Object { $_ -cne 'githubHandle' }).Count -gt 0) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner individuals must contain githubHandle only, never personal names.'))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner individuals must contain githubHandle only, never personal names.'))
                 continue
             }
             $candidates.Add([string]$owner.githubHandle)
@@ -179,7 +179,7 @@ function ConvertTo-AvmModuleMetadata {
         }
         foreach ($handle in $candidates) {
             if ($handle -cnotmatch '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$' -or $handle.Length -gt 39) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' -Message 'A supplied owner is not a valid GitHub handle; provide a GitHub handle.'))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'A supplied owner is not a valid GitHub handle; provide a GitHub handle.'))
             }
             elseif ($handles.Add($handle)) {
                 $individuals.Add([ordered]@{ githubHandle = $handle })
@@ -191,24 +191,21 @@ function ConvertTo-AvmModuleMetadata {
         }
         else {
             try {
-                $team = Get-AvmLegacyMetadataValue -Record $LegacyRecord -Name @('ModuleOwnersGHTeam')
+                $team = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('ModuleOwnersGHTeam')
                 if ($team) {
                     $metadata.owners.team = $team
                 }
             }
             catch [System.ArgumentException] {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
             }
         }
     }
 
     $required = @('moduleDisplayName', 'moduleDescription', 'canonicalType')
-    if (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule) {
-        $required += 'telemetryIdPrefix'
-    }
     foreach ($field in $required) {
         if (-not $metadata.Contains($field) -or [string]::IsNullOrWhiteSpace([string]$metadata[$field])) {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_REQUIRED' -Message "Cannot infer $field losslessly for '$ModuleId'; supply a explicit value."))
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_REQUIRED' -Message "Cannot infer $field losslessly for '$ModuleId'; supply an explicit value."))
         }
     }
     return [pscustomobject]@{ Candidate = $metadata; Issues = $issues.ToArray() }

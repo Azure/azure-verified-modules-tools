@@ -137,8 +137,8 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
-| `avm pre-commit`              | Composition (as wired today): `format` → `lint` → `test` → `docs`        | Composition (as wired today): `format` → `lint` → `test` → `docs`          |
-| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 8-step chain |
+| `avm pre-commit`              | `format` → `lint` → `validate` → `docs` → `metadata`                    | `sync` → `check convention` → `transform` → `format` → `docs` → `metadata` |
+| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs` → `metadata`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |
 | `avm index update`            | `Invoke-AvmJsonModuleIndexGeneration.ps1`                                | Update governance index entry                                              |
@@ -424,6 +424,9 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   the staged dual-source migration. This repository owns schemas and catalog
   sync; CSV indexes remain compatible generated outputs. Legacy rows are
   retained until the explicit per-ecosystem cutover.
+  Permanent authoring commands never read CSV inputs. Temporary backfill lives
+  outside the module; ordinary checks validate local metadata and warn on
+  missing files during rollout.
 
 **Exit criteria**: every `platform.*.yml` workflow can be expressed as `pwsh -c "avm governance …"` instead of `pwsh -File utilities/pipelines/platform/…`.
 

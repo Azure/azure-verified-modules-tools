@@ -166,12 +166,32 @@ This repository serves as a test sandbox for the Azure Verified Modules team.
 }
 
 Describe 'Component: metadata values from existing source' -Tag Component {
+    It 'derives Bicep values in migration scripts while the permanent reader still requires a file' {
+        $fixture = New-AutomaticMetadataFixture
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'main.bicep'), @'
+metadata name = 'Bicep source name'
+metadata description = 'Bicep source description.'
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '46d3xbcp.res.storage-account.suffix'
+}
+'@)
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId 'avm/res/storage/storage-account' `
+            -Ecosystem bicep -ModuleType resource -LegacyRecord $fixture.Records -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.moduleDisplayName | Should -BeExactly 'Bicep source name'
+        $result.Metadata.moduleDescription | Should -BeExactly 'Bicep source description.'
+        $result.Metadata.telemetryIdPrefix | Should -BeExactly '46d3xbcp.res.storage-account'
+        (Get-AvmModuleMetadata -Path $fixture.Root -Ecosystem bicep -ModuleType resource -SkipModuleVersionCheck).Status |
+            Should -Be 'fail'
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+    }
+
     It 'keeps a single alternative name as an array and allows real one-letter resource types' {
         $fixture = New-AutomaticMetadataFixture
         $fixture.Records[0].AlternativeNames = 'DNS'
         $fixture.Records[0].ResourceType = 'dnsZones/A'
         $fixture.Records[0].ProviderNamespace = 'Microsoft.Network'
-        $result = Get-AvmModuleMetadata -Path $fixture.Root -ModuleId 'avm-res-network-dnszone' `
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId 'avm-res-network-dnszone' `
             -Ecosystem terraform -ModuleType resource -LegacyRecord $fixture.Records -SkipModuleVersionCheck
         $result.Status | Should -Be 'pass'
         ($result.Metadata.alternativeNames -is [array]) | Should -BeTrue
@@ -181,7 +201,7 @@ Describe 'Component: metadata values from existing source' -Tag Component {
 
     It 'keeps every supplied owner handle without personal-name fields' {
         $fixture = New-AutomaticMetadataFixture
-        $result = Get-AvmModuleMetadata -Path $fixture.Root -ModuleId 'avm-res-storage-account' `
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId 'avm-res-storage-account' `
             -Ecosystem terraform -ModuleType resource -LegacyRecord $fixture.Records `
             -OwnerGitHubHandle @('FIRST-OWNER', 'third-owner', 'fourth-owner') -SkipModuleVersionCheck
         $result.Status | Should -Be 'pass'

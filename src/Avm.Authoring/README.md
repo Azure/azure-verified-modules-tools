@@ -17,7 +17,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
 | `Public/Test-AvmModuleMetadata.ps1`                | `avm metadata validate` -> validate root or child metadata using the packaged schema. |
-| `Public/Get-AvmModuleMetadata.ps1`                 | `avm metadata show` -> read metadata or derive values from existing indexes and source. |
+| `Public/Get-AvmModuleMetadata.ps1`                 | `avm metadata show` -> read and validate an existing metadata.json file. |
 | `Public/Initialize-AvmModuleMetadata.ps1`          | `avm metadata initialize` -> create metadata.json without overwriting an existing file. |
 | `Public/Get-AvmTool.ps1`                          | `avm tool list` / `avm tool which` -> inspect locked tools and cache/PATH state.   |
 | `Public/Install-AvmTool.ps1`                      | `avm tool install` -> download, SHA256-verify, and cache a locked tool.            |

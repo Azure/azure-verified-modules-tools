@@ -1,4 +1,4 @@
-function Get-AvmLegacyMetadataValue {
+function Get-AvmMetadataBackfillValue {
     [CmdletBinding()]
     [OutputType([string])]
     param(

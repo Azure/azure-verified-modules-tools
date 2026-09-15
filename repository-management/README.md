@@ -10,7 +10,10 @@ uses existing indexes and source without intermediate approval files.
 Terraform supports this operation in its sync; Bicep files are added directly
 to the module repository.
 
-Repository sync and repository creation are intentionally independent.
+Repository sync and [repository creation](repository-creation/README.md) are
+intentionally independent. New repositories initialize their own metadata from
+explicit creation inputs before publishing module files. The existing tooling
+inventory PR update remains a separate compatibility step.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.

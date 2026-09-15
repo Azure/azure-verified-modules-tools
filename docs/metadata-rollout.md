@@ -15,6 +15,12 @@ This document is a plan, not approval to run production commands.
   proposes updated CSV/JSON indexes and tier lists for review.
 - Engineering owners must review metadata changes. The existing AVM App bypass
   is retained; this plan does not grant a new bypass or permission.
+- Avm.Authoring's metadata commands are permanent authoring tools, with no CSV
+  input dependency. Both `pre-commit` and `pr-check` validate local metadata.
+  Missing files warn during rollout; invalid existing files fail.
+- CSV conversion and backfill-only inference are isolated in the temporary
+  `repository-management/module-metadata` directory. Keep the permanent
+  initializer in new-repository creation after the migration is removed.
 
 ## Changes and merge order
 
@@ -71,6 +77,11 @@ The Bicep workflow no longer has `AVM_CODEOWNERS_SYNC_ENABLED`. Enabling that
 workflow permits its scheduled CODEOWNERS apply runs; it is not a preview-only
 switch. This change remains intentional; the required rollout pause uses
 GitHub's workflow disable control rather than restoring that variable.
+
+Ordinary installed authoring commands receive the new metadata checks through
+a separately approved Avm.Authoring release. Merging tools does not update
+users' installed module. Migration and repository creation load the trusted
+tools checkout directly, so they do not require that release first.
 
 ## Bicep file adoption and CODEOWNERS
 
@@ -262,7 +273,11 @@ metadata-only run does not persist that choice. A reviewed configuration/workflo
 change is required to make the later cutover permanent.
 
 Retire manual metadata sources and old publication automation only after the
-replacement outputs and consumers are verified. Update issue templates and the
+replacement outputs and consumers are verified. Then follow the
+[migration cleanup instructions](../repository-management/module-metadata/README.md#removing-migration-after-reconciliation)
+to remove the one-off scripts and sync switches, retaining normal authoring,
+new-repository initialization, schemas, and catalog generation.
+Update issue templates and the
 internal [Azure-Verified-Modules-Docs](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
 runbook before declaring rollout complete. Add to an existing open documentation
 change where possible; record approved operators, run links, and recovery steps

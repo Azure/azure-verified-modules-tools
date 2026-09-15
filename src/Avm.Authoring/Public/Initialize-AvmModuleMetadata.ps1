@@ -21,7 +21,7 @@ function Initialize-AvmModuleMetadata {
         Wire Bicep's scoped telemetry prefix load, or Terraform's native JSON
         locals in main.metadata.tf. Existing conflicting readers are not replaced.
     .PARAMETER SkipModuleVersionCheck
-        Skip the standard installed-module version check for offline backfill.
+        Skip the standard installed-module version check for offline initialization.
     .EXAMPLE
         Initialize-AvmModuleMetadata -Path . -InputObject $metadata -Ecosystem terraform -ModuleType resource -WhatIf
     .OUTPUTS

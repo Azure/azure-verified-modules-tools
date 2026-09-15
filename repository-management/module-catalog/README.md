@@ -64,6 +64,12 @@ provider variants. `v1/migration-report.json` records missing metadata, unresolv
 legacy identities/taxonomy, and cross-ecosystem parity. Terraform hyphenated names
 are not guessed into taxonomy paths.
 
+`modulePath` is relative to the implementation's repository root, using `/`
+separators. Bicep paths include `avm/res/...`, `avm/ptn/...`, or `avm/utl/...`;
+Terraform roots use `.`, and submodules use `modules/{name}`.
+`parentModule` and `familyModule` use the same repository-relative basis.
+These paths are derived from file locations, not stored in module metadata.
+
 Registry errors, rate limiting, authentication failures, truncated GitHub
 discovery, and incomplete output data stop generation. Registry 404s mean
 not-published only at the module lookup boundary; a missing listed release is an

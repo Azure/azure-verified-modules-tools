@@ -103,3 +103,39 @@ metadata description = 'Literal \${value} and \\ path\nnext line'
         }
     }
 }
+
+Describe 'Metadata module identity' {
+    It 'uses the Terraform root directory rather than a misleading ancestor name' {
+        InModuleScope Avm.Authoring {
+            $context = [pscustomobject]@{
+                Root = Join-Path $TestDrive 'avm-res-parent' 'terraform-azurerm-avm-ptn-example-repo'
+                Ecosystem = 'terraform'
+            }
+            Get-AvmMetadataModuleType -Context $context -Path (Join-Path $context.Root 'modules' 'child') `
+                -Metadata @{ canonicalType = 'Microsoft.Storage/storageAccounts' } | Should -Be 'pattern'
+        }
+    }
+
+    It 'resolves a renamed Terraform checkout from its local Git origin without fetching it' {
+        InModuleScope Avm.Authoring {
+            $context = [pscustomobject]@{ Root = Join-Path $TestDrive 'renamed'; Ecosystem = 'terraform' }
+            Mock Test-Path { $true }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = 'git@github.com:Azure/terraform-azurerm-avm-utl-types-common.git'; StdErr = '' }
+            }
+            Get-AvmMetadataModuleType -Context $context -Path $context.Root -Metadata @{ canonicalType = 'types/common' } |
+                Should -Be 'utility'
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                ($ArgumentList -join ' ') -eq 'config --get remote.origin.url' -and $WorkingDirectory -eq $context.Root
+            }
+        }
+    }
+
+    It 'uses the explicit context scope for a telemetry-free module outside its normal path' {
+        InModuleScope Avm.Authoring {
+            $context = [pscustomobject]@{ Root = $TestDrive; Ecosystem = 'bicep'; Scope = 'utl' }
+            Get-AvmMetadataModuleType -Context $context -Path $context.Root -Metadata @{ canonicalType = 'types/common' } |
+                Should -Be 'utility'
+        }
+    }
+}

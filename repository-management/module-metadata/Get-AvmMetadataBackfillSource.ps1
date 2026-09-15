@@ -1,4 +1,4 @@
-function Get-AvmMetadataSource {
+function Get-AvmMetadataBackfillSource {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -17,6 +17,10 @@ function Get-AvmMetadataSource {
     $telemetryPresent = $false
     $literals = $null
     if ($Ecosystem -eq 'bicep') {
+        $authoring = (Get-Command Test-AvmModuleMetadata -Module Avm.Authoring -ErrorAction Stop).Module
+        foreach ($helper in @('Get-AvmBicepMetadataLiteral.ps1', 'Get-AvmBicepCommentFreeSource.ps1')) {
+            . (Join-Path $authoring.ModuleBase 'Private' 'Metadata' $helper)
+        }
         $source = Get-Content -LiteralPath (Join-Path -Path $Path -ChildPath 'main.bicep') -Raw
         $literals = Get-AvmBicepMetadataLiteral -Source $source
         $literal = "'''[\s\S]*?'''|'(?:\\.|[^'\\\r\n])*'"

@@ -1,16 +1,18 @@
+. (Join-Path $PSScriptRoot 'Get-AvmMetadataBackfillCandidate.ps1')
+
 function Assert-AvmMetadataBackfillCapability {
     [CmdletBinding()]
     param()
 
     $commands = [ordered]@{
-        'Get-AvmModuleMetadata' = @('LegacyRecord', 'Override', 'OwnerGitHubHandle', 'ChildModule', 'SkipModuleVersionCheck')
+        'Get-AvmModuleMetadata' = @('Path', 'ChildModule', 'SkipModuleVersionCheck')
         'Initialize-AvmModuleMetadata' = @('InputObject', 'ChildModule', 'UpdateSource', 'WhatIf', 'SkipModuleVersionCheck')
-        'Test-AvmModuleMetadata'       = @('ChildModule', 'CheckSource', 'SkipModuleVersionCheck')
+        'Test-AvmModuleMetadata'       = @('InputObject', 'ChildModule', 'CheckSource', 'SkipModuleVersionCheck')
     }
     foreach ($name in $commands.Keys) {
         $command = Get-Command -Name $name -Module Avm.Authoring -ErrorAction SilentlyContinue
         if (-not $command -or @($commands[$name] | Where-Object { -not $command.Parameters.ContainsKey($_) }).Count -gt 0) {
-            throw [System.InvalidOperationException]::new("Metadata backfill requires a published Avm.Authoring release containing $name and the shared metadata API. Publish/install that release before enabling backfill; this adapter never downloads module code or schemas.")
+            throw [System.InvalidOperationException]::new("Metadata backfill requires $name with the shared metadata API. Load Avm.Authoring from this tools checkout or a supporting release; this adapter never downloads module code or schemas.")
         }
     }
 }
@@ -42,7 +44,7 @@ function Get-AvmMetadataBackfillPlan {
                 $description = Get-AvmMetadataBackfillDescription -Root $Root -ModulePath $module.Path
                 if ($description) { $values.moduleDescription = $description }
             }
-            $metadata = Get-AvmModuleMetadata @parameters -Path $module.FullPath -ModuleId $module.ModuleId `
+            $metadata = Get-AvmMetadataBackfillCandidate @parameters -Path $module.FullPath -ModuleId $module.ModuleId `
                 -LegacyRecord $rows -Override $values
             if ($metadata.Status -ne 'pass') {
                 throw [System.ArgumentException]::new(($metadata.Issues.Message -join ' '))
@@ -54,7 +56,7 @@ function Get-AvmMetadataBackfillPlan {
                     Path = $module.Path
                     FullPath = $module.FullPath
                     Parameters = $parameters
-                    Metadata = $metadata.Metadata
+                    Metadata = $plan.Metadata
                     UpdateSource = $UpdateSource -and -not $fileExists
                     PlannedFiles = $plan.PlannedFiles
                 })

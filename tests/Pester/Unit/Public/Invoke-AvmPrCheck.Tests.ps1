@@ -15,6 +15,7 @@ Describe 'Invoke-AvmPrCheck' {
         InModuleScope 'Avm.Authoring' {
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Resolve-AvmCommandTool { @() }
+            Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
         }
     }
 
@@ -101,7 +102,7 @@ Describe 'Invoke-AvmPrCheck' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 4/8: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 4/9: lint'
         @($observed.DefaultWarnings) | Should -Contain 'nested lint warning'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint pass'
@@ -228,7 +229,7 @@ Describe 'Invoke-AvmPrCheck' {
         $probe.Message | Should -Match 'clean working tree'
     }
 
-    It 'composes all eight steps in order on a passing chain; the terraform-only sync step is skipped for bicep' {
+    It 'composes all nine steps in order on a passing chain; the terraform-only sync step is skipped for bicep' {
         $dir = Join-Path $TestDrive ("prcheck-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -252,7 +253,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 8
+        $result.Steps.Count               | Should -Be 9
         $result.Steps[0].Step             | Should -Be 'sync'
         $result.Steps[0].Status           | Should -Be 'skipped'
         $result.Steps[1].Step             | Should -Be 'format'
@@ -262,6 +263,12 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[5].Step             | Should -Be 'check convention'
         $result.Steps[6].Step             | Should -Be 'validate'
         $result.Steps[7].Step             | Should -Be 'docs'
+        $result.Steps[8].Step             | Should -Be 'metadata'
+        InModuleScope Avm.Authoring {
+            Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
+                $Context.Ecosystem -eq 'bicep' -and $WarnIfMissing
+            }
+        }
         ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -322,7 +329,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                  | Should -Be 'pass'
-        $result.Steps.Count                             | Should -Be 8
+        $result.Steps.Count                             | Should -Be 9
         ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 4
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
@@ -354,7 +361,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                | Should -Be 'fail'
-        $result.Steps.Count                           | Should -Be 8
+        $result.Steps.Count                           | Should -Be 9
         ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status | Should -Be 'pass'
     }
@@ -471,7 +478,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 8
+        $result.Steps.Count               | Should -Be 9
         $result.Steps[0].Step             | Should -Be 'sync'
         $result.Steps[1].Step             | Should -Be 'format'
         $result.Steps[2].Step             | Should -Be 'transform'
@@ -480,6 +487,7 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps[5].Step             | Should -Be 'check convention'
         $result.Steps[6].Step             | Should -Be 'validate'
         $result.Steps[7].Step             | Should -Be 'docs'
+        $result.Steps[8].Step             | Should -Be 'metadata'
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -557,7 +565,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                                                     | Should -Be 'pass'
         $result.Ecosystem                                                  | Should -Be 'terraform'
-        $result.Steps.Count                                                | Should -Be 8
+        $result.Steps.Count                                                | Should -Be 9
         ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'pass'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'

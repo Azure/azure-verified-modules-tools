@@ -115,7 +115,7 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
-    It 'preserves all four individual owners rather than imposing legacy CSV slots' {
+    It 'preserves all four individual owners without an ownership limit' {
         $fixture = New-MetadataFixture
         $fixture.Data.owners = @{
             individuals = @(
@@ -282,6 +282,76 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $result.Status | Should -Be 'fail'
         $result.Issues[0].File | Should -Be 'main.bicep'
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
+    }
+}
+
+Describe 'Component: permanent metadata reader' -Tag Component {
+    It 'reads existing metadata without changing source or metadata files' {
+        $fixture = New-MetadataFixture
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        $before = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        $sourceBefore = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $result = Get-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.canonicalType | Should -BeExactly 'Microsoft.Storage/storageAccounts'
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $before
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $sourceBefore
+    }
+
+    It 'reports a missing file without deriving values from source or indexes' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'repository-metadata.csv'), 'invalid,ignored,index')
+        $parameters = $fixture.Parameters
+        $result = Get-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_MISSING'
+        $result.Metadata | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+    }
+
+    It 'has no migration parameters or packaged conversion helpers' {
+        $command = Get-Command Get-AvmModuleMetadata -Module Avm.Authoring
+        foreach ($parameterName in @('ModuleId', 'LegacyRecord', 'Override', 'OwnerGitHubHandle', 'InputObject')) {
+            $command.Parameters.ContainsKey($parameterName) | Should -BeFalse
+        }
+        InModuleScope Avm.Authoring {
+            foreach ($name in @('ConvertTo-AvmModuleMetadata', 'Get-AvmLegacyMetadataValue', 'Get-AvmMetadataSource', 'Get-AvmMetadataBackfillCandidate')) {
+                Get-Command -Name $name -Module Avm.Authoring -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+            }
+        }
+    }
+
+    It 'validates supplied values without reading or overwriting an existing file' {
+        $fixture = New-MetadataFixture
+        [System.IO.File]::WriteAllText($fixture.MetadataPath, 'invalid existing JSON')
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly 'invalid existing JSON'
+        $fixture.Data.tier = 'invalid'
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+    }
+
+    It 'works from an isolated module copy with no repository-management migration directory' {
+        $standalone = Join-Path $TestDrive 'standalone-package'
+        $null = New-Item -ItemType Directory -Path $standalone
+        Copy-Item -LiteralPath $moduleRoot -Destination $standalone -Recurse
+        $manifest = Join-Path $standalone 'Avm.Authoring' 'Avm.Authoring.psd1'
+        $fixture = New-MetadataFixture
+        $parameters = $fixture.Parameters
+        try {
+            Remove-Module Avm.Authoring -Force
+            Import-Module $manifest -Force
+            (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeTrue
+            (Get-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+            (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+            Test-Path -LiteralPath (Join-Path $standalone 'repository-management') | Should -BeFalse
+        }
+        finally {
+            Remove-Module Avm.Authoring -Force
+            Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
+        }
     }
 }
 

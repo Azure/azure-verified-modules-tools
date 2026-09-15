@@ -62,7 +62,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('metadata', 'show')
             Cmdlet  = 'Get-AvmModuleMetadata'
-            Summary = 'Show metadata values from the module or existing indexes and source.'
+            Summary = 'Read and validate an existing module metadata.json file.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('metadata', 'initialize')

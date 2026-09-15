@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Metadata authoring is independent of CSV migration. `avm metadata show` only
+  reads existing metadata, and `validate` also accepts supplied values.
+  Both authoring chains validate local metadata and warn on missing files
+  during rollout. One-off conversion and backfill remain outside the module.
 - Terraform metadata backfill creates missing files directly from existing
   indexes/source and uses the selected tools checkout. The intermediate approval
   files and registration list are removed. Bicep file creation is a direct

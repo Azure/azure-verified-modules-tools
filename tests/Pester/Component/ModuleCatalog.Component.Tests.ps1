@@ -263,6 +263,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
             -ModulePath 'modules/container' -Canonical 'Microsoft.Storage/storageAccounts/blobServices/containers' -Child -Adopt
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $entry = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices/containers']
+        $entry.bicep[0].modulePath | Should -BeExactly 'avm/res/storage/storage-account/blob-service/container'
+        $entry.terraform[0].modulePath | Should -BeExactly 'modules/container'
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].modulePath | Should -BeExactly 'avm/res/storage/storage-account'
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0].modulePath | Should -BeExactly '.'
         $entry.bicep[0].parentModule | Should -BeExactly $child.ModulePath
         $entry.bicep[0].familyModule | Should -BeExactly 'avm/res/storage/storage-account'
         $entry.bicep[0].resourceType | Should -BeExactly 'storageAccounts/blobServices/containers'

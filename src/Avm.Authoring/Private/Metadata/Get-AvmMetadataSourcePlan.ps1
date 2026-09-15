@@ -86,7 +86,7 @@ function Get-AvmMetadataSourcePlan {
         $existingSource = Get-Content -LiteralPath $file.FullName -Raw
         foreach ($field in $fields.Keys) {
             if ([regex]::IsMatch($existingSource, "(?m)^[\t ]*$field[\t ]*=")) {
-                throw [System.ArgumentException]::new("$($file.Name) already defines $field; review the existing metadata reader before backfill.")
+                throw [System.ArgumentException]::new("$($file.Name) already defines $field; review the existing metadata reader before initializing source readers.")
             }
         }
     }

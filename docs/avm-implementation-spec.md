@@ -424,13 +424,21 @@ existing Deprecated status is retained.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies Bicep literal name/description declarations.
-`avm metadata show` reads or derives metadata from existing data.
+`-InputObject` validates supplied metadata values without reading a file.
+`avm metadata show` only reads and validates an existing `metadata.json`; it
+never derives values or reads CSV indexes.
 `avm metadata initialize` writes supplied metadata values, never overwrites
 existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
 load or Terraform JSON reader locals. It does not replace telemetry transport.
 The one-time source rewrite can change compiled Bicep output; subsequent
 owner/tier/canonical metadata edits do not. Terraform source wiring remains
 opt-in until its transport consumes the new locals.
+
+`avm pre-commit` and `avm pr-check` finish with read-only metadata validation for
+the selected root and its module children. Invalid existing metadata fails the
+check. Missing files produce explicit warnings during rollout, without creating
+files or reading indexes. Explicit `avm metadata validate` and `show` still fail
+for missing files. Test, example, and internal helper directories are excluded.
 
 The catalog workflow lives in this tools repository. During dual-source rollout,
 valid module metadata overrides legacy rows; invalid present metadata is an
@@ -440,6 +448,10 @@ overlay that can be replaced on every repository sync.
 Terraform sync creates missing files directly from existing indexes and source,
 without an intermediate approval file or repository registration. Bicep files
 are added directly to the module repository rather than through Bicep Sync.
+CSV conversion and backfill-only source inference live exclusively under
+`repository-management/module-metadata/`, outside the packaged module. That
+temporary directory and its sync hooks can be removed after reconciliation
+without changing the permanent metadata API or normal authoring checks.
 
 ### Files inside the user's home
 

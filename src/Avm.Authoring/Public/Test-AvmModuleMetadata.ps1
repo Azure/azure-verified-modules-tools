@@ -1,11 +1,12 @@
 function Test-AvmModuleMetadata {
     <#
     .SYNOPSIS
-        Validate a module's shared metadata against the packaged v1 schema.
+        Validate existing or supplied module metadata against the packaged schema.
     .DESCRIPTION
         Checks strict JSON, the root or reduced child shape, canonical type,
         ownership, and ecosystem-specific telemetry requirements. Never writes
         files or downloads schemas. Missing or invalid metadata returns fail.
+        InputObject validates supplied values without reading metadata.json.
     .PARAMETER Path
         Directory containing metadata.json.
     .PARAMETER Ecosystem
@@ -14,6 +15,8 @@ function Test-AvmModuleMetadata {
         Module kind derived by the caller from its path or repository name.
     .PARAMETER ChildModule
         Require the reduced child shape, without owners or tier.
+    .PARAMETER InputObject
+        Metadata values to validate instead of reading metadata.json.
     .PARAMETER CheckSource
         Also compare Bicep metadata name and description literals to the JSON.
     .PARAMETER SkipModuleVersionCheck
@@ -24,7 +27,7 @@ function Test-AvmModuleMetadata {
         A result with Status, Issues, and the decoded Metadata dictionary.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Metadata is the shared metadata.json contract name.')]
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'File')]
     [OutputType([pscustomobject])]
     param(
         [string] $Path = $PWD.Path,
@@ -38,6 +41,9 @@ function Test-AvmModuleMetadata {
         [string] $ModuleType,
 
         [switch] $ChildModule,
+
+        [Parameter(Mandatory, ParameterSetName = 'Object')]
+        [System.Collections.IDictionary] $InputObject,
 
         [switch] $CheckSource,
 
@@ -55,12 +61,16 @@ function Test-AvmModuleMetadata {
     $issues = [System.Collections.Generic.List[object]]::new()
     $metadataPath = Join-Path -Path $Path -ChildPath 'metadata.json'
     $metadataFiles = @(
-        if (Test-Path -LiteralPath $Path -PathType Container) {
+        if ($PSCmdlet.ParameterSetName -eq 'File' -and (Test-Path -LiteralPath $Path -PathType Container)) {
             Get-ChildItem -LiteralPath $Path -Force | Where-Object { $_.Name -ieq 'metadata.json' }
         }
     )
     $metadata = $null
-    if ($metadataFiles.Count -eq 0) {
+    $json = $null
+    if ($PSCmdlet.ParameterSetName -eq 'Object') {
+        $json = ConvertTo-Json -InputObject $InputObject -Depth 50
+    }
+    elseif ($metadataFiles.Count -eq 0) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_MISSING' -Message 'metadata.json is required.'))
     }
     elseif ($metadataFiles.Count -ne 1 -or $metadataFiles[0].PSIsContainer -or $metadataFiles[0].Name -cne 'metadata.json') {
@@ -68,7 +78,15 @@ function Test-AvmModuleMetadata {
     }
     else {
         try {
-            $result = Test-AvmMetadataContent -Json (Read-AvmMetadataJson -Path $metadataPath) `
+            $json = Read-AvmMetadataJson -Path $metadataPath
+        }
+        catch [System.ArgumentException] {
+            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_JSON' -Message $_.Exception.Message))
+        }
+    }
+    if ($null -ne $json) {
+        try {
+            $result = Test-AvmMetadataContent -Json $json `
                 -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule `
                 -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
             $metadata = $result.Metadata
