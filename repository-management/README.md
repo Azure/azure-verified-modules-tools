@@ -132,10 +132,23 @@ means verified variable contents, not working Azure authentication.
 Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)
 from [repository configuration](repository-config/config.json). Matching groups,
 including the wildcard `default` group, contribute `codeOwnersTeams` for the
-default `*` rule and `codeOwnersFileProtectionTeams` for the final
+default `*` rule and `codeOwnersFileProtectionTeams` for the subsequent
 `.github/CODEOWNERS` rule. Teams are deduplicated and qualified with the target
 organization; a group targeting one repository can supply its specific owners.
-An empty team list omits that rule.
+An empty team list omits that configured rule.
+
+The final rule is always
+`metadata.json @Azure/azure-verified-modules-engineering-owners`, including when
+configured team lists are empty. The unrooted basename covers root and child
+metadata files; other files retain their configured owners. Engineering is the
+only owner on this rule because multiple CODEOWNERS owners are alternatives,
+not jointly required reviewers.
+
+Review enforcement also requires the existing active ruleset's
+`require_code_owner_review = true` and a visible engineering team with repository
+write access. Initial backfill uses only the existing AVM App's authorized
+pull-request bypass. Neither the template nor its generation grants or broadens
+that bypass; authorized operators must verify these prerequisites before rollout.
 
 The generated file replaces stale content or creates a missing file after
 `avm pre-commit` succeeds, in the same temporary checkout and publication flow.
