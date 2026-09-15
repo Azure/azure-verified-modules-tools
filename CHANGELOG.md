@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Catalog CSV publication uses `test-` filenames beside the canonical inputs;
+  existing CSVs remain unchanged until a separate replacement change. Removed
+  catalog enable and Terraform sync pause variable gates; backfill still
+  requires explicit manual dispatch.
 - Metadata authoring is independent of CSV migration. `avm metadata show` only
   reads existing metadata, and `validate` also accepts supplied values.
   Both authoring chains validate local metadata and warn on missing files

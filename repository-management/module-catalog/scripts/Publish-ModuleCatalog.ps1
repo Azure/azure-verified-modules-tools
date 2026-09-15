@@ -23,17 +23,17 @@ if (-not $Publish) {
     return
 }
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REPOSITORY -cne $configuration.repositories.tools -or
-    $env:GITHUB_REF -cne 'refs/heads/main' -or $env:AVM_METADATA_SYNC_ENABLED -cne 'true' -or
+    $env:GITHUB_REF -cne 'refs/heads/main' -or
     $env:GITHUB_RUN_ID -notmatch '^[0-9]+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^[0-9]+$' -or
     $env:AVM_APP_SLUG -notmatch '^[a-z0-9-]+$' -or -not $env:GH_TOKEN) {
-    throw [System.InvalidOperationException]::new('Publication requires the enabled, main-branch tools workflow and its scoped app token.')
+    throw [System.InvalidOperationException]::new('Publication requires the main-branch tools workflow and its scoped app token.')
 }
 if (-not $PSCmdlet.ShouldProcess(($configuration.repositories.docs, $configuration.repositories.tools -join ' and '), 'Publish reviewable catalog branches and pull requests')) {
     return
 }
 
-$git = (Get-Command -Name git -CommandType Application -ErrorAction Stop).Source
-$gh = (Get-Command -Name gh -CommandType Application -ErrorAction Stop).Source
+$git = (Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$gh = (Get-Command -Name gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $state = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-catalog-publish-' + [guid]::NewGuid().ToString('N'))
 $null = [System.IO.Directory]::CreateDirectory($state)
 $hooks = Join-Path $state 'empty-hooks'

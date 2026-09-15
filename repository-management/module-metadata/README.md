@@ -16,8 +16,13 @@ Use the existing Terraform sync workflow with `metadata_backfill: true` and a
 repository filter such as `avm-ptn-example-repo`. `plan_only: true` remains a
 strict dry run. The workflow loads the metadata commands from its selected tools
 checkout, so a manual branch run can use the new code without a Gallery release.
+Workflow backfill requires `workflow_dispatch` and `metadata_backfill: true`.
+Scheduled and `repository_dispatch` runs cannot activate it; the runtime adapter
+also rejects non-manual events. The local command below remains an explicit
+operator action, not an automatic workflow trigger.
 
-The sync reads the matching public module index at one commit. If a repository
+The sync reads the matching canonical public CSV at one commit, never a `test-`
+catalog preview. If a repository
 has no public row yet, its entry in the tools repository's existing
 `repository-metadata.csv` is used. Descriptions can also come from `_header.md`.
 Missing information is reported rather than invented.

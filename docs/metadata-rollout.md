@@ -13,6 +13,8 @@ This document is a plan, not approval to run production commands.
   metadata is never overwritten, and no intermediate approval file is required.
 - The catalog workflow reads module metadata and registry information, then
   proposes updated CSV/JSON indexes and tier lists for review.
+  CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
+  remain unchanged. The new JSON catalog keeps `v1/modules.json`.
 - Engineering owners must review metadata changes. The existing AVM App bypass
   is retained; this plan does not grant a new bypass or permission.
 - Avm.Authoring's metadata commands are permanent authoring tools, with no CSV
@@ -56,13 +58,14 @@ so they can be restored deliberately.
   either tools change merges, even if its old enable variable appears absent.
   Verify the workflow is disabled and keep it disabled until both the Bicep
   governance tests and the tools generator accept the same ownership rules.
-- Pause automatic Terraform sync with `AVM_SYNC_PAUSED=true`. Manual dispatches
-  remain allowed for the approved, explicitly selected trials below. Do not
-  start other manual writers during the merge window.
+- Disable Terraform Sync for the merge window if its automatic writes must
+  pause. There is no pause variable; disabling also prevents manual dispatch.
+  Re-enabling requires approval covering automatic applies as well as trials.
 - Wait for active writers to finish and ensure queued writers cannot run during
   the pause. Do not cancel an active state writer or break its lease.
-- Keep `AVM_METADATA_SYNC_ENABLED` unset or `false`. Do not enable catalog
-  publication merely to test file creation.
+- The catalog workflow has no enable variable. Once merged and enabled, its
+  daily schedule can publish review changes for preview CSVs, JSON, and tiers.
+  Disable it until ready if an operator-controlled first run is required.
 - Check the protected `avm` environment, the existing App installation, and
   target permissions. The engineering team needs the access GitHub requires for
   CODEOWNERS, and code-owner review must be required on target main branches.
@@ -121,6 +124,9 @@ Do not remove people or loosen review rules to make the run pass.
 
 Use `avm-ptn-example-repo` first. The commands below are for an operator to run
 after approval; none are executed by writing this plan.
+If Terraform Sync was disabled for the merge window, obtain approval to enable
+it before dispatching. That also permits its normal scheduled/repository-dispatch
+applies; there is no variable-based manual-only mode.
 
 ```powershell
 $tools = 'Azure/azure-verified-modules-tools'
@@ -201,13 +207,15 @@ Missing source information is a stop for that repository. Correct the existing
 data or author the missing metadata values directly; never invent an owner,
 canonical type, or telemetry identifier just to satisfy validation. Keep
 `repositories=All` for a separately approved later run.
-Restore the previous automatic Terraform sync setting only after the selected
-trials pass and an operator approves resuming ordinary scheduled writes.
+Disable Terraform Sync again if automatic writes must stop between batches.
+Re-enable it only with approval covering normal automatic applies.
 
 ## Preview and publish the catalog
 
 Start in `dual-source` for both ecosystems. It uses valid module metadata and
-retains existing rows for modules that do not yet have it.
+retains existing rows for modules that do not yet have it. Publication writes
+the six `test-*.csv` previews beside the originals, not over them.
+The catalog workflow does not trigger metadata backfill.
 
 ```powershell
 gh workflow run module-metadata-sync.yml --repo $tools --ref main `
@@ -216,7 +224,8 @@ gh workflow run module-metadata-sync.yml --repo $tools --ref main `
 
 Download the `module-metadata-catalog` artifact. Check:
 
-- All six CSVs retain their required columns and expected rows.
+- All six `test-` CSVs retain their required columns and expected rows, and no
+  canonical CSV is included in the publication write list.
 - Child CSV `AlternativeNames` and `Comments` are unchanged, including blank
   cells. They must not be replaced with the parent's values.
 - `v1/modules.json` includes every owner, distinct implementations, and children
@@ -227,7 +236,7 @@ Download the `module-metadata-catalog` artifact. Check:
 - Output files and destinations match the central configuration, and publication
   hashes/bases are complete. Errors or partial API results are not publishable.
 
-**Approve the first index changes explicitly.** The review snapshot showed
+**Review the preview data before the later CSV cutover.** The review snapshot showed
 488 of 508 resource display names and all 508 resource descriptions changing,
 plus 45 of 48 pattern names and all 48 pattern descriptions. The new values come
 from current Bicep source literals, not the older index wording. These are large
@@ -243,19 +252,27 @@ their existing CSV cells remain separate.
 The review comparison also found 508 Bicep `ModuleOwnersGHTeam` cells becoming
 empty because deleted teams were replaced with individual owners. The full
 owner list is in the JSON catalog; CSV owner columns still expose only the first
-two people. Confirm the public index presents this change acceptably.
+two people. Confirm this change is acceptable before replacing the live CSVs.
 For 74 deep children, `ParentModule` changes from the family root to the immediate
 parent. Confirm consumers accept that relationship; the JSON `familyModule`
 still identifies the root. Include both changes in the first-index sign-off.
 
-Only after approving the artifact, enable `AVM_METADATA_SYNC_ENABLED` and run
-the same workflow with `plan_only=false`. Enabling also permits the daily
-scheduled run, so include that consequence in the approval.
+After approving a manual publication, run the same workflow with
+`plan_only=false`. The daily schedule can also publish while the workflow is
+enabled; no repository variable is required.
 
 Catalog publication opens updates in the public docs and tools repositories;
 neither is automatically merged. Review both, especially tier membership.
 Cross-repository publication is not atomic: if one succeeds and the other fails,
 inspect both before retrying rather than assuming neither changed.
+
+## Replace the live CSVs later
+
+A separate reviewed change will remove the `test-` output prefixes and replace
+the canonical CSVs after the previews are accepted. Keep existing consumers on
+the original files until then. Complete outstanding preview publication reviews
+and collect a fresh snapshot after changing the manifest; old bundles are invalid.
+This CSV replacement is separate from each ecosystem's metadata-only cutover.
 
 ## Finish the transition
 

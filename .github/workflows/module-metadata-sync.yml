@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       plan_only:
-        description: 'Generate artifacts only; publication also requires the enable variable and main.'
+        description: 'Generate artifacts only. Non-plan publication requires the trusted main branch.'
         type: boolean
         default: true
       bicep_mode:
@@ -39,9 +39,7 @@ defaults:
 jobs:
   collect:
     name: '[AVM] Collect and validate catalog'
-    if: >-
-      github.repository == 'Azure/azure-verified-modules-tools' &&
-      (github.event_name == 'workflow_dispatch' || vars.AVM_METADATA_SYNC_ENABLED == 'true')
+    if: github.repository == 'Azure/azure-verified-modules-tools'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     environment: avm
@@ -119,7 +117,6 @@ jobs:
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
       github.ref == 'refs/heads/main' &&
-      vars.AVM_METADATA_SYNC_ENABLED == 'true' &&
       (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.plan_only == false))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -165,7 +162,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           AVM_APP_SLUG: ${{ steps.writer.outputs.app-slug }}
-          AVM_METADATA_SYNC_ENABLED: ${{ vars.AVM_METADATA_SYNC_ENABLED }}
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
           & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish -Confirm:$false

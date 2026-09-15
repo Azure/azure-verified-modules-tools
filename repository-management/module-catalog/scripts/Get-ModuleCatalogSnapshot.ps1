@@ -51,7 +51,7 @@ try {
         }
     }
     $revisions = [System.Collections.Generic.List[object]]::new()
-    $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop).Source
+    $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     foreach ($inputRepository in @(
             @{ Name = $configuration.repositories.docs; Path = $DocumentationRoot },
             @{ Name = $configuration.repositories.bicep; Path = $BicepRoot },

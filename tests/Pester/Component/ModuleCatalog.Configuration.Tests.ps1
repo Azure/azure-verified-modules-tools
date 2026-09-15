@@ -31,10 +31,43 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
         $paths.docs.files['docs/v1/modules.json'] | Should -BeExactly 'docs/static/module-indexes/v1/modules.json'
     }
 
+    It 'publishes preview CSVs beside their canonical inputs without allowing writes to those inputs' {
+        $configuration = Read-AvmCatalogConfiguration
+        $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
+        $csvs = @($configuration.outputs | Where-Object kind -eq 'csv')
+        $csvs | Should -HaveCount 6
+        foreach ($csv in $csvs) {
+            $csv.sourceFile | Should -Not -Match '^test-'
+            $csv.file | Should -BeExactly "test-$($csv.sourceFile)"
+            $csv.sourcePath | Should -BeExactly "docs/static/module-indexes/$($csv.sourceFile)"
+            $csv.targetPath | Should -BeExactly "docs/static/module-indexes/test-$($csv.sourceFile)"
+            $paths.docs.files[$csv.bundlePath] | Should -BeExactly $csv.targetPath
+            @($paths.docs.files.Values) | Should -Not -Contain $csv.sourcePath
+            $paths.docs.basePaths | Should -Contain $csv.sourcePath
+            $paths.docs.basePaths | Should -Contain $csv.targetPath
+        }
+        $paths.docs.basePaths | Should -HaveCount 15
+    }
+
+    It 'can switch a reviewed manifest to canonical CSV names later without duplicate base paths' {
+        $path = New-ManifestFixture -Change {
+            param($c)
+            foreach ($csv in $c.outputs | Where-Object kind -eq 'csv') {
+                $csv.file = $csv.sourceFile
+            }
+        }
+        $configuration = Read-AvmCatalogConfiguration -Path $path
+        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 9
+    }
+
     It 'rejects incomplete, ambiguous, unsafe, or unused configuration: <Case>' -TestCases @(
         @{ Case = 'missing catalog'; Change = { param($c) $c.outputs = @($c.outputs | Where-Object kind -ne 'catalog') } }
         @{ Case = 'duplicate artifact'; Change = { param($c) $c.outputs += $c.outputs[-2] } }
         @{ Case = 'duplicate CSV mapping'; Change = { param($c) $c.outputs[1].moduleType = 'resource' } }
+        @{ Case = 'missing CSV source'; Change = { param($c) $c.outputs[0].Remove('sourceFile') } }
+        @{ Case = 'duplicate CSV source'; Change = { param($c) $c.outputs[1].sourceFile = $c.outputs[0].sourceFile.ToLowerInvariant() } }
+        @{ Case = 'unsafe CSV source'; Change = { param($c) $c.outputs[0].sourceFile = '../outside.csv' } }
+        @{ Case = 'wrong CSV source extension'; Change = { param($c) $c.outputs[0].sourceFile = 'source.json' } }
         @{ Case = 'case-colliding filename'; Change = { param($c) $c.outputs[1].file = $c.outputs[0].file.ToLowerInvariant() } }
         @{ Case = 'traversal'; Change = { param($c) $c.outputs[0].file = '../outside.csv' } }
         @{ Case = 'absolute path'; Change = { param($c) $c.outputs[0].file = '/outside.csv' } }

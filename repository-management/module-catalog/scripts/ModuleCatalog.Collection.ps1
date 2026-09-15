@@ -74,10 +74,25 @@ function Copy-AvmCatalogInputFile {
         $exists = Test-Path -LiteralPath $path -PathType Leaf
         $publication[$output.destination].baseFiles[$output.targetPath] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
         if ($output.kind -in @('csv', 'mar', 'tier-configuration')) {
+            if ($output.kind -eq 'csv') {
+                $path = Join-Path $RepositoryRoots[$output.destination] $output.sourcePath
+                $exists = Test-Path -LiteralPath $path -PathType Leaf
+            }
             if (-not $exists) {
                 throw [System.IO.FileNotFoundException]::new("Required legacy catalog is missing: $path")
             }
-            $relative = if ($output.kind -eq 'tier-configuration') { 'repository-config.json' } else { "legacy/$($output.file)" }
+            if ($output.kind -eq 'csv') {
+                $publication[$output.destination].baseFiles[$output.sourcePath] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            $relative = if ($output.kind -eq 'tier-configuration') {
+                'repository-config.json'
+            }
+            elseif ($output.kind -eq 'csv') {
+                "legacy/$($output.sourceFile)"
+            }
+            else {
+                "legacy/$($output.file)"
+            }
             $copies.Add(@{ Source = $path; Target = Join-Path $SnapshotPath $relative })
         }
     }
@@ -352,7 +367,7 @@ function Get-AvmCatalogTerraformRepositories {
         }
     }
     foreach ($output in $Configuration.outputs | Where-Object { $_.kind -ceq 'csv' -and $_.ecosystem -ceq 'terraform' }) {
-        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.file)
+        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.sourceFile)
         foreach ($row in $table.Rows) {
             $match = [regex]::Match([string]$row.RepoURL, '^https://github\.com/(?<repository>Azure/terraform-(azurerm|azapi|azure)-avm-(res|ptn|utl)-[a-z0-9-]+)(/|$)')
             if ($match.Success) {

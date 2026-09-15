@@ -39,6 +39,16 @@ Describe 'Component: Terraform metadata input collection' -Tag Component {
 }
 
 Describe 'Component: Terraform metadata workflow scope' -Tag Component {
+    It 'enables backfill only for an explicit workflow_dispatch input and keeps CI credential checks' {
+        $workflow = Get-Content (Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml') -Raw
+        $expression = "METADATA_BACKFILL_ENABLED: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.metadata_backfill \|\| false \}\}"
+        [regex]::Matches($workflow, $expression).Count | Should -Be 2
+        $workflow | Should -Match '(?s)metadata_backfill:.*?default: false\s+type: boolean'
+        $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
+        $ci = Get-Content (Join-Path $repoRoot '.github' 'workflows' 'ci.yml') -Raw
+        $ci | Should -Match "if:.*vars\.ARM_CLIENT_ID != ''"
+    }
+
     It 'loads branch code for metadata creation and skips Azure state, settings, and project changes' {
         $workflow = Get-Content (Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml') -Raw
         $driver = Get-Content (Join-Path $repoRoot 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1') -Raw
@@ -144,7 +154,7 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
     }
 
     It 'rejects non-manual metadata activation: <Event>' -TestCases @(
-        @{ Event = 'schedule' }, @{ Event = 'repository_dispatch' }
+        @{ Event = 'schedule' }, @{ Event = 'repository_dispatch' }, @{ Event = 'push' }, @{ Event = 'workflow_run' }
     ) {
         param($Event)
         $env:GITHUB_EVENT_NAME = $Event

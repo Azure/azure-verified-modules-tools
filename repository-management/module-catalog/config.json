@@ -10,12 +10,12 @@
     "tools": { "repository": "tools", "path": "repository-management/repository-config" }
   },
   "outputs": [
-    { "kind": "csv", "file": "BicepResourceModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "resource" },
-    { "kind": "csv", "file": "BicepPatternModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "pattern" },
-    { "kind": "csv", "file": "BicepUtilityModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "utility" },
-    { "kind": "csv", "file": "TerraformResourceModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "resource" },
-    { "kind": "csv", "file": "TerraformPatternModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "pattern" },
-    { "kind": "csv", "file": "TerraformUtilityModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "utility" },
+    { "kind": "csv", "sourceFile": "BicepResourceModules.csv", "file": "test-BicepResourceModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "resource" },
+    { "kind": "csv", "sourceFile": "BicepPatternModules.csv", "file": "test-BicepPatternModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "pattern" },
+    { "kind": "csv", "sourceFile": "BicepUtilityModules.csv", "file": "test-BicepUtilityModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "utility" },
+    { "kind": "csv", "sourceFile": "TerraformResourceModules.csv", "file": "test-TerraformResourceModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "resource" },
+    { "kind": "csv", "sourceFile": "TerraformPatternModules.csv", "file": "test-TerraformPatternModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "pattern" },
+    { "kind": "csv", "sourceFile": "TerraformUtilityModules.csv", "file": "test-TerraformUtilityModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "utility" },
     { "kind": "mar", "file": "BicepMARModules.json", "destination": "docs" },
     {
       "kind": "catalog",

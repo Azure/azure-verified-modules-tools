@@ -5,6 +5,7 @@ BeforeAll {
     $repoRoot = Join-Path $PSScriptRoot '..' '..' '..'
     $catalogScripts = Join-Path $repoRoot 'repository-management' 'module-catalog' 'scripts'
     . (Join-Path $catalogScripts 'ModuleCatalog.ps1')
+    . (Join-Path $catalogScripts 'ModuleCatalog.Collection.ps1')
     . (Join-Path $catalogScripts 'ModuleCatalog.Publication.ps1')
     $schemaPath = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-modules-catalog.schema.json'
     $catalogSchemaId = (Read-AvmCatalogJson -Path $schemaPath)['$id']
@@ -18,9 +19,10 @@ BeforeAll {
         $plan = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash; docs = $null; tools = $null; outputHashes = [ordered]@{} }
         foreach ($role in $paths.Keys) {
             $plan[$role] = [ordered]@{ repository = $paths[$role].repository; baseFiles = [ordered]@{} }
-            foreach ($relative in $paths[$role].files.Keys) {
-                $target = $paths[$role].files[$relative]
+            foreach ($target in $paths[$role].basePaths) {
                 $plan[$role].baseFiles[$target] = '1' * 64
+            }
+            foreach ($relative in $paths[$role].files.Keys) {
                 $file = Join-Path $root $relative
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
                 $text = if ($relative.EndsWith('.csv')) {
@@ -60,7 +62,7 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
 
     It 'rejects altered output bytes before preparing any remote update' {
         $root = New-CatalogPublicationFixture
-        [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'BicepResourceModules.csv'), 'tampered')
+        [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'test-BicepResourceModules.csv'), 'tampered')
         { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*hash mismatch*'
     }
 
@@ -77,6 +79,53 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         [System.IO.File]::WriteAllText((Join-Path $root 'unexpected.ps1'), 'throw "must not execute"')
         { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*Unexpected file*'
         { Assert-AvmCatalogSafePath -Root $root -RelativePath '../outside.json' } | Should -Throw '*fixed relative file paths*'
+    }
+
+    It 'rejects a canonical CSV included as an output during preview publication' {
+        $root = New-CatalogPublicationFixture
+        Copy-Item -LiteralPath (Join-Path $root 'docs' 'test-BicepResourceModules.csv') `
+            -Destination (Join-Path $root 'docs' 'BicepResourceModules.csv')
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*Unexpected file*'
+    }
+
+    It 'requires a base hash for canonical inputs as well as preview outputs' {
+        $root = New-CatalogPublicationFixture
+        $planPath = Join-Path $root 'plan.json'
+        $plan = Read-AvmCatalogJson -Path $planPath
+        $plan.docs.baseFiles.Remove('docs/static/module-indexes/BicepResourceModules.csv')
+        $plan.docs.baseFiles['docs/static/module-indexes/unrelated.csv'] = '1' * 64
+        [System.IO.File]::WriteAllText($planPath, (ConvertTo-AvmCatalogJson -Value $plan))
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*no valid base hash*BicepResourceModules.csv*'
+    }
+
+    It 'permits a trusted main-branch publication preview without an enable variable or remote calls' {
+        $root = New-CatalogPublicationFixture
+        $environment = @{
+            GITHUB_ACTIONS = 'true'
+            GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+            GITHUB_REF = 'refs/heads/main'
+            GITHUB_RUN_ID = '123'
+            GITHUB_RUN_ATTEMPT = '1'
+            AVM_APP_SLUG = 'azure-verified-modules'
+            GH_TOKEN = 'offline-test-token'
+            AVM_METADATA_SYNC_ENABLED = $null
+        }
+        $saved = @{}
+        Mock Invoke-AvmCatalogProcess { throw 'A publication preview must not run external commands.' }
+        try {
+            foreach ($name in $environment.Keys) {
+                $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, $environment[$name])
+            }
+            { & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $root -Publish -WhatIf } |
+                Should -Not -Throw
+            Should -Invoke Invoke-AvmCatalogProcess -Times 0 -Exactly
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            }
+        }
     }
 
     It 'blocks a stale base rather than overwriting new main-branch input' {
@@ -134,13 +183,14 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $workflow | Should -Not -Match '(?m)^\s+(id-token|contents|pull-requests): write'
     }
 
-    It 'defaults manual runs to plan-only and requires the explicit enable variable for production publication' {
+    It 'defaults manual runs to plan-only and publishes from main without an enable variable' {
         $workflow | Should -Match "(?s)plan_only:.*?type: boolean\s+default: true"
         $workflow | Should -Match "cron: '0 1 \* \* \*'"
         $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
-        $publication | Should -Match "vars.AVM_METADATA_SYNC_ENABLED == 'true'"
+        $workflow | Should -Not -Match 'AVM_METADATA_SYNC_ENABLED'
         $publication | Should -Match "github.ref == 'refs/heads/main'"
         $publication | Should -Match 'inputs.plan_only == false'
+        $publication | Should -Match "github.event_name == 'schedule'"
         $workflow | Should -Not -Match 'pull_request_target|repository_dispatch|workflow_run'
         $publication | Should -Match '(?s)repositories: \$\{\{ steps.manifest.outputs.publication-repositories \}\}\s+permission-contents: write\s+permission-pull-requests: write'
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
@@ -180,5 +230,6 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $publisher | Should -Match 'HEAD:refs/heads/\$\(\$target.Branch\)'
         $publisher | Should -Match 'GIT_CONFIG_VALUE_3'
         $publisher | Should -Match 'contains human commits'
+        $publisher | Should -Not -Match 'AVM_METADATA_SYNC_ENABLED'
     }
 }

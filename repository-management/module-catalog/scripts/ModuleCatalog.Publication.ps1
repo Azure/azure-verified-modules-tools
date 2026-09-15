@@ -41,16 +41,17 @@ function Test-AvmCatalogPublicationBundle {
     $expected = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($role in $paths.Keys) {
         if ($plan[$role].repository -cne $paths[$role].repository -or
-            $plan[$role].baseFiles.Count -ne $paths[$role].files.Count) {
+            $plan[$role].baseFiles.Count -ne $paths[$role].basePaths.Count) {
             throw [System.IO.InvalidDataException]::new("Unexpected publication target: $role")
         }
-        foreach ($relative in $paths[$role].files.Keys) {
-            $null = $expected.Add($relative)
-            $target = $paths[$role].files[$relative]
+        foreach ($target in $paths[$role].basePaths) {
             if (-not $plan[$role].baseFiles.Contains($target) -or
                 ($null -ne $plan[$role].baseFiles[$target] -and $plan[$role].baseFiles[$target] -cnotmatch '^[0-9a-f]{64}$')) {
                 throw [System.IO.InvalidDataException]::new("Publication plan has no valid base hash for $target.")
             }
+        }
+        foreach ($relative in $paths[$role].files.Keys) {
+            $null = $expected.Add($relative)
             Assert-AvmCatalogSafePath -Root $Path -RelativePath $relative
             $file = Join-Path $Path $relative
             if (-not $plan.outputHashes.Contains($relative) -or

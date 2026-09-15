@@ -405,10 +405,10 @@ function Get-AvmCatalogInventory {
     }
 
     foreach ($output in $csvOutputs) {
-        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.file)
+        $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.sourceFile)
         foreach ($column in @('Tier', 'CanonicalType')) {
             if ($table.Headers -contains $column -and $table.Headers -cnotcontains $column) {
-                throw [System.IO.InvalidDataException]::new("Reserved catalog column must use exact casing: $column in $($output.file)")
+                throw [System.IO.InvalidDataException]::new("Reserved catalog column must use exact casing: $column in $($output.sourceFile)")
             }
             if ($table.Headers -cnotcontains $column) {
                 $table.Headers += $column
@@ -417,7 +417,7 @@ function Get-AvmCatalogInventory {
                 }
             }
         }
-        $tables[$output.file] = $table
+        $tables[$output.sourceFile] = $table
         foreach ($row in $table.Rows) {
             $identity = $null
             try {
@@ -440,7 +440,7 @@ function Get-AvmCatalogInventory {
                     throw [System.IO.InvalidDataException]::new("Duplicate legacy identity: $($identity.Key)")
                 }
                 if ($null -ne $identity.Metadata) {
-                    $itemsByKey[$identity.Key] = [pscustomobject]@{ Identity = $identity; Row = $row; File = $output.file; Record = $null }
+                    $itemsByKey[$identity.Key] = [pscustomobject]@{ Identity = $identity; Row = $row; File = $output.sourceFile; Record = $null }
                     continue
                 }
                 $missing[$identity.Key] = [ordered]@{
@@ -485,13 +485,13 @@ function Get-AvmCatalogInventory {
                     telemetryIdPrefix = if ($row['TelemetryIdPrefix']) { [string]$row['TelemetryIdPrefix'] } else { $null }
                 }
                 $itemsByKey[$identity.Key] = [pscustomobject]@{
-                    Identity = $identity; Row = $row; File = $output.file
+                    Identity = $identity; Row = $row; File = $output.sourceFile
                     Record = New-AvmCatalogRecord -Identity $identity -Data $data -MetadataSource legacy
                 }
             }
             catch [System.ArgumentException] {
                 $unresolved.Add([ordered]@{
-                        file = $output.file; moduleName = [string]$row.ModuleName
+                        file = $output.sourceFile; moduleName = [string]$row.ModuleName
                         ecosystem = $output.ecosystem; reason = $_.Exception.Message
                     })
             }
@@ -521,11 +521,11 @@ function Get-AvmCatalogInventory {
         if (-not $itemsByKey.ContainsKey($source.Key)) {
             $output = @($csvOutputs | Where-Object { $_.ecosystem -eq $source.Ecosystem -and $_.moduleType -eq $source.ModuleType })[0]
             $row = [ordered]@{}
-            foreach ($header in $tables[$output.file].Headers) {
+            foreach ($header in $tables[$output.sourceFile].Headers) {
                 $row[$header] = ''
             }
-            $tables[$output.file].Rows.Add($row)
-            $itemsByKey[$source.Key] = [pscustomobject]@{ Identity = $source; Row = $row; File = $output.file; Record = $null }
+            $tables[$output.sourceFile].Rows.Add($row)
+            $itemsByKey[$source.Key] = [pscustomobject]@{ Identity = $source; Row = $row; File = $output.sourceFile; Record = $null }
         }
         $itemsByKey[$source.Key].Record = New-AvmCatalogRecord -Identity $source -Data $data -MetadataSource metadata
     }
@@ -768,7 +768,7 @@ function New-AvmCatalogBundle {
     }
     $files = [ordered]@{}
     foreach ($output in $configuration.outputs | Where-Object { $_.kind -ceq 'csv' }) {
-        $file = $output.file
+        $file = $output.sourceFile
         $table = $Inventory.Tables[$file]
         $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $table.Rows.ToArray()
         $report.counts.legacyRows[$file] = $table.OriginalRowCount

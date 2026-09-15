@@ -60,14 +60,16 @@ function Read-AvmCatalogConfiguration {
     $kinds = @('csv', 'mar', 'catalog', 'migration-report', 'tier-configuration', 'publication-plan')
     $counts = @{}
     $csvKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $csvSources = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $bundlePaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $targetPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $basePaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($output in $configuration.outputs) {
         if ($output -isnot [System.Collections.IDictionary] -or $output.kind -cnotin $kinds -or $output.file -isnot [string]) {
             throw [System.IO.InvalidDataException]::new('Each catalog output requires a supported kind and relative filename.')
         }
         $keys = @('kind', 'file', 'destination')
-        if ($output.kind -ceq 'csv') { $keys += @('ecosystem', 'moduleType') }
+        if ($output.kind -ceq 'csv') { $keys += @('sourceFile', 'ecosystem', 'moduleType') }
         if ($output.kind -ceq 'catalog') { $keys += 'schema' }
         Assert-AvmCatalogManifestKeys -Value $output -Keys $keys
         Assert-AvmCatalogManifestPath -Path $output.file
@@ -78,6 +80,12 @@ function Read-AvmCatalogConfiguration {
             throw [System.IO.InvalidDataException]::new("Catalog output '$kind' requires a $extension filename.")
         }
         if ($kind -eq 'csv') {
+            if ($output.sourceFile -isnot [string] -or
+                -not $output.sourceFile.EndsWith('.csv', [StringComparison]::Ordinal) -or
+                -not $csvSources.Add($output.sourceFile)) {
+                throw [System.IO.InvalidDataException]::new('Catalog CSV sources require distinct relative .csv filenames.')
+            }
+            Assert-AvmCatalogManifestPath -Path $output.sourceFile
             if ($output.ecosystem -cnotin @('bicep', 'terraform') -or $output.moduleType -cnotin @('resource', 'pattern', 'utility') -or
                 -not $csvKeys.Add("$($output.ecosystem)/$($output.moduleType)")) {
                 throw [System.IO.InvalidDataException]::new('Duplicate or invalid catalog CSV ecosystem/module-type mapping.')
@@ -90,9 +98,16 @@ function Read-AvmCatalogConfiguration {
         $output['bundlePath'] = if ($null -eq $expectedDestination) { $output.file } else { "$expectedDestination/$($output.file)" }
         $output['targetPath'] = if ($null -ne $expectedDestination) { "$($configuration.destinations[$expectedDestination].path)/$($output.file)" } else { $null }
         $output['repository'] = if ($null -ne $expectedDestination) { $configuration.repositories[$expectedDestination] } else { $null }
+        if ($kind -eq 'csv') {
+            $output['sourcePath'] = "$($configuration.destinations[$expectedDestination].path)/$($output.sourceFile)"
+            $null = $basePaths.Add("$($output.repository)/$($output.sourcePath)")
+        }
         if (-not $bundlePaths.Add($output.bundlePath) -or
             ($null -ne $output.targetPath -and -not $targetPaths.Add("$($output.repository)/$($output.targetPath)"))) {
             throw [System.IO.InvalidDataException]::new('Catalog outputs contain duplicate bundle or publication paths.')
+        }
+        if ($null -ne $output.targetPath) {
+            $null = $basePaths.Add("$($output.repository)/$($output.targetPath)")
         }
         if ($kind -eq 'catalog') {
             if ($output['schema'] -isnot [string]) {
@@ -110,7 +125,7 @@ function Read-AvmCatalogConfiguration {
             throw [System.IO.InvalidDataException]::new("Catalog manifest requires exactly $expected '$kind' output(s).")
         }
     }
-    foreach ($paths in @($bundlePaths, $targetPaths)) {
+    foreach ($paths in @($bundlePaths, $basePaths)) {
         foreach ($candidatePath in $paths) {
             if (@($paths | Where-Object { $_.StartsWith("$candidatePath/", [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) {
                 throw [System.IO.InvalidDataException]::new("Catalog output file/directory paths collide: $candidatePath")
@@ -141,10 +156,19 @@ function Get-AvmCatalogPublicationPaths {
     $paths = [ordered]@{}
     foreach ($role in @('docs', 'tools')) {
         $files = [ordered]@{}
+        $basePaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($output in $Configuration.outputs | Where-Object { $_.destination -ceq $role }) {
             $files[$output.bundlePath] = $output.targetPath
+            $null = $basePaths.Add($output.targetPath)
+            if ($output.kind -ceq 'csv') {
+                $null = $basePaths.Add($output.sourcePath)
+            }
         }
-        $paths[$role] = [ordered]@{ repository = $Configuration.repositories[$role]; files = $files }
+        $paths[$role] = [ordered]@{
+            repository = $Configuration.repositories[$role]
+            files = $files
+            basePaths = Get-AvmCatalogOrdinal -Values @($basePaths)
+        }
     }
     return $paths
 }

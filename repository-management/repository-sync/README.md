@@ -49,10 +49,10 @@ continue using the existing `ARM_*` environment. State recovery forwards the
 state subscription explicitly. Keep workflow concurrency at one active run and
 do not run another state writer outside that workflow.
 
-`AVM_SYNC_PAUSED` is a **repository variable**, not an `avm` environment variable.
-When its value is `true`, scheduled and repository-dispatch runs are skipped.
-Manual runs remain available for operator-controlled canaries. Other workflows
-and module test identities are unaffected.
+Pause this workflow through GitHub's workflow disable control, not a repository
+variable. Disabling stops manual dispatch as well as automatic runs.
+Re-enabling permits scheduled and repository-dispatch applies too; obtain
+approval for that consequence before running manual canaries.
 
 ## Isolated branch testing
 
@@ -85,22 +85,19 @@ runtime state identity cross-tenant or provider-management permissions.
    values and is ignored by Git. For an already-deployed bootstrap with no local
    file, use the infrastructure README's read-only output recovery commands.
    The new backend variables may already be staged; leave original variables unchanged.
-2. Before merging the tools change, disable the workflow, set the pause flag,
+1. Before merging the tools change, disable the workflow
    and agree that no other
    operators will run manual sync or Terraform during the copy:
 
    ```powershell
    gh workflow disable repository-management-sync.yml --repo Azure/azure-verified-modules-tools
-   gh variable set AVM_SYNC_PAUSED --repo Azure/azure-verified-modules-tools --body true
    gh run list --repo Azure/azure-verified-modules-tools --workflow repository-management-sync.yml --limit 100
    ```
 
    Wait for **all** active, waiting, and queued runs to finish. Do not cancel a
    state writer or break a lease to speed up the migration.
-   Disabling is necessary while the original `main` workflow does not yet
-   honor `AVM_SYNC_PAUSED`. Keep the workflow disabled until the copy and merge
-   are complete.
-3. Run the copy below from the repository root on a trusted machine. It refuses
+   Keep the workflow disabled until the copy and merge are complete.
+1. Run the copy below from the repository root on a trusted machine. It refuses
    a populated destination, leased source blobs, unexpected blob names, and
    byte mismatches. Keep the protected local backup until cutover succeeds.
    Never upload state backups or plans as workflow artifacts or commit them.
@@ -181,7 +178,7 @@ runtime state identity cross-tenant or provider-management permissions.
    leases; retain the source account for historical recovery. If interrupted,
    leave automatic sync paused and reconcile the destination against the saved
    manifest rather than blindly rerunning or overwriting blobs.
-4. Still disabled, inspect `target-variables.json`, then set or confirm only the
+1. Still disabled, inspect `target-variables.json`, then set or confirm only the
    five backend values:
 
    ```powershell
@@ -202,13 +199,15 @@ runtime state identity cross-tenant or provider-management permissions.
    subscription variables unchanged. No state migration flags are needed during
    normal init: fresh workflow checkouts select the copied state by the unchanged
    `<repoId>.tfstate` key.
-   Merge the reviewed tools change under the cutover approval, then enable the
-   workflow while `AVM_SYNC_PAUSED` is still `true`:
+   Merge the reviewed tools change under the cutover approval. Re-enable the
+   workflow only after approval also covers scheduled/repository-dispatch
+   applies, and coordinate the manual canary outside the scheduled run times:
 
    ```powershell
    gh workflow enable repository-management-sync.yml --repo $repo
    ```
-5. Run a manual plan-only canary from `main` while automated sync remains paused:
+1. Run a manual plan-only canary from `main`. The enabled workflow can also run
+   automatically; do not assume this is a manual-only window:
 
    ```powershell
    gh workflow run repository-management-sync.yml --repo $repo --ref main `
@@ -221,13 +220,10 @@ runtime state identity cross-tenant or provider-management permissions.
    drift may still appear in the plan; migration itself must not change resource
    IDs. A successful plan exercises blob leases; never test recovery by breaking
    a live lease.
-6. After approval, run the same canary with `plan_only=false`. Confirm its state
+1. After approval, run the same canary with `plan_only=false`. Confirm its state
    is updated in TME and provider resources remain in the original tenant.
-   Then remove `AVM_SYNC_PAUSED` to resume normal scheduled sync:
-
-   ```powershell
-   gh variable delete AVM_SYNC_PAUSED --repo $repo
-   ```
+   Disable the workflow again if automatic writes must stop; re-enabling is
+   the control for resuming them.
 
    Retain the old account and its versions for the agreed recovery period.
    Securely remove the local state copies after approval. Record the final

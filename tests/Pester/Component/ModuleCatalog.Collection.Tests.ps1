@@ -6,6 +6,7 @@ BeforeAll {
     $catalogScripts = Join-Path $repoRoot 'repository-management' 'module-catalog' 'scripts'
     . (Join-Path $catalogScripts 'ModuleCatalog.ps1')
     . (Join-Path $catalogScripts 'ModuleCatalog.Collection.ps1')
+    . (Join-Path $catalogScripts 'ModuleCatalog.Publication.ps1')
     $originalOffline = $env:AVM_OFFLINE
 }
 
@@ -273,5 +274,50 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
             [pscustomobject]@{ StatusCode = 409; Content = '{"message":"Unexpected service state"}' }
         } -ParameterFilter { [string]$Uri -like '*/commits/main' }
         { Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false } | Should -Throw '*not a confirmed empty repository*'
+    }
+}
+
+Describe 'Component: module catalog preview inputs' -Tag Component {
+    It 'reads canonical CSVs rather than preview files and captures both sets of publication bases' {
+        $configuration = Read-AvmCatalogConfiguration
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $roots = @{ docs = Join-Path $root 'docs'; tools = Join-Path $root 'tools' }
+        $snapshot = Join-Path $root 'snapshot'
+        $originals = @{}
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar', 'tier-configuration') }) {
+            $sourcePath = if ($output.kind -eq 'csv') { $output.sourcePath } else { $output.targetPath }
+            $file = Join-Path $roots[$output.destination] $sourcePath
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
+            $text = if ($output.kind -eq 'csv') {
+                "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n"
+            }
+            elseif ($output.kind -eq 'mar') {
+                "[]`n"
+            }
+            else {
+                "{`"repositoryGroups`":[]}`n"
+            }
+            [System.IO.File]::WriteAllText($file, $text, [System.Text.UTF8Encoding]::new($false))
+            $originals[$sourcePath] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        $csvs = @($configuration.outputs | Where-Object kind -eq 'csv')
+        $oldPreview = Join-Path $roots.docs $csvs[0].targetPath
+        [System.IO.File]::WriteAllText($oldPreview, 'Not a CSV input.')
+        $previewHash = (Get-FileHash -LiteralPath $oldPreview -Algorithm SHA256).Hash.ToLowerInvariant()
+        $plan = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $snapshot
+        foreach ($csv in $csvs) {
+            $copied = Join-Path $snapshot 'legacy' $csv.sourceFile
+            (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $originals[$csv.sourcePath]
+            $plan.docs.baseFiles[$csv.sourcePath] | Should -BeExactly $originals[$csv.sourcePath]
+            Test-Path -LiteralPath (Join-Path $snapshot 'legacy' $csv.file) | Should -BeFalse
+            (Get-FileHash -LiteralPath (Join-Path $roots.docs $csv.sourcePath) -Algorithm SHA256).Hash.ToLowerInvariant() |
+                Should -BeExactly $originals[$csv.sourcePath]
+        }
+        $plan.docs.baseFiles[$csvs[0].targetPath] | Should -BeExactly $previewHash
+        $plan.docs.baseFiles[$csvs[1].targetPath] | Should -BeNullOrEmpty
+        { Assert-AvmCatalogPublicationBase -Root $roots.docs -BaseFiles $plan.docs.baseFiles } | Should -Not -Throw
+        [System.IO.File]::AppendAllText((Join-Path $roots.docs $csvs[0].sourcePath), 'new canonical input')
+        { Assert-AvmCatalogPublicationBase -Root $roots.docs -BaseFiles $plan.docs.baseFiles } | Should -Throw '*base changed*'
+        [System.IO.File]::ReadAllText($oldPreview) | Should -BeExactly 'Not a CSV input.'
     }
 }

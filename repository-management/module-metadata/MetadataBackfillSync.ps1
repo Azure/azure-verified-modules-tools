@@ -39,7 +39,7 @@ function Get-AvmRepositoryMetadataBackfillContext {
     if ($source.sha -cnotmatch '^[0-9a-f]{40}$') {
         throw [System.IO.InvalidDataException]::new('The metadata index commit is missing or invalid.')
     }
-    $file = Get-RepositoryFileAtCommit -Repository $configuration.repositories.docs -Path $index.targetPath -Sha $source.sha
+    $file = Get-RepositoryFileAtCommit -Repository $configuration.repositories.docs -Path $index.sourcePath -Sha $source.sha
     $records = @(ConvertFrom-AvmMetadataIndex -Content $file.Content)
     $matching = @($records | Where-Object { $_['ModuleName'] -ceq $moduleId -or $_['RepoURL'] -ceq "https://github.com/$orgAndRepoName" })
     if ($matching.Count -eq 0) {
