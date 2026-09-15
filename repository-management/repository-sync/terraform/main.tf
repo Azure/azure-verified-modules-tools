@@ -33,9 +33,9 @@ module "github" {
   github_teams                                        = var.github_teams
   github_avm_app_id                                   = var.github_avm_app_id
   labels                                              = local.labels
-  arm_client_id                                       = var.repository_creation_mode_enabled ? "" : module.azure[0].client_id
-  arm_tenant_id                                       = var.repository_creation_mode_enabled ? "" : module.azure[0].tenant_id
-  test_subscription_ids                               = var.repository_creation_mode_enabled ? [] : var.test_subscription_ids
+  arm_client_id                                       = local.test_settings.client_id
+  arm_tenant_id                                       = local.test_settings.tenant_id
+  test_subscription_ids                               = local.test_settings.test_subscription_ids
   module_id                                           = var.module_id
   module_name                                         = var.module_name
   copilot_agent_firewall_allow_list                   = var.github_copilot_agent_firewall_allow_list

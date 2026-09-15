@@ -418,6 +418,14 @@ infra/*.tfstate.*
 infra/*.tfplan
 infra/crash*.log
 
+# Repository-sync provider caches and local validation artifacts
+repository-management/repository-sync/**/.terraform/
+repository-management/repository-sync/**/.terraform.lock.hcl
+repository-management/repository-sync/**/*.tfstate
+repository-management/repository-sync/**/*.tfstate.*
+repository-management/repository-sync/**/*.tfplan
+repository-management/repository-sync/**/terraform.tfvars.json
+
 # VS Code files for those working on multiple tools
 .vscode/*
 !.vscode/settings.json

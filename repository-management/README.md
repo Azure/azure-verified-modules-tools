@@ -12,6 +12,121 @@ The current snapshot came from the legacy Terraform governance repository at com
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
 
+## Test tenant selection
+
+`testTenant` accepts only `legacy` or `bami`. The
+[Terraform configuration](repository-config/config.json) defaults to `legacy`
+and selects `bami` for the existing canary groups without changing their
+membership or managed-file promotion. Higher `order` wins; later declaration
+wins a tie. Missing settings retain `legacy`.
+
+[Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
+the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
+only one behavioral setting: `testTenant`. Initially only
+`avm/res/dev-test-lab/lab` selects `bami`.
+
+The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
+environment. There is one current BAMI tenant, not a profile catalog.
+
+| Variable | Purpose |
+| --- | --- |
+| `TEST_BAMI_TENANT_ID` | Candidate tenant |
+| `TEST_BAMI_CONTROLLER_CLIENT_ID` | Repository-identity provisioning only |
+| `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` | Subscription holding repository identities |
+| `TEST_BAMI_SUBSCRIPTION_IDS` | Exactly 28 unique `{name,id}` objects, encoded as JSON |
+| `TEST_BAMI_MANAGEMENT_GROUP_ID` | Test management-group name |
+| `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
+| `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
+| `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | Bicep persistent-resource subscription |
+
+Admin and Persistent must be different subscriptions, and neither may appear
+in the disposable test pool. The shared Bicep-only guard also rejects
+Persistent overlap without copying Admin into the Bicep projection.
+
+Terraform sync uses dedicated per-repository identities, never the controller
+or Bicep client as a test identity. It replaces the existing repository
+**secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
+same-named variables would not override the current consumers' secrets.
+Unselected repositories retain their existing settings. See the
+[candidate state and activation prerequisites](repository-sync/README.md#bami-candidate-identities).
+
+Bicep variable sync copies only the five execution fields: tenant, Bicep
+client, subscription pool, management group, and persistent subscription.
+It leaves all legacy values untouched. For temporary BAMI testing, it derives
+the repository variable `TEST_BAMI_MODULE_PATHS` from the central groups and
+publishes that JSON array last:
+
+```json
+["avm/res/dev-test-lab/lab"]
+```
+
+The array contains only canonical module paths whose resolved `testTenant` is
+`bami`. Missing or `[]` means legacy. Consumers directly check array membership
+for their canonical module path and alias the existing execution variables;
+there is no runtime Tools resolver action, consumer routing file, or per-module
+workflow-file synchronization. Selecting `legacy` in the central groups removes
+the path from the array. The five execution values remain strings, including
+the compact subscription-pool JSON.
+
+Tools rejects malformed arrays, duplicate/noncanonical paths, and incomplete
+candidate bundles before publication. Reserved-subscription and identity
+separation checks are unchanged.
+Successful variable readback is not proof of Azure authentication or permissions.
+Bicep activation also requires its own execution-identity federated credential
+for the intended subject
+`repository_owner_id:6844498:repository_id:447791597:environment:avm-validation`.
+That credential and runtime login remain unproved; do not reuse the
+Tools-controller credential or enable publication to work around this gate.
+
+### Bicep variable publication
+
+The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
+Tools `main`, manual dispatch with `enable_test_tenant_sync=true` (default
+false), and the **repository variable**
+`AVM_BAMI_TEST_TENANT_SYNC_ENABLED=true`. Keep this control out of the `avm`
+environment: [environment-level variables are unavailable during job admission](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence).
+Those gates also apply to planning. `plan_only=true` is the default and never
+writes variables; publication additionally requires `plan_only=false`.
+The App must separately be approved for Actions Variables (`actions_variables: write`) on
+`Azure/bicep-registry-modules`. Its variable token has no content, secret,
+workflow, or pull-request write permission.
+The pinned action's [generic permission-input parser](https://github.com/actions/create-github-app-token/blob/bcd2ba49218906704ab6c1aa796996da409d3eb1/lib/get-permissions-from-inputs.js)
+maps `permission-actions-variables: write` to `actions_variables: write`.
+Its manifest omits this input, so an undeclared-input warning can occur; the
+runner still passes it to the action. Do not use `permission-variables` or omit
+the explicit scope.
+
+The existing CODEOWNERS job still runs on manual dispatch. Setting
+`plan_only=false` also permits that job's existing merge behavior; review both
+effects before dispatching. No workflow is enabled by changing the central
+canary configuration alone.
+Merging does not activate BAMI with the gate off, but BAMI-selected Terraform
+canaries remain pending and skip normal repository sync; it is not a
+zero-behavior-change merge.
+
+[Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
+defaults to a read-only plan. Standalone publication requires an explicit,
+operator-approved `-Apply`; `-PlanOnly:$false` is rejected, and `-Apply -WhatIf`
+is write-free. The script uses the fixed central config and eight named
+environment variables, plus `GH_TOKEN`; it accepts no target or config-path
+override.
+
+All eight values are required even for plans and deactivation. The publisher
+checks snapshots around writes, verifies all five execution values, publishes
+the module-path array last, and verifies the result. A nonempty existing array
+freezes the execution values. Retargeting requires first publishing `[]` from
+an all-legacy central selection; that deactivation changes only the array and
+preserves the existing execution values. A subsequent inactive run can publish
+the new bundle and desired selection.
+
+Do not run other variable writers alongside the serialized workflow. GitHub
+variables cannot be updated conditionally as one transaction: snapshot checks
+detect observed edits but cannot eliminate races between reads and writes.
+Failures never trigger write retries or rollback. Even a matching readback
+after a lost response is reported as an error, so a failed run may already have
+published the selector. Inspect the consumer before retrying. `Published`
+means verified variable contents, not working Azure authentication.
+
 ## Terraform CODEOWNERS
 
 Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)
