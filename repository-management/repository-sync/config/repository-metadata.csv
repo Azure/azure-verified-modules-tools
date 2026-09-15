@@ -147,6 +147,7 @@ avm-res-managedservices-registrationdefinition,Microsoft.ManagedServices,registr
 avm-res-management-managementgroup,Microsoft.Management,managementGroups,Management Groups,,herms14,Hermes Miraflor II,,,false
 avm-res-management-servicegroup,Microsoft.Management,serviceGroups,Service Group,,haflidif,Haflidi Fridthjofsson,,,false
 avm-res-mission-community,Microsoft.Mission,communities,Azure Enclave Community,,SvenAelterman,Sven Aelterman,,,false
+avm-res-mission-virtualenclave,Microsoft.Mission,virtualEnclaves,Azure Enclave Virtual Enclave,,SvenAelterman,Sven Aelterman,,,false
 avm-res-netapp-netappaccount,Microsoft.NetApp,netAppAccounts,Azure NetApp File,,jtracey93,Jack Tracey,,,false
 avm-res-network-applicationgateway,Microsoft.Network,applicationGateways,Application Gateway,App GW,mofaizal,Mohamed Faizal,,,false
 avm-res-network-applicationgatewaywebapplicationfirewallpolicy,Microsoft.Network,ApplicationGatewayWebApplicationFirewallPolicies,Application Gateway Web Application Firewall (WAF) Policy,,mofaizal,Mohamed Faizal,,,false
