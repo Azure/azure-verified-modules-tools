@@ -9,6 +9,59 @@ Describe 'terraform-module reusable workflow' {
         $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
         $script:e2eJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  pr-check:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the pr-check job block.' }
+        $script:prCheckJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  pr-check-fork:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the pr-check-fork job block.' }
+        $script:prCheckForkJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  unit-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the unit-test job block.' }
+        $script:unitTestJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  integration-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the integration-test job block.' }
+        $script:integrationTestJob = $jobMatch.Value
+
+        $jobMatch = [regex]::Match($script:workflow, '(?ms)^  discover-examples:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $jobMatch.Success) { throw 'Could not isolate the discover-examples job block.' }
+        $script:discoverExamplesJob = $jobMatch.Value
+    }
+
+    It 'keeps the authoritative pr-check credentialled and restricted to branch pull requests' {
+        $script:prCheckJob | Should -Match 'if:\s*github\.event\.pull_request\.head\.repo\.fork == false'
+        $script:prCheckJob | Should -Match '(?m)^\s*needs:\s*subscriptions\s*$'
+        $script:prCheckJob | Should -Match '(?m)^\s*environment:\s*pr-check\s*$'
+        $script:prCheckJob | Should -Match 'id-token:\s*write'
+        $script:prCheckJob | Should -Match 'ARM_OIDC_REQUEST_TOKEN'
+        $script:prCheckJob | Should -Match 'ARM_OIDC_REQUEST_URL'
+        $script:prCheckJob | Should -Match 'SELECTED_SUBSCRIPTION_ID:\s*\$\{\{ needs\.subscriptions\.outputs\.subscriptionId \}\}'
+        $script:prCheckJob | Should -Match 'ARM_SUBSCRIPTION_ID_OVERRIDE'
+        $script:prCheckJob | Should -Match '(?m)^\s*avm pr-check\s*$'
+    }
+
+    It 'runs a separate credential-free pr-check for fork pull requests' {
+        $script:prCheckForkJob | Should -Match 'if:\s*github\.event\.pull_request\.head\.repo\.fork == true'
+        $script:prCheckForkJob | Should -Not -Match '(?m)^\s*needs:'
+        $script:prCheckForkJob | Should -Not -Match 'id-token:\s*write'
+        $script:prCheckForkJob | Should -Match '(?m)^\s*contents:\s*read\s*$'
+        $script:prCheckForkJob | Should -Not -Match 'ARM_OIDC_REQUEST_(TOKEN|URL)'
+        $script:prCheckForkJob | Should -Not -Match 'SELECTED_SUBSCRIPTION_ID'
+        $script:prCheckForkJob | Should -Not -Match 'needs\.subscriptions'
+        $script:prCheckForkJob | Should -Match '(?m)^\s*environment:\s*no-approval\s*$'
+        $script:prCheckForkJob | Should -Match '(?m)^\s*avm pr-check\s*$'
+    }
+
+    It 'runs unit tests for forks while keeping credentialled tiers trusted-only' {
+        $script:unitTestJob | Should -Not -Match 'github\.event\.pull_request\.head\.repo\.fork'
+        $script:unitTestJob | Should -Match '(?m)^\s*avm test unit\s*$'
+        $script:integrationTestJob | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
+        $script:discoverExamplesJob | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
+        $script:e2eJob | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
+        $script:prCheckForkJob | Should -Not -Match 'avm test integration|avm test e2e'
     }
 
     It 'passes the non-secret subscription ID as a job output without masking it' {
