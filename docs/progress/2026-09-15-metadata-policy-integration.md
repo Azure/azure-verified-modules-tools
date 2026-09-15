@@ -46,6 +46,10 @@ Preserve both generators, the existing CI fixes, and the final engineering-only
 - [Azure/bicep-registry-modules#7349](https://github.com/Azure/bicep-registry-modules/pull/7349)
   must land before the metadata-protecting Bicep generator may run. Bicep
   `main`'s old governance tests reject the additional final metadata rule.
+- Resume Bicep Sync only after both that registry change and
+  [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) merge,
+  with fresh full checks passing on their final heads. The old tools static
+  guard also rejects target content after the metadata rule is adopted.
 - Keep Bicep Sync disabled throughout that incompatible interval, starting
   before [#113](https://github.com/Azure/azure-verified-modules-tools/pull/113)
   merges. That separate change intentionally removes the old enable-variable

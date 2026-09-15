@@ -81,8 +81,12 @@ writes; manual plans remain available.
 **Metadata rollout ordering:** land
 [Azure/bicep-registry-modules#7349](https://github.com/Azure/bicep-registry-modules/pull/7349)
 before allowing the metadata-protecting Bicep generator to run. The old registry
-governance tests reject its additional final metadata rule. Keep Bicep Sync
-disabled throughout this incompatible interval, starting before
+governance tests reject its additional final metadata rule, and the old tools
+static guard rejects registry content after that rule is adopted. Resume Bicep
+Sync only after both the registry change and
+[#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) have merged,
+with fresh full checks passing on their final heads. Keep Bicep Sync disabled
+throughout this incompatible interval, starting before
 [#113](https://github.com/Azure/azure-verified-modules-tools/pull/113) merges:
 that separate metadata implementation intentionally removes the old
 `AVM_CODEOWNERS_SYNC_ENABLED` gate. Setting that variable to `false` is not
