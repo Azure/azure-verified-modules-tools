@@ -266,7 +266,9 @@ function Invoke-RepositorySyncProcess {
     param(
         [Parameter(Mandatory)] [string] $Command,
         [Parameter(Mandatory)] [string[]] $Arguments,
-        [string] $WorkingDirectory
+        [string] $WorkingDirectory,
+        [hashtable] $EnvVars = @{},
+        [ValidateRange(1, 3600)] [int] $TimeoutSec = 300
     )
 
     $module = Get-Module Avm.Authoring | Select-Object -First 1
@@ -274,16 +276,16 @@ function Invoke-RepositorySyncProcess {
         throw [System.InvalidOperationException]::new('Import Avm.Authoring before invoking repository-sync commands.')
     }
     $executable = (Get-Command -Name $Command -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $environment = $EnvVars.Clone()
+    $environment.GH_HOST = 'github.com'
+    $environment.GITHUB_TOKEN = $null
+    $environment.GH_DEBUG = $null
+    $environment.GH_PROMPT_DISABLED = '1'
     return & $module {
-        param($Executable, $Arguments, $Directory)
+        param($Executable, $Arguments, $Directory, $Environment, $Timeout)
         Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
-            -TimeoutSec 300 -IgnoreExitCode -EnvVars @{
-                GH_HOST = 'github.com'
-                GITHUB_TOKEN = $null
-                GH_DEBUG = $null
-                GH_PROMPT_DISABLED = '1'
-            }
-    } $executable $Arguments $WorkingDirectory
+            -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment
+    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec
 }
 
 function Invoke-RepositoryGitHub {

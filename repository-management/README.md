@@ -12,6 +12,72 @@ The current snapshot came from the legacy Terraform governance repository at com
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
 
+## Test tenant selection
+
+`testTenant` accepts only `legacy` or `bami`. The
+[Terraform configuration](repository-config/config.json) defaults to `legacy`
+and selects `bami` for the existing canary groups without changing their
+membership or managed-file promotion. Higher `order` wins; later declaration
+wins a tie. Missing settings retain `legacy`.
+
+[Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
+the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
+only one behavioral setting: `testTenant`. Initially only
+`avm/res/network/front-door` selects `bami`.
+
+The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
+environment. There is one current BAMI tenant, not a profile catalog.
+
+| Variable | Purpose |
+| --- | --- |
+| `TEST_BAMI_TENANT_ID` | Candidate tenant |
+| `TEST_BAMI_CONTROLLER_CLIENT_ID` | Repository-identity provisioning only |
+| `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` | Subscription holding repository identities |
+| `TEST_BAMI_SUBSCRIPTION_IDS` | Exactly 28 unique `{name,id}` objects, encoded as JSON |
+| `TEST_BAMI_MANAGEMENT_GROUP_ID` | Test management-group name |
+| `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
+| `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
+| `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | Bicep persistent-resource subscription |
+
+Terraform sync uses dedicated per-repository identities, never the controller
+or Bicep client as a test identity. It replaces the existing repository
+**secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
+same-named variables would not override the current consumers' secrets.
+Unselected repositories retain their existing settings. See the
+[candidate state and activation prerequisites](repository-sync/README.md#bami-candidate-identities).
+
+Bicep variable sync copies only the five execution fields: tenant, Bicep
+client, subscription pool, management group, and persistent subscription.
+It leaves all legacy values untouched. It derives `TEST_BAMI_MODULE_CONFIG`
+from the central groups and publishes that metadata last:
+
+```json
+{"default":"legacy","modules":{"avm/res/network/front-door":"bami"}}
+```
+
+The [resolver action](test-tenant/actions/resolve-test-tenant/action.yml) must
+be referenced at a reviewed literal commit SHA.
+
+| Action contract | Value |
+| --- | --- |
+| `module-path` input | Canonical `avm/{res,ptn,utl}/{provider}/{module}`, or a safe descendant/test path |
+| `module-config` input | `TEST_BAMI_MODULE_CONFIG`; absent means legacy |
+| `bami-settings` input | JSON object containing the five execution variables |
+| `test-tenant` output | Exactly `legacy` or `bami` |
+| `settings-json` output | Complete normalized BAMI tuple, or `{}` for legacy |
+
+The shared `Resolve-AvmTestTenant` helper in
+[TestTenant.ps1](shared/TestTenant.ps1) takes `ModulePath`, `ModuleConfigJson`,
+and `BamiSettingsJson`, returning `TestTenant` and `Settings`. Settings values
+are strings, including the compact subscription-pool JSON. Invalid metadata or
+an incomplete explicit BAMI tuple fails rather than falling back field by field.
+Successful variable readback is not proof of Azure authentication or permissions.
+Bicep activation also requires its own execution-identity federated credential
+for the intended subject
+`repository_owner_id:6844498:repository_id:447791597:environment:avm-validation`.
+That credential and runtime login remain unproved; do not reuse the
+Tools-controller credential or enable publication to work around this gate.
+
 ## Terraform CODEOWNERS
 
 Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)

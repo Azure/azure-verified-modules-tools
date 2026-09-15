@@ -1,0 +1,35 @@
+name: Resolve AVM test tenant
+description: Resolve central legacy or BAMI selection and validate the complete BAMI execution bundle.
+inputs:
+  module-path:
+    description: Canonical top-level AVM module path or a descendant test path.
+    required: true
+  module-config:
+    description: Derived TEST_BAMI_MODULE_CONFIG JSON. Empty means legacy.
+    default: ''
+  bami-settings:
+    description: JSON object containing the five Bicep TEST_BAMI execution variables.
+    default: ''
+outputs:
+  test-tenant:
+    description: Exactly legacy or bami.
+    value: ${{ steps.resolve.outputs.test-tenant }}
+  settings-json:
+    description: Complete normalized BAMI execution variables, or an empty object for legacy.
+    value: ${{ steps.resolve.outputs.settings-json }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve test tenant
+      id: resolve
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_MODULE_PATH: ${{ inputs.module-path }}
+        AVM_MODULE_CONFIG: ${{ inputs.module-config }}
+        AVM_BAMI_SETTINGS: ${{ inputs.bami-settings }}
+      run: |
+        & (Join-Path $env:AVM_ACTION_PATH 'Resolve-TestTenant.ps1') `
+          -ModulePath $env:AVM_MODULE_PATH `
+          -ModuleConfigJson $env:AVM_MODULE_CONFIG `
+          -BamiSettingsJson $env:AVM_BAMI_SETTINGS

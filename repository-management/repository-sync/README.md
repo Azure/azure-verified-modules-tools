@@ -54,6 +54,48 @@ When its value is `true`, scheduled and repository-dispatch runs are skipped.
 Manual runs remain available for operator-controlled canaries. Other workflows
 and module test identities are unaffected.
 
+## BAMI candidate identities
+
+`AVM_BAMI_TEST_TENANT_SYNC_ENABLED` in the Tools `avm` environment defaults off.
+Until explicitly enabled, canary configuration does not retarget existing test
+settings. Enabling it permits selected repositories to use the
+[complete BAMI bundle](../README.md#test-tenant-selection) on trusted `main`
+runs, including subsequent scheduled syncs.
+
+The [candidate root](bami-identity/main.tf) reuses the Azure identity module
+only for selected repositories. Each candidate has its own
+`bami-identities/<tenantGuid>/<repoId>.tfstate` key in the **same configured TME
+backend**. The legacy `<repoId>.tfstate`, `module.azure[0]`, provider `ARM_*`,
+`ARM_BACKEND_*`, and `STORAGE_ACCOUNT_*` settings remain unchanged. Switching
+the central selection back to `legacy` restores legacy consumer secrets
+without touching candidate identities or state. A later candidate tenant uses
+a different internal key; it does not replace the previous tenant's identities.
+
+Plan-only never applies to obtain a client ID. If the candidate ID is still
+unknown, the run reports `PendingCandidateIdentity` and leaves the consumer
+update pending. Apply uses only a saved plan checked for the complete bounded
+identity scope, no deletes/replacements, and the required delegation deny
+condition. Failed or uncertain applies do not trigger automatic state repair,
+state imports, or apply retries.
+
+Before any operator-approved activation, verify the
+[Owner delegation fix](https://github.com/Azure/azure-verified-modules-tools/pull/111)
+has landed: Owner, User Access Administrator, and RBAC Administrator must all
+be denied for delegation in both write and delete clauses. The current
+candidate plan guard rejects the older condition. Verify controller federation,
+identity/FIC permissions, constrained management-group role assignment, and
+lookup/membership access to
+`grp-sec-avm-tf-end-to-end-testing-entra-readers`. The group exists in BAMI, but
+controller directory-role assignment alone does not establish Graph API
+readiness; lookup and membership operations remain unproved.
+
+Keep scheduled sync paused while approving the first repository-scoped plan
+and cutover. Explicit `ARM_*_OVERRIDE` values and environment-level secrets
+retain their existing consumer precedence; audit them before activating a
+canary. Do not run another writer outside the serialized sync workflow.
+Do not change the backend, move state, grant permissions, or reuse the
+controller as an execution identity to bypass a failed prerequisite.
+
 ## Isolated branch testing
 
 After an approved snapshot copy, test the migration branch explicitly without
