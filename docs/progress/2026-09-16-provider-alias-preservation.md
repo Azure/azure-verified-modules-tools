@@ -22,10 +22,25 @@ gates, target constraints, and unrelated provider entries unchanged.
 - [x] Pass targeted integration tests with a compatible real MAPOTF binary.
 - [x] Cover the public Fabric workspace proposal with representative Fabric
       and AzAPI aliases, resource/data references, upgrades, and idempotence.
+- [x] Verify official MAPOTF 0.2.0 archive/signature provenance and run all 31 cases.
 - [ ] Pin a compatible MAPOTF release with verified release archive hashes.
 
 ## Validation
 
+- The official [MAPOTF 0.2.0 release](https://github.com/Azure/mapotf/releases/tag/v0.2.0)
+  is now published. Its Windows amd64 executable passes 21 of the same 31
+  integration cases, with ten failures and no skips. All original cases and
+  compliant aliases pass; the nine matrix upgrades and the Fabric/AzAPI upgrade
+  still drop aliases. It reports commit `4a12a4858c9674bcb3a8470cafe9a4a02c118746`,
+  built `2026-09-16T08:03:50Z`, and does not contain the object-merge capability.
+- Before executing that release, the downloaded Windows archive SHA-256 matched
+  both official `checksums.txt` and GitHub's asset digest:
+  `27a68df04493d723f3e53e9a4c995e8898861945cdc3201e18847b753c00547a`.
+  Windows Authenticode reported `Valid`, signed and timestamped by Microsoft.
+  The executable SHA-256 is
+  `60df09f4e98b9f6cd1d640cbc1bcd3ae2638037afae5a6f21a4b3b27e6013213`.
+  The release ran from isolated session storage, not the managed cache; the
+  existing managed MAPOTF files and pins were unchanged after testing.
 - All 31 integration cases pass, with no failures or skips, against the real
   development executable from
   [Azure/mapotf@b40b96c](https://github.com/Azure/mapotf/commit/b40b96c59cc36b78248808f944a3dc12479a81d3).
@@ -40,7 +55,8 @@ gates, target constraints, and unrelated provider entries unchanged.
 - The representative Fabric case checks the complete Fabric requirement,
   workspace/resource and existing-capacity/data provider references, and AzAPI
   networking/resource and client-config/data references. Both compliant and
-  upgraded constraints pass without reading private source.
+  upgraded constraints pass on the object-merge development build without
+  reading private source; the official 0.2.0 upgrade remains failing.
 - The tests compare Terraform-formatted copies for expected metadata and
   untouched content, and compare original files byte-for-byte between MAPOTF
   passes for idempotence. `terraform providers` checks the real alias syntax.
@@ -51,7 +67,7 @@ gates, target constraints, and unrelated provider entries unchanged.
 The targeted run uses the repository build entry point:
 
 ```powershell
-$env:AVM_MAPOTF_TEST_BINARY = '<absolute path to the verified development executable>'
+$env:AVM_MAPOTF_TEST_BINARY = '<absolute path to the verified executable>'
 $PesterPreference = @{ Run = @{ TestExtension = 'MapotfProviderRequirements.Integration.Tests.ps1' } }
 .\build.ps1 integration
 ```
@@ -64,8 +80,9 @@ execution is real, and no managed cache entry or release pin is fabricated.
 - Release adoption remains blocked: a published MAPOTF release must contain
   [Azure/mapotf#129](https://github.com/Azure/mapotf/pull/129), including the
   opt-in `merge_object_attributes` implementation, and provide all six verified
-  archive hashes. MAPOTF 0.2.0 alone is insufficient and still has no assets.
-  The existing 0.1.12 pin and hashes remain unchanged.
+  archive hashes. Official MAPOTF 0.2.0 is published and verified but fails all
+  ten alias-upgrade regressions; it is not a compatible release. The existing
+  0.1.12 pin and hashes remain unchanged.
 - Keep [the tools change](https://github.com/Azure/azure-verified-modules-tools/pull/124)
   draft until that release is pinned and the native suite passes against it.
 - Following the user's updated instruction, cover the public pattern in
