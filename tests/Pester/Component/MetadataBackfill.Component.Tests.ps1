@@ -58,8 +58,9 @@ Describe 'Component: automatic metadata file creation' -Tag Component {
         $metadata = Get-Content (Join-Path $fixture.Root 'metadata.json') -Raw | ConvertFrom-Json
         $metadata.moduleDescription | Should -Be 'Creates the example resources.'
         $metadata.canonicalType | Should -Be 'Microsoft.Storage/storageAccounts'
-        $metadata.owners.individuals.githubHandle | Should -Be @('first-owner', 'second-owner')
-        $metadata.tier | Should -Be 'maintained'
+        $metadata.owners | Should -Be @('first-owner', 'second-owner')
+        $metadata.PSObject.Properties.Name | Should -Not -Contain 'tier'
+        $metadata.PSObject.Properties.Name | Should -Not -Contain 'schemaVersion'
         Test-Path (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
         Test-Path (Join-Path $script:adapterRoot 'reviewed-seeds.json') | Should -BeFalse
     }
@@ -205,8 +206,8 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
             -Ecosystem terraform -ModuleType resource -LegacyRecord $fixture.Records `
             -OwnerGitHubHandle @('FIRST-OWNER', 'third-owner', 'fourth-owner') -SkipModuleVersionCheck
         $result.Status | Should -Be 'pass'
-        $result.Metadata.owners.individuals.githubHandle | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner')
-        foreach ($owner in $result.Metadata.owners.individuals) { @($owner.Keys) | Should -Be @('githubHandle') }
+        $result.Metadata.owners | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner')
+        foreach ($owner in $result.Metadata.owners) { $owner | Should -BeOfType ([string]) }
     }
 
     It 'does not invent an owner when both the index and source are unowned' {
@@ -216,6 +217,6 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         $parameters = $fixture.Parameters
         $null = & $script:initialize @parameters
         $metadata = Get-Content (Join-Path $fixture.Root 'metadata.json') -Raw | ConvertFrom-Json
-        $metadata.owners.individuals.Count | Should -Be 0
+        $metadata.owners.Count | Should -Be 0
     }
 }

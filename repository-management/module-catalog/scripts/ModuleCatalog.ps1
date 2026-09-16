@@ -4,6 +4,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Configuration.ps1')
+. (Join-Path $PSScriptRoot 'ModuleCatalog.Lifecycle.ps1')
 
 function ConvertTo-AvmCatalogJson {
     [CmdletBinding()]
@@ -91,6 +92,7 @@ function New-AvmCatalogIdentity {
         FamilyModule = $ModulePath
         Directory    = $null
         Metadata     = $null
+        Deprecated   = $false
     }
 }
 
@@ -134,12 +136,14 @@ function Get-AvmCatalogSources {
             throw [System.IO.InvalidDataException]::new("Bicep module has no main.bicep: $modulePath")
         }
         $identity.Directory = $directory
+        $identity.Deprecated = Test-AvmCatalogDeprecationMarker -Path $directory
         $ancestor = $modulePath
         while ($ancestor.Contains('/')) {
             $ancestor = $ancestor.Substring(0, $ancestor.LastIndexOf('/'))
             if ($bicepByPath.ContainsKey($ancestor)) {
                 $identity.ParentModule = $ancestor
                 $identity.FamilyModule = $bicepByPath[$ancestor].FamilyModule
+                $identity.Deprecated = $identity.Deprecated -or $bicepByPath[$ancestor].Deprecated
                 break
             }
         }
@@ -365,8 +369,7 @@ function New-AvmCatalogRecord {
         moduleDescription       = [string]$Data.moduleDescription
         alternativeNames        = @($Data.alternativeNames)
         comments                = [string]$Data.comments
-        tier                    = $Data.tier
-        owners                  = $Data.owners
+        owners                  = @($Data.owners)
         telemetryIdPrefix       = $Data.telemetryIdPrefix
         publicRegistryReference = $Identity.Reference
         registry                = $null
@@ -406,7 +409,7 @@ function Get-AvmCatalogInventory {
 
     foreach ($output in $csvOutputs) {
         $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.sourceFile)
-        foreach ($column in @('Tier', 'CanonicalType')) {
+        foreach ($column in @('CanonicalType')) {
             if ($table.Headers -contains $column -and $table.Headers -cnotcontains $column) {
                 throw [System.IO.InvalidDataException]::new("Reserved catalog column must use exact casing: $column in $($output.sourceFile)")
             }
@@ -450,7 +453,7 @@ function Get-AvmCatalogInventory {
                 }
                 $canonical = Get-AvmCatalogLegacyCanonicalType -Row $row -Identity $identity
                 $row['CanonicalType'] = $canonical
-                $owners = [ordered]@{ individuals = @(); team = '' }
+                $owners = [System.Collections.Generic.List[string]]::new()
                 $handles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
                 foreach ($column in @('PrimaryModuleOwnerGHHandle', 'SecondaryModuleOwnerGHHandle')) {
                     $handle = [string]$row[$column]
@@ -459,7 +462,7 @@ function Get-AvmCatalogInventory {
                             throw [System.ArgumentException]::new("Legacy $column is not a GitHub handle.")
                         }
                         if ($handles.Add($handle)) {
-                            $owners.individuals += [ordered]@{ githubHandle = $handle }
+                            $owners.Add($handle)
                         }
                     }
                 }
@@ -468,11 +471,7 @@ function Get-AvmCatalogInventory {
                     if ($team -cnotmatch '^@[A-Za-z0-9-]+/[a-z0-9]+(-[a-z0-9]+)*$') {
                         throw [System.ArgumentException]::new('Legacy ModuleOwnersGHTeam is not a GitHub team handle.')
                     }
-                    $owners.team = $team
-                }
-                $tier = if ($row['Tier']) { $row['Tier'] } else { $null }
-                if ($null -ne $tier -and $tier -cnotin @('core', 'maintained')) {
-                    throw [System.ArgumentException]::new('Legacy Tier requires a reviewed core/maintained value.')
+                    $owners.Add($team)
                 }
                 $data = [ordered]@{
                     canonicalType = $canonical
@@ -480,8 +479,7 @@ function Get-AvmCatalogInventory {
                     moduleDescription = [string]$row.Description
                     alternativeNames = @(([string]$row['AlternativeNames'] -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
                     comments = [string]$row['Comments']
-                    tier = $tier
-                    owners = $owners
+                    owners = $owners.ToArray()
                     telemetryIdPrefix = if ($row['TelemetryIdPrefix']) { [string]$row['TelemetryIdPrefix'] } else { $null }
                 }
                 $itemsByKey[$identity.Key] = [pscustomobject]@{
@@ -511,11 +509,7 @@ function Get-AvmCatalogInventory {
             moduleDescription = $metadata.moduleDescription
             alternativeNames = @(if ($rootMetadata.Contains('alternativeNames')) { $rootMetadata.alternativeNames })
             comments = if ($rootMetadata.Contains('comments')) { [string]$rootMetadata.comments } else { '' }
-            tier = $rootMetadata.tier
-            owners = [ordered]@{
-                individuals = @($rootMetadata.owners.individuals | ForEach-Object { [ordered]@{ githubHandle = $_.githubHandle } })
-                team = if ($rootMetadata.owners.Contains('team')) { [string]$rootMetadata.owners.team } else { '' }
-            }
+            owners = @($rootMetadata.owners)
             telemetryIdPrefix = if ($metadata.Contains('telemetryIdPrefix')) { $metadata.telemetryIdPrefix } else { $null }
         }
         if (-not $itemsByKey.ContainsKey($source.Key)) {
@@ -531,11 +525,21 @@ function Get-AvmCatalogInventory {
     }
 
     foreach ($item in $itemsByKey.Values) {
+        if ($item.Identity.Ecosystem -eq 'bicep' -and -not $item.Identity.Deprecated) {
+            $ancestor = $item.Identity.ModulePath
+            while ($ancestor.Contains('/')) {
+                $ancestor = $ancestor.Substring(0, $ancestor.LastIndexOf('/'))
+                $ancestorKey = Get-AvmCatalogKey -Ecosystem bicep -Repository $item.Identity.Repository -ModulePath $ancestor
+                if ($sourcesByKey.ContainsKey($ancestorKey) -and $sourcesByKey[$ancestorKey].Deprecated) {
+                    $item.Identity.Deprecated = $true
+                    break
+                }
+            }
+        }
         if ($item.Record.metadataSource -eq 'legacy' -and $null -ne $item.Identity.ParentModule) {
             $familyKey = Get-AvmCatalogKey -Ecosystem $item.Identity.Ecosystem -Repository $item.Identity.Repository -ModulePath $item.Identity.FamilyModule
             if ($itemsByKey.ContainsKey($familyKey)) {
                 $item.Record.owners = $itemsByKey[$familyKey].Record.owners
-                $item.Record.tier = $itemsByKey[$familyKey].Record.tier
             }
             elseif ([string]$item.Row['ModuleOwnersGHTeam'] -eq 'same as parent') {
                 $unresolved.Add([ordered]@{
@@ -579,14 +583,13 @@ function Get-AvmCatalogInventory {
 
 function Resolve-AvmCatalogOwnerProfiles {
     [CmdletBinding()]
-    param([System.Collections.IDictionary] $Owners, [System.Collections.IDictionary] $Cache)
+    param([AllowEmptyCollection()][string[]] $Owners, [System.Collections.IDictionary] $Cache)
 
     if ($Cache['users'] -isnot [System.Collections.IDictionary] -or $Cache['teams'] -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('GitHub cache requires users and teams dictionaries.')
     }
     $names = [System.Collections.Generic.List[string]]::new()
-    foreach ($owner in $Owners.individuals) {
-        $handle = $owner.githubHandle
+    foreach ($handle in @($Owners | Where-Object { -not $_.StartsWith('@') })) {
         if (-not $Cache.users.Contains($handle)) {
             throw [System.IO.InvalidDataException]::new("GitHub profile cache is missing owner $handle.")
         }
@@ -597,8 +600,7 @@ function Resolve-AvmCatalogOwnerProfiles {
         }
         $names.Add([string]$profile.name)
     }
-    if ($Owners.team) {
-        $team = [string]$Owners.team
+    foreach ($team in @($Owners | Where-Object { $_.StartsWith('@') })) {
         $parts = $team.Substring(1).Split('/')
         if ($parts[0] -cne 'Azure' -or -not $Cache.teams.Contains($team)) {
             throw [System.IO.InvalidDataException]::new("GitHub team cache is missing Azure owner team $team.")
@@ -611,66 +613,13 @@ function Resolve-AvmCatalogOwnerProfiles {
     return ,$names.ToArray()
 }
 
-function ConvertTo-AvmCatalogTierConfiguration {
-    [CmdletBinding()]
-    param([System.Collections.IDictionary] $Configuration, [object] $Inventory)
-
-    $copy = ConvertFrom-Json -InputObject (ConvertTo-AvmCatalogJson -Value $Configuration) -AsHashtable -Depth 100
-    $tiers = @{}
-    foreach ($item in $Inventory.Items) {
-        if ($item.Record.ecosystem -ne 'terraform' -or $item.Record.modulePath -ne '.' -or $item.Record.metadataSource -ne 'metadata') {
-            continue
-        }
-        $id = $item.Identity.RepositoryId
-        if ($tiers.ContainsKey($id) -and $tiers[$id] -cne $item.Record.tier) {
-            throw [System.IO.InvalidDataException]::new("Provider variants of $id have conflicting tiers; repository groups cannot represent provider-specific membership.")
-        }
-        $tiers[$id] = $item.Record.tier
-    }
-    if ($tiers.Count -eq 0) {
-        return $copy
-    }
-    $groups = @{}
-    foreach ($number in 1..3) {
-        $name = "azure-verified-modules-tier-$number"
-        $found = @($copy.repositoryGroups | Where-Object { $_.name -ceq $name })
-        if ($found.Count -ne 1 -or $found[0].repositories -isnot [array]) {
-            throw [System.IO.InvalidDataException]::new("Expected exactly one tier group with a repositories array: $name")
-        }
-        if (@($found[0].repositories | Where-Object { $_ -isnot [string] -or $_.Contains('*') }).Count -gt 0) {
-            throw [System.IO.InvalidDataException]::new("Wildcard or invalid tier membership cannot be regenerated safely: $name")
-        }
-        $groups[$number] = $found[0]
-    }
-    foreach ($missing in $Inventory.Report.missingMetadata) {
-        if ($missing.ecosystem -eq 'terraform' -and $missing.modulePath -eq '.') {
-            $source = New-AvmCatalogIdentity -Ecosystem terraform -Repository $missing.repository -ModulePath '.'
-            if (-not $tiers.ContainsKey($source.RepositoryId)) {
-                continue
-            }
-            $target = if ($tiers[$source.RepositoryId] -eq 'core') { 1 } else { 2 }
-            $memberships = @(1..3 | Where-Object { $groups[$_].repositories -contains $source.RepositoryId })
-            if ($memberships.Count -ne 1 -or $memberships[0] -ne $target) {
-                throw [System.IO.InvalidDataException]::new("Tier update would change unadopted provider variant $($source.Repository); migrate the variants together.")
-            }
-        }
-    }
-    foreach ($number in 1..3) {
-        $remaining = @($groups[$number].repositories | Where-Object { -not $tiers.ContainsKey($_) })
-        $adopted = @($tiers.Keys | Where-Object { ($number -eq 1 -and $tiers[$_] -eq 'core') -or ($number -eq 2 -and $tiers[$_] -eq 'maintained') })
-        $sortedAdopted = Get-AvmCatalogOrdinal -Values $adopted
-        $groups[$number].repositories = @($remaining) + $sortedAdopted
-    }
-    return $copy
-}
-
 function New-AvmCatalogBundle {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object] $Inventory,
         [Parameter(Mandatory)][System.Collections.IDictionary] $Registry,
         [Parameter(Mandatory)][System.Collections.IDictionary] $GitHub,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $RepositoryConfiguration,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $RepositoryRevisions,
         [string] $SchemaPath
     )
 
@@ -680,6 +629,7 @@ function New-AvmCatalogBundle {
         $SchemaPath = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))) $catalogOutput.schema
     }
     $schema = Read-AvmCatalogJson -Path $SchemaPath
+    $archivedRepositories = Get-AvmCatalogArchivedRepositories -RepositoryRevisions $RepositoryRevisions
     $modules = [System.Collections.Specialized.OrderedDictionary]::new([StringComparer]::Ordinal)
     $canonicalTypes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($item in $Inventory.Items) {
@@ -694,10 +644,19 @@ function New-AvmCatalogBundle {
             throw [System.IO.InvalidDataException]::new("Registry snapshot is incomplete: $($item.Identity.Key)")
         }
         $record.registry = $Registry[$item.Identity.Key]
-        $record.moduleStatus = if ([string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
+        if ($record.ecosystem -eq 'terraform' -and -not $archivedRepositories.ContainsKey($record.repository)) {
+            throw [System.IO.InvalidDataException]::new("Repository archive snapshot is incomplete: $($record.repository). Collect a new snapshot.")
+        }
+        $deprecated = if ($record.ecosystem -eq 'bicep') {
+            $item.Identity.Deprecated
+        }
+        else {
+            $archivedRepositories[$record.repository] -eq $true
+        }
+        $record.moduleStatus = if ($deprecated -or [string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
             'Deprecated'
         }
-        elseif ($record.owners.individuals.Count -eq 0 -and -not $record.owners.team) {
+        elseif ($record.owners.Count -eq 0) {
             'Orphaned'
         }
         elseif ($record.registry.status -eq 'available') {
@@ -705,6 +664,9 @@ function New-AvmCatalogBundle {
         }
         else {
             'Proposed'
+        }
+        if ($deprecated) {
+            $item.Row['ModuleStatus'] = 'Deprecated'
         }
         if ($record.ecosystem -eq 'bicep' -and $record.registry.marRegistered -isnot [bool]) {
             throw [System.IO.InvalidDataException]::new("Bicep registry snapshot lacks MAR registration: $($item.Identity.Key)")
@@ -718,7 +680,8 @@ function New-AvmCatalogBundle {
         }
         if ($record.metadataSource -eq 'metadata') {
             $names = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub
-            $owners = @($record.owners.individuals)
+            $owners = @($record.owners | Where-Object { -not $_.StartsWith('@') })
+            $teams = @($record.owners | Where-Object { $_.StartsWith('@') })
             $values = @{
                 ModuleDisplayName = $record.moduleDisplayName
                 ModuleName = $record.moduleName
@@ -727,16 +690,15 @@ function New-AvmCatalogBundle {
                 RepoURL = $record.repoURL
                 PublicRegistryReference = $record.publicRegistryReference
                 TelemetryIdPrefix = [string]$record.telemetryIdPrefix
-                PrimaryModuleOwnerGHHandle = if ($owners.Count -gt 0) { $owners[0].githubHandle } else { '' }
+                PrimaryModuleOwnerGHHandle = if ($owners.Count -gt 0) { $owners[0] } else { '' }
                 PrimaryModuleOwnerDisplayName = if ($names.Count -gt 0) { $names[0] } else { '' }
-                SecondaryModuleOwnerGHHandle = if ($owners.Count -gt 1) { $owners[1].githubHandle } else { '' }
+                SecondaryModuleOwnerGHHandle = if ($owners.Count -gt 1) { $owners[1] } else { '' }
                 SecondaryModuleOwnerDisplayName = if ($names.Count -gt 1) { $names[1] } else { '' }
-                ModuleOwnersGHTeam = $record.owners.team
+                ModuleOwnersGHTeam = if ($teams.Count -gt 0) { $teams[0] } else { '' }
                 Description = $record.moduleDescription
                 FirstPublishedIn = [string]$record.registry.firstPublishedIn
                 ProviderNamespace = [string]$record.providerNamespace
                 ResourceType = [string]$record.resourceType
-                Tier = $record.tier
                 CanonicalType = $record.canonicalType
             }
             if ($null -eq $record.parentModule) {
@@ -756,7 +718,6 @@ function New-AvmCatalogBundle {
     if (-not (Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction Stop)) {
         throw [System.IO.InvalidDataException]::new('Generated module catalog failed its packaged output schema.')
     }
-    $tierConfiguration = ConvertTo-AvmCatalogTierConfiguration -Configuration $RepositoryConfiguration -Inventory $Inventory
     $report = $Inventory.Report
     $report.parity.bicepOnly = @($modules.Keys | Where-Object { $modules[$_].terraform.Count -eq 0 })
     $report.parity.terraformOnly = @($modules.Keys | Where-Object { $modules[$_].bicep.Count -eq 0 })
@@ -777,8 +738,7 @@ function New-AvmCatalogBundle {
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
     $files[$catalogOutput.bundlePath] = $json
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).bundlePath] = ConvertTo-AvmCatalogJson -Value $report
-    $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind tier-configuration).bundlePath] = ConvertTo-AvmCatalogJson -Value $tierConfiguration
-    return [pscustomobject]@{ Configuration = $configuration; Files = $files; Catalog = $catalog; Report = $report; RepositoryConfiguration = $tierConfiguration }
+    return [pscustomobject]@{ Configuration = $configuration; Files = $files; Catalog = $catalog; Report = $report }
 }
 
 function Write-AvmCatalogBundle {

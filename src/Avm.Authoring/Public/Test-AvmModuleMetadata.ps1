@@ -14,7 +14,7 @@ function Test-AvmModuleMetadata {
     .PARAMETER ModuleType
         Module kind derived by the caller from its path or repository name.
     .PARAMETER ChildModule
-        Require the reduced child shape, without owners or tier.
+        Require the reduced child shape, without owners.
     .PARAMETER InputObject
         Metadata values to validate instead of reading metadata.json.
     .PARAMETER CheckSource

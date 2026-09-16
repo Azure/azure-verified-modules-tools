@@ -21,7 +21,6 @@
       "type": "string",
       "const": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json"
     },
-    "schemaVersion": { "type": "integer", "const": 1 },
     "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "description": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "canonicalType": {
@@ -43,38 +42,22 @@
       "then": { "maxLength": 50 },
       "else": { "maxLength": 59 }
     },
-    "tier": {
-      "type": "string",
-      "enum": [ "core", "maintained" ],
-      "description": "Root-module tier, inherited by every child. open-source is reserved and is not a v1 value."
-    },
     "owners": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [ "individuals" ],
-      "properties": {
-        "individuals": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [ "githubHandle" ],
-            "properties": {
-              "githubHandle": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 39,
-                "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
-              }
-            }
+      "type": "array",
+      "description": "GitHub usernames or qualified @organization/team-slug handles, inherited by children. Empty arrays are valid; handles must be unique ignoring case.",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "not": { "pattern": "\\s" },
+        "anyOf": [
+          {
+            "maxLength": 39,
+            "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+          },
+          {
+            "pattern": "^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
           }
-        },
-        "team": {
-          "type": "string",
-          "description": "Optional shared GitHub team handle, for example @Azure/avm-core-modules.",
-          "pattern": "^(@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*)?$"
-        }
+        ]
       }
     },
     "root": {
@@ -88,20 +71,16 @@
       ],
       "required": [
         "$schema",
-        "schemaVersion",
         "moduleDisplayName",
         "moduleDescription",
         "canonicalType",
-        "tier",
         "owners"
       ],
       "properties": {
         "$schema": { "$ref": "#/definitions/schemaReference" },
-        "schemaVersion": { "$ref": "#/definitions/schemaVersion" },
         "moduleDisplayName": { "$ref": "#/definitions/displayName" },
         "moduleDescription": { "$ref": "#/definitions/description" },
         "canonicalType": { "$ref": "#/definitions/canonicalType" },
-        "tier": { "$ref": "#/definitions/tier" },
         "owners": { "$ref": "#/definitions/owners" },
         "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
         "alternativeNames": {
@@ -117,14 +96,12 @@
       "additionalProperties": false,
       "required": [
         "$schema",
-        "schemaVersion",
         "moduleDisplayName",
         "moduleDescription",
         "canonicalType"
       ],
       "properties": {
         "$schema": { "$ref": "#/definitions/schemaReference" },
-        "schemaVersion": { "$ref": "#/definitions/schemaVersion" },
         "moduleDisplayName": { "$ref": "#/definitions/displayName" },
         "moduleDescription": { "$ref": "#/definitions/description" },
         "canonicalType": { "$ref": "#/definitions/canonicalType" },

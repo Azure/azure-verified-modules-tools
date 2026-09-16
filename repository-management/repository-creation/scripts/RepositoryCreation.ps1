@@ -25,7 +25,6 @@ function New-AvmRepositoryMetadataInput {
         [string] $ModuleDisplayName,
         [string] $ModuleDescription,
         [string] $CanonicalType,
-        [string] $Tier,
         [string] $TelemetryIdPrefix,
         [string[]] $OwnerGitHubHandles = @(),
         [string] $OwnerTeam,
@@ -34,7 +33,7 @@ function New-AvmRepositoryMetadataInput {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    foreach ($field in @('ModuleDisplayName', 'ModuleDescription', 'CanonicalType', 'Tier')) {
+    foreach ($field in @('ModuleDisplayName', 'ModuleDescription', 'CanonicalType')) {
         if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $field -ValueOnly))) {
             throw [System.ArgumentException]::new("$field must be supplied explicitly for repository creation.")
         }
@@ -43,20 +42,16 @@ function New-AvmRepositoryMetadataInput {
     $schema = Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json -AsHashtable
     $metadata = [ordered]@{
         '$schema' = $schema.'$id'
-        schemaVersion = 1
         moduleDisplayName = $ModuleDisplayName
         moduleDescription = $ModuleDescription
         canonicalType = $CanonicalType
-        tier = $Tier
-        owners = [ordered]@{
-            individuals = @($OwnerGitHubHandles | ForEach-Object { @{ githubHandle = $_ } })
-        }
+        owners = @($OwnerGitHubHandles)
     }
     if (-not [string]::IsNullOrEmpty($TelemetryIdPrefix)) {
         $metadata.telemetryIdPrefix = $TelemetryIdPrefix
     }
     if (-not [string]::IsNullOrEmpty($OwnerTeam)) {
-        $metadata.owners.team = $OwnerTeam
+        $metadata.owners += $OwnerTeam
     }
     if ($AlternativeNames.Count -gt 0) {
         $metadata.alternativeNames = $AlternativeNames

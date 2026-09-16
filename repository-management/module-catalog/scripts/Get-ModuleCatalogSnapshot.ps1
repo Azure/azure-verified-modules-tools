@@ -39,17 +39,11 @@ try {
     foreach ($directory in @($legacy, $bicep, $terraform)) {
         $null = [System.IO.Directory]::CreateDirectory($directory)
     }
-    $roots = @{ docs = $DocumentationRoot; tools = $toolsRoot }
+    $roots = @{ docs = $DocumentationRoot }
     $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $staging -Confirm:$false
 
     $bicepSources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $terraform -Configuration $configuration
-    foreach ($source in $bicepSources) {
-        $directory = Join-Path $bicep $source.ModulePath
-        $null = [System.IO.Directory]::CreateDirectory($directory)
-        foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File | Where-Object { $_.Name -in @('main.bicep', 'metadata.json', 'version.json') })) {
-            [System.IO.File]::Copy($file.FullName, (Join-Path $directory $file.Name))
-        }
-    }
+    Copy-AvmCatalogBicepSource -Sources $bicepSources -Destination $bicep -Confirm:$false
     $revisions = [System.Collections.Generic.List[object]]::new()
     $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     foreach ($inputRepository in @(

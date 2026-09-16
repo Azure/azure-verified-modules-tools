@@ -17,23 +17,18 @@ BeforeAll {
     }
 
     function Save-CatalogMetadata {
-        param([object] $Module, [switch] $Child, [string] $Tier = 'core')
+        param([object] $Module, [switch] $Child)
         $marker = if ($Module.Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
         $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$Module.ModuleType]
         $data = [ordered]@{
             '$schema' = $metadataSchemaId
-            schemaVersion = 1
             moduleDisplayName = 'Authoritative module'
             moduleDescription = 'Deploys reviewed module.'
             canonicalType = $Module.Canonical
             telemetryIdPrefix = "$marker.$kind.test-module"
         }
         if (-not $Child) {
-            $data.tier = $Tier
-            $data.owners = [ordered]@{
-                individuals = @(@{ githubHandle = 'owner-one' }, @{ githubHandle = 'owner-two' }, @{ githubHandle = 'owner-three' })
-                team = '@Azure/avm-core-modules'
-            }
+            $data.owners = @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
             $data.alternativeNames = @('Alias one', 'Alias two')
             $data.comments = 'Reviewed comment.'
         }
@@ -43,8 +38,7 @@ BeforeAll {
     function Add-CatalogModule {
         param(
             [object] $Fixture, [string] $Ecosystem, [string] $Repository,
-            [string] $ModulePath, [string] $Canonical, [switch] $Child, [switch] $Adopt,
-            [string] $Tier = 'core'
+            [string] $ModulePath, [string] $Canonical, [switch] $Child, [switch] $Adopt
         )
         $identity = New-AvmCatalogIdentity -Ecosystem $Ecosystem -Repository $Repository -ModulePath $ModulePath
         $root = if ($Ecosystem -eq 'bicep') { $Fixture.Bicep } else { Join-Path $Fixture.Terraform $Repository.Substring('Azure/'.Length) }
@@ -64,7 +58,7 @@ BeforeAll {
         }
         $Fixture.Modules.Add($module)
         if ($Adopt) {
-            Save-CatalogMetadata -Module $module -Child:$Child -Tier $Tier
+            Save-CatalogMetadata -Module $module -Child:$Child
         }
         return $module
     }
@@ -76,17 +70,7 @@ BeforeAll {
             Root = $root; Legacy = Join-Path $root 'legacy'
             Bicep = Join-Path $root 'sources' 'bicep'; Terraform = Join-Path $root 'sources' 'terraform'
             Output = Join-Path $root 'generated'; Modules = [System.Collections.Generic.List[object]]::new()
-            Original = @{}; Headers = @{}
-            Config = [ordered]@{
-                unrelated = @{ preserve = 'yes' }
-                repositoryGroups = @(
-                    [ordered]@{ name = 'default'; repositories = @('*'); settings = @{ enabled = $true }; topics = @('avm') },
-                    [ordered]@{ name = 'azure-verified-modules-tier-1'; repositories = @('unadopted-core'); codeOwnersTeams = @('keep-me') },
-                    [ordered]@{ name = 'azure-verified-modules-tier-2'; repositories = @('unadopted-maintained'); topics = @('avm-tier-2') },
-                    [ordered]@{ name = 'azure-verified-modules-tier-3'; repositories = @('avm-res-storage-storageaccount', 'unadopted-three'); topics = @('avm-tier-3') },
-                    [ordered]@{ name = 'canary-ring-1'; repositories = @('avm-res-storage-storageaccount'); managedFiles = @('canary-ring-1') }
-                )
-            }
+            Original = @{}; Headers = @{}; Archived = @{}
         }
         foreach ($path in @($fixture.Legacy, $fixture.Bicep, $fixture.Terraform)) {
             $null = [System.IO.Directory]::CreateDirectory($path)
@@ -145,7 +129,6 @@ BeforeAll {
             [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $output.sourceFile), (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($row)))
         }
         Save-CatalogJson -Path (Join-Path $fixture.Legacy 'BicepMARModules.json') -Data @($bicepNames.Values)
-        Save-CatalogJson -Path (Join-Path $root 'repository-config.json') -Data $fixture.Config
         return $fixture
     }
 
@@ -168,17 +151,32 @@ BeforeAll {
                 marRegistered = if ($item.Identity.Ecosystem -eq 'bicep') { $true } else { $null }
             }
         }
+        $revisions = @(
+            foreach ($repository in @($Inventory.Items | Where-Object { $_.Identity.Ecosystem -eq 'terraform' } |
+                    ForEach-Object { $_.Identity.Repository } | Sort-Object -Unique)) {
+                [ordered]@{
+                    repository = $repository
+                    commit = 'a' * 40
+                    status = 'collected'
+                    archived = if ($Fixture.Archived.ContainsKey($repository)) { $Fixture.Archived[$repository] } else { $false }
+                }
+            }
+        )
         $github = [ordered]@{
             users = @{
                 'owner-one' = @{ login = 'owner-one'; name = 'Profile One'; type = 'User' }
                 'owner-two' = @{ login = 'owner-two'; name = 'Profile Two'; type = 'User' }
                 'owner-three' = @{ login = 'owner-three'; name = $null; type = 'User' }
             }
-            teams = @{ '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' } }
+            teams = @{
+                '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' }
+                '@Azure/second-team' = @{ slug = 'second-team'; organization = 'Azure' }
+            }
         }
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'registry.json') -Data $registry
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'github.json') -Data $github
-        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryConfiguration $Fixture.Config
+        Save-CatalogJson -Path (Join-Path $Fixture.Root 'revisions.json') -Data $revisions
+        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions
     }
 }
 
@@ -187,12 +185,12 @@ AfterAll {
 }
 
 Describe 'Component: module catalog transformations' -Tag Component {
-    It 'preserves all six legacy headers, order and values while appending the two new columns' {
+    It 'preserves all six legacy headers, order and values while appending canonical identity only' {
         $fixture = New-CatalogFixture
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         foreach ($file in $fixture.Original.Keys) {
             $text = $bundle.Files["docs/test-$file"]
-            ($text -split "`n")[0] | Should -BeExactly (($fixture.Headers[$file] + @('Tier', 'CanonicalType')) -join ',')
+            ($text -split "`n")[0] | Should -BeExactly (($fixture.Headers[$file] + @('CanonicalType')) -join ',')
             $row = @($text | ConvertFrom-Csv)[0]
             foreach ($column in $fixture.Headers[$file]) {
                 $row.$column | Should -BeExactly $fixture.Original[$file][$column] -Because "$file $column is not adopted"
@@ -212,16 +210,16 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $row.Description | Should -BeExactly 'Deploys reviewed module.'
         $row.AlternativeNames | Should -BeExactly 'Alias one, Alias two'
         $row.Comments | Should -BeExactly 'Reviewed comment.'
-        $row.Tier | Should -BeExactly 'core'
+        $row.PSObject.Properties.Name | Should -Not -Contain 'Tier'
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
         $row.PrimaryModuleOwnerDisplayName | Should -BeExactly 'Profile One'
         $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile Two'
         $row.ModuleStatus | Should -BeExactly 'Available'
-        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners.individuals | Should -HaveCount 3
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners | Should -HaveCount 4
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
-        $publishedOwners = @($published.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners.individuals | ForEach-Object { $_.githubHandle })
-        ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three'
+        $publishedOwners = @($published.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners)
+        ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
         @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)[0].ModuleDisplayName | Should -BeExactly 'Legacy name'
     }
 
@@ -253,7 +251,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
     }
 
-    It 'inherits family owners and tier while keeping immediate Bicep and Terraform parent identities' {
+    It 'inherits family owners while keeping immediate Bicep and Terraform parent identities' {
         $fixture = New-CatalogFixture -AdoptAll
         $child = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
             -ModulePath 'avm/res/storage/storage-account/blob-service' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
@@ -273,8 +271,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $entry.terraform[0].parentModule | Should -BeExactly '.'
         $entry.terraform[0].moduleName | Should -BeExactly 'avm-res-storage-storageaccount//modules/container'
         $entry.terraform[0].publicRegistryReference | Should -BeExactly 'https://registry.terraform.io/modules/Azure/avm-res-storage-storageaccount/azurerm/1.2.3/submodules/container'
-        $entry.terraform[0].tier | Should -BeExactly 'core'
-        $entry.terraform[0].owners.individuals | Should -HaveCount 3
+        $entry.terraform[0].Contains('tier') | Should -BeFalse
+        $entry.terraform[0].owners | Should -HaveCount 4
         $entry.bicep[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
         $entry.bicep[0].comments | Should -BeExactly 'Reviewed comment.'
         $entry.terraform[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
@@ -294,8 +292,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         foreach ($canonical in @('Microsoft.Storage/storageAccounts', 'Microsoft.Storage/storageAccounts/blobServices/containers')) {
             foreach ($ecosystem in @('bicep', 'terraform')) {
-                $publishedOwners = @($published.modules[$canonical][$ecosystem][0].owners.individuals | ForEach-Object { $_.githubHandle })
-                ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three'
+                $publishedOwners = @($published.modules[$canonical][$ecosystem][0].owners)
+                ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
             }
         }
     }
@@ -333,12 +331,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
             $childRows | Should -HaveCount 1
             $childRows[0].AlternativeNames | Should -BeExactly $legacyRow.AlternativeNames
             $childRows[0].Comments | Should -BeExactly $legacyRow.Comments
-            $childRows[0].Tier | Should -BeExactly 'core'
             $childRows[0].PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
             $childRows[0].SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
             $entry = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices'][$Ecosystem][0]
-            $entry.owners.individuals | Should -HaveCount 3
-            $entry.tier | Should -BeExactly 'core'
+            $entry.owners | Should -HaveCount 4
             $entry.alternativeNames | Should -Be @('Alias one', 'Alias two')
             $entry.comments | Should -BeExactly 'Reviewed comment.'
         }
@@ -355,12 +351,12 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $fixture = New-CatalogFixture -AdoptAll
         $path = Join-Path $fixture.Modules[2].Directory 'metadata.json'
         $metadata = Read-AvmCatalogJson -Path $path
-        $metadata.owners.individuals = @()
+        $metadata.owners = @('@Azure/avm-core-modules')
         $metadata.Remove('telemetryIdPrefix')
         Save-CatalogJson -Path $path -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $record = $bundle.Catalog.modules['types/common'].bicep[0]
-        $record.owners.individuals | Should -HaveCount 0
+        $record.owners | Should -Be @('@Azure/avm-core-modules')
         $record.telemetryIdPrefix | Should -BeNullOrEmpty
         $row = @($bundle.Files['docs/test-BicepUtilityModules.csv'] | ConvertFrom-Csv)[0]
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly ''
@@ -377,7 +373,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $path = Join-Path $fixture.Modules[0].Directory 'metadata.json'
         $metadata = Read-AvmCatalogJson -Path $path
         $metadata.Remove('comments')
-        $metadata.owners.Remove('team')
+        $metadata.owners = @('owner-one')
         if ($Shape -eq 'absent') {
             $metadata.Remove('alternativeNames')
         }
@@ -389,7 +385,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $record = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0]
         $record.alternativeNames | Should -HaveCount 0
         $record.comments | Should -BeExactly ''
-        $record.owners.team | Should -BeExactly ''
+        $record.owners | Should -Be @('owner-one')
     }
 
     It 'keeps multiple Terraform provider implementations under the same canonical key' {
@@ -426,48 +422,23 @@ Describe 'Component: module catalog transformations' -Tag Component {
         { Get-CatalogFixtureInventory -Fixture $fixture -TerraformMode metadata-only } | Should -Throw '*Metadata-only mode*'
     }
 
-    It 'changes only adopted Terraform tier memberships and preserves settings, groups and unadopted order' {
+    It 'does not read or publish repository configuration or generate tier metadata' {
         $fixture = New-CatalogFixture -AdoptAll
-        $before = ConvertTo-AvmCatalogJson -Value $fixture.Config
+        $configurationPath = Join-Path $fixture.Root 'repository-config.json'
+        [System.IO.File]::WriteAllText($configurationPath, 'not a catalog input')
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $after = $bundle.RepositoryConfiguration
-        (ConvertTo-AvmCatalogJson -Value $fixture.Config) | Should -BeExactly $before
-        (ConvertTo-AvmCatalogJson -Value $after.repositoryGroups[0]) | Should -BeExactly (ConvertTo-AvmCatalogJson -Value $fixture.Config.repositoryGroups[0])
-        (ConvertTo-AvmCatalogJson -Value $after.repositoryGroups[4]) | Should -BeExactly (ConvertTo-AvmCatalogJson -Value $fixture.Config.repositoryGroups[4])
-        $after.repositoryGroups[1].repositories | Should -Contain 'avm-res-storage-storageaccount'
-        $after.repositoryGroups[1].repositories[0] | Should -BeExactly 'unadopted-core'
-        $after.repositoryGroups[3].repositories | Should -Be @('unadopted-three')
-        $after.repositoryGroups[1].codeOwnersTeams | Should -Be @('keep-me')
-        $after.unrelated.preserve | Should -BeExactly 'yes'
-    }
-
-    It 'refuses conflicting provider tiers rather than assigning a lossy repository group' {
-        $fixture = New-CatalogFixture -AdoptAll
-        $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' `
-            -ModulePath '.' -Canonical 'Microsoft.Storage/storageAccounts' -Adopt -Tier maintained
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*conflicting tiers*'
-        Test-Path -LiteralPath $fixture.Output | Should -BeFalse
-    }
-
-    It 'does not change the effective tier of an unadopted provider variant' {
-        $fixture = New-CatalogFixture -AdoptAll
-        $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' `
-            -ModulePath '.' -Canonical 'Microsoft.Storage/storageAccounts'
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*unadopted provider variant*'
-    }
-
-    It 'protects a legacy-only provider variant without source from a shared-ID tier change' {
-        $fixture = New-CatalogFixture -AdoptAll
-        $file = 'TerraformResourceModules.csv'
-        $row = [ordered]@{}
-        foreach ($key in $fixture.Original[$file].Keys) {
-            $row[$key] = $fixture.Original[$file][$key]
+        $bundle.Files.Count | Should -Be 9
+        @($bundle.Files.Keys | Where-Object { $_ -notlike 'docs/*' }) | Should -HaveCount 0
+        $published = Read-AvmCatalogJson -Path (Join-Path $fixture.Modules[0].Directory 'metadata.json')
+        $published.Contains('tier') | Should -BeFalse
+        foreach ($implementations in $bundle.Catalog.modules.Values) {
+            foreach ($record in @($implementations.bicep) + @($implementations.terraform)) {
+                $record.Contains('tier') | Should -BeFalse
+            }
         }
-        $row.RepoURL = 'https://github.com/Azure/terraform-azure-avm-res-storage-storageaccount'
-        $row.PublicRegistryReference = 'https://registry.terraform.io/modules/Azure/avm-res-storage-storageaccount/azure/latest'
-        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
-            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $row)))
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*unadopted provider variant*'
+        $null = & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output
+        [System.IO.File]::ReadAllText($configurationPath) | Should -BeExactly 'not a catalog input'
+        Test-Path (Join-Path $fixture.Output 'tools') | Should -BeFalse
     }
 
     It 'keeps known future columns and avoids duplicate headers when consuming a previously generated CSV' {
@@ -475,9 +446,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $file = 'BicepResourceModules.csv'
         $row = $fixture.Original[$file]
         $row['FutureColumn'] = 'retain future data'
-        $row['Tier'] = ''
         $row['CanonicalType'] = ''
-        $headers = $fixture.Headers[$file] + @('FutureColumn', 'Tier', 'CanonicalType')
+        $headers = $fixture.Headers[$file] + @('FutureColumn', 'CanonicalType')
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file), (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($row)))
         $text = (Get-CatalogFixtureBundle -Fixture $fixture).Files["docs/test-$file"]
         ($text -split "`n")[0] | Should -BeExactly ($headers -join ',')
@@ -536,12 +506,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $raw.repositories.bicep = 'Azure/bicep-fixture'
         $raw.repositories.tools = 'Azure/tools-fixture'
         $raw.destinations.docs.path = 'docs/static/custom-indexes'
-        $raw.destinations.tools.path = 'repository-management/custom-config'
         $raw.outputs[0].file = 'RenamedBicepResources.csv'
         $raw.outputs[0].sourceFile = 'LegacyBicepResources.csv'
         ($raw.outputs | Where-Object kind -eq 'catalog').file = 'custom/catalog.json'
         ($raw.outputs | Where-Object kind -eq 'migration-report').file = 'custom/migration.json'
-        ($raw.outputs | Where-Object kind -eq 'tier-configuration').file = 'tiers.json'
         ($raw.outputs | Where-Object kind -eq 'publication-plan').file = 'control/publication.json'
         $configurationPath = Join-Path $fixture.Root 'manifest.json'
         Save-CatalogJson -Path $configurationPath -Data $raw
@@ -553,11 +521,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $null = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
 
         $roots = @{ docs = Join-Path $fixture.Root 'docs-checkout'; tools = Join-Path $fixture.Root 'tools-checkout' }
-        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar', 'tier-configuration') }) {
-            $source = if ($output.kind -eq 'tier-configuration') {
-                Join-Path $fixture.Root 'repository-config.json'
-            }
-            elseif ($output.kind -eq 'csv') {
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
+            $source = if ($output.kind -eq 'csv') {
                 Join-Path $fixture.Legacy $output.sourceFile
             }
             else {
@@ -571,7 +536,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $inputPath = Join-Path $fixture.Root 'configured-input'
         $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $inputPath -Confirm:$false
         Copy-Item -LiteralPath (Join-Path $fixture.Root 'sources') -Destination (Join-Path $inputPath 'sources') -Recurse
-        foreach ($name in @('registry.json', 'github.json')) {
+        foreach ($name in @('registry.json', 'github.json', 'revisions.json')) {
             Copy-Item -LiteralPath (Join-Path $fixture.Root $name) -Destination (Join-Path $inputPath $name)
         }
         Save-CatalogJson -Path (Join-Path $inputPath 'publication.json') -Data $publication
@@ -579,11 +544,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
             -OutputPath $fixture.Output -ConfigurationPath $configurationPath | Should -BeExactly ([System.IO.Path]::GetFullPath($fixture.Output))
         $plan = Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration
         $plan.docs.repository | Should -BeExactly 'Azure/catalog-fixture'
-        $plan.tools.repository | Should -BeExactly 'Azure/tools-fixture'
+        $plan.Contains('tools') | Should -BeFalse
         $plan.docs.baseFiles.Contains('docs/static/custom-indexes/custom/catalog.json') | Should -BeTrue
         $plan.docs.baseFiles.Contains('docs/static/custom-indexes/LegacyBicepResources.csv') | Should -BeTrue
         $plan.docs.baseFiles['docs/static/custom-indexes/RenamedBicepResources.csv'] | Should -BeNullOrEmpty
-        $plan.tools.baseFiles.Contains('repository-management/custom-config/tiers.json') | Should -BeTrue
         $paths = @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse |
                 ForEach-Object { [System.IO.Path]::GetRelativePath($fixture.Output, $_.FullName).Replace('\', '/') })
         @($paths | Sort-Object) | Should -Be @($configuration.outputs.bundlePath | Sort-Object)
@@ -613,7 +577,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
         $null = Get-CatalogFixtureBundle -Fixture $fixture
         & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output | Should -BeExactly ([System.IO.Path]::GetFullPath($fixture.Output))
-        @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse) | Should -HaveCount 10
+        @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse) | Should -HaveCount 9
     }
 
     It 'does not write output when generated registry data fails the output schema' {
@@ -654,7 +618,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
         $path = Join-Path $fixture.Modules[0].Directory 'metadata.json'
         $metadata = Read-AvmCatalogJson -Path $path
-        $metadata.owners = @{ individuals = @(); team = '' }
+        $metadata.owners = @()
         Save-CatalogJson -Path $path -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly $Expected
@@ -683,5 +647,148 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $null = [System.IO.Directory]::CreateDirectory($helper)
         [System.IO.File]::WriteAllText((Join-Path $helper 'keyVaultExport.bicep'), 'param value string')
         (Get-CatalogFixtureInventory -Fixture $fixture).Sources | Should -HaveCount 6
+    }
+}
+
+Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
+    It 'deprecates a Bicep <Scope> and descendants but not unrelated modules' -TestCases @(
+        @{ Scope = 'root' }
+        @{ Scope = 'child' }
+    ) {
+        param($Scope)
+        $fixture = New-CatalogFixture -AdoptAll
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/storage-account/blob-service' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/storage-account/blob-service/container' -Canonical 'Microsoft.Storage/storageAccounts/blobServices/containers' -Child -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/storage-account/file-service' -Canonical 'Microsoft.Storage/storageAccounts/fileServices' -Child -Adopt
+        $markerRoot = if ($Scope -eq 'root') { $fixture.Modules[0].Directory } else { $child.Directory }
+        [System.IO.File]::WriteAllText((Join-Path $markerRoot 'DEPRECATED.md'), 'Use the replacement module.')
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $rows = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)
+        foreach ($row in $rows) {
+            $expected = if ($Scope -eq 'root' -or $row.ModuleName -like '*blob-service*') { 'Deprecated' } else { 'Available' }
+            $row.ModuleStatus | Should -Be $expected
+            $bundle.Catalog.modules[$row.CanonicalType].bicep[0].moduleStatus | Should -Be $expected
+        }
+        $bundle.Catalog.modules['lz/sub-vending'].bicep[0].moduleStatus | Should -Be 'Available'
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0].moduleStatus | Should -Be 'Available'
+    }
+
+    It 'retains Bicep deprecation evidence in the source snapshot and offline output' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $marker = Join-Path $fixture.Modules[0].Directory 'DEPRECATED.md'
+        [System.IO.File]::WriteAllText($marker, 'Retired module.')
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $snapshot = Join-Path $fixture.Root 'snapshot'
+        $copy = Join-Path $snapshot 'sources' 'bicep'
+        Copy-AvmCatalogBicepSource -Sources @($inventory.Sources | Where-Object Ecosystem -eq 'bicep') -Destination $copy
+        [System.IO.File]::ReadAllText((Join-Path $copy 'avm' 'res' 'storage' 'storage-account' 'DEPRECATED.md')) |
+            Should -BeExactly 'Retired module.'
+        $null = Get-CatalogFixtureBundle -Fixture $fixture
+        Copy-Item -LiteralPath $fixture.Terraform -Destination (Join-Path $snapshot 'sources' 'terraform') -Recurse
+        Copy-Item -LiteralPath $fixture.Legacy -Destination (Join-Path $snapshot 'legacy') -Recurse
+        foreach ($file in @('registry.json', 'github.json', 'revisions.json')) {
+            Copy-Item -LiteralPath (Join-Path $fixture.Root $file) -Destination (Join-Path $snapshot $file)
+        }
+        & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $snapshot -OutputPath $fixture.Output | Out-Null
+        $catalog = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'modules.json')
+        $catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Deprecated'
+    }
+
+    It 'rejects ambiguous deprecation marker <Shape>' -TestCases @(
+        @{ Shape = 'casing' }
+        @{ Shape = 'directory' }
+    ) {
+        param($Shape)
+        $fixture = New-CatalogFixture -AdoptAll
+        if ($Shape -eq 'casing') {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Modules[0].Directory 'Deprecated.md'), 'wrong casing')
+        }
+        else {
+            $null = New-Item -ItemType Directory -Path (Join-Path $fixture.Modules[0].Directory 'DEPRECATED.md')
+        }
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*regular file named DEPRECATED.md*'
+    }
+
+    It 'deprecates all Terraform implementations in an archived repository, even without owners' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $repository = 'Azure/terraform-azurerm-avm-res-storage-storageaccount'
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository $repository `
+            -ModulePath 'modules/container' -Canonical 'Microsoft.Storage/storageAccounts/blobServices/containers' -Child -Adopt
+        $metadataPath = Join-Path $fixture.Modules[3].Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $metadataPath
+        $metadata.owners = @()
+        Save-CatalogJson -Path $metadataPath -Data $metadata
+        $fixture.Archived[$repository] = $true
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $rows = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)
+        $rows | Should -HaveCount 2
+        foreach ($row in $rows) {
+            $row.ModuleStatus | Should -Be 'Deprecated'
+            $bundle.Catalog.modules[$row.CanonicalType].terraform[0].moduleStatus | Should -Be 'Deprecated'
+        }
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Available'
+    }
+
+    It 'derives Deprecated for legacy-only <Ecosystem> rows without rewriting their authored fields' -TestCases @(
+        @{ Ecosystem = 'bicep'; File = 'BicepResourceModules.csv' }
+        @{ Ecosystem = 'terraform'; File = 'TerraformResourceModules.csv' }
+    ) {
+        param($Ecosystem, $File)
+        $fixture = New-CatalogFixture
+        if ($Ecosystem -eq 'bicep') {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Modules[0].Directory 'DEPRECATED.md'), 'Deprecated.')
+        }
+        else {
+            $fixture.Archived['Azure/terraform-azurerm-avm-res-storage-storageaccount'] = $true
+        }
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $row = @($bundle.Files["docs/test-$File"] | ConvertFrom-Csv)[0]
+        $row.ModuleStatus | Should -Be 'Deprecated'
+        $row.ModuleDisplayName | Should -Be $fixture.Original[$File].ModuleDisplayName
+        $row.PrimaryModuleOwnerGHHandle | Should -Be $fixture.Original[$File].PrimaryModuleOwnerGHHandle
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem][0].moduleStatus | Should -Be 'Deprecated'
+    }
+
+    It 'fails offline generation for an incomplete archive snapshot instead of treating repositories as active' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $null = Get-CatalogFixtureBundle -Fixture $fixture
+        Save-CatalogJson -Path (Join-Path $fixture.Root 'revisions.json') -Data @()
+        { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output } |
+            Should -Throw '*archive snapshot is incomplete*'
+        Test-Path $fixture.Output | Should -BeFalse
+    }
+
+    It 'keeps users out of team columns and teams out of user columns while retaining all JSON owners' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $metadataPath = Join-Path $fixture.Modules[0].Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $metadataPath
+        $metadata.owners = @('@Azure/avm-core-modules', 'owner-three', '@Azure/second-team', 'owner-one', 'owner-two')
+        Save-CatalogJson -Path $metadataPath -Data $metadata
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-three'
+        $row.PrimaryModuleOwnerDisplayName | Should -BeExactly ''
+        $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
+        $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile One'
+        $row.ModuleOwnersGHTeam | Should -BeExactly '@Azure/avm-core-modules'
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners | Should -Be $metadata.owners
+    }
+
+    It 'rejects incomplete or ambiguous archive evidence: <Case>' -TestCases @(
+        @{ Case = 'missing flag'; Records = @(@{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = 'a' * 40; status = 'collected' }) }
+        @{ Case = 'text flag'; Records = @(@{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = 'a' * 40; status = 'collected'; archived = 'false' }) }
+        @{ Case = 'unknown collected flag'; Records = @(@{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = 'a' * 40; status = 'collected'; archived = $null }) }
+        @{ Case = 'missing commit'; Records = @(@{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; status = 'collected'; archived = $false }) }
+        @{ Case = 'unavailable with false flag'; Records = @(@{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = $null; status = 'not-found'; archived = $false }) }
+        @{ Case = 'duplicate revision'; Records = @(
+                @{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = 'a' * 40; status = 'collected'; archived = $true }
+                @{ repository = 'Azure/terraform-azurerm-avm-res-test-module'; commit = 'a' * 40; status = 'collected'; archived = $false }
+            ) }
+    ) {
+        param($Records)
+        { Get-AvmCatalogArchivedRepositories -RepositoryRevisions $Records } | Should -Throw
     }
 }

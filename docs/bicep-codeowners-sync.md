@@ -21,11 +21,18 @@ rows: their parent's directory rule applies recursively, regardless of child
 index metadata. Retired `ModuleOwnersGHTeam` values are never used.
 
 The template preserves the tooling catch-all, shared `/avm/` default, automation
-header, and final governance-test and `.e2eignore` overrides. Only the literal
-`__AVM_MODULE_OWNERS__` placeholder is replaced. Unknown target static rules or
-comments cause failure rather than being lost. The first migration explicitly
-permits adding the two automation-header comments and replacing the previous
-module-contributors default with module-owners.
+header, and governance-test and `.e2eignore` overrides. Its final rule is
+`metadata.json @Azure/azure-verified-modules-engineering-owners`. This unrooted
+basename covers root and child metadata files, overriding module and tooling
+owners for those files only. Engineering is the sole owner, not an alternative
+to other reviewers.
+
+Only the literal `__AVM_MODULE_OWNERS__` placeholder is replaced. Unknown target static rules or
+comments cause failure rather than being lost. Base and old-candidate validation
+permit the previous content without metadata protection, the original static
+file without automation-header comments, and the old module-contributors
+default. Generated content, new candidates, and merged output must use the
+current template with the exact final metadata rule.
 
 All three CSVs are read from `docs/static/module-indexes/Bicep*Modules.csv` at
 one resolved commit in `Azure/Azure-Verified-Modules`. These are the files behind
@@ -82,6 +89,21 @@ target governance tests and generated ownership rules agree.
 
 ## Operator setup and rollout
 
+**Metadata rollout ordering:** land
+[Azure/bicep-registry-modules#7349](https://github.com/Azure/bicep-registry-modules/pull/7349)
+before allowing the metadata-protecting Bicep generator to run. The old registry
+governance tests reject its additional final metadata rule, and the old tools
+static guard rejects registry content after that rule is adopted. Resume Bicep
+Sync only after both the registry change and
+the consolidated [tools change](https://github.com/Azure/azure-verified-modules-tools/pull/113) have merged,
+with fresh full checks passing on their final heads. Keep Bicep Sync disabled
+throughout this incompatible interval, starting before
+[#113](https://github.com/Azure/azure-verified-modules-tools/pull/113) merges:
+that implementation includes the ownership generator and intentionally removes the old
+`AVM_CODEOWNERS_SYNC_ENABLED` gate. Setting that variable to `false` is not
+sufficient afterward. Disabling and re-enabling the workflow require operator
+approval; this change does neither.
+
 - Use the existing `avm` environment's `AVM_APP_CLIENT_ID` and
   `AVM_APP_PRIVATE_KEY`. Restrict that environment to trusted tools `main`.
   The existing AVM App must be installed on the target with Contents and Pull
@@ -90,7 +112,12 @@ target governance tests and generated ownership rules agree.
 - Every applicable protection rule must already permit the AVM App integration
   (`1049636`) to bypass through pull requests. No Administration permission,
   self-approval, ruleset edit, normal auto-merge, human PAT, or alternate identity
-  is used. An unavailable bypass fails the run.
+  is used. An unavailable bypass fails the run. Initial metadata backfill uses
+  only this existing authorized App bypass; this policy adds no bypass actors.
+- Keep required code owner reviews enabled on the target branch and ensure
+  `azure-verified-modules-engineering-owners` is a visible team with explicit
+  repository write access. CODEOWNERS selects reviewers but does not itself
+  establish review enforcement.
 - Merge [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343)
   before automatic merging can succeed; runtime enforces this prerequisite.
 - Ensure every named owner and the shared team have the repository write access

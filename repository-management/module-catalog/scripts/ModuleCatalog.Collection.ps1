@@ -65,7 +65,7 @@ function Copy-AvmCatalogInputFile {
     )
 
     $publication = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash }
-    foreach ($role in @('docs', 'tools')) {
+    foreach ($role in $Configuration.destinations.Keys) {
         $publication[$role] = [ordered]@{ repository = $Configuration.repositories[$role]; baseFiles = [ordered]@{} }
     }
     $copies = [System.Collections.Generic.List[object]]::new()
@@ -73,7 +73,7 @@ function Copy-AvmCatalogInputFile {
         $path = Join-Path $RepositoryRoots[$output.destination] $output.targetPath
         $exists = Test-Path -LiteralPath $path -PathType Leaf
         $publication[$output.destination].baseFiles[$output.targetPath] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
-        if ($output.kind -in @('csv', 'mar', 'tier-configuration')) {
+        if ($output.kind -in @('csv', 'mar')) {
             if ($output.kind -eq 'csv') {
                 $path = Join-Path $RepositoryRoots[$output.destination] $output.sourcePath
                 $exists = Test-Path -LiteralPath $path -PathType Leaf
@@ -84,10 +84,7 @@ function Copy-AvmCatalogInputFile {
             if ($output.kind -eq 'csv') {
                 $publication[$output.destination].baseFiles[$output.sourcePath] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             }
-            $relative = if ($output.kind -eq 'tier-configuration') {
-                'repository-config.json'
-            }
-            elseif ($output.kind -eq 'csv') {
+            $relative = if ($output.kind -eq 'csv') {
                 "legacy/$($output.sourceFile)"
             }
             else {
@@ -115,6 +112,25 @@ function Get-AvmCatalogResponseJson {
     $document = [System.Text.Json.JsonDocument]::Parse($Response.Content)
     $document.Dispose()
     return ConvertFrom-Json -InputObject $Response.Content -AsHashtable -Depth 100 -NoEnumerate
+}
+
+function Copy-AvmCatalogBicepSource {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Sources,
+        [Parameter(Mandatory)][string] $Destination
+    )
+
+    foreach ($source in $Sources) {
+        $directory = Join-Path $Destination $source.ModulePath
+        if ($PSCmdlet.ShouldProcess($directory, 'Copy Bicep source and deprecation evidence into the catalog snapshot')) {
+            $null = [System.IO.Directory]::CreateDirectory($directory)
+            foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File |
+                    Where-Object { $_.Name -cin @('main.bicep', 'metadata.json', 'version.json', 'DEPRECATED.md') })) {
+                [System.IO.File]::Copy($file.FullName, (Join-Path $directory $file.Name))
+            }
+        }
+    }
 }
 
 function Get-AvmCatalogPublicationDate {
@@ -288,15 +304,16 @@ function Get-AvmCatalogEnrichment {
     $terraform = @{}
     foreach ($item in $Inventory.Items) {
         if ($item.Record.metadataSource -eq 'metadata') {
-            foreach ($owner in $item.Record.owners.individuals) {
-                $handle = $owner.githubHandle
+            foreach ($handle in @($item.Record.owners | Where-Object { -not $_.StartsWith('@') })) {
                 if (-not $github.users.ContainsKey($handle)) {
                     $profile = Get-AvmCatalogResponseJson -Response (Invoke-AvmCatalogRequest -Uri "https://api.github.com/users/$handle" -GitHubToken $GitHubToken)
                     $github.users[$handle] = [ordered]@{ login = $profile.login; name = $profile.name; type = $profile.type }
                 }
             }
-            $team = [string]$item.Record.owners.team
-            if ($team -and -not $github.teams.ContainsKey($team)) {
+            foreach ($team in @($item.Record.owners | Where-Object { $_.StartsWith('@') })) {
+                if ($github.teams.ContainsKey($team)) {
+                    continue
+                }
                 if ($team -cnotmatch '^@Azure/(?<slug>[a-z0-9]+(-[a-z0-9]+)*)$') {
                     throw [System.IO.InvalidDataException]::new("Only Azure owner teams are supported: $team")
                 }
@@ -384,18 +401,21 @@ function Save-AvmCatalogTerraformSource {
 
     $repoResponse = Invoke-AvmCatalogRequest -Uri "https://api.github.com/repos/$Repository" -GitHubToken $GitHubToken -AllowNotFound
     if ($repoResponse.StatusCode -eq 404) {
-        return [ordered]@{ repository = $Repository; commit = $null; status = 'not-found' }
+        return [ordered]@{ repository = $Repository; commit = $null; status = 'not-found'; archived = $null }
     }
     $repositoryInfo = Get-AvmCatalogResponseJson -Response $repoResponse
     if ($repositoryInfo.full_name -cne $Repository -or $repositoryInfo.private) {
         throw [System.IO.InvalidDataException]::new("Expected a public, unrenamed repository: $Repository")
+    }
+    if ($repositoryInfo['archived'] -isnot [bool]) {
+        throw [System.IO.InvalidDataException]::new("GitHub did not return a valid archived flag for $Repository. Collect a new snapshot.")
     }
     $branch = [uri]::EscapeDataString($repositoryInfo.default_branch)
     $commitResponse = Invoke-AvmCatalogRequest -Uri "https://api.github.com/repos/$Repository/commits/$branch" -GitHubToken $GitHubToken -AllowEmptyRepository
     if ($commitResponse.StatusCode -eq 409) {
         $errorBody = ConvertFrom-Json -InputObject $commitResponse.Content -AsHashtable
         if ($errorBody.message -ceq 'Git Repository is empty.') {
-            return [ordered]@{ repository = $Repository; commit = $null; status = 'empty' }
+            return [ordered]@{ repository = $Repository; commit = $null; status = 'empty'; archived = $repositoryInfo.archived }
         }
         throw [System.IO.InvalidDataException]::new("GitHub commit lookup failed with HTTP 409 for $Repository; it is not a confirmed empty repository.")
     }
@@ -446,7 +466,7 @@ function Save-AvmCatalogTerraformSource {
             [System.IO.File]::WriteAllBytes($target, $content.Bytes)
         }
     }
-    return [ordered]@{ repository = $Repository; commit = $commit.sha; status = 'collected' }
+    return [ordered]@{ repository = $Repository; commit = $commit.sha; status = 'collected'; archived = $repositoryInfo.archived }
 }
 
 function Invoke-AvmCatalogProcess {

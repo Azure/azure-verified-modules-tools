@@ -42,7 +42,6 @@ BeforeAll {
         }
         if ($CreateRepository) {
             $parameters.moduleDescription = 'Description supplied with the creation request.'
-            $parameters.tier = 'maintained'
             $parameters.telemetryIdPrefix = '46d3xtrf.res.storage-account'
             $parameters.ownerGitHubHandles = @('third-owner', 'fourth-owner')
             $parameters.ownerTeam = '@Azure/storage-owners'
@@ -263,7 +262,7 @@ Describe 'Component: repository creation inventory compatibility' -Tag Component
         $result.Status | Should -Be 'plan'
         $result.Inventory.primaryOwnerDisplayName | Should -Be 'First Owner'
         $result.Metadata.moduleDescription | Should -Be $parameters.moduleDescription
-        $result.Metadata.owners.individuals | Should -HaveCount 4
+        $result.Metadata.owners | Should -HaveCount 5
         $script:processCalls | Should -HaveCount 0
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
         Should -Invoke Install-Module -Times 0 -Exactly
@@ -284,10 +283,9 @@ Describe 'Component: repository creation inventory compatibility' -Tag Component
         $metadata.moduleDisplayName | Should -Be $parameters.moduleDisplayName
         $metadata.moduleDescription | Should -Be $parameters.moduleDescription
         $metadata.canonicalType | Should -Be 'Microsoft.Storage/storageAccounts'
-        $metadata.tier | Should -Be $parameters.tier
+        $metadata.Contains('tier') | Should -BeFalse
         $metadata.telemetryIdPrefix | Should -Be $parameters.telemetryIdPrefix
-        @($metadata.owners.individuals.githubHandle) | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner')
-        $metadata.owners.team | Should -Be '@Azure/storage-owners'
+        @($metadata.owners) | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner', '@Azure/storage-owners')
         @($metadata.alternativeNames) | Should -Be @('Storage', 'Storage account')
         $operations = @($script:processCalls.Operation)
         [array]::IndexOf($operations, 'gh pr create') | Should -BeLessThan ([array]::IndexOf($operations, 'gh repo create'))
@@ -306,7 +304,7 @@ Describe 'Component: repository creation inventory compatibility' -Tag Component
         $parameters.ownerGitHubHandles = @()
         & $creationScript @parameters -Confirm:$false
         $script:publishedMetadata.moduleDescription | Should -Be $parameters.moduleDescription
-        $script:publishedMetadata.owners.individuals | Should -HaveCount 0
+        $script:publishedMetadata.owners | Should -Be @('@Azure/storage-owners')
         @($script:processCalls.Operation) | Should -Contain 'gh repo create'
         @($script:processCalls.Operation) | Should -Not -Contain 'gh repo fork'
         @($script:processCalls.Operation) | Should -Not -Contain 'gh pr create'
@@ -315,7 +313,7 @@ Describe 'Component: repository creation inventory compatibility' -Tag Component
 
     It 'rejects invalid metadata before publishing an otherwise valid inventory request' {
         $parameters = New-InventoryScriptArguments -CreateRepository
-        $parameters.tier = 'invalid-tier'
+        $parameters.telemetryIdPrefix = 'invalid-prefix'
         { & $creationScript @parameters -Confirm:$false } | Should -Throw '*Invalid repository metadata*'
         $script:processCalls | Should -HaveCount 0
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse

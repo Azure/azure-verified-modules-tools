@@ -70,10 +70,10 @@ function Test-AvmMetadataContent {
 
     if (-not $ChildModule) {
         $handles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($owner in $metadata.owners.individuals) {
-            if (-not $handles.Add($owner.githubHandle)) {
+        foreach ($owner in $metadata.owners) {
+            if (-not $handles.Add($owner)) {
                 $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_OWNER' `
-                            -Message "Owner '$($owner.githubHandle)' is listed more than once."))
+                            -Message "Owner '$owner' is listed more than once."))
             }
         }
     }

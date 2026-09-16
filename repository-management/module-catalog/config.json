@@ -6,8 +6,7 @@
     "tools": "Azure/azure-verified-modules-tools"
   },
   "destinations": {
-    "docs": { "repository": "docs", "path": "docs/static/module-indexes" },
-    "tools": { "repository": "tools", "path": "repository-management/repository-config" }
+    "docs": { "repository": "docs", "path": "docs/static/module-indexes" }
   },
   "outputs": [
     { "kind": "csv", "sourceFile": "BicepResourceModules.csv", "file": "test-BicepResourceModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "resource" },
@@ -24,7 +23,6 @@
       "schema": "src/Avm.Authoring/Resources/Schemas/v1/avm-modules-catalog.schema.json"
     },
     { "kind": "migration-report", "file": "v1/migration-report.json", "destination": "docs" },
-    { "kind": "tier-configuration", "file": "config.json", "destination": "tools" },
     { "kind": "publication-plan", "file": "plan.json", "destination": null }
   ]
 }

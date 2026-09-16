@@ -10,7 +10,6 @@ param (
   [string]$moduleDisplayName,
   [string]$moduleDescription,
   [string]$canonicalType,
-  [string]$tier,
   [string]$telemetryIdPrefix,
   [string]$resourceProviderNamespace,
   [string]$resourceType,
@@ -99,7 +98,6 @@ if ($willInitializeRepository) {
     ModuleDisplayName = $moduleDisplayName
     ModuleDescription = $moduleDescription
     CanonicalType = $canonicalType
-    Tier = $tier
     TelemetryIdPrefix = $telemetryIdPrefix
     OwnerGitHubHandles = @(
       if (-not [string]::IsNullOrEmpty($ownerPrimaryGitHubHandle)) { $ownerPrimaryGitHubHandle }

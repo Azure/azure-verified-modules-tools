@@ -11,7 +11,7 @@ BeforeAll {
     function New-CreationTestMetadata {
         New-AvmRepositoryMetadataInput -AuthoringModule $script:authoringModule `
             -ModuleDisplayName 'Azure Storage' -ModuleDescription 'Creates a storage account.' `
-            -CanonicalType 'Microsoft.Storage/storageAccounts' -Tier maintained `
+            -CanonicalType 'Microsoft.Storage/storageAccounts' `
             -TelemetryIdPrefix '46d3xtrf.res.storage-account' `
             -OwnerGitHubHandles @('first-owner', 'second-owner', 'third-owner') `
             -OwnerTeam '@Azure/storage-owners' -AlternativeNames @('Storage', 'Storage account')
@@ -23,7 +23,6 @@ BeforeAll {
             moduleDisplayName = 'Azure Storage'
             moduleDescription = 'Creates a storage account.'
             canonicalType = 'Microsoft.Storage/storageAccounts'
-            tier = 'maintained'
             telemetryIdPrefix = '46d3xtrf.res.storage-account'
             tempPath = $script:workRoot
             skipMetaDataCreation = $true
@@ -126,10 +125,10 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $result.Metadata.moduleDisplayName | Should -Be $parameters.moduleDisplayName
         $result.Metadata.moduleDescription | Should -Be $parameters.moduleDescription
         $result.Metadata.canonicalType | Should -Be $parameters.canonicalType
-        $result.Metadata.tier | Should -Be $parameters.tier
+        $result.Metadata.Contains('tier') | Should -BeFalse
+        $result.Metadata.Contains('schemaVersion') | Should -BeFalse
         $result.Metadata.telemetryIdPrefix | Should -Be $parameters.telemetryIdPrefix
-        @($result.Metadata.owners.individuals.githubHandle) | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner')
-        $result.Metadata.owners.team | Should -Be $parameters.ownerTeam
+        @($result.Metadata.owners) | Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner', '@Azure/storage-owners')
         @($result.Metadata.alternativeNames) | Should -Be @('Storage', 'Storage account')
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
         Should -Invoke Get-Command -Times 0 -Exactly -ParameterFilter { $Name -in @('git', 'gh') }
@@ -140,7 +139,7 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $parameters = New-CreationScriptArguments
         $result = & $creationScript @parameters -WhatIf
         $result.Status | Should -Be 'plan'
-        $result.Metadata.owners.individuals | Should -HaveCount 0
+        $result.Metadata.owners | Should -HaveCount 0
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
         Should -Invoke Get-Command -Times 0 -Exactly -ParameterFilter { $Name -in @('git', 'gh') }
     }
@@ -201,7 +200,7 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $parameters.telemetryIdPrefix = $Prefix
         $result = & $creationScript @parameters -PlanOnly
         $result.Metadata.canonicalType | Should -Be $Canonical
-        $result.Metadata.owners.individuals | Should -HaveCount 0
+        $result.Metadata.owners | Should -HaveCount 0
         $result.Metadata.Contains('telemetryIdPrefix') | Should -Be (-not [string]::IsNullOrEmpty($Prefix))
     }
 
@@ -210,14 +209,13 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $result.Status | Should -Be 'pass'
         $published = $script:metadataAtCreate | ConvertFrom-Json -AsHashtable
         $published.'$schema' | Should -Be $script:createArguments.Metadata.'$schema'
-        $published.schemaVersion | Should -Be 1
+        $published.Contains('schemaVersion') | Should -BeFalse
         $published.moduleDisplayName | Should -Be $script:createArguments.Metadata.moduleDisplayName
         $published.moduleDescription | Should -Be $script:createArguments.Metadata.moduleDescription
         $published.canonicalType | Should -Be $script:createArguments.Metadata.canonicalType
-        $published.tier | Should -Be $script:createArguments.Metadata.tier
+        $published.Contains('tier') | Should -BeFalse
         $published.telemetryIdPrefix | Should -Be $script:createArguments.Metadata.telemetryIdPrefix
-        @($published.owners.individuals.githubHandle) | Should -Be @('first-owner', 'second-owner', 'third-owner')
-        $published.owners.team | Should -Be '@Azure/storage-owners'
+        @($published.owners) | Should -Be @('first-owner', 'second-owner', 'third-owner', '@Azure/storage-owners')
         $script:sourceAtCreate | Should -BeExactly $script:templateSource
         $script:metadataAtCreate | Should -Not -Match "`r"
         $script:metadataAtCreate.EndsWith("`n") | Should -BeTrue
@@ -273,7 +271,6 @@ Describe 'Component: repository creation metadata' -Tag Component {
         @{ Field = 'moduleDisplayName' }
         @{ Field = 'moduleDescription' }
         @{ Field = 'canonicalType' }
-        @{ Field = 'tier' }
         @{ Field = 'owners' }
         @{ Field = 'telemetryIdPrefix' }
     ) {
@@ -289,8 +286,10 @@ Describe 'Component: repository creation metadata' -Tag Component {
         @{ Field = 'canonicalType'; Value = 'not-a-canonical-type' }
         @{ Field = 'canonicalType'; Value = 'networking/hub-spoke' }
         @{ Field = 'tier'; Value = 'open-source' }
+        @{ Field = 'schemaVersion'; Value = 1 }
         @{ Field = 'telemetryIdPrefix'; Value = '46d3xbcp.res.wrong-ecosystem' }
         @{ Field = 'owners'; Value = @{ individuals = @(@{ githubHandle = '@invalid' }) } }
+        @{ Field = 'owners'; Value = @('valid-user', '@unqualified-team') }
     ) {
         param($Field, $Value)
         $script:createArguments.Metadata[$Field] = $Value

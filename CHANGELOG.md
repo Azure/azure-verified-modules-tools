@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Module metadata uses a flat owner-handle array and the versioned `$schema`
+  reference, without tier or a duplicate `schemaVersion` field. Catalog
+  deprecation derives from Bicep `DEPRECATED.md` and Terraform repository archival.
+  Tier generation and tools repository-configuration publication are removed.
 - Catalog CSV publication uses `test-` filenames beside the canonical inputs;
   existing CSVs remain unchanged until a separate replacement change. Removed
   catalog enable and Terraform sync pause variable gates; backfill still

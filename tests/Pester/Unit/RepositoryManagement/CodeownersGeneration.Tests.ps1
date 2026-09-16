@@ -4,6 +4,7 @@ BeforeAll {
     . (Join-Path $script:syncRoot 'scripts' 'lib' 'Codeowners.ps1')
     $script:template = Get-Content -LiteralPath (Join-Path $script:syncRoot 'CODEOWNERS.template') -Raw
     $script:group = '@Azure/azure-verified-modules-module-owners'
+    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners'
 
     function New-OwnershipRow {
         param(
@@ -226,11 +227,12 @@ Describe 'Template-backed static ownership preservation' {
         $rules = @($script:rendered.Split("`n") | Where-Object { $_ -and -not $_.StartsWith('#') })
         $rules[0] | Should -Be '* @Azure/azure-verified-modules-tooling-contributors'
         $rules[1] | Should -Be "/avm/ $script:group"
-        $rules[-2] | Should -Be '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-        $rules[-1] | Should -Be '*.e2eignore @Azure/azure-verified-modules-tooling-contributors'
+        $rules[-3] | Should -Be '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
+        $rules[-2] | Should -Be '*.e2eignore @Azure/azure-verified-modules-tooling-contributors'
+        $rules[-1] | Should -BeExactly $script:metadataRule
     }
 
-    It 'permits only the explicit first-time header and default migration' {
+    It 'permits only the explicit first-time header, default, and metadata migration' {
         $legacy = @(
             '* @Azure/azure-verified-modules-tooling-contributors', '',
             '/avm/ @Azure/azure-verified-modules-module-contributors', '',
@@ -238,8 +240,48 @@ Describe 'Template-backed static ownership preservation' {
             '*.e2eignore @Azure/azure-verified-modules-tooling-contributors', ''
         ) -join "`n"
         { Assert-AvmCodeownersContent -Content $legacy -Template $script:template -AllowLegacyDefault } | Should -Not -Throw
+        { Assert-AvmCodeownersContent -Content $legacy -Template $script:template } | Should -Throw '*static CODEOWNERS*'
         { Assert-AvmCodeownersContent -Content ("# Keep this manual note`n" + $legacy) -Template $script:template -AllowLegacyDefault } |
             Should -Throw '*static CODEOWNERS*'
+    }
+
+    It 'accepts old generated content without metadata protection only in compatibility mode' {
+        $legacy = $script:rendered.Replace("$script:metadataRule`n", '')
+        { Assert-AvmCodeownersContent -Content $legacy -Template $script:template -AllowLegacyDefault } | Should -Not -Throw
+        { Assert-AvmCodeownersContent -Content $legacy -Template $script:template } | Should -Throw '*static CODEOWNERS*'
+        $legacy | Should -Not -Match '(?m)^metadata\.json '
+    }
+
+    It 'rejects a template with <Mutation> metadata protection even in compatibility mode' -ForEach @(
+        @{ Mutation = 'missing'; Replacement = '' }
+        @{ Mutation = 'root-only'; Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners' }
+        @{ Mutation = 'additional owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @alice' }
+        @{ Mutation = 'non-final'; Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`n* @alice" }
+    ) {
+        $template = $script:template.Replace($script:metadataRule, $Replacement)
+        { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*static ownership contract*'
+        { Assert-AvmCodeownersContent -Content $script:rendered -Template $template -AllowLegacyDefault } |
+            Should -Throw '*static ownership contract*'
+    }
+
+    It 'rejects changed metadata ownership or precedence in old and new content' -ForEach @(
+        @{ Replacement = 'metadata.json @alice' }
+        @{ Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @alice' }
+        @{ Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners' }
+        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`n* @alice" }
+        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`nmetadata.json @Azure/azure-verified-modules-engineering-owners" }
+    ) {
+        $changed = $script:rendered.Replace($script:metadataRule, $Replacement)
+        { Assert-AvmCodeownersContent -Content $changed -Template $script:template } | Should -Throw '*static CODEOWNERS*'
+        { Assert-AvmCodeownersContent -Content $changed -Template $script:template -AllowLegacyDefault } | Should -Throw '*static CODEOWNERS*'
+    }
+
+    It 'rejects moving metadata before the tooling overrides without changing their rules' {
+        $changed = $script:rendered.Replace("$script:metadataRule`n", '').Replace(
+            '*avm.core.team.tests.ps1', "$script:metadataRule`n*avm.core.team.tests.ps1"
+        )
+        { Assert-AvmCodeownersContent -Content $changed -Template $script:template } | Should -Throw '*static CODEOWNERS*'
+        { Assert-AvmCodeownersContent -Content $changed -Template $script:template -AllowLegacyDefault } | Should -Throw '*static CODEOWNERS*'
     }
 
     It 'preserves additional reviewed template comments byte-for-byte and does not evaluate them' {

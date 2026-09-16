@@ -20,8 +20,9 @@ $outputs = [ordered]@{
     'tools-repository' = $configuration.repositories.tools
     'owner' = $configuration.repositories.tools.Split('/')[0]
     'publication-repositories' = @(
-        $configuration.repositories.docs.Split('/')[1]
-        $configuration.repositories.tools.Split('/')[1]
+        foreach ($destination in $configuration.destinations.Values) {
+            $configuration.repositories[$destination.repository].Split('/')[1]
+        }
     ) -join ','
 }
 if ($GitHubOutputPath -and $PSCmdlet.ShouldProcess($GitHubOutputPath, 'Write validated catalog workflow outputs')) {

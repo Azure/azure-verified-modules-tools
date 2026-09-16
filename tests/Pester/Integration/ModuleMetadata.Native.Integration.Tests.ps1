@@ -37,7 +37,6 @@ Describe 'Integration: module metadata native readers' -Tag Integration -Skip:($
             $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
             $seed = [ordered]@{
                 '$schema'         = $script:schemaId
-                schemaVersion     = 1
                 moduleDisplayName = 'Storage Accounts'
                 moduleDescription = 'Deploys a Storage Account.'
                 canonicalType     = 'Microsoft.Storage/storageAccounts'
@@ -48,8 +47,7 @@ Describe 'Integration: module metadata native readers' -Tag Integration -Skip:($
                 $seed.telemetryIdPrefix = "$marker.res.storage-blobservice"
             }
             else {
-                $seed.tier = 'maintained'
-                $seed.owners = @{ individuals = @(@{ githubHandle = 'original-owner' }) }
+                $seed.owners = @('original-owner')
             }
             return $seed
         }
@@ -83,7 +81,7 @@ Describe 'Integration: module metadata native readers' -Tag Integration -Skip:($
         Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
     }
 
-    It 'keeps compiled ARM byte-identical after owner, tier, and canonical edits' {
+    It 'keeps compiled ARM byte-identical after owner and canonical edits' {
         $root = Join-Path $TestDrive 'bicep-native'
         $null = New-Item -ItemType Directory -Path $root
         $sourcePath = Join-Path $root 'main.bicep'
@@ -114,15 +112,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $template = $before | ConvertFrom-Json
         Get-NativeBicepTelemetryPrefix -Template $template | Should -BeExactly $seed.telemetryIdPrefix
 
-        $seed.owners = @{
-            individuals = @(
-                @{ githubHandle = 'first-owner' }
-                @{ githubHandle = 'second-owner' }
-                @{ githubHandle = 'third-owner' }
-                @{ githubHandle = 'fourth-owner' }
-            )
-        }
-        $seed.tier = 'core'
+        $seed.owners = @('first-owner', '@Azure/team-one', 'second-owner', 'third-owner', '@Azure/team-two', 'fourth-owner')
         $seed.canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
         $seed.comments = 'Catalog-only change.'
         $metadataPath = Join-Path $root 'metadata.json'
@@ -138,7 +128,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         Get-NativeBicepTelemetryPrefix -Template ($changed | ConvertFrom-Json) | Should -BeExactly $seed.telemetryIdPrefix
     }
 
-    It 'evaluates root and inherited child metadata in a provider-free Terraform plan' {
+    It 'evaluates root and reduced child metadata in a provider-free Terraform plan' {
         $root = Join-Path $TestDrive 'terraform-native'
         $child = Join-Path $root 'modules' 'child'
         $null = New-Item -ItemType Directory -Path $child -Force
@@ -153,16 +143,16 @@ output "canonical" {
 output "prefix" {
   value = local.avm_telemetry_id_prefix
 }
-output "inherited_tier" {
-  value = module.child.tier
+output "child_canonical" {
+  value = module.child.canonical
 }
 output "child_prefix" {
   value = module.child.prefix
 }
 '@
         $childSource = @'
-output "tier" {
-  value = local.avm_tier
+output "canonical" {
+  value = local.avm_canonical_type
 }
 output "prefix" {
   value = local.avm_telemetry_id_prefix
@@ -171,12 +161,14 @@ output "prefix" {
         [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), $rootSource)
         [System.IO.File]::WriteAllText((Join-Path $child 'main.tf'), $childSource)
         $seed = New-NativeMetadataSeed -Ecosystem terraform
-        $seed.tier = 'core'
         $childSeed = New-NativeMetadataSeed -Ecosystem terraform -ChildModule
         $null = Initialize-AvmModuleMetadata -Path $root -InputObject $seed `
             -Ecosystem terraform -ModuleType resource -UpdateSource -SkipModuleVersionCheck
         $null = Initialize-AvmModuleMetadata -Path $child -InputObject $childSeed `
             -Ecosystem terraform -ModuleType resource -ChildModule -UpdateSource -SkipModuleVersionCheck
+        foreach ($modulePath in @($root, $child)) {
+            Get-Content -LiteralPath (Join-Path $modulePath 'main.metadata.tf') -Raw | Should -Not -Match 'avm_tier'
+        }
         $null = Invoke-MetadataNativeTool -Tool terraform -Root $root `
             -Arguments @('init', '-backend=false', '-input=false', '-no-color')
         $planPath = Join-Path $root 'metadata.tfplan'
@@ -187,8 +179,18 @@ output "prefix" {
         $outputs = $plan.planned_values.outputs
         $outputs.canonical.value | Should -BeExactly $seed.canonicalType
         $outputs.prefix.value | Should -BeExactly $seed.telemetryIdPrefix
-        $outputs.inherited_tier.value | Should -BeExactly 'core'
+        $outputs.child_canonical.value | Should -BeExactly $childSeed.canonicalType
         $outputs.child_prefix.value | Should -BeExactly $childSeed.telemetryIdPrefix
         $plan.PSObject.Properties.Name | Should -Not -Contain 'resource_changes'
+
+        $before = $outputs | ConvertTo-Json -Depth 20
+        $seed.owners = @('new-owner', '@Azure/new-team')
+        [System.IO.File]::WriteAllText((Join-Path $root 'metadata.json'), ($seed | ConvertTo-Json -Depth 20))
+        $null = Invoke-MetadataNativeTool -Tool terraform -Root $root `
+            -Arguments @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', "-out=$planPath")
+        $updatedPlan = (Invoke-MetadataNativeTool -Tool terraform -Root $root `
+                -Arguments @('show', '-json', $planPath)) | ConvertFrom-Json
+        ($updatedPlan.planned_values.outputs | ConvertTo-Json -Depth 20) | Should -BeExactly $before
+        $updatedPlan.PSObject.Properties.Name | Should -Not -Contain 'resource_changes'
     }
 }

@@ -22,13 +22,11 @@ BeforeAll {
             Paths = @($root)
             Data = [ordered]@{
                 '$schema' = $metadataSchemaId
-                schemaVersion = 1
                 moduleDisplayName = 'Storage'
                 moduleDescription = 'Creates storage.'
                 canonicalType = 'Microsoft.Storage/storageAccounts'
                 telemetryIdPrefix = if ($Ecosystem -eq 'bicep') { '46d3xbcp.res.storage-account' } else { '46d3xtrf.res.storage-account' }
-                tier = 'maintained'
-                owners = @{ individuals = @(@{ githubHandle = 'module-owner' }) }
+                owners = @('module-owner', '@Azure/team-name')
             }
         }
         if ($Child) {
@@ -53,7 +51,7 @@ BeforeAll {
         foreach ($path in $Fixture.Paths) {
             $data = [ordered]@{}
             foreach ($key in $Fixture.Data.Keys) {
-                if ($path -ceq $Fixture.Root -or $key -notin @('owners', 'tier')) {
+                if ($path -ceq $Fixture.Root -or $key -ne 'owners') {
                     $data[$key] = $Fixture.Data[$key]
                 }
             }
@@ -162,6 +160,33 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         $metadata.Status | Should -Be 'fail'
         $metadata.Result.Issues[0].File | Should -Match 'blob-service/metadata.json$'
         [System.IO.File]::ReadAllText($childFile) | Should -BeExactly '{}'
+    }
+
+    It 'rejects obsolete <Ecosystem> root metadata property <Property> in <Command>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($command in @('Invoke-AvmPreCommit', 'Invoke-AvmPrCheck')) {
+                foreach ($legacy in @(
+                        @{ Property = 'owners'; Value = @{ individuals = @() } }
+                        @{ Property = 'tier'; Value = 'core' }
+                        @{ Property = 'schemaVersion'; Value = 1 }
+                    )) {
+                    @{ Ecosystem = $ecosystem; Command = $command; Property = $legacy.Property; Value = $legacy.Value }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $Command, $Property, $Value)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem
+        $fixture.Data[$Property] = $Value
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $before = @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash)
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'fail'
+        $metadata = $probe.Result.Steps | Where-Object Step -eq 'metadata'
+        $metadata.Status | Should -Be 'fail'
+        $metadata.Result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+        $probe.Warnings | Should -HaveCount 0
+        @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
     }
 
     It 'fails a Bicep source mismatch rather than repairing either file' {

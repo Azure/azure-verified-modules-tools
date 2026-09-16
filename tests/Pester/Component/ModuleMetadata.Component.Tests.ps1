@@ -25,15 +25,13 @@ BeforeAll {
         $canonical = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'types/example' }
         $data = [ordered]@{
             '$schema'         = $script:metadataSchemaId
-            schemaVersion     = 1
             moduleDisplayName = 'Storage Accounts'
             moduleDescription = 'Deploys a Storage Account.'
             canonicalType     = $canonical
             telemetryIdPrefix = "$marker.$kind.storage-storageaccount"
         }
         if (-not $ChildModule) {
-            $data.tier = 'maintained'
-            $data.owners = @{ individuals = @(@{ githubHandle = 'azure-owner' }); team = '' }
+            $data.owners = @('azure-owner')
             $data.alternativeNames = @('Storage')
             $data.comments = ''
         }
@@ -105,42 +103,41 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $result.Status | Should -BeExactly 'pass'
         $result.Metadata.canonicalType | Should -BeExactly 'Microsoft.Storage/storageAccounts'
         $result.Issues.Count | Should -Be 0
+        $result.Metadata.Contains('schemaVersion') | Should -BeFalse
+        $result.Metadata.Contains('tier') | Should -BeFalse
+        $result.Metadata.Contains('owners') | Should -Be (-not $Child)
     }
 
     It 'accepts team-only ownership without storing personal names' {
         $fixture = New-MetadataFixture
-        $fixture.Data.owners = @{ individuals = @(); team = '@Azure/avm-core-modules' }
+        $fixture.Data.owners = @('@Azure/avm-core-modules', '@Other-org/team-name')
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
-    It 'preserves all four individual owners without an ownership limit' {
+    It 'preserves many individual and team owners without an ownership limit' {
         $fixture = New-MetadataFixture
-        $fixture.Data.owners = @{
-            individuals = @(
-                @{ githubHandle = 'first-owner' }
-                @{ githubHandle = 'second-owner' }
-                @{ githubHandle = 'third-owner' }
-                @{ githubHandle = 'fourth-owner' }
-            )
-        }
+        $fixture.Data.owners = @('first-owner', '@Azure/team-one', 'second-owner', 'third-owner', '@Azure/team-two', 'fourth-owner')
         $parameters = $fixture.Parameters
         $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
         $result = Test-AvmModuleMetadata @parameters
         $result.Status | Should -Be 'pass'
-        @($result.Metadata.owners.individuals.githubHandle) |
-            Should -Be @('first-owner', 'second-owner', 'third-owner', 'fourth-owner')
+        $result.Metadata.owners |
+            Should -Be @('first-owner', '@Azure/team-one', 'second-owner', 'third-owner', '@Azure/team-two', 'fourth-owner')
     }
 
     It 'rejects invalid authored fields: <Case>' -TestCases @(
-        @{ Case = 'future tier'; Property = 'tier'; Value = 'open-source' }
-        @{ Case = 'tier casing'; Property = 'tier'; Value = 'Core' }
-        @{ Case = 'future schema'; Property = 'schemaVersion'; Value = 2 }
+        @{ Case = 'removed tier'; Property = 'tier'; Value = 'core' }
+        @{ Case = 'removed maintained tier'; Property = 'tier'; Value = 'maintained' }
+        @{ Case = 'removed schemaVersion'; Property = 'schemaVersion'; Value = 1 }
+        @{ Case = 'future schemaVersion'; Property = 'schemaVersion'; Value = 2 }
         @{ Case = 'missing reference'; Property = '$schema'; Remove = $true }
         @{ Case = 'foreign reference'; Property = '$schema'; Value = 'https://example.invalid/schema.json' }
         @{ Case = 'derived module type'; Property = 'moduleType'; Value = 'resource' }
         @{ Case = 'derived parent'; Property = 'parentModule'; Value = 'parent' }
+        @{ Case = 'derived status'; Property = 'status'; Value = 'deprecated' }
+        @{ Case = 'derived deprecation'; Property = 'deprecated'; Value = $true }
         @{ Case = 'empty description'; Property = 'moduleDescription'; Value = '' }
         @{ Case = 'whitespace name'; Property = 'moduleDisplayName'; Value = ' ' }
         @{ Case = 'wrong canonical kind'; Property = 'canonicalType'; Value = 'types/example' }
@@ -148,9 +145,17 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         @{ Case = 'wrong ecosystem'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.storage-storageaccount' }
         @{ Case = 'wrong telemetry kind'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.storage-storageaccount' }
         @{ Case = 'missing telemetry'; Property = 'telemetryIdPrefix'; Remove = $true }
-        @{ Case = 'owner PII'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner'; displayName = 'Personal Name' }) } }
-        @{ Case = 'duplicate handle casing'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner' }, @{ githubHandle = 'Owner' }) } }
-        @{ Case = 'invalid team'; Property = 'owners'; Value = @{ individuals = @(); team = 'Azure/team' } }
+        @{ Case = 'missing owners'; Property = 'owners'; Remove = $true }
+        @{ Case = 'legacy nested owners'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner' }); team = '@Azure/team' } }
+        @{ Case = 'owner object'; Property = 'owners'; Value = @(@{ githubHandle = 'owner' }) }
+        @{ Case = 'owner PII'; Property = 'owners'; Value = @(@{ githubHandle = 'owner'; displayName = 'Personal Name' }) }
+        @{ Case = 'scalar owners'; Property = 'owners'; Value = 'owner' }
+        @{ Case = 'null owners'; Property = 'owners'; Value = $null }
+        @{ Case = 'duplicate individual'; Property = 'owners'; Value = @('owner', 'owner') }
+        @{ Case = 'duplicate team'; Property = 'owners'; Value = @('@Azure/team', '@Azure/team') }
+        @{ Case = 'duplicate handle casing'; Property = 'owners'; Value = @('owner', 'Owner') }
+        @{ Case = 'duplicate team casing'; Property = 'owners'; Value = @('@Azure/team', '@azure/team') }
+        @{ Case = 'invalid team'; Property = 'owners'; Value = @('Azure/team') }
         @{ Case = 'duplicate alternative'; Property = 'alternativeNames'; Value = @('Storage', 'Storage') }
     ) {
         param($Property, $Value, $Remove)
@@ -166,6 +171,67 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $result = Test-AvmModuleMetadata @parameters
         $result.Status | Should -Be 'fail'
         $result.Issues.Count | Should -BeGreaterThan 0
+    }
+
+    It 'rejects invalid owner tokens: <Case>' -TestCases @(
+        @{ Case = 'empty token'; Token = '' }
+        @{ Case = 'whitespace'; Token = ' ' }
+        @{ Case = 'personal name'; Token = 'Owner Name' }
+        @{ Case = 'prefixed individual'; Token = '@owner' }
+        @{ Case = 'individual underscore'; Token = 'owner_name' }
+        @{ Case = 'individual leading hyphen'; Token = '-owner' }
+        @{ Case = 'individual trailing hyphen'; Token = 'owner-' }
+        @{ Case = 'individual consecutive hyphens'; Token = 'owner--name' }
+        @{ Case = 'individual trailing newline'; Token = "owner`n" }
+        @{ Case = 'overlong individual'; Token = ('a' * 40) }
+        @{ Case = 'unqualified team'; Token = 'Azure/team' }
+        @{ Case = 'missing organization'; Token = '@/team' }
+        @{ Case = 'missing team'; Token = '@Azure/' }
+        @{ Case = 'extra team segment'; Token = '@Azure/team/extra' }
+        @{ Case = 'invalid organization'; Token = '@Azure_org/team' }
+        @{ Case = 'organization leading hyphen'; Token = '@-Azure/team' }
+        @{ Case = 'organization trailing hyphen'; Token = '@Azure-/team' }
+        @{ Case = 'organization consecutive hyphens'; Token = '@Azure--org/team' }
+        @{ Case = 'team uppercase slug'; Token = '@Azure/Team' }
+        @{ Case = 'team underscore'; Token = '@Azure/team_name' }
+        @{ Case = 'team leading hyphen'; Token = '@Azure/-team' }
+        @{ Case = 'team trailing hyphen'; Token = '@Azure/team-' }
+        @{ Case = 'team consecutive hyphens'; Token = '@Azure/team--name' }
+        @{ Case = 'team trailing newline'; Token = "@Azure/team`n" }
+        @{ Case = 'null token'; Token = $null }
+        @{ Case = 'numeric token'; Token = 123 }
+        @{ Case = 'nested array'; Token = @('owner') }
+    ) {
+        param($Token)
+        $fixture = New-MetadataFixture
+        $fixture.Data.owners = , $Token
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+    }
+
+    It 'accepts the existing individual handle length boundaries and qualified team syntax' {
+        $fixture = New-MetadataFixture
+        $fixture.Data.owners = @('a', ('b' * 39), 'Owner-One', '@Example-org/a-team', '@3Org/1-team')
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.owners | Should -Be $fixture.Data.owners
+    }
+
+    It 'accepts one-letter and underscore ARM child type segments: <CanonicalType>' -TestCases @(
+        @{ CanonicalType = 'Microsoft.Storage/storageAccounts/a' }
+        @{ CanonicalType = 'Microsoft.Example/a_b/c' }
+    ) {
+        param($CanonicalType)
+        $fixture = New-MetadataFixture -ChildModule
+        $fixture.Data.canonicalType = $CanonicalType
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
     It 'enforces each transport limit at the exact boundary: <Ecosystem> length <Length>' -TestCases @(
@@ -195,10 +261,13 @@ Describe 'Component: shared module metadata schema' -Tag Component {
 
     It 'allows empty owners without inventing a team or person' {
         $fixture = New-MetadataFixture
-        $fixture.Data.owners = @{ individuals = @(); team = '' }
-        Save-MetadataFixture -Fixture $fixture
+        $fixture.Data.owners = @()
         $parameters = $fixture.Parameters
-        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+        $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'pass'
+        ($result.Metadata.owners -is [array]) | Should -BeTrue
+        $result.Metadata.owners | Should -HaveCount 0
     }
 
     It 'omits telemetry only for Bicep children that are unpublished and uninstrumented' {
@@ -242,20 +311,38 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
-    It 'rejects owners or tier repeated on a child' {
+    It 'rejects root-only or removed properties on a child: <Property>' -TestCases @(
+        @{ Property = 'owners'; Value = @() }
+        @{ Property = 'tier'; Value = 'core' }
+        @{ Property = 'schemaVersion'; Value = 1 }
+        @{ Property = 'alternativeNames'; Value = @('Storage') }
+        @{ Property = 'comments'; Value = '' }
+    ) {
+        param($Property, $Value)
         $fixture = New-MetadataFixture -ChildModule
-        $fixture.Data.tier = 'core'
-        $fixture.Data.owners = @{ individuals = @(@{ githubHandle = 'owner' }) }
+        $fixture.Data[$Property] = $Value
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
-        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+    }
+
+    It 'requires the versioned schema reference on a child' {
+        $fixture = New-MetadataFixture -ChildModule
+        $fixture.Data.Remove('$schema')
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
     }
 
     It 'reports missing or malformed metadata rather than passing or falling back' {
         $fixture = New-MetadataFixture
         $parameters = $fixture.Parameters
         (Test-AvmModuleMetadata @parameters).Issues[0].Code | Should -Be 'AVM_METADATA_MISSING'
-        [System.IO.File]::WriteAllText($fixture.MetadataPath, '{"schemaVersion":1,}')
+        [System.IO.File]::WriteAllText($fixture.MetadataPath, '{"owners":[],}')
         (Test-AvmModuleMetadata @parameters).Issues[0].Code | Should -Be 'AVM_METADATA_JSON'
     }
 
@@ -286,8 +373,12 @@ Describe 'Component: shared module metadata schema' -Tag Component {
 }
 
 Describe 'Component: permanent metadata reader' -Tag Component {
-    It 'reads existing metadata without changing source or metadata files' {
-        $fixture = New-MetadataFixture
+    It 'reads existing <Ecosystem> metadata without changing source or metadata files' -TestCases @(
+        @{ Ecosystem = 'bicep' }
+        @{ Ecosystem = 'terraform' }
+    ) {
+        param($Ecosystem)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
         $before = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
@@ -322,15 +413,24 @@ Describe 'Component: permanent metadata reader' -Tag Component {
         }
     }
 
-    It 'validates supplied values without reading or overwriting an existing file' {
+    It 'validates supplied values without reading or overwriting an existing file: <Case>' -TestCases @(
+        @{ Case = 'invalid owner token'; Property = 'owners'; Value = @('@invalid-user') }
+        @{ Case = 'nested owners'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner' }) } }
+        @{ Case = 'removed tier'; Property = 'tier'; Value = 'core' }
+        @{ Case = 'removed schemaVersion'; Property = 'schemaVersion'; Value = 1 }
+    ) {
+        param($Property, $Value)
         $fixture = New-MetadataFixture
         [System.IO.File]::WriteAllText($fixture.MetadataPath, 'invalid existing JSON')
         $parameters = $fixture.Parameters
         $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
         $result.Status | Should -Be 'pass'
         [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly 'invalid existing JSON'
-        $fixture.Data.tier = 'invalid'
-        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+        $fixture.Data[$Property] = $Value
+        $invalid = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $invalid.Status | Should -Be 'fail'
+        $invalid.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+        [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly 'invalid existing JSON'
     }
 
     It 'works from an isolated module copy with no repository-management migration directory' {
@@ -411,21 +511,57 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         $fixture = New-MetadataFixture
         Save-MetadataFixture -Fixture $fixture
         $before = [System.IO.File]::ReadAllText($fixture.MetadataPath)
-        $fixture.Data.tier = 'open-source'
+        $fixture.Data.owners = @('@invalid-user')
         $parameters = $fixture.Parameters
         $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
         $result.Changed | Should -BeFalse
-        $result.Metadata.tier | Should -Be 'maintained'
+        $result.Metadata.owners | Should -Be @('azure-owner')
         [System.IO.File]::ReadAllText($fixture.MetadataPath) | Should -BeExactly $before
     }
 
-    It 'rejects invalid metadata values before writing anything' {
-        $fixture = New-MetadataFixture
-        $fixture.Data.Remove('owners')
+    It 'does not rewrite <Ecosystem> source during metadata-only initialization and edits' -TestCases @(
+        @{ Ecosystem = 'bicep' }
+        @{ Ecosystem = 'terraform' }
+    ) {
+        param($Ecosystem)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem
         $parameters = $fixture.Parameters
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.PlannedFiles | Should -Be @('metadata.json')
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
+        $fixture.Data.owners = @('new-owner', '@Azure/new-team')
+        $fixture.Data.canonicalType = 'Microsoft.Storage/storageAccounts/a'
+        Save-MetadataFixture -Fixture $fixture
+        (Get-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+        (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $fixture.Root -Force -File) | Should -HaveCount 2
+    }
+
+    It 'rejects invalid metadata values before writing anything: <Case>' -TestCases @(
+        @{ Case = 'missing owners'; Property = 'owners'; Remove = $true }
+        @{ Case = 'nested owners'; Property = 'owners'; Value = @{ individuals = @() } }
+        @{ Case = 'owner object'; Property = 'owners'; Value = @(@{ githubHandle = 'owner' }) }
+        @{ Case = 'removed tier'; Property = 'tier'; Value = 'core' }
+        @{ Case = 'removed schemaVersion'; Property = 'schemaVersion'; Value = 1 }
+    ) {
+        param($Property, $Value, $Remove)
+        $fixture = New-MetadataFixture
+        if ($Remove) {
+            $fixture.Data.Remove($Property)
+        }
+        else {
+            $fixture.Data[$Property] = $Value
+        }
+        $parameters = $fixture.Parameters
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
         { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
     }
 
     It 'does not replace invalid existing metadata with generated values' {
@@ -451,13 +587,13 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         [System.IO.File]::ReadAllText($fixture.SourcePath) | Should -BeExactly $source
     }
 
-    It 'owner and tier changes never rewrite Bicep source after initialization' {
+    It 'owner and canonical type changes never rewrite Bicep source after initialization' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         $parameters = $fixture.Parameters
         $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $before = (Get-FileHash -LiteralPath $fixture.SourcePath).Hash
-        $fixture.Data.tier = 'core'
-        $fixture.Data.owners = @{ individuals = @(@{ githubHandle = 'new-owner' }) }
+        $fixture.Data.canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
+        $fixture.Data.owners = @('new-owner', '@Azure/new-team')
         Save-MetadataFixture -Fixture $fixture
         (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource).Changed | Should -BeFalse
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
@@ -511,14 +647,14 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
             $sourcePath = Join-Path $fixture.Root 'main.metadata.tf'
             $source = [System.IO.File]::ReadAllText($sourcePath)
             $source | Should -Match ([regex]::Escape('jsondecode(file("${path.module}/metadata.json"))'))
+            $source | Should -Match 'avm_canonical_type\s*=\s*local.avm_metadata.canonicalType'
             $source | Should -Match 'avm_telemetry_id_prefix\s*=\s*local.avm_metadata.telemetryIdPrefix'
+            $source | Should -Not -Match 'avm_tier'
+            $source | Should -Not -Match ([regex]::Escape('../../metadata.json'))
+            $result.Metadata.Contains('tier') | Should -BeFalse
+            $result.Metadata.Contains('schemaVersion') | Should -BeFalse
             if ($child) {
-                $source | Should -Match ([regex]::Escape('jsondecode(file("${path.module}/../../metadata.json")).tier'))
                 $result.Metadata.Contains('owners') | Should -BeFalse
-                $result.Metadata.Contains('tier') | Should -BeFalse
-            }
-            else {
-                $source | Should -Match 'avm_tier\s*=\s*local.avm_metadata.tier'
             }
             (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource).Changed | Should -BeFalse
             Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.tf.json') | Should -BeFalse

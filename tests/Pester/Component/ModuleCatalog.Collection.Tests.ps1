@@ -164,7 +164,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
     }
 
     It 'caches every migrated user and team across modules and permits profiles with no personal name' {
-        $owners = @{ individuals = @(@{ githubHandle = 'owner-one' }); team = '@Azure/avm-core-modules' }
+        $owners = @('owner-one', '@Azure/avm-core-modules', '@Azure/second-team')
         $inventory = [pscustomobject]@{
             Mar = @('avm/res/test/module', 'avm/res/test/other')
             Items = @(
@@ -178,15 +178,15 @@ Describe 'Component: module catalog registry collection' -Tag Component {
                 @{ login = 'owner-one'; name = $null; type = 'User' }
             }
             else {
-                @{ slug = 'avm-core-modules'; organization = @{ login = 'Azure' } }
+                @{ slug = ([uri]$Uri).Segments[-1]; organization = @{ login = 'Azure' } }
             }
             [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value $data }
         }
         $enrichment = Get-AvmCatalogEnrichment -Inventory $inventory
         $enrichment.GitHub.users.Count | Should -Be 1
-        $enrichment.GitHub.teams.Count | Should -Be 1
+        $enrichment.GitHub.teams.Count | Should -Be 2
         $enrichment.GitHub.users['owner-one'].name | Should -BeNullOrEmpty
-        Should -Invoke Invoke-AvmCatalogRequest -Times 2
+        Should -Invoke Invoke-AvmCatalogRequest -Times 3
     }
 
     It 'rejects truncated GitHub discovery instead of publishing a partial fleet' {
@@ -201,6 +201,7 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
     BeforeEach {
         $script:sourceRepository = 'Azure/terraform-azurerm-avm-res-test-module'
         $script:sourceCommit = 'a' * 40
+        $script:sourceArchived = $false
         $script:sourceBytes = @{
             'main.tf' = [System.Text.Encoding]::UTF8.GetBytes("terraform {}`n")
             'metadata.json' = [byte[]]@(239, 187, 191, 123, 125)
@@ -215,7 +216,7 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         Mock Invoke-AvmCatalogRequest {
             $url = [string]$Uri
             $body = if ($url -eq "https://api.github.com/repos/$script:sourceRepository") {
-                @{ full_name = $script:sourceRepository; private = $false; default_branch = 'main' }
+                @{ full_name = $script:sourceRepository; private = $false; default_branch = 'main'; archived = $script:sourceArchived }
             }
             elseif ($url -like '*/commits/main') {
                 @{ sha = $script:sourceCommit; commit = @{ tree = @{ sha = 'b' * 40 } } }
@@ -241,8 +242,38 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         $root = Join-Path $TestDrive 'source-copy'
         $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
         $result.commit | Should -BeExactly $script:sourceCommit
+        $result.archived | Should -BeFalse
         [System.IO.File]::ReadAllBytes((Join-Path $root 'metadata.json')) | Should -Be $script:sourceBytes['metadata.json']
         Should -Invoke Invoke-AvmCatalogRequest -Times 2 -ParameterFilter { [string]$Uri -like "https://raw.githubusercontent.com/*/$script:sourceCommit/*" }
+    }
+
+    It 'records an archived repository without skipping its source' {
+        $script:sourceArchived = $true
+        $root = Join-Path $TestDrive 'archived-source-copy'
+        $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
+        $result.archived | Should -BeTrue
+        $result.status | Should -Be 'collected'
+        (Join-Path $root 'main.tf') | Should -Exist
+    }
+
+    It 'rejects unknown archive state instead of defaulting it to active: <Value>' -TestCases @(
+        @{ Value = $null }
+        @{ Value = 'false' }
+        @{ Value = 0 }
+    ) {
+        param($Value)
+        $script:sourceArchived = $Value
+        $root = Join-Path $TestDrive 'invalid-archive-state'
+        { Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false } |
+            Should -Throw '*valid archived flag*'
+        Test-Path $root | Should -BeFalse
+    }
+
+    It 'does not infer archive state for an unavailable repository' {
+        Mock Invoke-AvmCatalogRequest { [pscustomobject]@{ StatusCode = 404; Content = '{}' } }
+        $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $TestDrive -Confirm:$false
+        $result.status | Should -Be 'not-found'
+        $result.archived | Should -BeNullOrEmpty
     }
 
     It 'rejects linked source files rather than following or executing them' {
@@ -268,7 +299,10 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
             [pscustomobject]@{ StatusCode = 409; Content = '{"message":"Git Repository is empty."}' }
         } -ParameterFilter { [string]$Uri -like '*/commits/main' }
         $root = Join-Path $TestDrive 'empty-source'
-        (Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false).status | Should -BeExactly 'empty'
+        $script:sourceArchived = $true
+        $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
+        $result.status | Should -BeExactly 'empty'
+        $result.archived | Should -BeTrue
         Test-Path -LiteralPath $root | Should -BeFalse
         Mock Invoke-AvmCatalogRequest {
             [pscustomobject]@{ StatusCode = 409; Content = '{"message":"Unexpected service state"}' }
@@ -284,18 +318,15 @@ Describe 'Component: module catalog preview inputs' -Tag Component {
         $roots = @{ docs = Join-Path $root 'docs'; tools = Join-Path $root 'tools' }
         $snapshot = Join-Path $root 'snapshot'
         $originals = @{}
-        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar', 'tier-configuration') }) {
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
             $sourcePath = if ($output.kind -eq 'csv') { $output.sourcePath } else { $output.targetPath }
             $file = Join-Path $roots[$output.destination] $sourcePath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
             $text = if ($output.kind -eq 'csv') {
                 "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n"
             }
-            elseif ($output.kind -eq 'mar') {
-                "[]`n"
-            }
             else {
-                "{`"repositoryGroups`":[]}`n"
+                "[]`n"
             }
             [System.IO.File]::WriteAllText($file, $text, [System.Text.UTF8Encoding]::new($false))
             $originals[$sourcePath] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()

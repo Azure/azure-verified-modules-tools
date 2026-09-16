@@ -24,7 +24,7 @@ function ConvertTo-AvmMetadataBackfillCandidate {
     $schema = Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json -AsHashtable
     $shape = if ($ChildModule) { 'child' } else { 'root' }
     $allowed = @($schema.definitions[$shape].properties.Keys)
-    $metadata = [ordered]@{ '$schema' = $schema.'$id'; schemaVersion = 1 }
+    $metadata = [ordered]@{ '$schema' = $schema.'$id' }
     foreach ($key in $Override.Keys) {
         if ($allowed -cnotcontains $key) {
             $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OVERRIDE' -Message "Unsupported $shape override field '$key'."))
@@ -135,13 +135,9 @@ function ConvertTo-AvmMetadataBackfillCandidate {
     }
 
     if (-not $ChildModule) {
-        if (-not $metadata.Contains('tier')) {
-            $metadata.tier = 'maintained'
-        }
-        $ownerOverride = if ($metadata.Contains('owners')) { $metadata.owners } else { @{} }
         $handles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        $individuals = [System.Collections.Generic.List[object]]::new()
-        $candidates = [System.Collections.Generic.List[string]]::new()
+        $owners = [System.Collections.Generic.List[string]]::new()
+        $candidates = [System.Collections.Generic.List[object]]::new()
         foreach ($row in $LegacyRecord) {
             foreach ($names in @(
                     @('PrimaryModuleOwnerGHHandle', 'PrimaryOwnerGitHubHandle'),
@@ -158,48 +154,41 @@ function ConvertTo-AvmMetadataBackfillCandidate {
                 }
             }
         }
-        if ($ownerOverride -isnot [System.Collections.IDictionary] -or
-            @($ownerOverride.Keys | Where-Object { $_ -cnotin @('individuals', 'team') }).Count -gt 0) {
-            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner overrides accept individuals and team only, never personal names.'))
-            $ownerOverride = @{}
-        }
-        foreach ($owner in @($ownerOverride['individuals'])) {
-            if ($null -eq $owner) {
-                continue
+        if ($metadata.Contains('owners')) {
+            if ($metadata.owners -isnot [array]) {
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner overrides must be an array of usernames or qualified team handles.'))
             }
-            if ($owner -isnot [System.Collections.IDictionary] -or @($owner.Keys) -cnotcontains 'githubHandle' -or
-                @($owner.Keys | Where-Object { $_ -cne 'githubHandle' }).Count -gt 0) {
-                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'Owner individuals must contain githubHandle only, never personal names.'))
-                continue
+            else {
+                foreach ($owner in $metadata.owners) {
+                    $candidates.Add($owner)
+                }
             }
-            $candidates.Add([string]$owner.githubHandle)
         }
         foreach ($handle in $OwnerGitHubHandle) {
             $candidates.Add($handle)
         }
+        try {
+            $team = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('ModuleOwnersGHTeam')
+            if ($team) {
+                $candidates.Add($team)
+            }
+        }
+        catch [System.ArgumentException] {
+            $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
+        }
         foreach ($handle in $candidates) {
-            if ($handle -cnotmatch '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$' -or $handle.Length -gt 39) {
-                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'A supplied owner is not a valid GitHub handle; provide a GitHub handle.'))
+            $valid = $handle -is [string] -and (
+                ($handle.Length -le 39 -and $handle -cmatch '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$') -or
+                $handle -cmatch '^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$'
+            )
+            if (-not $valid) {
+                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message 'An owner must be a GitHub username or a qualified @organization/team-slug string.'))
             }
             elseif ($handles.Add($handle)) {
-                $individuals.Add([ordered]@{ githubHandle = $handle })
+                $owners.Add($handle)
             }
         }
-        $metadata.owners = [ordered]@{ individuals = $individuals.ToArray() }
-        if ($ownerOverride.Contains('team')) {
-            $metadata.owners.team = $ownerOverride.team
-        }
-        else {
-            try {
-                $team = Get-AvmMetadataBackfillValue -Record $LegacyRecord -Name @('ModuleOwnersGHTeam')
-                if ($team) {
-                    $metadata.owners.team = $team
-                }
-            }
-            catch [System.ArgumentException] {
-                $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_OWNER' -Message $_.Exception.Message))
-            }
-        }
+        $metadata.owners = $owners.ToArray()
     }
 
     $required = @('moduleDisplayName', 'moduleDescription', 'canonicalType')

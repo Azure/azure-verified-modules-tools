@@ -23,7 +23,7 @@ $inventory = Get-AvmCatalogInventory -BicepRoot (Join-Path $InputPath 'sources' 
 $bundle = New-AvmCatalogBundle -Inventory $inventory `
     -Registry (Read-AvmCatalogJson -Path (Join-Path $InputPath 'registry.json')) `
     -GitHub (Read-AvmCatalogJson -Path (Join-Path $InputPath 'github.json')) `
-    -RepositoryConfiguration (Read-AvmCatalogJson -Path (Join-Path $InputPath 'repository-config.json'))
+    -RepositoryRevisions (Read-AvmCatalogJson -Path (Join-Path $InputPath 'revisions.json'))
 
 $publicationPath = Join-Path $InputPath 'publication.json'
 if (Test-Path -LiteralPath $publicationPath -PathType Leaf) {

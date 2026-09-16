@@ -13,17 +13,19 @@ AfterAll {
 Describe 'Strict metadata JSON' {
     It 'preserves a JSON object and arrays without evaluating values' {
         InModuleScope Avm.Authoring {
-            $data = ConvertFrom-AvmMetadataJson -Json '{"owners":{"individuals":[{"githubHandle":"azure-owner"}]},"comments":"$(throw 1)"}'
-            $data.owners.individuals.Count | Should -Be 1
+            $data = ConvertFrom-AvmMetadataJson -Json '{"owners":["azure-owner","@Azure/team-name"],"comments":"$(throw 1)"}'
+            $data.owners | Should -Be @('azure-owner', '@Azure/team-name')
             $data.comments | Should -BeExactly '$(throw 1)'
         }
     }
 
     It 'preserves ISO-looking JSON strings and empty arrays without date or null coercion' {
         InModuleScope Avm.Authoring {
-            $data = ConvertFrom-AvmMetadataJson -Json '{"moduleDescription":"2024-07-01T00:30:00Z","nested":{"items":[]},"values":[null,true,1,"2024-07-01T00:30:00Z"]}'
+            $data = ConvertFrom-AvmMetadataJson -Json '{"moduleDescription":"2024-07-01T00:30:00Z","owners":[],"nested":{"items":[]},"values":[null,true,1,"2024-07-01T00:30:00Z"]}'
             $data.moduleDescription | Should -BeOfType ([string])
             $data.moduleDescription | Should -BeExactly '2024-07-01T00:30:00Z'
+            ($data.owners -is [array]) | Should -BeTrue
+            $data.owners.Count | Should -Be 0
             ($data.nested.items -is [array]) | Should -BeTrue
             $data.nested.items.Count | Should -Be 0
             $data.values.Count | Should -Be 4
@@ -44,6 +46,45 @@ Describe 'Strict metadata JSON' {
         InModuleScope Avm.Authoring -Parameters @{ Json = $Json } {
             param($Json)
             { ConvertFrom-AvmMetadataJson -Json $Json } | Should -Throw
+        }
+    }
+}
+
+Describe 'Metadata owner uniqueness' {
+    It 'compares all root owner strings without regard to case: <Case>' -TestCases @(
+        @{ Case = 'unowned root'; Owners = @(); DuplicateCount = 0 }
+        @{ Case = 'mixed individuals and teams'; Owners = @('owner-one', 'Owner-Two', '@Azure/team-one', '@Azure/team-two'); DuplicateCount = 0 }
+        @{ Case = 'individual casing'; Owners = @('owner-one', 'OWNER-ONE'); DuplicateCount = 1 }
+        @{ Case = 'team organization casing'; Owners = @('@Azure/team-one', '@azure/team-one'); DuplicateCount = 1 }
+        @{ Case = 'duplicates across a mixed list'; Owners = @('owner-one', '@Azure/team-one', 'OWNER-ONE', '@azure/team-one'); DuplicateCount = 2 }
+    ) {
+        param($Owners, $DuplicateCount)
+        InModuleScope Avm.Authoring -Parameters @{ Owners = $Owners; DuplicateCount = $DuplicateCount } {
+            param($Owners, $DuplicateCount)
+            Mock Get-Content { '{"oneOf":[]}' }
+            Mock Test-Json { $true }
+            $json = @{
+                canonicalType = 'Microsoft.Storage/storageAccounts'
+                telemetryIdPrefix = '46d3xtrf.res.storage-account'
+                owners = $Owners
+            } | ConvertTo-Json -Depth 20
+
+            $result = Test-AvmMetadataContent -Json $json -Ecosystem terraform -ModuleType resource
+            $result.Issues | Should -HaveCount $DuplicateCount
+            foreach ($issue in $result.Issues) {
+                $issue.Code | Should -Be 'AVM_METADATA_OWNER'
+            }
+        }
+    }
+
+    It 'does not read an owners property from reduced child metadata' {
+        InModuleScope Avm.Authoring {
+            Mock Get-Content { '{"oneOf":[]}' }
+            Mock Test-Json { $true }
+            $json = '{"canonicalType":"Microsoft.Storage/storageAccounts/a","telemetryIdPrefix":"46d3xtrf.res.storage-child"}'
+            $result = Test-AvmMetadataContent -Json $json -Ecosystem terraform -ModuleType resource -ChildModule
+            $result.Issues | Should -HaveCount 0
+            $result.Metadata.Contains('owners') | Should -BeFalse
         }
     }
 }

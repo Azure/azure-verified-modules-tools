@@ -16,7 +16,7 @@ function Initialize-AvmModuleMetadata {
     .PARAMETER ModuleType
         Module kind derived from its path or repository name.
     .PARAMETER ChildModule
-        Initialize the reduced child shape, inheriting owners and tier.
+        Initialize the reduced child shape, inheriting root ownership.
     .PARAMETER UpdateSource
         Wire Bicep's scoped telemetry prefix load, or Terraform's native JSON
         locals in main.metadata.tf. Existing conflicting readers are not replaced.

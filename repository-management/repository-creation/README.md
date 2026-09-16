@@ -24,7 +24,6 @@ $request = @{
     moduleDescription = 'Deploys an Azure Storage account.'
     resourceProviderNamespace = 'Microsoft.Storage'
     resourceType = 'storageAccounts'
-    tier = 'maintained'
     telemetryIdPrefix = '46d3xtrf.res.storage-storageaccount'
     ownerPrimaryGitHubHandle = 'first-owner'
     ownerPrimaryDisplayName = 'First Owner'
@@ -41,23 +40,22 @@ $request = @{
 ```
 
 The values above are illustrative: supply the requested module's actual
-description, canonical type, tier, telemetry identifier, and owners.
+description, canonical type, telemetry identifier, and owners.
 
 | Metadata field | Creation input |
 | --- | --- |
 | `$schema` | `$id` of the schema packaged in the checked-out module |
-| `schemaVersion` | `1` |
 | `moduleDisplayName` | `moduleDisplayName` |
 | `moduleDescription` | Required `moduleDescription`; never copied from a display name |
 | `canonicalType` | Required `canonicalType`; resource modules may instead supply both `resourceProviderNamespace` and `resourceType` |
-| `tier` | Required `tier`, either `core` or `maintained` |
 | `telemetryIdPrefix` | Explicit `telemetryIdPrefix`, required for resource and pattern roots |
-| `owners.individuals` | All supplied primary/secondary legacy handles followed by `ownerGitHubHandles` |
-| `owners.team` | Optional `ownerTeam` |
+| `owners` | Flat array of primary/secondary handles, additional `ownerGitHubHandles`, and optional qualified `ownerTeam` |
 | `alternativeNames` | Comma-separated `moduleAlternativeNames`, trimmed with empty and duplicate entries removed |
 
 No owner is inferred. An empty owner array is valid; there is no two-owner
 limit. Handles must satisfy the schema, without a leading `@` for individuals.
+Teams use `@organization/team-slug`. The versioned `$schema` is required;
+module metadata has no additional `schemaVersion` or `tier` field.
 Legacy owner display names are inventory fields, not metadata.json fields.
 The compatibility inventory retains its required primary owner handle/display
 name and, for resource modules, resource provider namespace/type inputs. When

@@ -32,7 +32,7 @@ function Read-AvmCatalogConfiguration {
         throw [System.IO.InvalidDataException]::new('Invalid catalog manifest: expected v1 repositories, destinations, and outputs.')
     }
     Assert-AvmCatalogManifestKeys -Value $configuration.repositories -Keys @('docs', 'bicep', 'tools')
-    Assert-AvmCatalogManifestKeys -Value $configuration.destinations -Keys @('docs', 'tools')
+    Assert-AvmCatalogManifestKeys -Value $configuration.destinations -Keys @('docs')
     $repositories = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($role in @('docs', 'bicep', 'tools')) {
         $repository = $configuration.repositories[$role]
@@ -41,23 +41,20 @@ function Read-AvmCatalogConfiguration {
             throw [System.IO.InvalidDataException]::new("Catalog repository '$role' must be a distinct Azure/owner-repository name.")
         }
     }
-    if ($configuration.repositories.Count -ne 3 -or $configuration.destinations.Count -ne 2) {
-        throw [System.IO.InvalidDataException]::new('Unexpected catalog repository or destination roles.')
-    }
-    foreach ($role in @('docs', 'tools')) {
+    foreach ($role in @('docs')) {
         $destination = $configuration.destinations[$role]
         Assert-AvmCatalogManifestKeys -Value $destination -Keys @('repository', 'path')
         if ($destination -isnot [System.Collections.IDictionary] -or $destination.repository -cne $role -or $destination.path -isnot [string]) {
             throw [System.IO.InvalidDataException]::new("Invalid catalog destination '$role'.")
         }
         Assert-AvmCatalogManifestPath -Path $destination.path
-        $prefix = if ($role -eq 'docs') { 'docs/' } else { 'repository-management/' }
+        $prefix = 'docs/'
         if (-not $destination.path.StartsWith($prefix, [StringComparison]::Ordinal)) {
             throw [System.IO.InvalidDataException]::new("Catalog destination '$role' must remain under '$prefix'.")
         }
     }
 
-    $kinds = @('csv', 'mar', 'catalog', 'migration-report', 'tier-configuration', 'publication-plan')
+    $kinds = @('csv', 'mar', 'catalog', 'migration-report', 'publication-plan')
     $counts = @{}
     $csvKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $csvSources = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -91,7 +88,7 @@ function Read-AvmCatalogConfiguration {
                 throw [System.IO.InvalidDataException]::new('Duplicate or invalid catalog CSV ecosystem/module-type mapping.')
             }
         }
-        $expectedDestination = if ($kind -eq 'publication-plan') { $null } elseif ($kind -eq 'tier-configuration') { 'tools' } else { 'docs' }
+        $expectedDestination = if ($kind -eq 'publication-plan') { $null } else { 'docs' }
         if (-not $output.Contains('destination') -or $output.destination -cne $expectedDestination) {
             throw [System.IO.InvalidDataException]::new("Catalog output '$kind' has an invalid destination.")
         }
@@ -154,7 +151,7 @@ function Get-AvmCatalogPublicationPaths {
     param([System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration))
 
     $paths = [ordered]@{}
-    foreach ($role in @('docs', 'tools')) {
+    foreach ($role in $Configuration.destinations.Keys) {
         $files = [ordered]@{}
         $basePaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($output in $Configuration.outputs | Where-Object { $_.destination -ceq $role }) {

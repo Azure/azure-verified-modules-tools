@@ -20,14 +20,14 @@ BeforeAll {
 Describe 'Component: module catalog artifact manifest' -Tag Component {
     It 'declares every published artifact and the internal publication plan' {
         $configuration = Read-AvmCatalogConfiguration
-        $configuration.outputs | Should -HaveCount 11
-        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 10
+        $configuration.outputs | Should -HaveCount 10
+        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 9
         (Get-AvmCatalogOutput -Configuration $configuration -Kind catalog).file | Should -BeExactly 'v1/modules.json'
         (Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).file | Should -BeExactly 'v1/migration-report.json'
         (Get-AvmCatalogOutput -Configuration $configuration -Kind mar).file | Should -BeExactly 'BicepMARModules.json'
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         $paths.docs.files.Count | Should -Be 9
-        $paths.tools.files.Count | Should -Be 1
+        $paths.Contains('tools') | Should -BeFalse
         $paths.docs.files['docs/v1/modules.json'] | Should -BeExactly 'docs/static/module-indexes/v1/modules.json'
     }
 
@@ -75,6 +75,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
         @{ Case = 'device name'; Change = { param($c) $c.outputs[0].file = 'NUL.csv' } }
         @{ Case = 'executable output'; Change = { param($c) $c.outputs[0].file = 'run.ps1' } }
         @{ Case = 'wrong destination'; Change = { param($c) $c.outputs[0].destination = 'tools' } }
+        @{ Case = 'retired tier output'; Change = { param($c) $c.outputs += @{ kind = 'tier-configuration'; file = 'config.json'; destination = 'tools' } } }
         @{ Case = 'published control plan'; Change = { param($c) $c.outputs[-1].destination = 'docs' } }
         @{ Case = 'foreign owner'; Change = { param($c) $c.repositories.docs = 'Other/catalog' } }
         @{ Case = 'duplicate repository roles'; Change = { param($c) $c.repositories.docs = $c.repositories.tools } }
@@ -100,7 +101,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             -ConfigurationPath $path -GitHubOutputPath $outputPath -Confirm:$false
         $result.'documentation-repository' | Should -BeExactly 'Azure/catalog-fixture'
         $result.'bicep-repository' | Should -BeExactly 'Azure/bicep-fixture'
-        $result.'publication-repositories' | Should -BeExactly 'catalog-fixture,azure-verified-modules-tools'
+        $result.'publication-repositories' | Should -BeExactly 'catalog-fixture'
         $text = [System.IO.File]::ReadAllText($outputPath)
         $text | Should -Match 'documentation-repository=Azure/catalog-fixture'
         $text | Should -Not -Match "`r"

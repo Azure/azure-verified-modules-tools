@@ -16,7 +16,6 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Publication.ps1')
 
 $configuration = Read-AvmCatalogConfiguration
-$tierOutput = Get-AvmCatalogOutput -Configuration $configuration -Kind tier-configuration
 $plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration
 if (-not $Publish) {
     Write-Output 'Catalog publication plan validated; no remote changes requested.'
@@ -28,7 +27,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REPOSITORY -cne $configuratio
     $env:AVM_APP_SLUG -notmatch '^[a-z0-9-]+$' -or -not $env:GH_TOKEN) {
     throw [System.InvalidOperationException]::new('Publication requires the main-branch tools workflow and its scoped app token.')
 }
-if (-not $PSCmdlet.ShouldProcess(($configuration.repositories.docs, $configuration.repositories.tools -join ' and '), 'Publish reviewable catalog branches and pull requests')) {
+if (-not $PSCmdlet.ShouldProcess($configuration.repositories.docs, 'Publish reviewable catalog branches and pull requests')) {
     return
 }
 
@@ -70,11 +69,6 @@ try {
             -WorkingDirectory $state -EnvVars $processEnvironment
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', 'main') -WorkingDirectory $root -EnvVars $processEnvironment
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
-        if ($role -eq 'tools') {
-            Assert-AvmCatalogTierOnlyChange `
-                -Before (Read-AvmCatalogJson -Path (Join-Path $root $tierOutput.targetPath)) `
-                -After (Read-AvmCatalogJson -Path (Join-Path $BundlePath $tierOutput.bundlePath))
-        }
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
             -ArgumentList @('api', '--method', 'GET', '--paginate', '--slurp', "repos/$repository/pulls?state=open&base=main&per_page=100") `
             -WorkingDirectory $root -EnvVars $processEnvironment
@@ -135,7 +129,7 @@ try {
         $body = [ordered]@{
             title = 'chore: synchronize AVM module catalogs'
             head = $target.Branch; base = 'main'
-            body = "Generated AVM catalog update. Review metadata precedence, unresolved identities, parity, and tier membership before merging.`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
+            body = "Generated AVM catalog update. Review metadata precedence, deprecation, unresolved identities, and parity before merging.`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
         }
         [System.IO.File]::WriteAllText($bodyPath, (ConvertTo-AvmCatalogJson -Value $body), [System.Text.UTF8Encoding]::new($false))
         $response = Invoke-AvmCatalogProcess -FilePath $gh `

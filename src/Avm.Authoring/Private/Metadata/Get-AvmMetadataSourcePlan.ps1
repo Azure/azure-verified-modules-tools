@@ -62,13 +62,11 @@ function Get-AvmMetadataSourcePlan {
     $fields = [ordered]@{
         avm_metadata       = 'jsondecode(file("${path.module}/metadata.json"))'
         avm_canonical_type = 'local.avm_metadata.canonicalType'
-        avm_tier           = 'local.avm_metadata.tier'
     }
     if ($ChildModule) {
         if ((Split-Path -Leaf (Split-Path -Parent $Path)) -cne 'modules') {
             throw [System.ArgumentException]::new('Terraform child source readers require an immediate modules/{name} directory.')
         }
-        $fields.avm_tier = 'jsondecode(file("${path.module}/../../metadata.json")).tier'
     }
     if ($Metadata.Contains('telemetryIdPrefix')) {
         $fields.avm_telemetry_id_prefix = 'local.avm_metadata.telemetryIdPrefix'

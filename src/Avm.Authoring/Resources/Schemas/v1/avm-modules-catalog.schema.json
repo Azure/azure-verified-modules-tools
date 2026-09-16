@@ -55,30 +55,19 @@
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
     },
     "owners": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [ "individuals", "team" ],
-      "properties": {
-        "individuals": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [ "githubHandle" ],
-            "properties": {
-              "githubHandle": {
-                "type": "string",
-                "maxLength": 39,
-                "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
-              }
-            }
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "anyOf": [
+          {
+            "maxLength": 39,
+            "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+          },
+          {
+            "pattern": "^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
           }
-        },
-        "team": {
-          "type": "string",
-          "pattern": "^(@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*)?$"
-        }
+        ]
       }
     },
     "registry": {
@@ -117,13 +106,13 @@
     "module": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Identity is (ecosystem, repository, modulePath), not canonicalType alone. Legacy records can have unknown tier or no known owners.",
+      "description": "Identity is (ecosystem, repository, modulePath), not canonicalType alone. Owner strings are usernames or qualified team handles.",
       "required": [
         "ecosystem", "moduleType", "moduleStatus", "moduleName", "modulePath", "repository",
         "repoURL", "parentModule", "familyModule", "provider",
         "canonicalType", "providerNamespace", "resourceType", "metadataSource",
         "moduleDisplayName", "moduleDescription", "alternativeNames", "comments",
-        "tier", "owners", "telemetryIdPrefix", "publicRegistryReference", "registry"
+        "owners", "telemetryIdPrefix", "publicRegistryReference", "registry"
       ],
       "properties": {
         "ecosystem": { "enum": [ "bicep", "terraform" ] },
@@ -147,7 +136,6 @@
         "moduleDescription": { "type": "string" },
         "alternativeNames": { "type": "array", "items": { "type": "string" } },
         "comments": { "type": "string" },
-        "tier": { "enum": [ null, "core", "maintained" ] },
         "owners": { "$ref": "#/definitions/owners" },
         "telemetryIdPrefix": { "$ref": "#/definitions/nullableText" },
         "publicRegistryReference": { "type": "string", "minLength": 1 },
@@ -166,7 +154,6 @@
           "if": { "properties": { "metadataSource": { "const": "metadata" } } },
           "then": {
             "properties": {
-              "tier": { "enum": [ "core", "maintained" ] },
               "moduleDisplayName": { "minLength": 1 },
               "moduleDescription": { "minLength": 1 }
             }

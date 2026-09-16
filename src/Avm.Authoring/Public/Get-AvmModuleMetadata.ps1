@@ -13,7 +13,7 @@ function Get-AvmModuleMetadata {
     .PARAMETER ModuleType
         resource, pattern, or utility.
     .PARAMETER ChildModule
-        Require the reduced child shape, without owners or tier.
+        Require the reduced child shape, without owners.
     .PARAMETER SkipModuleVersionCheck
         Skip the installed-module version check for offline reading.
     .EXAMPLE

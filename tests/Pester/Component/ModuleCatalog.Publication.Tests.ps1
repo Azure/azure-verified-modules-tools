@@ -16,7 +16,7 @@ BeforeAll {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = [System.IO.Directory]::CreateDirectory($root)
         $paths = Get-AvmCatalogPublicationPaths -Configuration $Configuration
-        $plan = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash; docs = $null; tools = $null; outputHashes = [ordered]@{} }
+        $plan = [ordered]@{ schemaVersion = 1; manifestHash = $Configuration.hash; docs = $null; outputHashes = [ordered]@{} }
         foreach ($role in $paths.Keys) {
             $plan[$role] = [ordered]@{ repository = $paths[$role].repository; baseFiles = [ordered]@{} }
             foreach ($target in $paths[$role].basePaths) {
@@ -26,16 +26,13 @@ BeforeAll {
                 $file = Join-Path $root $relative
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
                 $text = if ($relative.EndsWith('.csv')) {
-                    "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,Tier,CanonicalType`n"
+                    "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,CanonicalType`n"
                 }
                 elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog).bundlePath) {
                     ConvertTo-AvmCatalogJson -Value ([ordered]@{ '$schema' = $catalogSchemaId; schemaVersion = 1; modules = [ordered]@{} })
                 }
                 elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind mar).bundlePath) {
                     "[]`n"
-                }
-                elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind tier-configuration).bundlePath) {
-                    "{`"repositoryGroups`": []}`n"
                 }
                 else {
                     "{`"schemaVersion`": 1}`n"
@@ -56,8 +53,8 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         $root = New-CatalogPublicationFixture
         $plan = Test-AvmCatalogPublicationBundle -Path $root
         $plan.docs.repository | Should -BeExactly 'Azure/Azure-Verified-Modules'
-        $plan.tools.repository | Should -BeExactly 'Azure/azure-verified-modules-tools'
-        $plan.outputHashes.Count | Should -Be 10
+        $plan.Contains('tools') | Should -BeFalse
+        $plan.outputHashes.Count | Should -Be 9
     }
 
     It 'rejects altered output bytes before preparing any remote update' {
@@ -139,16 +136,13 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         { Assert-AvmCatalogPublicationBase -Root $root -BaseFiles @{ 'input.json' = $hash } } | Should -Throw '*base changed*'
     }
 
-    It 'permits only tier membership edits and refuses settings or non-tier group changes' {
-        $before = [ordered]@{ repositoryGroups = @(
-                [ordered]@{ name = 'azure-verified-modules-tier-1'; repositories = @('old'); topics = @('avm-tier-1') },
-                [ordered]@{ name = 'canary'; repositories = @('keep'); settings = @{ value = 1 } }
-            ) }
-        $after = ConvertFrom-Json -InputObject (ConvertTo-AvmCatalogJson -Value $before) -AsHashtable -Depth 100
-        $after.repositoryGroups[0].repositories = @('new')
-        { Assert-AvmCatalogTierOnlyChange -Before $before -After $after } | Should -Not -Throw
-        $after.repositoryGroups[1].settings.value = 2
-        { Assert-AvmCatalogTierOnlyChange -Before $before -After $after } | Should -Throw '*only tier repository memberships*'
+    It 'rejects retired tools configuration publication instead of broadening the write scope' {
+        $root = New-CatalogPublicationFixture
+        $planPath = Join-Path $root 'plan.json'
+        $plan = Read-AvmCatalogJson -Path $planPath
+        $plan['tools'] = @{ repository = 'Azure/azure-verified-modules-tools'; baseFiles = @{} }
+        [System.IO.File]::WriteAllText($planPath, (ConvertTo-AvmCatalogJson -Value $plan))
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*manifest fields*'
     }
 
     It 'parses every catalog script without executing fetched module code' {

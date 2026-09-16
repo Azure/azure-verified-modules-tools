@@ -2,7 +2,7 @@
 
 **Status: review findings resolved; current hosted checks and operator approval
 are required before rollout. No rollout operations have been performed.**
-State last checked on 2026-09-15. Recheck each change immediately before merging.
+Recheck each change immediately before merging.
 This document is a plan, not approval to run production commands.
 
 ## What is being deployed
@@ -12,7 +12,8 @@ This document is a plan, not approval to run production commands.
 - Terraform creates missing files through its existing sync workflow. Existing
   metadata is never overwritten, and no intermediate approval file is required.
 - The catalog workflow reads module metadata and registry information, then
-  proposes updated CSV/JSON indexes and tier lists for review.
+  proposes updated CSV/JSON indexes for review. It does not change tier lists
+  or repository configuration.
   CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
   remain unchanged. The new JSON catalog keeps `v1/modules.json`.
 - Engineering owners must review metadata changes. The existing AVM App bypass
@@ -30,11 +31,11 @@ This document is a plan, not approval to run production commands.
 | --- | --- | --- | --- |
 | Prerequisite | [#119: Terraform CODEOWNERS generation](https://github.com/Azure/azure-verified-modules-tools/pull/119) | Merged | Supplies the generator used by the ownership-policy change. |
 | Prerequisite | [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343) | Merged | Required by the existing Bicep CODEOWNERS merge check. |
-| Safety gate | [Disable Bicep Sync](../.github/workflows/repository-management-bicep-sync.yml) with operator approval | Required before either tools change merges | Removing the old enable-variable gate can activate six scheduled apply runs per day. Keep the workflow disabled until every change below is merged. |
+| Safety gate | [Disable Bicep Sync](../.github/workflows/repository-management-bicep-sync.yml) with operator approval | Required before the tools change merges | The combined tools change contains the new ownership rule. Keep the workflow disabled until the Bicep governance change is merged too. |
 | 1 | [Azure/Azure-Verified-Modules#2929: pipeline template](https://github.com/Azure/Azure-Verified-Modules/pull/2929) | Merged; current main retains the exclusion | Makes future generated Bicep pipelines exclude metadata-only publishing. |
-| 2 | [#113: metadata implementation](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Open; Opus follow-up and local gate passed | Makes the schemas available before Bicep files reference them. Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
+| 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Consolidated tools change | Includes the schemas and engineering-only ownership generators formerly in [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120). Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
 | 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Open; merge blocked pending completion of requirements | Adds metadata, its engineering-only ownership rule, compatible governance tests, and existing pipeline exclusions together. |
-| 4 | [#120: engineering review for metadata](https://github.com/Azure/azure-verified-modules-tools/pull/120) | Open; conflicts resolved and local gate passed | Makes both tools generators preserve the new ownership rule, after the Bicep governance tests accept it. Obtain fresh checks after earlier tools changes merge. |
+| After data adoption and CSV cutover | [Azure/Azure-Verified-Modules#2936: metadata maintenance processes](https://github.com/Azure/Azure-Verified-Modules/pull/2936) | Draft | Updates ownership, orphaning, adoption, and generated-index processes once the new sources and review protections are in use. |
 
 **Do not run the new Bicep generator before the Bicep repository change.** The
 old governance tests reject the new final metadata rule and would fail across
@@ -55,7 +56,7 @@ operation below. Record the current workflow states and relevant variable values
 so they can be restored deliberately.
 
 - Disable `repository-management-bicep-sync.yml` in the tools repository before
-  either tools change merges, even if its old enable variable appears absent.
+  the tools change merges, even if its old enable variable appears absent.
   Verify the workflow is disabled and keep it disabled until both the Bicep
   governance tests and the tools generator accept the same ownership rules.
 - Disable Terraform Sync for the merge window if its automatic writes must
@@ -64,7 +65,7 @@ so they can be restored deliberately.
 - Wait for active writers to finish and ensure queued writers cannot run during
   the pause. Do not cancel an active state writer or break its lease.
 - The catalog workflow has no enable variable. Once merged and enabled, its
-  daily schedule can publish review changes for preview CSVs, JSON, and tiers.
+  daily schedule can publish review changes for preview CSVs and JSON.
   Disable it until ready if an operator-controlled first run is required.
 - Check the protected `avm` environment, the existing App installation, and
   target permissions. The engineering team needs the access GitHub requires for
@@ -95,8 +96,8 @@ tools checkout directly, so they do not require that release first.
 
 ## Bicep file adoption and CODEOWNERS
 
-Follow the merge order above: tools schemas first, then the Bicep files,
-governance tests and ownership rule, then the matching tools generator.
+Follow the merge order above: combined tools schemas/generators first, then the
+Bicep files, compatible governance tests and ownership rule.
 Keep Bicep Sync disabled throughout.
 
 Confirm that all 572 intended files are present, including complete owner lists.
@@ -193,7 +194,7 @@ gh workflow run repository-management-sync.yml --repo $tools --ref $ref `
 ```
 
 This opens a file change; it does not automatically merge it. Inspect names,
-descriptions, canonical types, owner handles, tier, and telemetry identifiers.
+descriptions, canonical types, flat owner handles, and telemetry identifiers.
 Require normal review/approval or the already-authorized App process; do not
 self-approve or introduce new bypasses.
 
@@ -236,10 +237,10 @@ Download the `module-metadata-catalog` artifact. Check:
 - Child CSV `AlternativeNames` and `Comments` are unchanged, including blank
   cells. They must not be replaced with the parent's values.
 - `v1/modules.json` includes every owner, distinct implementations, and children
-  with inherited ownership/tier. Check representative deprecated/unowned modules.
+  with inherited ownership. Check representative deprecated/unowned modules.
 - The migration report explains every missing/unresolved module and parity gap.
-- Tier changes are expected. Defaulting metadata to `maintained` must not
-  accidentally downgrade a known core module's governance.
+- Deprecation reflects Bicep `DEPRECATED.md` and descendants, or the Terraform
+  repository archived flag. Existing Deprecated values are preserved during transition.
 - Output files and destinations match the central configuration, and publication
   hashes/bases are complete. Errors or partial API results are not publishable.
 
@@ -251,7 +252,7 @@ text changes even though metadata-only edits do not publish modules.
 
 Recovered owners can move formerly Orphaned modules to Available. Genuinely
 unowned modules stay Orphaned and Deprecated modules stay Deprecated. The six
-CSVs also gain `Tier` and `CanonicalType`. Compare fresh output against its
+CSVs gain `CanonicalType`, not a tier column. Compare fresh output against its
 recorded inputs; these review counts are not permanent expected totals.
 The JSON catalog retains family-level aliases/comments for children, while
 their existing CSV cells remain separate.
@@ -268,10 +269,8 @@ After approving a manual publication, run the same workflow with
 `plan_only=false`. The daily schedule can also publish while the workflow is
 enabled; no repository variable is required.
 
-Catalog publication opens updates in the public docs and tools repositories;
-neither is automatically merged. Review both, especially tier membership.
-Cross-repository publication is not atomic: if one succeeds and the other fails,
-inspect both before retrying rather than assuming neither changed.
+Catalog publication opens updates only in the public docs repository, without
+automatic merging. It does not publish tools repository settings or tier changes.
 
 ## Replace the live CSVs later
 
@@ -311,7 +310,7 @@ there rather than copying generated catalogs.
 
 Stop on missing/stale checks, review findings, unexpected files, overwritten
 metadata, truncated collection, unexplained row loss, owner omissions,
-unexpected tier moves, or a release selected by metadata-only changes.
+unexpected repository-setting changes, or a release selected by metadata-only changes.
 
 Pause the relevant automation first. Keep run links, logs, artifacts, and commit
 IDs. Correct data/tooling and generate again from fresh inputs. If an applied

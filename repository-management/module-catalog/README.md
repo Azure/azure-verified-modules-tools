@@ -14,8 +14,8 @@ selects the docs, Bicep source, and tools repositories; `destinations` supplies
 the repository-relative output directories. Each `outputs` entry declares its
 kind, relative filename, and destination. CSV entries also declare `sourceFile`,
 the canonical input name; `file` is the preview output name. This includes all six CSVs,
-`BicepMARModules.json`, `v1/modules.json`, `v1/migration-report.json`, and the
-tier configuration. The `publication-plan` entry has a null destination: it is
+`BicepMARModules.json`, `v1/modules.json`, and `v1/migration-report.json`.
+The `publication-plan` entry has a null destination: it is
 bundle-only and is emitted when publication-base information is available.
 
 Collection, generation, workflow checkouts/token targets, and publication use
@@ -31,8 +31,8 @@ Manual runs default to artifacts only. Publication requires `main`, the protecte
 Disable the workflow when its scheduled publication must stop; enabling it also
 allows daily publication, not just manual previews. The existing app needs
 read access for collection, organization members read for owner-team validation,
-and contents/pull-requests write restricted to the public docs and tools
-repositories for publication. Nothing applies repository settings or cloud state.
+and contents/pull-requests write restricted to the public docs repository
+for publication. Nothing applies repository settings or cloud state.
 This workflow never creates module `metadata.json` files.
 
 ## Offline generation
@@ -45,7 +45,9 @@ This workflow never creates module `metadata.json` files.
 Use a new output directory. The snapshot contains `legacy/` (all six CSVs and the
 approved `BicepMARModules.json` mirror), `sources/bicep/`, source-bearing
 `sources/terraform/terraform-{azurerm,azapi,azure}-avm-*/` repositories,
-`registry.json`, `github.json`, and `repository-config.json`.
+`registry.json`, `github.json`, and `revisions.json`. Repository revisions include
+the boolean GitHub `archived` flag for every available Terraform repository.
+Bicep snapshots preserve each module's `DEPRECATED.md` alongside its source.
 `Get-ModuleCatalogSnapshot.ps1` collects these read-only; `GH_TOKEN` is its
 authentication boundary. Only trusted local code is imported. Fetched module
 files are data, never scripts, builds, Terraform plans, or Bicep compilations.
@@ -60,12 +62,12 @@ configuration supplied inside the generated bundle.
 missing metadata and unresolved legacy entries. Dual-source is the default:
 present metadata must pass the packaged validator, including Bicep literals;
 invalid present metadata never falls back. Reduced children require family-root
-metadata and inherit owners and tier. The JSON catalog also includes the
+metadata and inherit owners. The JSON catalog also includes the
 family's alternative names and comments; child CSV cells for those two fields
 stay unchanged, including blanks. Newly discovered child rows leave them blank.
 
 The six CSVs retain their existing columns and unmigrated values, then append
-`Tier,CanonicalType`. Only existing columns are projected for adopted rows; full
+`CanonicalType`. Only existing columns are projected for adopted rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. `v1/migration-report.json` records missing metadata, unresolved
@@ -87,18 +89,27 @@ containing that submodule; per-child download counts are unavailable and remain
 null. The approved MAR string-array mirror is preserved, not replaced with an
 MCR-only list that would lose approved but unpublished modules.
 
-Only adopted Terraform root IDs move between tier lists. Other groups/settings
-and unadopted memberships remain unchanged. Conflicting provider-variant tiers,
-or a tier move affecting an unadopted variant sharing the same ID, fail explicitly.
+`owners` is a flat list of usernames and qualified team handles. CSV user columns
+project the first two usernames, and the existing team column projects the
+first team; JSON retains all entries. Teams are never placed in user columns.
+Tier metadata and repository-configuration publication are not implemented.
+
+Deprecation takes precedence over ownership and registry availability. A Bicep
+`DEPRECATED.md` marks that module and its descendants; a child's marker does not
+deprecate its parent or siblings. An archived Terraform repository marks every
+module in it Deprecated. Existing legacy Deprecated state is retained during
+transition, including when source is unavailable. Missing or malformed archive
+evidence fails generation rather than being treated as an active repository.
+Old snapshots without that evidence must be collected again. The workflow only
+reads these signals; it does not archive repositories or perform retirement steps.
 
 Publication checks output hashes, exact allowed paths, schema, unchanged input
-and output-base hashes on current `main`, and tier-only configuration changes.
+and output-base hashes on current `main`.
 Canonical CSV hashes remain required even though only preview CSVs are written.
-Both targets
-are prepared before any push. Existing app-owned review branches are updated
+Existing app-owned review branches are updated
 without force; human commits or unrelated branch changes stop publication.
-Cross-repository pushes are not transactional: an interrupted publication may
-leave one reviewable update and must be retried after inspection. No automatic
+An interrupted publication may leave a reviewable update and must be retried
+after inspection. No automatic
 merge, direct `main` push, permission edit, or obsolete-source deletion is used.
 
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,

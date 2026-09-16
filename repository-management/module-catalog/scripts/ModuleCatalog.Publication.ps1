@@ -35,6 +35,7 @@ function Test-AvmCatalogPublicationBundle {
     $planOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind publication-plan
     Assert-AvmCatalogSafePath -Root $Path -RelativePath $planOutput.bundlePath
     $plan = Read-AvmCatalogJson -Path (Join-Path $Path $planOutput.bundlePath)
+    Assert-AvmCatalogManifestKeys -Value $plan -Keys (@('schemaVersion', 'manifestHash', 'outputHashes') + @($paths.Keys))
     if ($plan.schemaVersion -ne 1 -or $plan['manifestHash'] -cne $Configuration.hash) {
         throw [System.IO.InvalidDataException]::new('Unsupported or stale catalog publication manifest. Collect and generate again.')
     }
@@ -92,27 +93,6 @@ function Test-AvmCatalogPublicationBundle {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }
     return $plan
-}
-
-function Assert-AvmCatalogTierOnlyChange {
-    [CmdletBinding()]
-    param([System.Collections.IDictionary] $Before, [System.Collections.IDictionary] $After)
-
-    $copies = foreach ($configuration in @($Before, $After)) {
-        $copy = ConvertFrom-Json -InputObject (ConvertTo-AvmCatalogJson -Value $configuration) -AsHashtable -Depth 100
-        foreach ($group in $copy.repositoryGroups) {
-            if ($group.name -cmatch '^azure-verified-modules-tier-[123]$') {
-                if ($group.repositories -isnot [array] -or @($group.repositories | Where-Object { $_ -isnot [string] }).Count -gt 0) {
-                    throw [System.IO.InvalidDataException]::new('Tier repositories must remain flat string arrays.')
-                }
-                $group.repositories = @()
-            }
-        }
-        ConvertTo-AvmCatalogJson -Value $copy
-    }
-    if ($copies[0] -cne $copies[1]) {
-        throw [System.Security.SecurityException]::new('Catalog publication may change only tier repository memberships, not settings or other groups.')
-    }
 }
 
 function Assert-AvmCatalogPublicationBase {
