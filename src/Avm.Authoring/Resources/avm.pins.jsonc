@@ -115,7 +115,7 @@
     },
     {
       "name": "mapotf",
-      "version": "0.1.12",
+      "version": "0.2.1",
       "urlTemplate": "https://github.com/Azure/mapotf/releases/download/v{version}/mapotf_{version}_{os}_{arch}{ext}",
       "archive": "tar.gz",
       "entrypoint": "mapotf",
@@ -128,12 +128,12 @@
         "darwin-arm64": "tar.gz"
       },
       "sha256": {
-        "windows-amd64": "258a94bdaaa15b49c586943426ba77c3d10ed647a09fd809e3bbe37bf805a3d7",
-        "windows-arm64": "26bb2b9b8265d9d30554694e0a918a3bf626c241300bb256b93397858f156645",
-        "linux-amd64": "83c18c6b2a4559309b7b25ba4fa4e17424d9e529f63f2933fed82e721c441f1f",
-        "linux-arm64": "ba69caabbd8890753117ed96a1ae21c107913b0f03268615f89b07643827637f",
-        "darwin-amd64": "372535b3284dd6580d0b562c8828ef16ce5cb3d3ecf5db1859483e00e018fdd0",
-        "darwin-arm64": "e5fb17849ff9fdfc48c6fb5b695eb734c3b73c58b10bf44059146cc2cd303659"
+        "windows-amd64": "ba29c03f86156fd9940c9d940e80cd4e49524193d728503c37815092747d7b45",
+        "windows-arm64": "2362a3541401f0a9e39d28577c93d2b94fe96be7df45ebd3894aa676b0c643c0",
+        "linux-amd64": "e9b00d784623d40bc65d2345824ad0d28c2fc97952ffc5327759ee7e5cfaf08a",
+        "linux-arm64": "0dad958f396865c762cfb70eb7b8e0c2e2930f182116eb05eec7990c1e46e667",
+        "darwin-amd64": "eeacf206dc372c801f23d4f9e9eda186ae39e864cef492d781f83ea7e9f31118",
+        "darwin-arm64": "6f9ddc6e1ce5833806534c01c6a9485d2e099c2e047017a6222f79bba96582f2"
       }
     },
     {

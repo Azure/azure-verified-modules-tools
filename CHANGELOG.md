@@ -57,6 +57,8 @@ section when cutting a release.
 
 ### Changed
 
+- Managed MAPOTF now pins 0.2.1, preserving provider aliases during metadata
+  updates and handling optional provider source/version fields safely.
 - Terraform `avm test` now validates every direct example rather than treating
   the reusable library as a root module, supporting deprecated variables and
   outputs. Missing local root/submodule coverage produces warnings only.
@@ -188,6 +190,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Preserve provider `configuration_aliases` as HCL traversals when MAPOTF
+  upgrades AzAPI or Random requirements, retaining unrelated provider entries
+  and comments.
 - Mapotf no longer adds an unused AzAPI requirement to provider-free local
   helpers. Direct AzAPI use and root telemetry still receive a requirement;
   generated constraints and provider schemas now use the `~> 2.12` floor.

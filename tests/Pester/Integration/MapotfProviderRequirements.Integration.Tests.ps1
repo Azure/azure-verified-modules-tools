@@ -10,7 +10,22 @@ Describe 'Integration: MAPOTF provider requirements' -Tag 'Integration' -Skip:($
             $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         }
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
-        Install-AvmTool -Name mapotf, terraform, tflint -ErrorAction Stop
+        $tools = @('terraform', 'tflint')
+        if ($env:AVM_MAPOTF_TEST_BINARY) {
+            (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).PSIsContainer | Should -BeFalse
+            Mock Resolve-AvmTool -ModuleName 'Avm.Authoring' -ParameterFilter { $Name -eq 'mapotf' } {
+                [pscustomobject]@{
+                    Name = 'mapotf'
+                    Path = (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).FullName
+                    Version = 'development'
+                    Source = 'AVM_MAPOTF_TEST_BINARY'
+                }
+            }
+        }
+        else {
+            $tools += 'mapotf'
+        }
+        Install-AvmTool -Name $tools -ErrorAction Stop
         $script:lintConfig = Join-Path $TestDrive 'tflint.hcl'
         Set-Content -LiteralPath $script:lintConfig -Encoding utf8NoBOM -Value @'
 plugin "terraform" {
@@ -60,6 +75,90 @@ rule "terraform_unused_required_providers" {
 
             @(Get-ChildItem -LiteralPath $Root -Filter '*.tf' -File | Sort-Object Name |
                 ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+        }
+
+        function New-AliasedProviderConfiguration {
+            param(
+                [string] $Syntax,
+                [string] $AzapiVersion,
+                [string] $RandomVersion
+            )
+
+            $template = switch ($Syntax) {
+                'multiline' {
+                    @'
+    __NAME__ = {
+      source = "__SOURCE__"
+      version = "__VERSION__"
+      configuration_aliases = [__NAME__.primary, __NAME__.secondary]
+    }
+'@
+                }
+                'inline' {
+                    '    __NAME__ = { source = "__SOURCE__", version = "__VERSION__", configuration_aliases = [__NAME__.primary, __NAME__.secondary] }'
+                }
+                'comments' {
+                    @'
+    __NAME__ = {
+      # version = "~> 2.4"; source = "example/untouched"
+      "configuration_aliases" = [
+        __NAME__.primary, # primary account
+        /* secondary account */ __NAME__.secondary,
+      ]
+      "source" = "__SOURCE__" # keep the source note
+      "version" = "__VERSION__" # keep the version note
+    }
+'@
+                }
+            }
+
+            $providers = @(
+                @{ Name = 'azapi'; Source = 'Azure/azapi'; Version = $AzapiVersion }
+                @{ Name = 'random'; Source = 'hashicorp/random'; Version = $RandomVersion }
+                @{ Name = 'azurerm'; Source = 'hashicorp/azurerm'; Version = '~> 4.0' }
+            )
+            $requirements = foreach ($provider in $providers) {
+                $template.Replace('__NAME__', $provider.Name).
+                    Replace('__SOURCE__', $provider.Source).
+                    Replace('__VERSION__', $provider.Version)
+            }
+
+            @"
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+$($requirements -join "`n")
+  }
+}
+
+locals {
+  untouched = "version = \"~> 2.4\" and source = \"example/untouched\""
+}
+"@ + "`n"
+        }
+
+        function Assert-ProviderRequirements {
+            param([string] $Root, [string] $ExpectedConfiguration)
+
+            $expectedRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $expectedRoot
+            $expectedFile = Join-Path $expectedRoot 'terraform.tf'
+            Set-Content -LiteralPath $expectedFile -Value $ExpectedConfiguration -Encoding utf8NoBOM -NoNewline
+
+            Invoke-ProviderTransform -Root $Root
+            $first = Get-TerraformContent -Root $Root
+            Invoke-ProviderTransform -Root $Root
+            Get-TerraformContent -Root $Root | Should -BeExactly $first
+
+            $actualFile = Join-Path $expectedRoot 'actual.tf'
+            Copy-Item -LiteralPath (Join-Path $Root 'terraform.tf') -Destination $actualFile
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $Root; ExpectedRoot = $expectedRoot } {
+                param($Root, $ExpectedRoot)
+                $tool = Resolve-AvmTool -Name terraform
+                $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedRoot) -WorkingDirectory $Root
+                $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+            }
+            Get-Content -LiteralPath $actualFile -Raw | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
         }
     }
 
@@ -191,6 +290,102 @@ data "azapi_client_config" "example" {
 
         Invoke-ProviderTransform -Root $script:target
         Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'preserves aliases for <Scenario> with <Syntax> syntax' -TestCases @(
+        foreach ($scenario in @(
+            @{ Name = 'compliant providers'; Azapi = '~> 2.12'; Random = '~> 3.6'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.6' }
+            @{ Name = 'an AzAPI upgrade'; Azapi = '~> 2.4'; Random = '~> 3.6'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.6' }
+            @{ Name = 'a Random upgrade'; Azapi = '~> 2.12'; Random = '~> 2.0'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.0' }
+            @{ Name = 'both upgrades'; Azapi = '~> 2.4'; Random = '~> 2.0'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.0' }
+        )) {
+            foreach ($syntax in @('multiline', 'inline', 'comments')) {
+                @{
+                    Scenario = $scenario.Name
+                    Syntax = $syntax
+                    AzapiVersion = $scenario.Azapi
+                    RandomVersion = $scenario.Random
+                    ExpectedAzapiVersion = $scenario.ExpectedAzapi
+                    ExpectedRandomVersion = $scenario.ExpectedRandom
+                }
+            }
+        }
+    ) {
+        param($Scenario, $Syntax, $AzapiVersion, $RandomVersion, $ExpectedAzapiVersion, $ExpectedRandomVersion)
+
+        $source = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $AzapiVersion -RandomVersion $RandomVersion
+        Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Value $source -Encoding utf8NoBOM -NoNewline
+        $expected = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $ExpectedAzapiVersion -RandomVersion $ExpectedRandomVersion
+        Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
+    }
+
+    It 'preserves representative Fabric workspace aliases and references for <AzapiVersion>' -TestCases @(
+        @{ AzapiVersion = '~> 2.12'; ExpectedAzapiVersion = '~> 2.12' }
+        @{ AzapiVersion = '~> 2.4'; ExpectedAzapiVersion = '~> 2.12' }
+    ) {
+        param($AzapiVersion, $ExpectedAzapiVersion)
+
+        $requirements = @'
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    fabric = {
+      source = "microsoft/fabric"
+      version = "~> 1.0"
+      configuration_aliases = [fabric.workspaces, fabric.capacities]
+    }
+    azapi = {
+      source = "Azure/azapi"
+      version = "__AZAPI_VERSION__"
+      configuration_aliases = [azapi.networking, azapi.identity]
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Encoding utf8NoBOM -NoNewline -Value ($requirements.Replace('__AZAPI_VERSION__', $AzapiVersion) + "`n")
+        $mainFile = Join-Path $script:target 'main.tf'
+        $workloadSource = @'
+data "fabric_capacity" "existing" {
+  provider     = fabric.capacities
+  display_name = "existing-shared-capacity"
+}
+
+resource "fabric_workspace" "this" {
+  provider     = fabric.workspaces
+  display_name = "alias-regression-workspace"
+  capacity_id  = data.fabric_capacity.existing.id
+}
+
+data "azapi_client_config" "current" {
+  provider = azapi.identity
+}
+
+resource "azapi_resource" "network" {
+  provider  = azapi.networking
+  type      = "Microsoft.Network/virtualNetworks@2024-05-01"
+  name      = "alias-regression-network"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alias-regression"
+  location  = "westeurope"
+  body = {
+    properties = {
+      addressSpace = {
+        addressPrefixes = ["10.0.0.0/24"]
+      }
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath $mainFile -Value ($workloadSource + "`n") -Encoding utf8NoBOM -NoNewline
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target } {
+            param($Root)
+            $tool = Resolve-AvmTool -Name terraform
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $Root) -WorkingDirectory $Root
+        }
+        $workload = Get-Content -LiteralPath $mainFile -Raw
+        $expected = $requirements.Replace('__AZAPI_VERSION__', $ExpectedAzapiVersion) + "`n"
+
+        Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
+        Get-Content -LiteralPath $mainFile -Raw | Should -BeExactly $workload
     }
 
     It 'updates a function-only AzAPI declaration' {
