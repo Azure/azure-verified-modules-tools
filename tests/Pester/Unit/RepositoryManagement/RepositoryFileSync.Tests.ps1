@@ -79,7 +79,7 @@ Describe 'Both repository-sync entry points use one existing publication core' {
             $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration' -and
             $State.CodeownersContent -cmatch '(?m)^\* @Azure/module-reviewers$' -and
             $State.CodeownersContent -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$' -and
-            $State.CodeownersContent.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners`n")
+            $State.CodeownersContent.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n")
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
@@ -136,7 +136,7 @@ Describe 'Both repository-sync entry points use one existing publication core' {
             $RepositoryRoot -ceq 'isolated-clone' -and
             $Content -cmatch '(?m)^\* @Azure/module-reviewers$' -and
             $Content -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$' -and
-            $Content.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners`n")
+            $Content.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n")
         }
     }
 
@@ -332,7 +332,7 @@ Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
         $script:context.Phase = $_
         Mock Get-RepositoryFileAtCommit {
             [pscustomobject]@{
-                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners`n", '')
+                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n", '')
                 Sha = 'c' * 40
             }
         }
@@ -344,7 +344,7 @@ Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
         $script:context.Phase = $_
         Mock Get-RepositoryFileAtCommit {
             [pscustomobject]@{
-                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners`n", '')
+                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n", '')
                 Sha = $script:snapshot.BlobSha
             }
         }

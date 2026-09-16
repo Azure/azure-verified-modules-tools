@@ -148,15 +148,16 @@ organization; a group targeting one repository can supply its specific owners.
 An empty team list omits that configured rule.
 
 The final rule is always
-`metadata.json @Azure/azure-verified-modules-engineering-owners`, including when
+`metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`, including when
 configured team lists are empty. The unrooted basename covers root and child
-metadata files; other files retain their configured owners. Engineering is the
-only owner on this rule because multiple CODEOWNERS owners are alternatives,
-not jointly required reviewers.
+metadata files; other files retain their configured owners. The teams are
+alternatives: approval from either team satisfies code-owner review, not both.
 
 Review enforcement also requires the existing active ruleset's
-`require_code_owner_review = true` and a visible engineering team with repository
-write access. Initial backfill uses only the existing AVM App's authorized
+`require_code_owner_review = true` and visible teams with repository write
+access. Default Terraform configuration grants both teams `push` without
+adding environment approvals; the existing CODEOWNERS-file rule remains
+engineering-only. Initial backfill uses only the existing AVM App's authorized
 pull-request bypass. Neither the template nor its generation grants or broadens
 that bypass; authorized operators must verify these prerequisites before rollout.
 

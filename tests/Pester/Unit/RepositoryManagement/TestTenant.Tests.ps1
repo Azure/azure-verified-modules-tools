@@ -68,7 +68,11 @@ Describe 'Central test tenant group resolution' {
         $result.RepositoryGroupNames | Should -Be @('default', 'canary-ring-0', 'canary-ring-1', 'azure-verified-modules-tier-1')
         $result.Topics | Should -Be @('azure-verified-modules', 'avm', 'canary', 'avm-tier-1')
         $result.CodeOwnersDefaultTeams | Should -Be @('azure-verified-modules-engineering-owners')
-        $result.Teams.Count | Should -Be 3
+        $result.Teams.Count | Should -Be 4
+        $moduleOwners = @($result.Teams | Where-Object name -eq 'azure-verified-modules-module-owners')
+        $moduleOwners | Should -HaveCount 1
+        $moduleOwners[0].repositoryPermission | Should -Be 'push'
+        $moduleOwners[0].environmentApproval | Should -BeFalse
         $result.WorkloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef |
             Should -Be 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
         & (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Test-RepositoryConfig.ps1')

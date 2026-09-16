@@ -8,7 +8,7 @@ BeforeAll {
         '# This file is managed by azure-verified-modules-tools. Do not edit manually.'
         '# Template: https://github.com/Azure/azure-verified-modules-tools/blob/main/repository-management/repository-sync/CODEOWNERS.template'
     ) -join "`n"
-    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners'
+    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
 }
 
 Describe 'Terraform CODEOWNERS rendering' {

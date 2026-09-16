@@ -22,10 +22,10 @@ index metadata. Retired `ModuleOwnersGHTeam` values are never used.
 
 The template preserves the tooling catch-all, shared `/avm/` default, automation
 header, and governance-test and `.e2eignore` overrides. Its final rule is
-`metadata.json @Azure/azure-verified-modules-engineering-owners`. This unrooted
+`metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`. This unrooted
 basename covers root and child metadata files, overriding module and tooling
-owners for those files only. Engineering is the sole owner, not an alternative
-to other reviewers.
+owners for those files only. Approval from either listed team satisfies the
+code-owner requirement; approval from both teams is not required.
 
 Only the literal `__AVM_MODULE_OWNERS__` placeholder is replaced. Unknown target static rules or
 comments cause failure rather than being lost. Base and old-candidate validation
@@ -115,7 +115,8 @@ approval; this change does neither.
   is used. An unavailable bypass fails the run. Initial metadata backfill uses
   only this existing authorized App bypass; this policy adds no bypass actors.
 - Keep required code owner reviews enabled on the target branch and ensure
-  `azure-verified-modules-engineering-owners` is a visible team with explicit
+  both `azure-verified-modules-engineering-owners` and
+  `azure-verified-modules-module-owners` are visible teams with explicit
   repository write access. CODEOWNERS selects reviewers but does not itself
   establish review enforcement.
 - Merge [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343)

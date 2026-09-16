@@ -101,7 +101,7 @@ function Assert-AvmCodeownersContent {
     $rules = @($templateLines | Where-Object { -not $_.TrimStart().StartsWith('#') })
     $tooling = '@Azure/azure-verified-modules-tooling-contributors'
     $fallback = '@Azure/azure-verified-modules-module-owners'
-    $metadata = 'metadata.json @Azure/azure-verified-modules-engineering-owners'
+    $metadata = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
     $required = @("* $tooling", "/avm/ $fallback", "*avm.core.team.tests.ps1 $tooling", "*.e2eignore $tooling", $metadata)
     if ($rules.Count -ne $required.Count -or ($rules -join "`n") -cne ($required -join "`n")) {
         throw [System.IO.InvalidDataException]::new('The CODEOWNERS template changed the static ownership contract.')

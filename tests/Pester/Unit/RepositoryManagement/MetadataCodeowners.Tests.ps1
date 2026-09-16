@@ -4,7 +4,7 @@ BeforeAll {
     $bicepRoot = Join-Path $script:root 'repository-management' 'bicep-codeowners-sync'
     . (Join-Path $terraformRoot 'scripts' 'lib' 'TerraformCodeowners.ps1')
     . (Join-Path $bicepRoot 'scripts' 'lib' 'Codeowners.ps1')
-    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners'
+    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
     $script:templates = @{
         Terraform = Get-Content -LiteralPath (Join-Path $terraformRoot 'CODEOWNERS.template') -Raw
         Bicep = Get-Content -LiteralPath (Join-Path $bicepRoot 'CODEOWNERS.template') -Raw
@@ -44,7 +44,7 @@ BeforeAll {
 }
 
 Describe 'Metadata CODEOWNERS scope and last-match precedence' {
-    It 'keeps the exact engineering-only rule once and last in <Ecosystem>' -ForEach @(
+    It 'keeps both eligible review teams on one exact final rule in <Ecosystem>' -ForEach @(
         @{ Ecosystem = 'Terraform' }
         @{ Ecosystem = 'Bicep' }
     ) {
@@ -55,7 +55,7 @@ Describe 'Metadata CODEOWNERS scope and last-match precedence' {
         }
     }
 
-    It 'assigns only engineering to <Path> in both ecosystems' -ForEach @(
+    It 'assigns engineering and module owners to <Path> in both ecosystems' -ForEach @(
         @{ Path = 'metadata.json' }
         @{ Path = 'modules/child/metadata.json' }
         @{ Path = 'modules/child/modules/grandchild/metadata.json' }
@@ -72,7 +72,7 @@ Describe 'Metadata CODEOWNERS scope and last-match precedence' {
     ) {
         foreach ($ecosystem in @('Terraform', 'Bicep')) {
             $owners = @(Get-TestCodeownersForPath -Content $script:contents[$ecosystem] -Path $Path)
-            $owners | Should -Be @('@Azure/azure-verified-modules-engineering-owners') -Because "$ecosystem metadata ownership must override earlier rules"
+            $owners | Should -Be @('@Azure/azure-verified-modules-engineering-owners', '@Azure/azure-verified-modules-module-owners') -Because "$ecosystem metadata ownership must override earlier rules"
         }
     }
 
@@ -102,7 +102,7 @@ Describe 'Metadata CODEOWNERS scope and last-match precedence' {
         $content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @() `
             -FileProtectionTeams @() -Template $script:templates.Terraform
         @(Get-TestCodeownersForPath -Content $content -Path 'modules/child/metadata.json') |
-            Should -Be @('@Azure/azure-verified-modules-engineering-owners')
+            Should -Be @('@Azure/azure-verified-modules-engineering-owners', '@Azure/azure-verified-modules-module-owners')
         @(Get-TestCodeownersForPath -Content $content -Path 'modules/child/main.tf') | Should -BeNullOrEmpty
         @(Get-TestCodeownersForPath -Content $content -Path '.github/CODEOWNERS') | Should -BeNullOrEmpty
     }
@@ -122,5 +122,11 @@ Describe 'Existing metadata review enforcement prerequisites' {
         $engineering = @($default.teams | Where-Object name -EQ 'azure-verified-modules-engineering-owners')
         $engineering | Should -HaveCount 1
         $engineering[0].repositoryPermission | Should -BeExactly 'push'
+        $moduleOwners = @($default.teams | Where-Object name -EQ 'azure-verified-modules-module-owners')
+        $moduleOwners | Should -HaveCount 1
+        $moduleOwners[0].repositoryPermission | Should -BeExactly 'push'
+        $moduleOwners[0].environmentApproval | Should -BeFalse
+        $engineering[0].environmentApproval | Should -BeFalse
+        @($default.codeOwnersFileProtectionTeams) | Should -Be @('azure-verified-modules-engineering-owners')
     }
 }

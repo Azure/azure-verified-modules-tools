@@ -34,6 +34,12 @@
           "environmentApproval": false
         },
         {
+          "name": "azure-verified-modules-module-owners",
+          "description": "AVM module owners. Can approve module metadata changes.",
+          "repositoryPermission": "push",
+          "environmentApproval": false
+        },
+        {
           "name": "azure-verified-modules-engineering-owners",
           "description": "AVM engineering owners. Required reviewers for CODEOWNERS changes on all repositories and for all changes on tier 1 modules.",
           "repositoryPermission": "push",

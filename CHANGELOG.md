@@ -66,6 +66,9 @@ section when cutting a release.
 
 ### Changed
 
+- Metadata code-owner review accepts either engineering owners or module owners.
+  Both teams appear on the final rule; default Terraform team configuration
+  includes module owners with write access and no new environment approvals.
 - Module metadata uses a flat owner-handle array and the versioned `$schema`
   reference, without tier or a duplicate `schemaVersion` field. Catalog
   deprecation derives from Bicep `DEPRECATED.md` and Terraform repository archival.

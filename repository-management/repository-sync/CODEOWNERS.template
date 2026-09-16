@@ -3,4 +3,4 @@
 
 __AVM_CODEOWNERS_RULES__
 
-metadata.json @Azure/azure-verified-modules-engineering-owners
+metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners

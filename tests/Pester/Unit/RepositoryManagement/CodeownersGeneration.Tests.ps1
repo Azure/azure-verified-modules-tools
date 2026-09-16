@@ -4,7 +4,7 @@ BeforeAll {
     . (Join-Path $script:syncRoot 'scripts' 'lib' 'Codeowners.ps1')
     $script:template = Get-Content -LiteralPath (Join-Path $script:syncRoot 'CODEOWNERS.template') -Raw
     $script:group = '@Azure/azure-verified-modules-module-owners'
-    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners'
+    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
 
     function New-OwnershipRow {
         param(
@@ -254,9 +254,11 @@ Describe 'Template-backed static ownership preservation' {
 
     It 'rejects a template with <Mutation> metadata protection even in compatibility mode' -ForEach @(
         @{ Mutation = 'missing'; Replacement = '' }
-        @{ Mutation = 'root-only'; Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners' }
-        @{ Mutation = 'additional owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @alice' }
-        @{ Mutation = 'non-final'; Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`n* @alice" }
+        @{ Mutation = 'root-only'; Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners' }
+        @{ Mutation = 'additional owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners @alice' }
+        @{ Mutation = 'non-final'; Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n* @alice" }
+        @{ Mutation = 'missing module owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners' }
+        @{ Mutation = 'missing engineering owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-module-owners' }
     ) {
         $template = $script:template.Replace($script:metadataRule, $Replacement)
         { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*static ownership contract*'
@@ -266,10 +268,12 @@ Describe 'Template-backed static ownership preservation' {
 
     It 'rejects changed metadata ownership or precedence in old and new content' -ForEach @(
         @{ Replacement = 'metadata.json @alice' }
-        @{ Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @alice' }
-        @{ Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners' }
-        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`n* @alice" }
-        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners`nmetadata.json @Azure/azure-verified-modules-engineering-owners" }
+        @{ Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners @alice' }
+        @{ Replacement = '/metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners' }
+        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n* @alice" }
+        @{ Replacement = "metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`nmetadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners" }
+        @{ Replacement = 'metadata.json @Azure/azure-verified-modules-engineering-owners' }
+        @{ Replacement = 'metadata.json @Azure/azure-verified-modules-module-owners' }
     ) {
         $changed = $script:rendered.Replace($script:metadataRule, $Replacement)
         { Assert-AvmCodeownersContent -Content $changed -Template $script:template } | Should -Throw '*static CODEOWNERS*'

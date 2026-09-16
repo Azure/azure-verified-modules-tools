@@ -29,7 +29,7 @@ Describe 'Terraform CODEOWNERS filesystem contract' -Tag Component {
         [Convert]::ToBase64String($second) | Should -BeExactly ([Convert]::ToBase64String($first))
         [System.Text.Encoding]::UTF8.GetString($second) | Should -BeExactly $script:content
         [System.Text.Encoding]::UTF8.GetString($second).TrimEnd("`n").Split("`n")[-1] |
-            Should -BeExactly 'metadata.json @Azure/azure-verified-modules-engineering-owners'
+            Should -BeExactly 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
         Get-Content -LiteralPath $other -Raw | Should -BeExactly 'unchanged'
     }
 

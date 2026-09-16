@@ -16,7 +16,8 @@ This document is a plan, not approval to run production commands.
   or repository configuration.
   CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
   remain unchanged. The new JSON catalog keeps `v1/modules.json`.
-- Engineering owners must review metadata changes. The existing AVM App bypass
+- Engineering owners or module owners must review metadata changes; either
+  team's approval satisfies the code-owner requirement. The existing AVM App bypass
   is retained; this plan does not grant a new bypass or permission.
 - Avm.Authoring's metadata commands are permanent authoring tools, with no CSV
   input dependency. Both `pre-commit` and `pr-check` validate local metadata.
@@ -33,8 +34,8 @@ This document is a plan, not approval to run production commands.
 | Prerequisite | [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343) | Merged | Required by the existing Bicep CODEOWNERS merge check. |
 | Safety gate | [Disable Bicep Sync](../.github/workflows/repository-management-bicep-sync.yml) with operator approval | Required before the tools change merges | The combined tools change contains the new ownership rule. Keep the workflow disabled until the Bicep governance change is merged too. |
 | 1 | [Azure/Azure-Verified-Modules#2929: pipeline template](https://github.com/Azure/Azure-Verified-Modules/pull/2929) | Merged; current main retains the exclusion | Makes future generated Bicep pipelines exclude metadata-only publishing. |
-| 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Consolidated tools change | Includes the schemas and engineering-only ownership generators formerly in [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120). Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
-| 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Open; merge blocked pending completion of requirements | Adds metadata, its engineering-only ownership rule, compatible governance tests, and existing pipeline exclusions together. |
+| 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Consolidated tools change | Includes schemas and ownership generators; [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) is closed as superseded. Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
+| 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Open; merge blocked pending completion of requirements | Adds metadata, the two-team ownership rule, compatible governance tests, and existing pipeline exclusions together. |
 | After data adoption and CSV cutover | [Azure/Azure-Verified-Modules#2936: metadata maintenance processes](https://github.com/Azure/Azure-Verified-Modules/pull/2936) | Draft | Updates ownership, orphaning, adoption, and generated-index processes once the new sources and review protections are in use. |
 
 **Do not run the new Bicep generator before the Bicep repository change.** The
@@ -68,7 +69,7 @@ so they can be restored deliberately.
   daily schedule can publish review changes for preview CSVs and JSON.
   Disable it until ready if an operator-controlled first run is required.
 - Check the protected `avm` environment, the existing App installation, and
-  target permissions. The engineering team needs the access GitHub requires for
+  target permissions. Both review teams need the access GitHub requires for
   CODEOWNERS, and code-owner review must be required on target main branches.
   Verify the existing App bypass with an authorized operator; do not assume it
   from an incomplete API response.
@@ -149,7 +150,7 @@ metadata mode loads that checkout rather than relying on a Gallery release.
 ### Establish the review rule
 
 After the ownership-policy change is merged, check the example repository's
-current CODEOWNERS. If it has not adopted the engineering-only rule, run an
+current CODEOWNERS. If it has not adopted the two-team rule, run an
 ordinary sync plan first:
 
 ```powershell
@@ -164,11 +165,12 @@ ownership rule. Do not treat this ordinary apply as metadata-only work.
 Confirm the final matching rule is:
 
 ```text
-metadata.json @Azure/azure-verified-modules-engineering-owners
+metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners
 ```
 
-No later rule may replace it, and no alternative owner may satisfy it. Verify
-root, child, and deeper metadata paths as well as required code-owner approval.
+No later rule may replace it. Either listed team may provide the code-owner
+approval; both are not required. Verify root, child, and deeper metadata paths,
+both teams' write access, and the unchanged branch approval requirements.
 
 ### Preview metadata creation
 
@@ -206,7 +208,7 @@ approved controls before retrying. Never force-update someone else's work.
 ## Expand Terraform in small groups
 
 After the example passes, select a small explicit comma-separated repository
-list. Adopt and verify the engineering-only CODEOWNERS rule on every target
+list. Adopt and verify the two-team CODEOWNERS rule on every target
 before creating metadata. Use the same plan-then-apply sequence, with source updates disabled.
 Include a resource module, a pattern module, and a repository with children.
 Inspect every failed module rather than widening the run immediately.
