@@ -109,10 +109,39 @@ This repository serves as a test sandbox for the Azure Verified Modules team.
         $path = Join-Path $fixture.Root 'metadata.json'
         $before = [System.IO.File]::ReadAllBytes($path)
         $fixture.Records[0].ModuleDisplayName = 'Changed index'
-        $result = & $script:initialize @parameters -UpdateSource
+        $result = & $script:initialize @parameters
         $result.Changed | Should -BeFalse
         [System.IO.File]::ReadAllBytes($path) | Should -Be $before
         Test-Path (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'rejects Terraform source updates even with existing metadata or WhatIf: <Existing>, <Preview>' -TestCases @(
+        @{ Existing = $false; Preview = $false }
+        @{ Existing = $false; Preview = $true }
+        @{ Existing = $true; Preview = $false }
+        @{ Existing = $true; Preview = $true }
+    ) {
+        param($Existing, $Preview)
+        $fixture = New-AutomaticMetadataFixture -Child
+        $parameters = $fixture.Parameters
+        if ($Existing) { $null = & $script:initialize @parameters }
+        $before = @(Get-ChildItem $fixture.Root -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" })
+        { & $script:initialize @parameters -UpdateSource -WhatIf:$Preview } |
+            Should -Throw '*Terraform -UpdateSource is not supported*'
+        @(Get-ChildItem $fixture.Root -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }) |
+            Should -Be $before
+        @(Get-ChildItem $fixture.Root -Filter 'main.metadata.tf' -Recurse) | Should -HaveCount 0
+    }
+
+    It 'preserves an existing authored Terraform reader during backfill' {
+        $fixture = New-AutomaticMetadataFixture
+        $parameters = $fixture.Parameters
+        $path = Join-Path $fixture.Root 'main.metadata.tf'
+        $source = "locals { authored = true }`n"
+        [System.IO.File]::WriteAllText($path, $source)
+        ($result = & $script:initialize @parameters).Changed | Should -BeTrue
+        $result.Modules[0].PlannedFiles | Should -Be @('metadata.json')
+        [System.IO.File]::ReadAllText($path) | Should -BeExactly $source
     }
 
     It 'reports planned files without writing them under WhatIf' {

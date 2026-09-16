@@ -436,10 +436,11 @@ scope. `-CheckSource` also verifies Bicep literal name/description declarations.
 never derives values or reads CSV indexes.
 `avm metadata initialize` writes supplied metadata values, never overwrites
 existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
-load or Terraform JSON reader locals. It does not replace telemetry transport.
+load without replacing telemetry transport. Terraform rejects `-UpdateSource`
+before writes; initialization never generates `main.metadata.tf` or removes
+existing authored source. Terraform telemetry wiring is deferred to MaPoTF.
 The one-time source rewrite can change compiled Bicep output; subsequent
-owner/canonical metadata edits do not. Terraform source wiring remains
-opt-in until its transport consumes the new locals.
+owner/canonical metadata edits do not.
 
 `avm pre-commit` and `avm pr-check` finish with read-only metadata validation for
 the selected root and its module children. Invalid existing metadata fails the
@@ -459,8 +460,16 @@ Matched-row compatibility fields and prior Deprecated status remain preserved.
 Fleet backfill and canonical CSV replacement remain explicit operator actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
-Terraform sync creates missing files directly from existing indexes and source,
-without an intermediate approval file or repository registration. Bicep files
+Terraform sync can create missing files directly from existing indexes and source,
+without an intermediate approval file or repository registration. The manual,
+default-off `metadata_backfill` input adds preparation before ordinary pre-commit
+in the temporary checkout. It does not select a metadata-only execution or
+publication path: normal managed files, CODEOWNERS, repository/Azure management,
+tenant gates and standard publication/merge controls still apply. The temporary
+worker loads checkout metadata APIs in a separate PowerShell process; ordinary
+authoring uses the installed release. Plan-only never publishes files. Metadata
+failure stops file publication without undoing earlier normal management steps.
+Bicep files
 are added directly to the module repository rather than through Bicep Sync.
 CSV conversion and backfill-only source inference live exclusively under
 `repository-management/module-metadata/`, outside the packaged module. That

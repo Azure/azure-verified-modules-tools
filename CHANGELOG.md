@@ -25,8 +25,8 @@ section when cutting a release.
   non-overwriting initialization through `avm metadata show`, `avm metadata
   validate`, and `avm metadata initialize`.
   Versioned input/output schemas are centrally packaged with Avm.Authoring.
-  Optional source wiring uses scoped Bicep `loadJsonContent` and native
-  Terraform `jsondecode(file(...))`, without replacing telemetry transport.
+  Optional source wiring uses scoped Bicep `loadJsonContent`, without replacing
+  telemetry transport.
 - Opt-in metadata backfill and a tools-owned metadata catalog workflow.
   Source CSV row removals fail by default and require an explicit override;
   production rollout and canonical CSV replacement are operator-controlled.
@@ -66,6 +66,16 @@ section when cutting a release.
 
 ### Changed
 
+- Manual Terraform metadata backfill now runs the full normal repository sync,
+  including managed files, pre-commit, CODEOWNERS, repository/Azure management
+  and standard automatic merge on apply. Only metadata creation is optional;
+  there is no separate review-only publisher or stable backfill branch.
+  Checkout metadata APIs run in an isolated process while normal authoring uses
+  its installed release. Plan-only and tenant gates retain their normal behavior.
+- Terraform metadata initialization no longer generates `main.metadata.tf`.
+  Terraform `-UpdateSource` requests fail before writes, including during
+  backfill. Existing authored source is preserved; Bicep source wiring remains
+  supported. Future Terraform telemetry changes belong in MaPoTF.
 - Catalog generation uses valid module metadata only, without dual-source modes
   or legacy-record fallback. Generation and publication protect rows from the
   source CSVs; explicit `Force` permits listed removals without bypassing other

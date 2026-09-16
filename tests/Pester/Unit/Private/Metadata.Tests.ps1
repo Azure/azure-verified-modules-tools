@@ -10,6 +10,28 @@ AfterAll {
     Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Terraform metadata source wiring' {
+    It 'rejects UpdateSource before version checks or filesystem access with WhatIf=<Preview>' -TestCases @(
+        @{ Preview = $false }
+        @{ Preview = $true }
+    ) {
+        param($Preview)
+        InModuleScope Avm.Authoring -Parameters @{ Preview = $Preview } {
+            param($Preview)
+            Mock Test-AvmModuleVersion {}
+            Mock Test-AvmDisableSentinel {}
+            Mock Test-Path {}
+            Mock Get-AvmMetadataSourcePlan {}
+            { Initialize-AvmModuleMetadata -InputObject @{} -Ecosystem terraform -ModuleType resource -UpdateSource -WhatIf:$Preview } |
+                Should -Throw '*Terraform -UpdateSource is not supported*'
+            Should -Invoke Test-AvmModuleVersion -Exactly 0
+            Should -Invoke Test-AvmDisableSentinel -Exactly 0
+            Should -Invoke Test-Path -Exactly 0
+            Should -Invoke Get-AvmMetadataSourcePlan -Exactly 0
+        }
+    }
+}
+
 Describe 'Strict metadata JSON' {
     It 'preserves a JSON object and arrays without evaluating values' {
         InModuleScope Avm.Authoring {

@@ -6,6 +6,9 @@ BeforeAll {
     . (Join-Path $libRoot 'RepoTree.ps1')
     . (Join-Path $libRoot 'AvmPreCommit.ps1')
     . (Join-Path $libRoot 'TestTenant.ps1')
+    foreach ($name in @('Logging', 'RepositoryConfig', 'BranchProtection', 'UnmanagedRulesets', 'CodeQlDefaultSetup', 'TeamsAndUsers', 'TerraformOperations')) {
+        . (Join-Path $libRoot "$name.ps1")
+    }
 }
 
 Describe 'Repository sync activation gate' -Tag Component {
@@ -95,37 +98,131 @@ Describe 'Repository sync activation gate' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    It 'keeps metadata backfill outside enabled BAMI identity and state operations with plan <RequestedPlanOnly>' -TestCases @(
+    It 'keeps metadata backfill behind the disabled BAMI gate with plan <RequestedPlanOnly>' -TestCases @(
         @{ RequestedPlanOnly = $true }
         @{ RequestedPlanOnly = $false }
     ) {
         param($RequestedPlanOnly)
 
         $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
-        $env:ARM_USE_AZUREAD = 'unchanged-by-metadata'
         $script:arguments.metadataBackfill = $true
         $script:arguments.planOnly = $RequestedPlanOnly
-        $script:arguments.bamiTestTenantSyncEnabled = $true
-        $script:arguments.bamiSettings = @{ invalid = 'must not be inspected' }
-        Mock Get-RepositoryDefaultBranchTree { @{ Success = $true; DefaultBranch = 'main' } }
-        Mock Invoke-AvmPreCommitForRepository { @{ HasChanges = $true; IssueLog = @() } }
-        Mock Resolve-RepositoryTestTenantSettings { throw 'Metadata must not resolve a test tenant.' }
-        Mock Invoke-AvmBamiRepositoryIdentity { throw 'Metadata must not prepare a BAMI identity.' }
-        Mock Resolve-RepositorySyncStateIdentity { throw 'Metadata must not access Azure state.' }
-        Mock Clear-TerraformWorkspace { throw 'Metadata must not clean Terraform state.' }
+        $script:arguments.bamiTestTenantSyncEnabled = $false
+        Mock Invoke-AvmPreCommitForRepository {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        Mock Clear-TerraformWorkspace {}
 
         $result = & $script:driver @script:arguments
 
-        $result.HasChanges | Should -BeTrue
-        $env:ARM_USE_AZUREAD | Should -BeExactly 'unchanged-by-metadata'
-        Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
-            $metadataBackfill -and $planOnly -eq $RequestedPlanOnly
-        }
-        Should -Invoke Resolve-RepositoryTestTenantSettings -Exactly 0
+        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
+        $result.TestTenant | Should -BeExactly 'bami'
+        $env:ARM_USE_AZUREAD | Should -BeExactly 'true'
+        Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
         Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
-        Should -Invoke Resolve-RepositorySyncStateIdentity -Exactly 0
         Should -Invoke Clear-TerraformWorkspace -Exactly 0
         Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects the removed Terraform source-reader option before any work' {
+        { & $script:driver @script:arguments -metadataUpdateSource } | Should -Throw '*metadataUpdateSource*'
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    Context 'Full management with optional metadata creation' {
+        BeforeEach {
+            $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+            $script:arguments.metadataBackfill = $true
+            $script:arguments.bamiTestTenantSyncEnabled = $true
+            $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
+            $management = $script:managementState
+            Mock Resolve-RepositorySyncStateIdentity ({ $management.Events.Add('state') }.GetNewClosure())
+            Mock Resolve-RepositoryTestTenantSettings ({
+                param($TestTenant)
+                $management.Events.Add('tenant')
+                @{ TestTenant = $TestTenant; Status = 'Ready'; Settings = @{ fixture = 'bami' } }
+            }.GetNewClosure())
+            Mock Clear-TerraformWorkspace ({ $management.Events.Add('cleanup') }.GetNewClosure())
+            Mock Invoke-AvmBamiRepositoryIdentity ({
+                $management.Events.Add('identity')
+                @{ Status = 'Ready'; ConsumerSettings = @{ fixture = 'identity' } }
+            }.GetNewClosure())
+            Mock Get-RepositoryDefaultBranchTree ({
+                $management.Events.Add('tree')
+                @{ Success = $true; DefaultBranch = 'main' }
+            }.GetNewClosure())
+            Mock Remove-LegacyBranchProtection ({ param($issueLog) $management.Events.Add('protection'); @{ IssueLog = @($issueLog) } }.GetNewClosure())
+            Mock Remove-UnmanagedRulesets ({ param($issueLog) $management.Events.Add('rulesets'); @{ IssueLog = @($issueLog) } }.GetNewClosure())
+            Mock Disable-CodeQlDefaultSetup ({ param($issueLog) $management.Events.Add('codeql'); @{ IssueLog = @($issueLog) } }.GetNewClosure())
+            Mock Resolve-GitHubTeams ({ param($issueLog) $management.Events.Add('teams'); @{ GithubTeams = @{}; IssueLog = @($issueLog) } }.GetNewClosure())
+            Mock Remove-DirectCollaborators ({ param($issueLog) $management.Events.Add('collaborators'); return ,$issueLog }.GetNewClosure())
+            Mock Remove-UnmanagedRepositoryTeams ({ param($issueLog) $management.Events.Add('unmanaged-teams'); return ,$issueLog }.GetNewClosure())
+            Mock Invoke-TerraformInit ({ param($issueLog) $management.Events.Add('init'); return ,$issueLog }.GetNewClosure())
+            Mock Invoke-TerraformPlanAndApply ({
+                param($issueLog)
+                $management.Events.Add('terraform')
+                if ($management.Failure -ceq 'terraform') { return ,@(@{ message = 'terraform failed' }) }
+                return ,$issueLog
+            }.GetNewClosure())
+            Mock Invoke-AvmPreCommitForRepository ({
+                param($issueLog)
+                $management.Events.Add('files')
+                if ($management.Failure -ceq 'metadata') { throw 'metadata preparation failed' }
+                @{ HasChanges = $true; IssueLog = @($issueLog) }
+            }.GetNewClosure())
+        }
+
+        It 'runs the standard management sequence for <Tenant> with plan=<Plan>' -TestCases @(
+            @{ Tenant = 'legacy'; Plan = $false }
+            @{ Tenant = 'legacy'; Plan = $true }
+            @{ Tenant = 'bami'; Plan = $false }
+            @{ Tenant = 'bami'; Plan = $true }
+        ) {
+            param($Tenant, $Plan)
+            $script:config.repositoryGroups[0].testTenant = $Tenant
+            $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+            $script:arguments.planOnly = $Plan
+            $null = & $script:driver @script:arguments
+
+            $expected = @('state', 'tenant', 'cleanup')
+            if ($Tenant -ceq 'bami') { $expected += 'identity' }
+            $expected += @('tree', 'protection', 'rulesets', 'codeql', 'teams', 'collaborators', 'unmanaged-teams', 'init', 'terraform', 'files')
+            $script:managementState.Events | Should -Be $expected
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $Plan }
+            Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
+                $metadataBackfill -and $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
+            }
+            Should -Invoke Start-Process -Exactly 0
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        }
+
+        It 'retains the pending BAMI identity stop before repository changes' {
+            Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingIdentityValidation' } }
+            $result = & $script:driver @script:arguments
+            $result.Status | Should -BeExactly 'PendingIdentityValidation'
+            Should -Invoke Get-RepositoryDefaultBranchTree -Exactly 0
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 0
+            Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
+            Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+        }
+
+        It 'does not prepare or publish files after a normal Terraform failure' {
+            $script:managementState.Failure = 'terraform'
+            $null = & $script:driver @script:arguments
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1
+            Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
+            Get-Content (Join-Path $TestDrive 'issue.log.json') -Raw | Should -Match 'terraform failed'
+        }
+
+        It 'surfaces metadata failure after earlier normal management without claiming rollback' {
+            $script:managementState.Failure = 'metadata'
+            { & $script:driver @script:arguments } | Should -Throw '*metadata preparation failed*'
+            $script:managementState.Events[-3..-1] | Should -Be @('init', 'terraform', 'files')
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1
+            Should -Invoke Remove-LegacyBranchProtection -Exactly 1
+            Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeTrue
+        }
     }
 }

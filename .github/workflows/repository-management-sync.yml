@@ -22,11 +22,7 @@ on:
         default: false
         type: boolean
       metadata_backfill:
-        description: 'ONE-OFF: create missing metadata.json files from existing indexes and source. Existing files are never overwritten.'
-        default: false
-        type: boolean
-      metadata_update_source:
-        description: 'ONE-OFF: also add source readers for newly created metadata files. Requires metadata_backfill.'
+        description: 'ONE-OFF: create missing metadata.json before full normal sync, including standard merge on apply. Existing metadata is preserved.'
         default: false
         type: boolean
       sync_project_items:
@@ -101,51 +97,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Terraform
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
+      - name: '[AVM] Setup Terraform'
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: latest
           terraform_wrapper: false
 
-      - name: Install Avm.Authoring
-        id: avm-authoring
+      - name: '[AVM] Install Avm.Authoring'
         shell: pwsh
-        env:
-          METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
-          METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
-          METADATA_BACKFILL_REPOSITORY_URL: ${{ matrix.repoUrl }}
         run: |
-          if ($env:METADATA_BACKFILL_ENABLED -eq 'true') {
-            Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-          } else {
-            Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
-            Import-Module Avm.Authoring
-          }
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
+          Import-Module Avm.Authoring
           if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
             throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
           }
-          if ($env:METADATA_UPDATE_SOURCE_ENABLED -eq 'true' -and $env:METADATA_BACKFILL_ENABLED -ne 'true') {
-            throw 'metadata_update_source requires explicit metadata_backfill opt-in.'
-          }
-          if ($env:METADATA_BACKFILL_ENABLED -eq 'true') {
-            . (Join-Path $PWD '..' 'module-metadata' 'MetadataBackfill.ps1')
-            Assert-AvmMetadataBackfillCapability
-            $backfillRepository = ([uri]$env:METADATA_BACKFILL_REPOSITORY_URL).AbsolutePath.Trim('/')
-            "app-repository=$($backfillRepository.Split('/')[1])" >> $env:GITHUB_OUTPUT
-          }
 
-      - name: Create GitHub App Token
+      - name: '[AVM] Create GitHub App Token'
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.avm-authoring.outputs.app-repository }}
 
-      - name: Resolve state backend
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
+      - name: '[AVM] Resolve state backend'
         id: state-backend
         shell: pwsh
         env:
@@ -183,21 +158,19 @@ jobs:
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
       # Only state lock recovery uses this CLI login; providers retain ARM_* below.
-      - name: Azure Login for state (OIDC)
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
+      - name: '[AVM] Azure Login for state (OIDC)'
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ steps.state-backend.outputs.client-id }}
           tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
 
-      - name: Download Labels CSV File
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.metadata_backfill }}
+      - name: '[AVM] Download Labels CSV File'
         run: |
           ./scripts/Get-AvmLabels.ps1
         shell: pwsh
 
-      - name: Run Sync for ${{ matrix.repoId }}
+      - name: '[AVM] Run Sync for ${{ matrix.repoId }}'
         run: |
 
           $triggerType = "${{ github.event_name }}"
@@ -205,33 +178,27 @@ jobs:
           $planOnly = $false
           $forceFileUpdate = $false
           $metadataBackfill = $false
-          $metadataUpdateSource = $false
 
           if($triggerType -eq "workflow_dispatch") {
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
             $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
             $metadataBackfill = $env:METADATA_BACKFILL_ENABLED -eq 'true'
-            $metadataUpdateSource = $env:METADATA_UPDATE_SOURCE_ENABLED -eq 'true'
           }
 
           Write-Output "Repositories: $repositories"
           Write-Output "Plan Only: $planOnly"
           Write-Output "Force File Update: $forceFileUpdate"
 
-          $testSubscriptionIds = @()
-          $bamiSettings = @{}
-          if (-not $metadataBackfill) {
-            $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
-            $bamiSettings = @{
-              TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
-              TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
-              TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $env:TEST_BAMI_ADMIN_SUBSCRIPTION_ID
-              TEST_BAMI_SUBSCRIPTION_IDS = $env:TEST_BAMI_SUBSCRIPTION_IDS
-              TEST_BAMI_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_MANAGEMENT_GROUP_ID
-              TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
-              TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
-              TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
-            }
+          $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
+          $bamiSettings = @{
+            TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
+            TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
+            TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $env:TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+            TEST_BAMI_SUBSCRIPTION_IDS = $env:TEST_BAMI_SUBSCRIPTION_IDS
+            TEST_BAMI_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_MANAGEMENT_GROUP_ID
+            TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
+            TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
+            TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
           }
 
           $repoMetaDataJson = $env:REPO_META_DATA_JSON
@@ -240,14 +207,9 @@ jobs:
             $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
           }
 
-          if (-not $metadataBackfill) {
-            Write-Host "Authenticating gh cli"
-            gh auth login -h "GitHub.com"
-          }
+          Write-Host "Authenticating gh cli"
+          gh auth login -h "GitHub.com"
           Write-Host "Running repo sync"
-          if ($metadataBackfill) {
-            Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-          }
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
             -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
@@ -262,11 +224,10 @@ jobs:
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
-            -bamiTestTenantSyncEnabled ($env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true' -and -not $metadataBackfill) `
+            -bamiTestTenantSyncEnabled ($env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true') `
             -bamiSettings $bamiSettings `
             -forceFileUpdate:$forceFileUpdate `
-            -metadataBackfill:$metadataBackfill `
-            -metadataUpdateSource:$metadataUpdateSource
+            -metadataBackfill:$metadataBackfill
 
         shell: pwsh
         env:
@@ -293,7 +254,6 @@ jobs:
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
           METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
-          METADATA_UPDATE_SOURCE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_update_source || false }}
 
       - name: Upload Issue Logs Json
         if: always() && hashFiles('issue.log.json') != ''
@@ -320,8 +280,8 @@ jobs:
           if ($hasError) { exit 1 }
         shell: pwsh
 
-      - name: Add Repository Items to AVM All Up Project
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || (inputs.sync_project_items && !inputs.metadata_backfill)) }}
+      - name: '[AVM] Add Repository Items to AVM All Up Project'
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
         run: |
 
           $triggerType = "${{ github.event_name }}"

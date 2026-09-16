@@ -264,7 +264,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'partial' }
     ) {
         $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
-        $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
+        $step = [regex]::Match($workflow, '(?ms)^      - name: ''\[AVM\] Resolve state backend''\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
         $step.Success | Should -BeTrue
         $body = [regex]::Replace($step.Groups['body'].Value, '(?m)^          ', '')
         $resolve = [scriptblock]::Create($body)

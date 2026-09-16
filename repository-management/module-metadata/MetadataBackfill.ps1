@@ -26,6 +26,9 @@ function Get-AvmMetadataBackfillPlan {
         [switch] $UpdateSource
     )
 
+    if ($UpdateSource -and $Ecosystem -eq 'terraform') {
+        throw [System.NotSupportedException]::new('Terraform -UpdateSource is not supported. Omit -UpdateSource; Terraform telemetry changes belong in a later MaPoTF update.')
+    }
     $modules = @(Get-AvmMetadataBackfillModule -Root $Root -Ecosystem $Ecosystem -Repository $Repository)
     $plans = [System.Collections.Generic.List[object]]::new()
     $errors = [System.Collections.Generic.List[string]]::new()
@@ -233,7 +236,7 @@ function Get-AvmMetadataBackfillModule {
         }
         foreach ($relative in $paths) {
             $directory = Resolve-AvmMetadataBackfillPath -Root $rootPath -RelativePath $relative
-            $sources = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -clike '*.tf' -and $_.Name -cne 'main.metadata.tf' })
+            $sources = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -clike '*.tf' })
             if ($sources.Count -eq 0) {
                 if ($relative -ceq '.') {
                     throw [System.ArgumentException]::new('Terraform checkout has no root .tf source.')
@@ -301,8 +304,7 @@ function Get-AvmMetadataBackfillModule {
                 if ($file.Name -ieq 'metadata.json' -and $file.Name -cne 'metadata.json') {
                     throw [System.ArgumentException]::new("metadata.json has incorrect casing at '$fileRelative'.")
                 }
-                if (($file.Name -ieq 'main.metadata.tf' -and $file.Name -cne 'main.metadata.tf') -or
-                    ($file.Name -ilike '*.tf' -and $file.Name -cnotlike '*.tf')) {
+                if ($file.Name -ilike '*.tf' -and $file.Name -cnotlike '*.tf') {
                     throw [System.ArgumentException]::new("Terraform source has unsupported casing at '$fileRelative'.")
                 }
             }

@@ -83,26 +83,20 @@ workflow through the normal operator controls when scheduled writes must stop.
 There is no Bicep metadata-backfill mode.
 The retained BAMI activation gate applies only to the separate test-tenant job.
 `plan_only=true` also prevents that job from writing variables.
-For metadata adoption, the [rollout plan](metadata-rollout.md) requires disabling
-this workflow before the tools changes merge and keeping it disabled until the
-target governance tests and generated ownership rules agree.
+The initial metadata adoption required a pause until the target governance
+tests and generated ownership rules agreed. Both changes are now merged;
+check current workflow state and obtain approval for any pause or resumption.
 
 ## Operator setup and rollout
 
-**Metadata rollout ordering:** land
+**Metadata rollout prerequisites are merged:**
 [Azure/bicep-registry-modules#7349](https://github.com/Azure/bicep-registry-modules/pull/7349)
-before allowing the metadata-protecting Bicep generator to run. The old registry
-governance tests reject its additional final metadata rule, and the old tools
-static guard rejects registry content after that rule is adopted. Resume Bicep
-Sync only after both the registry change and
-the consolidated [tools change](https://github.com/Azure/azure-verified-modules-tools/pull/113) have merged,
-with fresh full checks passing on their final heads. Keep Bicep Sync disabled
-throughout this incompatible interval, starting before
-[#113](https://github.com/Azure/azure-verified-modules-tools/pull/113) merges:
-that implementation includes the ownership generator and intentionally removes the old
-`AVM_CODEOWNERS_SYNC_ENABLED` gate. Setting that variable to `false` is not
-sufficient afterward. Disabling and re-enabling the workflow require operator
-approval; this change does neither.
+and [#113](https://github.com/Azure/azure-verified-modules-tools/pull/113)
+provide compatible governance tests and the metadata ownership rule.
+Recheck current main and workflow state before an approved run.
+`AVM_CODEOWNERS_SYNC_ENABLED` was removed, so setting it to `false` does not
+pause writes. Disabling and re-enabling the workflow require operator approval;
+this documentation does neither. See the [rollout plan](metadata-rollout.md).
 
 - Use the existing `avm` environment's `AVM_APP_CLIENT_ID` and
   `AVM_APP_PRIVATE_KEY`. Restrict that environment to trusted tools `main`.
@@ -163,15 +157,16 @@ in a fresh PowerShell process. Intentional changes from the original publisher
 are literal-argv Git/CLI calls, disposable-clone credential/hook configuration
 instead of global authentication setup, a 300-second per-command transport
 timeout, and exact-head `--match-head-commit` merging. Full candidate/base/tree/API verification is explicitly opt-in with
-`-VerifyCandidate`; ordinary Terraform sync does not acquire the CODEOWNERS
-prerequisites. Metadata backfill deliberately opts into candidate verification
-and a target-only token, while preserving ordinary Terraform preparation.
+`-VerifyCandidate`; ordinary Terraform sync does not acquire the Bicep CODEOWNERS
+prerequisites. Terraform metadata backfill now adds only missing-file preparation
+before normal pre-commit. It uses the same installed authoring, management
+steps, publisher options and authorized merge as ordinary Terraform sync.
 
 CODEOWNERS opts into that verification and a sparse
 default-branch checkout limited to its managed file, a stable branch, strict dry
-runs, retained branch, and target-only app identity. Metadata backfill uses
-`-ReviewOnly` for apply runs: it opens a verified candidate but never merges.
-There is no Bicep workflow backfill adapter. Neither path
+runs, retained branch, and target-only app identity. There is no separate
+Terraform metadata review-only lane and no Bicep workflow backfill adapter.
+Neither path
 checks out an existing candidate head. Git credential/hook configuration is
 confined to the disposable clone rather than the user's global settings.
 

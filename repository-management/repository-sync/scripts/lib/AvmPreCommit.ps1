@@ -1,5 +1,4 @@
 . (Join-Path $PSScriptRoot 'RepositoryFileSync.ps1')
-. (Join-Path $PSScriptRoot '..' '..' '..' 'module-metadata' 'MetadataBackfillSync.ps1')
 . (Join-Path $PSScriptRoot 'TerraformCodeowners.ps1')
 
 function Assert-AvmPreCommitResult {
@@ -137,61 +136,32 @@ function Invoke-AvmPreCommitForRepository {
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
         [bool]$metadataBackfill = $false,
-        [bool]$metadataUpdateSource = $false,
         [array]$issueLog
     )
 
-    if ($metadataUpdateSource -and -not $metadataBackfill) {
-        throw [System.ArgumentException]::new('metadataUpdateSource requires explicit metadataBackfill opt-in.')
+    if ($metadataBackfill -and $env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch') {
+        throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
     }
     $result = @{ IssueLog = $issueLog; HasChanges = $false }
-    $backfillContext = $null
-    $publication = @{}
-    if ($metadataBackfill) {
-        Assert-AvmMetadataBackfillTrigger
-        $backfillContext = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $orgAndRepoName
-        $branch = 'avm-bot/module-metadata-backfill'
-        $review = Get-AvmMetadataBackfillReview -orgAndRepoName $orgAndRepoName -branchName $branch
-        if ($review.Exists) {
-            Write-Warning "$orgAndRepoName - $($review.Reason)"
-            $result.BackfillDeferred = $true
-            return $result
-        }
-        $publication = @{
-            StableBranch = $branch
-            ReviewOnly = $true
-            VerifyCandidate = $true
-            ExpectedActor = Get-AvmMetadataBackfillActor
-            Title = 'chore: backfill module metadata'
-            Body = 'Create missing metadata.json files from existing indexes and module source. Existing metadata is preserved. CI stays enabled and this change is never automatically merged.'
-        }
-    }
 
     try {
-        $codeowners = $null
-        if (-not $metadataBackfill) {
-            Import-Module Avm.Authoring -ErrorAction Stop
-            $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
-            $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
-                -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
-        }
+        Import-Module Avm.Authoring -ErrorAction Stop
+        $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
+        $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
+            -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
         $prepareState = @{
             RepoId = $repoId
             RepositoryConfigDir = $repositoryConfigDir
             ForceFileUpdate = $forceFileUpdate
-            BackfillContext = $backfillContext
-            UpdateSource = $metadataUpdateSource
+            MetadataBackfill = $metadataBackfill
             CodeownersContent = $codeowners
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
-            -PlanOnly:$planOnly -State $prepareState @publication -Prepare {
+            -PlanOnly:$planOnly -State $prepareState -Prepare {
                 param($context)
                 $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
-                if ($context.State.BackfillContext) {
-                    $context.State.BackfillResult = Invoke-AvmMetadataBackfillPreparation -Context $context
-                    return
-                }
                 $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
+                if ($context.State.MetadataBackfill) { $null = & (Join-Path $PSScriptRoot '..' '..' '..' 'module-metadata' 'MetadataBackfillSync.ps1') -Context $context }
                 $upgrade = Resolve-AvmManagedFilesUpgradeDecision -orgAndRepoName $context.Repository.full_name `
                     -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
                 Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray
@@ -201,10 +171,6 @@ function Invoke-AvmPreCommitForRepository {
                 Set-TerraformCodeowners -RepositoryRoot $context.Root -Content $context.State.CodeownersContent
             }
         $result.HasChanges = $published.HasChanges
-        if ($metadataBackfill) {
-            $result.MetadataBackfill = $prepareState['BackfillResult']
-            $result.BackfillReviewUrl = $published.PullRequestUrl
-        }
         return $result
     } catch {
         Write-Error "avm pre-commit failed for $orgAndRepoName. Administrative corrective action is required. $($_.Exception.Message)"
