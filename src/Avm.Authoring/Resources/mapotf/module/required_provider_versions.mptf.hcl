@@ -18,8 +18,9 @@ locals {
 }
 
 transform "update_in_place" azapi_provider_version {
-  for_each             = local.azapi_provider_required && !local.azapi_provider_version_valid ? toset([1]) : toset([])
-  target_block_address = "terraform"
+  for_each                = local.azapi_provider_required && !local.azapi_provider_version_valid ? toset([1]) : toset([])
+  target_block_address    = "terraform"
+  merge_object_attributes = true
   asraw {
     required_providers {
       azapi = {
@@ -31,8 +32,9 @@ transform "update_in_place" azapi_provider_version {
 }
 
 transform "update_in_place" random_provider_version {
-  for_each             = !local.random_provider_version_valid ? toset([1]) : toset([])
-  target_block_address = "terraform"
+  for_each                = !local.random_provider_version_valid ? toset([1]) : toset([])
+  target_block_address    = "terraform"
+  merge_object_attributes = true
   asraw {
     required_providers {
       random = {

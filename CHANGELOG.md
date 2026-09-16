@@ -188,6 +188,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Preserve provider `configuration_aliases` as HCL traversals when MAPOTF
+  upgrades AzAPI or Random requirements, retaining unrelated provider entries
+  and comments.
 - Mapotf no longer adds an unused AzAPI requirement to provider-free local
   helpers. Direct AzAPI use and root telemetry still receive a requirement;
   generated constraints and provider schemas now use the `~> 2.12` floor.

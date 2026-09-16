@@ -10,7 +10,21 @@ Describe 'Integration: MAPOTF provider requirements' -Tag 'Integration' -Skip:($
             $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         }
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
-        Install-AvmTool -Name mapotf, terraform, tflint -ErrorAction Stop
+        $tools = @('terraform', 'tflint')
+        if ($env:AVM_MAPOTF_TEST_BINARY) {
+            (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).PSIsContainer | Should -BeFalse
+            Mock Resolve-AvmTool -ModuleName 'Avm.Authoring' -ParameterFilter { $Name -eq 'mapotf' } {
+                [pscustomobject]@{
+                    Path = (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).FullName
+                    Version = 'development'
+                    Source = 'AVM_MAPOTF_TEST_BINARY'
+                }
+            }
+        }
+        else {
+            $tools += 'mapotf'
+        }
+        Install-AvmTool -Name $tools -ErrorAction Stop
         $script:lintConfig = Join-Path $TestDrive 'tflint.hcl'
         Set-Content -LiteralPath $script:lintConfig -Encoding utf8NoBOM -Value @'
 plugin "terraform" {
@@ -60,6 +74,66 @@ rule "terraform_unused_required_providers" {
 
             @(Get-ChildItem -LiteralPath $Root -Filter '*.tf' -File | Sort-Object Name |
                 ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+        }
+
+        function New-AliasedProviderConfiguration {
+            param(
+                [string] $Syntax,
+                [string] $AzapiVersion,
+                [string] $RandomVersion
+            )
+
+            $template = switch ($Syntax) {
+                'multiline' {
+                    @'
+    __NAME__ = {
+      source = "__SOURCE__"
+      version = "__VERSION__"
+      configuration_aliases = [__NAME__.primary, __NAME__.secondary]
+    }
+'@
+                }
+                'inline' {
+                    '    __NAME__ = { source = "__SOURCE__", version = "__VERSION__", configuration_aliases = [__NAME__.primary, __NAME__.secondary] }'
+                }
+                'comments' {
+                    @'
+    __NAME__ = {
+      # version = "~> 2.4"; source = "example/untouched"
+      "configuration_aliases" = [
+        __NAME__.primary, # primary account
+        /* secondary account */ __NAME__.secondary,
+      ]
+      "source" = "__SOURCE__" # keep the source note
+      "version" = "__VERSION__" # keep the version note
+    }
+'@
+                }
+            }
+
+            $providers = @(
+                @{ Name = 'azapi'; Source = 'Azure/azapi'; Version = $AzapiVersion }
+                @{ Name = 'random'; Source = 'hashicorp/random'; Version = $RandomVersion }
+                @{ Name = 'azurerm'; Source = 'hashicorp/azurerm'; Version = '~> 4.0' }
+            )
+            $requirements = foreach ($provider in $providers) {
+                $template.Replace('__NAME__', $provider.Name).
+                    Replace('__SOURCE__', $provider.Source).
+                    Replace('__VERSION__', $provider.Version)
+            }
+
+            @"
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+$($requirements -join "`n")
+  }
+}
+
+locals {
+  untouched = "version = \"~> 2.4\" and source = \"example/untouched\""
+}
+"@ + "`n"
         }
     }
 
@@ -188,6 +262,49 @@ data "azapi_client_config" "example" {
         $first = Get-TerraformContent -Root $script:target
         $first | Should -Match ('version\s*=\s*"{0}"' -f [regex]::Escape($Expected))
         $first | Should -Match 'version\s*=\s*"~> 3\.6"'
+
+        Invoke-ProviderTransform -Root $script:target
+        Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'preserves aliases for <Scenario> with <Syntax> syntax' -TestCases @(
+        foreach ($scenario in @(
+            @{ Name = 'compliant providers'; Azapi = '~> 2.12'; Random = '~> 3.6'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.6' }
+            @{ Name = 'an AzAPI upgrade'; Azapi = '~> 2.4'; Random = '~> 3.6'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.6' }
+            @{ Name = 'a Random upgrade'; Azapi = '~> 2.12'; Random = '~> 2.0'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.0' }
+            @{ Name = 'both upgrades'; Azapi = '~> 2.4'; Random = '~> 2.0'; ExpectedAzapi = '~> 2.12'; ExpectedRandom = '~> 3.0' }
+        )) {
+            foreach ($syntax in @('multiline', 'inline', 'comments')) {
+                @{
+                    Scenario = $scenario.Name
+                    Syntax = $syntax
+                    AzapiVersion = $scenario.Azapi
+                    RandomVersion = $scenario.Random
+                    ExpectedAzapiVersion = $scenario.ExpectedAzapi
+                    ExpectedRandomVersion = $scenario.ExpectedRandom
+                }
+            }
+        }
+    ) {
+        param($Scenario, $Syntax, $AzapiVersion, $RandomVersion, $ExpectedAzapiVersion, $ExpectedRandomVersion)
+
+        $source = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $AzapiVersion -RandomVersion $RandomVersion
+        Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Value $source -Encoding utf8NoBOM -NoNewline
+        $expectedRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $expectedRoot
+        $expected = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $ExpectedAzapiVersion -RandomVersion $ExpectedRandomVersion
+        $expectedFile = Join-Path $expectedRoot 'terraform.tf'
+        Set-Content -LiteralPath $expectedFile -Value $expected -Encoding utf8NoBOM -NoNewline
+
+        Invoke-ProviderTransform -Root $script:target
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target; ExpectedFile = $expectedFile } {
+            param($Root, $ExpectedFile)
+            $tool = Resolve-AvmTool -Name terraform
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedFile) -WorkingDirectory $Root
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+        }
+        $first = Get-TerraformContent -Root $script:target
+        $first | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
 
         Invoke-ProviderTransform -Root $script:target
         Get-TerraformContent -Root $script:target | Should -BeExactly $first
