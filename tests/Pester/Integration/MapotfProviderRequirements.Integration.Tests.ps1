@@ -15,6 +15,7 @@ Describe 'Integration: MAPOTF provider requirements' -Tag 'Integration' -Skip:($
             (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).PSIsContainer | Should -BeFalse
             Mock Resolve-AvmTool -ModuleName 'Avm.Authoring' -ParameterFilter { $Name -eq 'mapotf' } {
                 [pscustomobject]@{
+                    Name = 'mapotf'
                     Path = (Get-Item -LiteralPath $env:AVM_MAPOTF_TEST_BINARY -ErrorAction Stop).FullName
                     Version = 'development'
                     Source = 'AVM_MAPOTF_TEST_BINARY'
@@ -297,17 +298,19 @@ data "azapi_client_config" "example" {
         Set-Content -LiteralPath $expectedFile -Value $expected -Encoding utf8NoBOM -NoNewline
 
         Invoke-ProviderTransform -Root $script:target
-        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target; ExpectedFile = $expectedFile } {
-            param($Root, $ExpectedFile)
-            $tool = Resolve-AvmTool -Name terraform
-            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedFile) -WorkingDirectory $Root
-            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
-        }
         $first = Get-TerraformContent -Root $script:target
-        $first | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
-
         Invoke-ProviderTransform -Root $script:target
         Get-TerraformContent -Root $script:target | Should -BeExactly $first
+
+        $actualFile = Join-Path $expectedRoot 'actual.tf'
+        Set-Content -LiteralPath $actualFile -Value $first -Encoding utf8NoBOM -NoNewline
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target; ExpectedRoot = $expectedRoot } {
+            param($Root, $ExpectedRoot)
+            $tool = Resolve-AvmTool -Name terraform
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedRoot) -WorkingDirectory $Root
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+        }
+        Get-Content -LiteralPath $actualFile -Raw | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
     }
 
     It 'updates a function-only AzAPI declaration' {

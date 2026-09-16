@@ -23,7 +23,6 @@ gates, target constraints, and unrelated provider entries unchanged.
 - [ ] Run local transformation and drift checks on an isolated copy of
       Sebastian's actual Terraform module.
 - [ ] Pin a compatible MAPOTF release with verified release archive hashes.
-- [ ] Commit, push, and open the tools pull request.
 
 ## Validation
 
@@ -32,14 +31,22 @@ all 17 existing cases. The 12 new alias cases reproduce its reader error.
 `AVM_MAPOTF_TEST_BINARY` explicitly selects a local development executable for
 this suite without changing the managed-tool cache or release pins.
 
+- Repeated with a real development binary built from
+  `Azure/mapotf@63f95f9b00d8f4cfdfbb7e27731be80559e369c0`, containing the alias
+  reader and optional-provider-field fixes: all 17 existing cases and the three
+  compliant-alias cases pass. The nine upgrade cases still fail because the
+  existing transform replaces provider objects and drops their aliases.
+- The tests compare Terraform-formatted copies for expected metadata and
+  untouched content, and compare original files byte-for-byte between MAPOTF
+  passes for idempotence. `terraform providers` checks the real alias syntax.
 - `.\build.ps1 pre-commit`: passed; 1,425 unit tests passed, 8 skipped;
-  all 117 component tests passed. The existing analyzer retry handled a
-  transient failure; lint reported 180 warnings and no errors.
+  all 117 component tests passed. After an analyzer retry exhaustion, a fresh
+  PowerShell process passed the complete gate with 217 warnings and no errors.
 
 ## Dependencies
 
-- MAPOTF 0.2.0 release assets and verified checksums are being checked by the
-  coordinating session. The existing 0.1.12 pin remains until those are ready.
+- Awaiting a compatible MAPOTF release and verified archive checksums from the
+  coordinating session. The existing 0.1.12 pin and hashes remain unchanged.
 - MAPOTF 0.2.0 cannot safely merge raw provider objects with its existing DSL.
   Both rules prepare the proposed opt-in `merge_object_attributes` API, reported
   to the coordinator before editing. A compatible MAPOTF implementation and
