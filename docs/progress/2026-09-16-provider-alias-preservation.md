@@ -15,31 +15,32 @@ gates, target constraints, and unrelated provider entries unchanged.
 
 - [x] Read repository contracts and check existing branches and pull requests.
 - [x] Investigate MAPOTF update methods and report the missing object-merge API.
-- [x] Prepare both provider rules and directly related documentation.
+- [x] Enable object-attribute merging in both provider rules and update documentation.
 - [x] Cover compliant aliases, separate and combined upgrades, multiple aliases,
       unrelated providers, inline/multiline syntax, comments, and idempotence.
 - [x] Run the local pre-commit gate.
-- [ ] Pass targeted integration tests with a compatible real MAPOTF binary.
+- [x] Pass targeted integration tests with a compatible real MAPOTF binary.
 - [x] Cover the public Fabric workspace proposal with representative Fabric
       and AzAPI aliases, resource/data references, upgrades, and idempotence.
 - [ ] Pin a compatible MAPOTF release with verified release archive hashes.
 
 ## Validation
 
-The original 29-case `.\build.ps1 integration` baseline on the existing 0.1.12
-pin passes all 17 existing cases. Its 12 alias cases reproduce the reader error.
-`AVM_MAPOTF_TEST_BINARY` explicitly selects a local development executable for
-this suite without changing the managed-tool cache or release pins.
-
-- The expanded 31-case suite uses a real development binary built from
-  `Azure/mapotf@63f95f9b00d8f4cfdfbb7e27731be80559e369c0`, containing the alias
-  reader and optional-provider-field fixes: 21 pass, including all 17 existing
-  cases, three compliant-alias layouts, and the compliant Fabric/AzAPI case.
-  Ten upgrade cases still fail because provider objects lose their aliases.
+- All 31 integration cases pass, with no failures or skips, against the real
+  development executable from
+  [Azure/mapotf@b40b96c](https://github.com/Azure/mapotf/commit/b40b96c59cc36b78248808f944a3dc12479a81d3).
+  Its reported version is `dev-object-merge-b40b96c`, and its full commit and
+  SHA-256 were independently verified:
+  `9a607177363bde00f3fe780a20fe0445a19a6c4d645da4e0e3574cae12ce400d`.
+- Before the object-merge implementation, the same 31-case suite against
+  reader-fixed commit `63f95f9b00d8f4cfdfbb7e27731be80559e369c0` had 21 passes
+  and ten alias-loss failures. All ten upgrades now pass.
+- The original 29-case baseline on pinned MAPOTF 0.1.12 passed the 17 existing
+  cases; its 12 matrix alias cases reproduced the reader error.
 - The representative Fabric case checks the complete Fabric requirement,
   workspace/resource and existing-capacity/data provider references, and AzAPI
-  networking/resource and client-config/data references. The upgraded case
-  demonstrates the remaining alias-loss defect without reading private source.
+  networking/resource and client-config/data references. Both compliant and
+  upgraded constraints pass without reading private source.
 - The tests compare Terraform-formatted copies for expected metadata and
   untouched content, and compare original files byte-for-byte between MAPOTF
   passes for idempotence. `terraform providers` checks the real alias syntax.
@@ -47,16 +48,29 @@ this suite without changing the managed-tool cache or release pins.
   all 117 component tests passed. The existing analyzer retry handled transient
   failures; the latest gate completed with 230 warnings and no errors.
 
+The targeted run uses the repository build entry point:
+
+```powershell
+$env:AVM_MAPOTF_TEST_BINARY = '<absolute path to the verified development executable>'
+$PesterPreference = @{ Run = @{ TestExtension = 'MapotfProviderRequirements.Integration.Tests.ps1' } }
+.\build.ps1 integration
+```
+
+The binary override only replaces tool selection in this integration suite;
+execution is real, and no managed cache entry or release pin is fabricated.
+
 ## Dependencies
 
-- Awaiting a compatible MAPOTF release and verified archive checksums from the
-  coordinating session. The existing 0.1.12 pin and hashes remain unchanged.
-- MAPOTF 0.2.0 cannot safely merge raw provider objects with its existing DSL.
-  Both rules prepare the proposed opt-in `merge_object_attributes` API, reported
-  to the coordinator before editing. A compatible MAPOTF implementation and
-  release are required before this change can be accepted.
+- Release adoption remains blocked: a published MAPOTF release must contain
+  [Azure/mapotf#129](https://github.com/Azure/mapotf/pull/129), including the
+  opt-in `merge_object_attributes` implementation, and provide all six verified
+  archive hashes. MAPOTF 0.2.0 alone is insufficient and still has no assets.
+  The existing 0.1.12 pin and hashes remain unchanged.
+- Keep [the tools change](https://github.com/Azure/azure-verified-modules-tools/pull/124)
+  draft until that release is pinned and the native suite passes against it.
 - Following the user's updated instruction, cover the public pattern in
   [Azure/Azure-Verified-Modules#2932](https://github.com/Azure/Azure-Verified-Modules/issues/2932)
   with representative fixtures. The private implementation was not inspected
   or tested. Capacity is looked up, not provisioned; no cloud activity runs.
-- The separate MAPOTF optional-provider-field panic fix is outside this slice.
+- The separate MAPOTF optional-provider-field panic fix is included in the
+  development binary but was not duplicated in this tools slice.
