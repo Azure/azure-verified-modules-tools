@@ -136,6 +136,30 @@ locals {
 }
 "@ + "`n"
         }
+
+        function Assert-ProviderRequirements {
+            param([string] $Root, [string] $ExpectedConfiguration)
+
+            $expectedRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $expectedRoot
+            $expectedFile = Join-Path $expectedRoot 'terraform.tf'
+            Set-Content -LiteralPath $expectedFile -Value $ExpectedConfiguration -Encoding utf8NoBOM -NoNewline
+
+            Invoke-ProviderTransform -Root $Root
+            $first = Get-TerraformContent -Root $Root
+            Invoke-ProviderTransform -Root $Root
+            Get-TerraformContent -Root $Root | Should -BeExactly $first
+
+            $actualFile = Join-Path $expectedRoot 'actual.tf'
+            Copy-Item -LiteralPath (Join-Path $Root 'terraform.tf') -Destination $actualFile
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $Root; ExpectedRoot = $expectedRoot } {
+                param($Root, $ExpectedRoot)
+                $tool = Resolve-AvmTool -Name terraform
+                $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedRoot) -WorkingDirectory $Root
+                $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+            }
+            Get-Content -LiteralPath $actualFile -Raw | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
+        }
     }
 
     BeforeEach {
@@ -291,26 +315,77 @@ data "azapi_client_config" "example" {
 
         $source = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $AzapiVersion -RandomVersion $RandomVersion
         Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Value $source -Encoding utf8NoBOM -NoNewline
-        $expectedRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        $null = New-Item -ItemType Directory -Path $expectedRoot
         $expected = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $ExpectedAzapiVersion -RandomVersion $ExpectedRandomVersion
-        $expectedFile = Join-Path $expectedRoot 'terraform.tf'
-        Set-Content -LiteralPath $expectedFile -Value $expected -Encoding utf8NoBOM -NoNewline
+        Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
+    }
 
-        Invoke-ProviderTransform -Root $script:target
-        $first = Get-TerraformContent -Root $script:target
-        Invoke-ProviderTransform -Root $script:target
-        Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    It 'preserves representative Fabric workspace aliases and references for <AzapiVersion>' -TestCases @(
+        @{ AzapiVersion = '~> 2.12'; ExpectedAzapiVersion = '~> 2.12' }
+        @{ AzapiVersion = '~> 2.4'; ExpectedAzapiVersion = '~> 2.12' }
+    ) {
+        param($AzapiVersion, $ExpectedAzapiVersion)
 
-        $actualFile = Join-Path $expectedRoot 'actual.tf'
-        Set-Content -LiteralPath $actualFile -Value $first -Encoding utf8NoBOM -NoNewline
-        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target; ExpectedRoot = $expectedRoot } {
-            param($Root, $ExpectedRoot)
+        $requirements = @'
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    fabric = {
+      source = "microsoft/fabric"
+      version = "~> 1.0"
+      configuration_aliases = [fabric.workspaces, fabric.capacities]
+    }
+    azapi = {
+      source = "Azure/azapi"
+      version = "__AZAPI_VERSION__"
+      configuration_aliases = [azapi.networking, azapi.identity]
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Encoding utf8NoBOM -NoNewline -Value ($requirements.Replace('__AZAPI_VERSION__', $AzapiVersion) + "`n")
+        $mainFile = Join-Path $script:target 'main.tf'
+        $workloadSource = @'
+data "fabric_capacity" "existing" {
+  provider     = fabric.capacities
+  display_name = "existing-shared-capacity"
+}
+
+resource "fabric_workspace" "this" {
+  provider     = fabric.workspaces
+  display_name = "alias-regression-workspace"
+  capacity_id  = data.fabric_capacity.existing.id
+}
+
+data "azapi_client_config" "current" {
+  provider = azapi.identity
+}
+
+resource "azapi_resource" "network" {
+  provider  = azapi.networking
+  type      = "Microsoft.Network/virtualNetworks@2024-05-01"
+  name      = "alias-regression-network"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alias-regression"
+  location  = "westeurope"
+  body = {
+    properties = {
+      addressSpace = {
+        addressPrefixes = ["10.0.0.0/24"]
+      }
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath $mainFile -Value ($workloadSource + "`n") -Encoding utf8NoBOM -NoNewline
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:target } {
+            param($Root)
             $tool = Resolve-AvmTool -Name terraform
-            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $ExpectedRoot) -WorkingDirectory $Root
-            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+            $null = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('fmt', $Root) -WorkingDirectory $Root
         }
-        Get-Content -LiteralPath $actualFile -Raw | Should -BeExactly (Get-Content -LiteralPath $expectedFile -Raw)
+        $workload = Get-Content -LiteralPath $mainFile -Raw
+        $expected = $requirements.Replace('__AZAPI_VERSION__', $ExpectedAzapiVersion) + "`n"
+
+        Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
+        Get-Content -LiteralPath $mainFile -Raw | Should -BeExactly $workload
     }
 
     It 'updates a function-only AzAPI declaration' {
