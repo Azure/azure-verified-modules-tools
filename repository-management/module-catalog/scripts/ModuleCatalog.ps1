@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Configuration.ps1')
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Lifecycle.ps1')
+. (Join-Path $PSScriptRoot 'ModuleCatalog.CsvRows.ps1')
 
 function ConvertTo-AvmCatalogJson {
     [CmdletBinding()]
@@ -324,29 +325,9 @@ function Get-AvmCatalogLegacyIdentity {
     return $identity
 }
 
-function Get-AvmCatalogLegacyCanonicalType {
-    [CmdletBinding()]
-    param([System.Collections.IDictionary] $Row, [object] $Identity)
-
-    $canonical = [string]$Row['CanonicalType']
-    if (-not $canonical -and $Identity.ModuleType -eq 'resource') {
-        if ($Row['ProviderNamespace'] -and $Row['ResourceType']) {
-            $canonical = '{0}/{1}' -f $Row['ProviderNamespace'], $Row['ResourceType']
-        }
-    }
-    elseif (-not $canonical -and $Identity.Ecosystem -eq 'bicep') {
-        $canonical = $Identity.ModulePath.Substring('avm/ptn/'.Length)
-    }
-    $pattern = if ($Identity.ModuleType -eq 'resource') { '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w*)+$' } else { '^[a-z0-9-]+(/[a-z0-9-]+)+$' }
-    if (-not $canonical -or $canonical -cnotmatch $pattern) {
-        throw [System.ArgumentException]::new('Legacy data cannot determine canonicalType without a reviewed mapping.')
-    }
-    return $canonical
-}
-
 function New-AvmCatalogRecord {
     [CmdletBinding()]
-    param([object] $Identity, [System.Collections.IDictionary] $Data, [string] $MetadataSource)
+    param([object] $Identity, [System.Collections.IDictionary] $Data)
 
     $canonical = $Data.canonicalType
     $split = $canonical.IndexOf('/')
@@ -364,7 +345,7 @@ function New-AvmCatalogRecord {
         canonicalType           = $canonical
         providerNamespace       = if ($Identity.ModuleType -eq 'resource') { $canonical.Substring(0, $split) } else { $null }
         resourceType            = if ($Identity.ModuleType -eq 'resource') { $canonical.Substring($split + 1) } else { $null }
-        metadataSource          = $MetadataSource
+        metadataSource          = 'metadata'
         moduleDisplayName       = [string]$Data.moduleDisplayName
         moduleDescription       = [string]$Data.moduleDescription
         alternativeNames        = @($Data.alternativeNames)
@@ -382,8 +363,6 @@ function Get-AvmCatalogInventory {
         [Parameter(Mandatory)][string] $BicepRoot,
         [Parameter(Mandatory)][string] $TerraformRoot,
         [Parameter(Mandatory)][string] $LegacyPath,
-        [ValidateSet('dual-source', 'metadata-only')][string] $BicepMode = 'dual-source',
-        [ValidateSet('dual-source', 'metadata-only')][string] $TerraformMode = 'dual-source',
         [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
@@ -394,10 +373,10 @@ function Get-AvmCatalogInventory {
         $sourcesByKey[$source.Key] = $source
     }
     $tables = [ordered]@{}
+    $existingRows = @{}
     $itemsByKey = @{}
     $missing = [ordered]@{}
     $unresolved = [System.Collections.Generic.List[object]]::new()
-    $modes = @{ bicep = $BicepMode; terraform = $TerraformMode }
     foreach ($source in $sources) {
         if ($null -eq $source.Metadata) {
             $missing[$source.Key] = [ordered]@{
@@ -420,7 +399,13 @@ function Get-AvmCatalogInventory {
                 }
             }
         }
-        $tables[$output.sourceFile] = $table
+        $generatedTable = [pscustomobject]@{
+            Headers = $table.Headers
+            Rows = [System.Collections.Generic.List[object]]::new()
+            OriginalRowCount = $table.OriginalRowCount
+            SourceRows = Get-AvmCatalogCsvRowSnapshot -Rows $table.Rows.ToArray()
+        }
+        $tables[$output.sourceFile] = $generatedTable
         foreach ($row in $table.Rows) {
             $identity = $null
             try {
@@ -431,60 +416,18 @@ function Get-AvmCatalogInventory {
                 if ($sourcesByKey.ContainsKey($identity.Key)) {
                     $identity = $sourcesByKey[$identity.Key]
                 }
-                elseif ($identity.Ecosystem -eq 'bicep' -and $row['ParentModule'] -and $row['ParentModule'] -ne 'n/a') {
-                    $parent = [string]$row['ParentModule']
-                    if (-not $identity.ModulePath.StartsWith("$parent/", [StringComparison]::Ordinal)) {
-                        throw [System.ArgumentException]::new('Legacy ParentModule is not an ancestor of ModuleName.')
-                    }
-                    $identity.ParentModule = $parent
-                    $identity.FamilyModule = $parent
-                }
-                if ($itemsByKey.ContainsKey($identity.Key)) {
+                if ($existingRows.ContainsKey($identity.Key)) {
                     throw [System.IO.InvalidDataException]::new("Duplicate legacy identity: $($identity.Key)")
                 }
+                $existingRows[$identity.Key] = [pscustomobject]@{ Row = $row; File = $output.sourceFile }
                 if ($null -ne $identity.Metadata) {
-                    $itemsByKey[$identity.Key] = [pscustomobject]@{ Identity = $identity; Row = $row; File = $output.sourceFile; Record = $null }
+                    $generatedTable.Rows.Add($row)
                     continue
                 }
                 $missing[$identity.Key] = [ordered]@{
                     ecosystem = $identity.Ecosystem; repository = $identity.Repository
                     modulePath = $identity.ModulePath
                     reason = if ($identity.Directory) { 'metadata-not-present' } else { 'module-source-not-found' }
-                }
-                $canonical = Get-AvmCatalogLegacyCanonicalType -Row $row -Identity $identity
-                $row['CanonicalType'] = $canonical
-                $owners = [System.Collections.Generic.List[string]]::new()
-                $handles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-                foreach ($column in @('PrimaryModuleOwnerGHHandle', 'SecondaryModuleOwnerGHHandle')) {
-                    $handle = [string]$row[$column]
-                    if ($handle) {
-                        if ($handle -notmatch '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$' -or $handle.Length -gt 39) {
-                            throw [System.ArgumentException]::new("Legacy $column is not a GitHub handle.")
-                        }
-                        if ($handles.Add($handle)) {
-                            $owners.Add($handle)
-                        }
-                    }
-                }
-                $team = [string]$row['ModuleOwnersGHTeam']
-                if ($team -and $team -ne 'same as parent') {
-                    if ($team -cnotmatch '^@[A-Za-z0-9-]+/[a-z0-9]+(-[a-z0-9]+)*$') {
-                        throw [System.ArgumentException]::new('Legacy ModuleOwnersGHTeam is not a GitHub team handle.')
-                    }
-                    $owners.Add($team)
-                }
-                $data = [ordered]@{
-                    canonicalType = $canonical
-                    moduleDisplayName = [string]$row.ModuleDisplayName
-                    moduleDescription = [string]$row.Description
-                    alternativeNames = @(([string]$row['AlternativeNames'] -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-                    comments = [string]$row['Comments']
-                    owners = $owners.ToArray()
-                    telemetryIdPrefix = if ($row['TelemetryIdPrefix']) { [string]$row['TelemetryIdPrefix'] } else { $null }
-                }
-                $itemsByKey[$identity.Key] = [pscustomobject]@{
-                    Identity = $identity; Row = $row; File = $output.sourceFile
-                    Record = New-AvmCatalogRecord -Identity $identity -Data $data -MetadataSource legacy
                 }
             }
             catch [System.ArgumentException] {
@@ -512,47 +455,24 @@ function Get-AvmCatalogInventory {
             owners = @($rootMetadata.owners)
             telemetryIdPrefix = if ($metadata.Contains('telemetryIdPrefix')) { $metadata.telemetryIdPrefix } else { $null }
         }
-        if (-not $itemsByKey.ContainsKey($source.Key)) {
+        if ($existingRows.ContainsKey($source.Key)) {
+            $existing = $existingRows[$source.Key]
+            $row = $existing.Row
+            $file = $existing.File
+        }
+        else {
             $output = @($csvOutputs | Where-Object { $_.ecosystem -eq $source.Ecosystem -and $_.moduleType -eq $source.ModuleType })[0]
             $row = [ordered]@{}
             foreach ($header in $tables[$output.sourceFile].Headers) {
                 $row[$header] = ''
             }
             $tables[$output.sourceFile].Rows.Add($row)
-            $itemsByKey[$source.Key] = [pscustomobject]@{ Identity = $source; Row = $row; File = $output.sourceFile; Record = $null }
+            $file = $output.sourceFile
         }
-        $itemsByKey[$source.Key].Record = New-AvmCatalogRecord -Identity $source -Data $data -MetadataSource metadata
-    }
-
-    foreach ($item in $itemsByKey.Values) {
-        if ($item.Identity.Ecosystem -eq 'bicep' -and -not $item.Identity.Deprecated) {
-            $ancestor = $item.Identity.ModulePath
-            while ($ancestor.Contains('/')) {
-                $ancestor = $ancestor.Substring(0, $ancestor.LastIndexOf('/'))
-                $ancestorKey = Get-AvmCatalogKey -Ecosystem bicep -Repository $item.Identity.Repository -ModulePath $ancestor
-                if ($sourcesByKey.ContainsKey($ancestorKey) -and $sourcesByKey[$ancestorKey].Deprecated) {
-                    $item.Identity.Deprecated = $true
-                    break
-                }
-            }
+        $itemsByKey[$source.Key] = [pscustomobject]@{
+            Identity = $source; Row = $row; File = $file
+            Record = New-AvmCatalogRecord -Identity $source -Data $data
         }
-        if ($item.Record.metadataSource -eq 'legacy' -and $null -ne $item.Identity.ParentModule) {
-            $familyKey = Get-AvmCatalogKey -Ecosystem $item.Identity.Ecosystem -Repository $item.Identity.Repository -ModulePath $item.Identity.FamilyModule
-            if ($itemsByKey.ContainsKey($familyKey)) {
-                $item.Record.owners = $itemsByKey[$familyKey].Record.owners
-            }
-            elseif ([string]$item.Row['ModuleOwnersGHTeam'] -eq 'same as parent') {
-                $unresolved.Add([ordered]@{
-                        file = $item.File; moduleName = $item.Identity.ModuleName
-                        ecosystem = $item.Identity.Ecosystem; reason = 'Legacy parent ownership cannot be resolved.'
-                    })
-            }
-        }
-    }
-    $strictMissing = @($missing.Values | Where-Object { $modes[$_.ecosystem] -eq 'metadata-only' })
-    $strictUnresolved = @($unresolved | Where-Object { $modes[$_.ecosystem] -eq 'metadata-only' })
-    if ($strictMissing.Count -gt 0 -or $strictUnresolved.Count -gt 0) {
-        throw [System.IO.InvalidDataException]::new("Metadata-only mode has $($strictMissing.Count) missing modules and $($strictUnresolved.Count) unresolved legacy entries.")
     }
 
     $marOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind mar
@@ -573,7 +493,6 @@ function Get-AvmCatalogInventory {
         Mar = Get-AvmCatalogOrdinal -Values $mar
         Report = [ordered]@{
             schemaVersion = 1
-            modes = [ordered]@{ bicep = $BicepMode; terraform = $TerraformMode }
             missingMetadata = @((Get-AvmCatalogOrdinal -Values @($missing.Keys)) | ForEach-Object { $missing[$_] })
             unresolvedLegacy = $unresolved.ToArray()
             parity = [ordered]@{ bicepOnly = @(); terraformOnly = @() }
@@ -620,6 +539,7 @@ function New-AvmCatalogBundle {
         [Parameter(Mandatory)][System.Collections.IDictionary] $Registry,
         [Parameter(Mandatory)][System.Collections.IDictionary] $GitHub,
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $RepositoryRevisions,
+        [switch] $Force,
         [string] $SchemaPath
     )
 
@@ -723,18 +643,30 @@ function New-AvmCatalogBundle {
     $report.parity.terraformOnly = @($modules.Keys | Where-Object { $modules[$_].bicep.Count -eq 0 })
     $report['counts'] = [ordered]@{
         catalogEntries = $Inventory.Items.Count
-        adoptedEntries = @($Inventory.Items | Where-Object { $_.Record.metadataSource -eq 'metadata' }).Count
+        adoptedEntries = $Inventory.Items.Count
         legacyRows = [ordered]@{}
         csvRows = [ordered]@{}
     }
     $files = [ordered]@{}
+    $sourceCsvRows = [ordered]@{}
+    $removals = [System.Collections.Generic.List[object]]::new()
     foreach ($output in $configuration.outputs | Where-Object { $_.kind -ceq 'csv' }) {
         $file = $output.sourceFile
         $table = $Inventory.Tables[$file]
+        $sourceCsvRows[$file] = $table.SourceRows
+        $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $table.Rows.ToArray()
+        foreach ($removal in (Get-AvmCatalogCsvRowRemovals -SourceRows $table.SourceRows -OutputRows $outputRows `
+                -Output $output -Configuration $configuration)) {
+            $removals.Add($removal)
+        }
         $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $table.Rows.ToArray()
         $report.counts.legacyRows[$file] = $table.OriginalRowCount
         $report.counts.csvRows[$file] = $table.Rows.Count
     }
+    $report['sourceCsvRows'] = $sourceCsvRows
+    $report['csvRowRemovals'] = $removals.ToArray()
+    $report['csvRowRemovalsForced'] = [bool]$Force
+    Assert-AvmCatalogCsvRowRetention -Removals $removals.ToArray() -Force:$Force
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
     $files[$catalogOutput.bundlePath] = $json
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).bundlePath] = ConvertTo-AvmCatalogJson -Value $report

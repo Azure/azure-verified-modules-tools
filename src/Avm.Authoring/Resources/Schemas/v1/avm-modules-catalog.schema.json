@@ -131,7 +131,7 @@
         "canonicalType": { "$ref": "#/definitions/canonicalType" },
         "providerNamespace": { "$ref": "#/definitions/nullableText" },
         "resourceType": { "$ref": "#/definitions/nullableText" },
-        "metadataSource": { "enum": [ "metadata", "legacy" ] },
+        "metadataSource": { "const": "metadata" },
         "moduleDisplayName": { "type": "string" },
         "moduleDescription": { "type": "string" },
         "alternativeNames": { "type": "array", "items": { "type": "string" } },

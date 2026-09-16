@@ -14,6 +14,8 @@ This document is a plan, not approval to run production commands.
 - The catalog workflow reads module metadata and registry information, then
   proposes updated CSV/JSON indexes for review. It does not change tier lists
   or repository configuration.
+  Only valid metadata produces rows; removals from source CSVs fail by default
+  and require an explicit override.
   CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
   remain unchanged. The new JSON catalog keeps `v1/modules.json`.
 - Engineering owners or module owners must review metadata changes; either
@@ -222,15 +224,28 @@ Re-enable it only with approval covering normal automatic applies.
 
 ## Preview and publish the catalog
 
-Start in `dual-source` for both ecosystems. It uses valid module metadata and
-retains existing rows for modules that do not yet have it. Publication writes
+Catalog entries and CSV rows come only from valid module metadata. There are no
+ecosystem mode options or full legacy-row fallback. Publication writes
 the six `test-*.csv` previews beside the originals, not over them.
 The catalog workflow does not trigger metadata backfill.
 
 ```powershell
 gh workflow run module-metadata-sync.yml --repo $tools --ref main `
-    -f plan_only=true -f bicep_mode=dual-source -f terraform_mode=dual-source
+    -f plan_only=true
 ```
+
+Generation and publication fail by default if a row from a source CSV would be
+removed. The comparison uses module implementation identities, not just row counts:
+adding another row does not hide a removal, and Terraform provider repositories
+with the same module name are distinct. Existing preview-only rows are not protected
+by this guard. Missing metadata for an unindexed module is reported and does not
+create a row.
+
+Resolve missing metadata first. If particular omissions are intentional and
+approved, a manual `plan_only=true` run with `force=true` generates an artifact
+for review without publishing. Review every listed removal; force permits all
+listed removals for that run. A subsequent publication also needs explicit
+`force=true`. Scheduled runs never select force.
 
 Download the `module-metadata-catalog` artifact. Check:
 
@@ -241,10 +256,16 @@ Download the `module-metadata-catalog` artifact. Check:
 - `v1/modules.json` includes every owner, distinct implementations, and children
   with inherited ownership. Check representative deprecated/unowned modules.
 - The migration report explains every missing/unresolved module and parity gap.
+  Its `sourceCsvRows` contains the source identity snapshots, `csvRowRemovals`
+  lists each removed `sourceFile`, `moduleName`, and `repoURL`, and
+  `csvRowRemovalsForced` records whether generation used the override.
 - Deprecation reflects Bicep `DEPRECATED.md` and descendants, or the Terraform
   repository archived flag. Existing Deprecated values are preserved during transition.
 - Output files and destinations match the central configuration, and publication
   hashes/bases are complete. Errors or partial API results are not publishable.
+  Publication rechecks source-row evidence against actual source CSVs on the
+  unchanged main-branch base before writes. Force cannot bypass that check,
+  invalid metadata, other validation, `WhatIf`, or approval requirements.
 
 **Review the preview data before the later CSV cutover.** The review snapshot showed
 488 of 508 resource display names and all 508 resource descriptions changing,
@@ -253,7 +274,9 @@ from current Bicep source literals, not the older index wording. These are large
 text changes even though metadata-only edits do not publish modules.
 
 Recovered owners can move formerly Orphaned modules to Available. Genuinely
-unowned modules stay Orphaned and Deprecated modules stay Deprecated. The six
+unowned metadata-backed modules stay Orphaned and prior Deprecated status is
+preserved for matching metadata-backed entries. Rows without metadata are
+subject to the removal guard, not silently retained. The six
 CSVs gain `CanonicalType`, not a tier column. Compare fresh output against its
 recorded inputs; these review counts are not permanent expected totals.
 The JSON catalog retains family-level aliases/comments for children, while
@@ -280,28 +303,26 @@ A separate reviewed change will remove the `test-` output prefixes and replace
 the canonical CSVs after the previews are accepted. Keep existing consumers on
 the original files until then. Complete outstanding preview publication reviews
 and collect a fresh snapshot after changing the manifest; old bundles are invalid.
-This CSV replacement is separate from each ecosystem's metadata-only cutover.
+The same source-row guard applies after replacement, when source and destination
+are the same file. Changing filenames does not enable force or change the baseline.
 
 ## Finish the transition
 
-Track the agreed 60-day compatibility window separately for Bicep and Terraform.
-Do not switch simply because the calendar date has arrived.
-
-`metadata-only` requires no missing or unresolved entries, including legacy
-proposals, retired modules, and repositories without source. Decide explicitly
-how those records are represented; do not delete rows to manufacture a clean
-report. Run a metadata-only preview for one ecosystem before changing its
-steady-state mode.
-
-The current workflow's scheduled defaults remain `dual-source`; a manual
-metadata-only run does not persist that choice. A reviewed configuration/workflow
-change is required to make the later cutover permanent.
+There is no later mode switch or compatibility-window setting. Resolve every
+missing or unresolved entry before declaring migration complete. Existing source
+CSV proposals, retired modules, and repositories without source block default
+generation if they have no metadata-backed replacement. Decide explicitly how
+they are represented or whether their removal is intentional; do not use force
+to hide unexplained omissions. Proposal approval and repository creation remain
+separate processes and do not create catalog entries before valid metadata exists.
 
 Retire manual metadata sources and old publication automation only after the
 replacement outputs and consumers are verified. Then follow the
 [migration cleanup instructions](../repository-management/module-metadata/README.md#removing-migration-after-reconciliation)
 to remove the one-off scripts and sync switches, retaining normal authoring,
 new-repository initialization, schemas, and catalog generation.
+Keep source CSV collection and row-retention checks; they are permanent safeguards,
+not disposable backfill code.
 Update issue templates and the
 internal [Azure-Verified-Modules-Docs](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
 runbook before declaring rollout complete. Add to an existing open documentation

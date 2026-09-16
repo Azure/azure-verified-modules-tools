@@ -27,9 +27,9 @@ section when cutting a release.
   Versioned input/output schemas are centrally packaged with Avm.Authoring.
   Optional source wiring uses scoped Bicep `loadJsonContent` and native
   Terraform `jsondecode(file(...))`, without replacing telemetry transport.
-- Opt-in metadata backfill and a tools-owned dual-source catalog workflow.
-  Legacy indexes remain available during migration; production rollout and
-  cutover are operator-controlled.
+- Opt-in metadata backfill and a tools-owned metadata catalog workflow.
+  Source CSV row removals fail by default and require an explicit override;
+  production rollout and canonical CSV replacement are operator-controlled.
 - Per-module and per-example `avm.tflint.override.hcl` files. They layer after
   the corresponding all-scope override and use validated, collision-free staged
   config paths.
@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Catalog generation uses valid module metadata only, without dual-source modes
+  or legacy-record fallback. Generation and publication protect rows from the
+  source CSVs; explicit `Force` permits listed removals without bypassing other
+  checks. Existing preview-only rows are not the comparison baseline.
 - Metadata code-owner review accepts either engineering owners or module owners.
   Both teams appear on the final rule; default Terraform team configuration
   includes module owners with write access and no new environment approvals.

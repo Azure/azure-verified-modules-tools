@@ -10,20 +10,10 @@ on:
         description: 'Generate artifacts only. Non-plan publication requires the trusted main branch.'
         type: boolean
         default: true
-      bicep_mode:
-        description: 'Bicep migration mode. Metadata-only rejects every missing or unresolved module.'
-        type: choice
-        options:
-          - dual-source
-          - metadata-only
-        default: dual-source
-      terraform_mode:
-        description: 'Terraform migration mode. Metadata-only rejects every missing or unresolved module.'
-        type: choice
-        options:
-          - dual-source
-          - metadata-only
-        default: dual-source
+      force:
+        description: 'Permit rows to be removed from the source CSVs. Other validation and publication safeguards still apply.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -56,7 +46,7 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Get-ModuleCatalogConfiguration.ps1'
           & $script -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false | Out-Null
 
-      - name: '[AVM] Checkout public legacy catalogs as data'
+      - name: '[AVM] Checkout public source catalogs as data'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.manifest.outputs.documentation-repository }}
@@ -95,13 +85,12 @@ jobs:
       - name: '[AVM] Generate validated outputs without network access'
         env:
           AVM_OFFLINE: '1'
-          BICEP_MODE: ${{ inputs.bicep_mode || 'dual-source' }}
-          TERRAFORM_MODE: ${{ inputs.terraform_mode || 'dual-source' }}
+          FORCE_CSV_ROW_REMOVALS: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Invoke-ModuleCatalog.ps1'
           & $script -InputPath (Join-Path $env:RUNNER_TEMP 'catalog-input') `
             -OutputPath (Join-Path $env:RUNNER_TEMP 'module-catalog') `
-            -BicepMode $env:BICEP_MODE -TerraformMode $env:TERRAFORM_MODE -Confirm:$false
+            -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) -Confirm:$false
 
       - name: '[AVM] Upload catalog and migration artifacts'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -143,9 +132,11 @@ jobs:
       - name: '[AVM] Validate the publication allow-list and output hashes'
         env:
           AVM_OFFLINE: '1'
+          FORCE_CSV_ROW_REMOVALS: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
-          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog')
+          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') `
+            -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS))
 
       - name: '[AVM] Create narrowly scoped publication token'
         id: writer
@@ -162,6 +153,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           AVM_APP_SLUG: ${{ steps.writer.outputs.app-slug }}
+          FORCE_CSV_ROW_REMOVALS: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
-          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish -Confirm:$false
+          & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish `
+            -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) -Confirm:$false

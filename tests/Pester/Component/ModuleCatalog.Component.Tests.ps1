@@ -133,13 +133,12 @@ BeforeAll {
     }
 
     function Get-CatalogFixtureInventory {
-        param([object] $Fixture, [string] $BicepMode = 'dual-source', [string] $TerraformMode = 'dual-source')
-        Get-AvmCatalogInventory -BicepRoot $Fixture.Bicep -TerraformRoot $Fixture.Terraform -LegacyPath $Fixture.Legacy `
-            -BicepMode $BicepMode -TerraformMode $TerraformMode
+        param([object] $Fixture, [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration))
+        Get-AvmCatalogInventory -BicepRoot $Fixture.Bicep -TerraformRoot $Fixture.Terraform -LegacyPath $Fixture.Legacy -Configuration $Configuration
     }
 
     function Get-CatalogFixtureBundle {
-        param([object] $Fixture, [object] $Inventory)
+        param([object] $Fixture, [object] $Inventory, [switch] $Force)
         if ($null -eq $Inventory) {
             $Inventory = Get-CatalogFixtureInventory -Fixture $Fixture
         }
@@ -176,7 +175,7 @@ BeforeAll {
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'registry.json') -Data $registry
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'github.json') -Data $github
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'revisions.json') -Data $revisions
-        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions
+        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions -Force:$Force
     }
 }
 
@@ -185,26 +184,32 @@ AfterAll {
 }
 
 Describe 'Component: module catalog transformations' -Tag Component {
-    It 'preserves all six legacy headers, order and values while appending canonical identity only' {
+    It 'blocks source CSV row removal by default and emits no legacy records when forced' {
         $fixture = New-CatalogFixture
-        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*6 row(s)*source CSVs*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         foreach ($file in $fixture.Original.Keys) {
             $text = $bundle.Files["docs/test-$file"]
             ($text -split "`n")[0] | Should -BeExactly (($fixture.Headers[$file] + @('CanonicalType')) -join ',')
-            $row = @($text | ConvertFrom-Csv)[0]
+            @($text | ConvertFrom-Csv) | Should -HaveCount 0
+            $source = Read-AvmCatalogCsv -Path (Join-Path $fixture.Legacy $file)
             foreach ($column in $fixture.Headers[$file]) {
-                $row.$column | Should -BeExactly $fixture.Original[$file][$column] -Because "$file $column is not adopted"
+                $source.Rows[0][$column] | Should -BeExactly $fixture.Original[$file][$column]
             }
+            $bundle.Report.sourceCsvRows[$file] | Should -HaveCount 1
         }
+        $bundle.Catalog.modules.Count | Should -Be 0
         $bundle.Report.missingMetadata.Count | Should -Be 6
-        $bundle.Report.unresolvedLegacy.Count | Should -Be 2
+        $bundle.Report.csvRowRemovals | Should -HaveCount 6
+        $bundle.Report.csvRowRemovalsForced | Should -BeTrue
+        $bundle.Report.Contains('modes') | Should -BeFalse
         $bundle.Files['docs/BicepMARModules.json'] | ConvertFrom-Json | Should -HaveCount 3
     }
 
     It 'uses metadata per adopted module and resolves only the first two names from the profile cache' {
         $fixture = New-CatalogFixture
         Save-CatalogMetadata -Module $fixture.Modules[0]
-        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.ModuleDisplayName | Should -BeExactly 'Authoritative module'
         $row.Description | Should -BeExactly 'Deploys reviewed module.'
@@ -220,7 +225,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         $publishedOwners = @($published.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners)
         ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
-        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)[0].ModuleDisplayName | Should -BeExactly 'Legacy name'
+        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 0
+        $bundle.Report.csvRowRemovals | Should -HaveCount 5
+        $bundle.Report.csvRowRemovals.moduleName | Should -Not -Contain $fixture.Modules[0].Identity.ModuleName
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].metadataSource | Should -BeExactly 'metadata'
     }
 
     It 'does not fall back or write outputs for invalid present metadata: <Kind>' -TestCases @(
@@ -247,8 +255,11 @@ Describe 'Component: module catalog transformations' -Tag Component {
                 [System.IO.File]::WriteAllText($path, [System.IO.File]::ReadAllText($path), [System.Text.UTF8Encoding]::new($true))
             }
         }
-        { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output } | Should -Throw '*Invalid present metadata*'
-        Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+        foreach ($force in @($false, $true)) {
+            { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output -Force:$force } |
+                Should -Throw '*Invalid present metadata*'
+            Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+        }
     }
 
     It 'inherits family owners while keeping immediate Bicep and Terraform parent identities' {
@@ -324,9 +335,9 @@ Describe 'Component: module catalog transformations' -Tag Component {
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $legacyRow)))
 
-        foreach ($mode in @('dual-source', 'metadata-only')) {
-            $inventory = Get-CatalogFixtureInventory -Fixture $fixture -BicepMode $mode -TerraformMode $mode
-            $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+        foreach ($force in @($false, $true)) {
+            $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+            $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force:$force
             $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
             $childRows | Should -HaveCount 1
             $childRows[0].AlternativeNames | Should -BeExactly $legacyRow.AlternativeNames
@@ -400,26 +411,41 @@ Describe 'Component: module catalog transformations' -Tag Component {
         @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 2
     }
 
-    It 'reports unmatched canonical types and unresolved Terraform taxonomy without inventing mappings' {
-        $fixture = New-CatalogFixture
+    It 'derives canonical types and parity from metadata without using legacy taxonomy' {
+        $fixture = New-CatalogFixture -AdoptAll
+        foreach ($module in @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'terraform' -and $_.ModuleType -ne 'resource' })) {
+            $path = Join-Path $module.Directory 'metadata.json'
+            $metadata = Read-AvmCatalogJson -Path $path
+            $metadata.canonicalType = "terraform/$($module.ModuleType)"
+            Save-CatalogJson -Path $path -Data $metadata
+        }
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $bundle.Report.parity.bicepOnly | Should -Contain 'lz/sub-vending'
         $bundle.Report.parity.bicepOnly | Should -Contain 'types/common'
-        $bundle.Report.unresolvedLegacy.moduleName | Should -Contain 'avm-ptn-lz-sub-vending'
-        @($bundle.Files['docs/test-TerraformPatternModules.csv'] | ConvertFrom-Csv)[0].CanonicalType | Should -BeExactly ''
+        $bundle.Report.unresolvedLegacy | Should -HaveCount 0
+        @($bundle.Files['docs/test-TerraformPatternModules.csv'] | ConvertFrom-Csv)[0].CanonicalType | Should -BeExactly 'terraform/pattern'
         $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azapi-avm-res-compute-disk' `
             -ModulePath '.' -Canonical 'Microsoft.Compute/disks' -Adopt
         (Get-CatalogFixtureBundle -Fixture $fixture).Report.parity.terraformOnly | Should -Contain 'Microsoft.Compute/disks'
     }
 
-    It 'supports independent metadata-only cutover and rejects missing or unresolved entries in the strict ecosystem' {
+    It 'protects source rows across both ecosystems without mode options' {
         $fixture = New-CatalogFixture
-        { Get-CatalogFixtureInventory -Fixture $fixture -BicepMode metadata-only } | Should -Throw '*Metadata-only mode*'
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*source CSVs*'
         foreach ($module in @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'bicep' })) {
             Save-CatalogMetadata -Module $module
         }
-        { Get-CatalogFixtureInventory -Fixture $fixture -BicepMode metadata-only } | Should -Not -Throw
-        { Get-CatalogFixtureInventory -Fixture $fixture -TerraformMode metadata-only } | Should -Throw '*Metadata-only mode*'
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*TerraformResourceModules.csv*'
+        foreach ($module in @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'terraform' })) {
+            Save-CatalogMetadata -Module $module
+        }
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        $bundle.Report.csvRowRemovalsForced | Should -BeFalse
+        foreach ($command in @((Get-Command Get-AvmCatalogInventory), (Get-Command (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1')))) {
+            $command.Parameters.Keys | Should -Not -Contain 'BicepMode'
+            $command.Parameters.Keys | Should -Not -Contain 'TerraformMode'
+        }
     }
 
     It 'does not read or publish repository configuration or generate tier metadata' {
@@ -591,18 +617,21 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
     }
 
-    It 'calculates an orphaned catalog status without overwriting an unmigrated legacy row' {
-        $fixture = New-CatalogFixture
+    It 'does not recreate an unowned legacy row without metadata even with force' {
+        $fixture = New-CatalogFixture -AdoptAll
         $file = 'BicepResourceModules.csv'
+        [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
         $row = $fixture.Original[$file]
         $row.PrimaryModuleOwnerGHHandle = ''
         $row.SecondaryModuleOwnerGHHandle = ''
         $row.ModuleOwnersGHTeam = ''
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
-        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly 'Orphaned'
-        ($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly 'Proposed'
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*BicepResourceModules.csv*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep | Should -HaveCount 0
+        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv) | Should -HaveCount 0
+        $bundle.Report.csvRowRemovals | Should -HaveCount 1
     }
 
     It 'reports unowned metadata as Orphaned but preserves existing Deprecated status in CSV and JSON' -TestCases @(
@@ -647,6 +676,127 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $null = [System.IO.Directory]::CreateDirectory($helper)
         [System.IO.File]::WriteAllText((Join-Path $helper 'keyVaultExport.bicep'), 'param value string')
         (Get-CatalogFixtureInventory -Fixture $fixture).Sources | Should -HaveCount 6
+    }
+}
+
+Describe 'Component: module catalog source CSV row retention' -Tag Component {
+    It 'requires force at the offline entry point and still honors WhatIf' {
+        $fixture = New-CatalogFixture
+        Save-CatalogMetadata -Module $fixture.Modules[0]
+        $null = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $scriptPath = Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1'
+        foreach ($force in @($null, $false)) {
+            $arguments = @{ InputPath = $fixture.Root; OutputPath = $fixture.Output }
+            if ($null -ne $force) { $arguments.Force = $force }
+            { & $scriptPath @arguments } | Should -Throw '*CSV row removals are blocked*'
+            Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+        }
+        & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force -WhatIf
+        Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+        & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force | Out-Null
+        $report = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'migration-report.json')
+        $report.csvRowRemovals | Should -HaveCount 5
+        $report.csvRowRemovalsForced | Should -BeTrue
+        $report.sourceCsvRows['BicepResourceModules.csv'][0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
+    }
+
+    It 'detects a removed row even when an added module keeps the row count unchanged' {
+        $fixture = New-CatalogFixture -AdoptAll
+        [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
+        $replacement = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/key-vault/vault' -Canonical 'Microsoft.KeyVault/vaults' -Adopt
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*avm/res/storage/storage-account*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $bundle.Report.counts.legacyRows['BicepResourceModules.csv'] | Should -Be 1
+        $bundle.Report.counts.csvRows['BicepResourceModules.csv'] | Should -Be 1
+        $bundle.Report.csvRowRemovals | Should -HaveCount 1
+        $bundle.Report.csvRowRemovals[0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
+        @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0].ModuleName |
+            Should -BeExactly $replacement.Identity.ModuleName
+    }
+
+    It 'distinguishes Terraform implementations that share a module name' {
+        $fixture = New-CatalogFixture -AdoptAll
+        [System.IO.File]::Delete((Join-Path $fixture.Modules[3].Directory 'metadata.json'))
+        $replacement = Add-CatalogModule -Fixture $fixture -Ecosystem terraform `
+            -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' -ModulePath '.' `
+            -Canonical 'Microsoft.Storage/storageAccounts' -Adopt
+        $replacement.Identity.ModuleName | Should -BeExactly $fixture.Modules[3].Identity.ModuleName
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*terraform-azurerm-avm-res-storage-storageaccount*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $bundle.Report.csvRowRemovals | Should -HaveCount 1
+        $bundle.Report.csvRowRemovals[0].repoURL | Should -BeExactly $fixture.Modules[3].Identity.RepoURL
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0].provider | Should -BeExactly 'azure'
+    }
+
+    It 'protects a pre-source proposal with a <Identity> identity until force permits removal' -TestCases @(
+        @{ Identity = 'resolvable'; Url = 'https://github.com/Azure/terraform-azurerm-avm-ptn-future-proposal' }
+        @{ Identity = 'unresolved'; Url = '' }
+    ) {
+        param($Identity, $Url)
+        $fixture = New-CatalogFixture -AdoptAll
+        $file = 'TerraformPatternModules.csv'
+        $proposal = [ordered]@{}
+        foreach ($header in $fixture.Headers[$file]) { $proposal[$header] = $fixture.Original[$file][$header] }
+        $proposal.ModuleName = 'avm-ptn-future-proposal'
+        $proposal.RepoURL = $Url
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $proposal)))
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*TerraformPatternModules.csv: avm-ptn-future-proposal*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $bundle.Report.csvRowRemovals | Should -HaveCount 1
+        $bundle.Report.csvRowRemovals[0].moduleName | Should -BeExactly 'avm-ptn-future-proposal'
+        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleName | Should -Not -Contain 'avm-ptn-future-proposal'
+        if ($Identity -eq 'unresolved') {
+            $bundle.Report.unresolvedLegacy | Should -HaveCount 1
+        }
+    }
+
+    It 'compares only source rows for <Destination> outputs and ignores existing preview rows' -TestCases @(
+        @{ Destination = 'preview' }
+        @{ Destination = 'canonical' }
+    ) {
+        param($Destination)
+        $fixture = New-CatalogFixture -AdoptAll
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy 'test-BicepResourceModules.csv'), 'not a source CSV')
+        $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+        if ($Destination -eq 'canonical') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        }
+        $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
+        Save-CatalogJson -Path $configurationPath -Data $raw
+        $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        [System.IO.File]::ReadAllText((Join-Path $fixture.Legacy 'test-BicepResourceModules.csv')) | Should -BeExactly 'not a source CSV'
+        [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
+        { Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory } | Should -Throw '*BicepResourceModules.csv*'
+    }
+
+    It 'does not treat a corrected repository URL or non-identity field as a removal' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $file = 'TerraformResourceModules.csv'
+        $row = $fixture.Original[$file]
+        $row.RepoURL += '/'
+        $row.Description = 'Changed source description'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv)[0].RepoURL | Should -BeExactly $fixture.Modules[3].Identity.RepoURL
+    }
+
+    It 'does not allow force to bypass duplicate source identities or legacy catalog records' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $inventory.Items[0].Record.metadataSource = 'legacy'
+        { Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force } | Should -Throw
+        $file = 'BicepResourceModules.csv'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $fixture.Original[$file])))
+        { Get-CatalogFixtureBundle -Fixture $fixture -Force } | Should -Throw '*Duplicate legacy identity*'
     }
 }
 
@@ -732,24 +882,26 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Available'
     }
 
-    It 'derives Deprecated for legacy-only <Ecosystem> rows without rewriting their authored fields' -TestCases @(
+    It 'requires the removal override for deprecated <Ecosystem> source rows without metadata' -TestCases @(
         @{ Ecosystem = 'bicep'; File = 'BicepResourceModules.csv' }
         @{ Ecosystem = 'terraform'; File = 'TerraformResourceModules.csv' }
     ) {
         param($Ecosystem, $File)
-        $fixture = New-CatalogFixture
+        $fixture = New-CatalogFixture -AdoptAll
+        $module = @($fixture.Modules | Where-Object { $_.Ecosystem -eq $Ecosystem -and $_.ModuleType -eq 'resource' })[0]
+        [System.IO.File]::Delete((Join-Path $module.Directory 'metadata.json'))
         if ($Ecosystem -eq 'bicep') {
             [System.IO.File]::WriteAllText((Join-Path $fixture.Modules[0].Directory 'DEPRECATED.md'), 'Deprecated.')
         }
         else {
             $fixture.Archived['Azure/terraform-azurerm-avm-res-storage-storageaccount'] = $true
         }
-        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $row = @($bundle.Files["docs/test-$File"] | ConvertFrom-Csv)[0]
-        $row.ModuleStatus | Should -Be 'Deprecated'
-        $row.ModuleDisplayName | Should -Be $fixture.Original[$File].ModuleDisplayName
-        $row.PrimaryModuleOwnerGHHandle | Should -Be $fixture.Original[$File].PrimaryModuleOwnerGHHandle
-        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem][0].moduleStatus | Should -Be 'Deprecated'
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*source CSVs*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        @($bundle.Files["docs/test-$File"] | ConvertFrom-Csv) | Should -HaveCount 0
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem] | Should -HaveCount 0
+        $bundle.Report.csvRowRemovals | Should -HaveCount 1
+        $bundle.Report.csvRowRemovals[0].sourceFile | Should -BeExactly $File
     }
 
     It 'fails offline generation for an incomplete archive snapshot instead of treating repositories as active' {

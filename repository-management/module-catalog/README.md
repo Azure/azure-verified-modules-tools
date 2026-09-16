@@ -58,21 +58,49 @@ Local collection/generation can use `-ConfigurationPath` for a reviewed manifest
 variant. Publication always reads the trusted tools-checkout manifest, never a
 configuration supplied inside the generated bundle.
 
-`-BicepMode metadata-only` and `-TerraformMode metadata-only` independently reject
-missing metadata and unresolved legacy entries. Dual-source is the default:
-present metadata must pass the packaged validator, including Bicep literals;
-invalid present metadata never falls back. Reduced children require family-root
+Only valid module metadata creates catalog entries and CSV rows. There are no
+ecosystem mode options or full legacy-record fallback. Present metadata must pass
+the packaged validator, including Bicep literals. Reduced children require family-root
 metadata and inherit owners. The JSON catalog also includes the
 family's alternative names and comments; child CSV cells for those two fields
 stay unchanged, including blanks. Newly discovered child rows leave them blank.
 
-The six CSVs retain their existing columns and unmigrated values, then append
-`CanonicalType`. Only existing columns are projected for adopted rows; full
+The six CSVs retain their existing column order and matched-row compatibility
+fields, then append `CanonicalType`. Missing metadata is reported but never
+reconstructed from a CSV. Existing source rows without metadata-backed replacements
+stop generation by default. Only existing columns are projected for metadata rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. `v1/migration-report.json` records missing metadata, unresolved
-legacy identities/taxonomy, and cross-ecosystem parity. Terraform hyphenated names
-are not guessed into taxonomy paths.
+source identities, source-row snapshots, removals, and cross-ecosystem parity.
+Canonical types come from metadata, not inferred CSV taxonomy.
+
+### Source CSV row-removal override
+
+Every source CSV row is checked against the generated module implementation
+identities. New rows cannot hide removed rows by keeping the total count unchanged,
+and Terraform repositories for different providers remain distinct even when
+their module names match. The baseline is `sourceFile`, not an existing preview
+destination. This still applies when a later manifest makes `file` equal
+`sourceFile`.
+
+Use `-Force` on `Invoke-ModuleCatalog.ps1` only when the listed source-row
+removals are intentional. The error identifies each source file, module name,
+and repository URL. A forced result records `sourceCsvRows`, `csvRowRemovals`
+(`sourceFile`, `moduleName`, `repoURL`), and `csvRowRemovalsForced` in
+`v1/migration-report.json`. It does not recreate missing metadata or legacy rows.
+
+The manual workflow input `force` defaults to `false`; schedules cannot select
+the override. `plan_only=true` with `force=true` can produce a review artifact
+without publication. For local bundle validation or publication,
+`Publish-ModuleCatalog.ps1` also requires explicit `-Force` when removals exist;
+the generation flag in an artifact does not grant publication permission.
+The publisher rechecks the report against the actual source CSVs on the unchanged
+main-branch base before any file writes.
+
+Force does not bypass invalid metadata, incomplete snapshots, altered hashes,
+stale bases, output allow-lists, `WhatIf`, or publication approvals. It never
+enables a Git force-push.
 
 `modulePath` is relative to the implementation's repository root, using `/`
 separators. Bicep paths include `avm/res/...`, `avm/ptn/...`, or `avm/utl/...`;
@@ -97,8 +125,9 @@ Tier metadata and repository-configuration publication are not implemented.
 Deprecation takes precedence over ownership and registry availability. A Bicep
 `DEPRECATED.md` marks that module and its descendants; a child's marker does not
 deprecate its parent or siblings. An archived Terraform repository marks every
-module in it Deprecated. Existing legacy Deprecated state is retained during
-transition, including when source is unavailable. Missing or malformed archive
+module in it Deprecated. Prior CSV Deprecated state is retained for matching
+metadata-backed entries. A row without metadata is subject to the removal guard,
+not retained as a legacy record. Missing or malformed archive
 evidence fails generation rather than being treated as an active repository.
 Old snapshots without that evidence must be collected again. The workflow only
 reads these signals; it does not archive repositories or perform retirement steps.
@@ -113,7 +142,7 @@ after inspection. No automatic
 merge, direct `main` push, permission edit, or obsolete-source deletion is used.
 
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,
-refreshing the private-source MAR mirror, and the approved per-ecosystem cutover
+refreshing the private-source MAR mirror, and approval of any source-row removals
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team how-to when enabling the workflow; generated catalogs do not belong there.
 Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
@@ -123,3 +152,5 @@ Replacing canonical CSVs is a separate later change. After reviewing the preview
 data and completing outstanding preview publication reviews, change each CSV
 `file` to its canonical `sourceFile` and collect a fresh snapshot. This change
 does not rename, delete, or overwrite the canonical CSVs.
+Source CSV collection and row-retention checks remain permanent after the
+temporary metadata backfill tooling is removed.

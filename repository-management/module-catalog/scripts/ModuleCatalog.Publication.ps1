@@ -28,7 +28,8 @@ function Test-AvmCatalogPublicationBundle {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Path,
-        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration),
+        [switch] $Force
     )
 
     $paths = Get-AvmCatalogPublicationPaths -Configuration $Configuration
@@ -92,7 +93,56 @@ function Test-AvmCatalogPublicationBundle {
     if (-not (Test-Json -Json $catalog -SchemaFile $schemaPath -ErrorAction Stop)) {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }
+    $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $Path -Configuration $Configuration
+    Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force
     return $plan
+}
+
+function Get-AvmCatalogPublicationRowRemovals {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $BundlePath,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Configuration,
+        [string] $SourceRoot
+    )
+
+    $reportOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind migration-report
+    $report = Read-AvmCatalogJson -Path (Join-Path $BundlePath $reportOutput.bundlePath)
+    if ($report -isnot [System.Collections.IDictionary] -or
+        -not $report.Contains('sourceCsvRows') -or -not $report.Contains('csvRowRemovals') -or
+        -not $report.Contains('csvRowRemovalsForced') -or $report.csvRowRemovals -isnot [array] -or
+        $report.csvRowRemovalsForced -isnot [bool]) {
+        throw [System.IO.InvalidDataException]::new('Catalog publication requires source CSV row evidence. Collect and generate again.')
+    }
+    $outputs = @($Configuration.outputs | Where-Object kind -eq 'csv')
+    Assert-AvmCatalogManifestKeys -Value $report.sourceCsvRows -Keys @($outputs.sourceFile)
+    $removals = [System.Collections.Generic.List[object]]::new()
+    foreach ($output in $outputs) {
+        $sourceRows = $report.sourceCsvRows[$output.sourceFile]
+        if ($sourceRows -isnot [array]) {
+            throw [System.IO.InvalidDataException]::new("Source CSV row evidence must be an array: $($output.sourceFile).")
+        }
+        if ($SourceRoot) {
+            Assert-AvmCatalogSafePath -Root $SourceRoot -RelativePath $output.sourcePath
+            $source = Read-AvmCatalogCsv -Path (Join-Path $SourceRoot $output.sourcePath)
+            $actualRows = Get-AvmCatalogCsvRowSnapshot -Rows $source.Rows.ToArray()
+            if ((ConvertTo-AvmCatalogJson -Value $actualRows) -cne (ConvertTo-AvmCatalogJson -Value $sourceRows)) {
+                throw [System.Security.SecurityException]::new("Source CSV row evidence does not match the publication base: $($output.sourceFile).")
+            }
+            $sourceRows = $actualRows
+        }
+        $generated = Read-AvmCatalogCsv -Path (Join-Path $BundlePath $output.bundlePath)
+        $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $generated.Rows.ToArray()
+        foreach ($removal in (Get-AvmCatalogCsvRowRemovals -SourceRows $sourceRows -OutputRows $outputRows `
+                -Output $output -Configuration $Configuration)) {
+            $removals.Add($removal)
+        }
+    }
+    if ((ConvertTo-AvmCatalogJson -Value $removals.ToArray()) -cne (ConvertTo-AvmCatalogJson -Value $report.csvRowRemovals) -or
+        ($removals.Count -gt 0 -and -not $report.csvRowRemovalsForced)) {
+        throw [System.IO.InvalidDataException]::new('Catalog CSV row-removal report disagrees with its source evidence and generated outputs.')
+    }
+    return ,$removals.ToArray()
 }
 
 function Assert-AvmCatalogPublicationBase {

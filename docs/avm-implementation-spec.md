@@ -447,10 +447,17 @@ check. Missing files produce explicit warnings during rollout, without creating
 files or reading indexes. Explicit `avm metadata validate` and `show` still fail
 for missing files. Test, example, and internal helper directories are excluded.
 
-The catalog workflow lives in this tools repository. During dual-source rollout,
-valid module metadata overrides legacy rows; invalid present metadata is an
-error, not a fallback. Fleet backfill and eventual per-ecosystem cutover remain
-explicit operator actions. Metadata is owner-authored, not a managed-file
+The catalog workflow lives in this tools repository and generates entries only
+from valid module metadata. Invalid present metadata is an error; missing
+metadata never causes a full legacy CSV record to be retained. Generation and
+publication fail by default when source CSV module identities would disappear.
+Explicit `Force` permits those removals only, not other validation failures.
+Source CSVs, not existing preview outputs, are the comparison baseline; this
+remains true after canonical CSV replacement. Hash-protected source-row evidence
+is checked again against the unchanged publication base before writes.
+Matched-row compatibility fields and prior Deprecated status remain preserved.
+Fleet backfill and canonical CSV replacement remain explicit operator actions.
+Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
 Terraform sync creates missing files directly from existing indexes and source,
 without an intermediate approval file or repository registration. Bicep files

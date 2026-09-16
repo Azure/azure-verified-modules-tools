@@ -39,7 +39,7 @@ A phased plan to consolidate the Azure Verified Modules (AVM) tooling — the Bi
 | Observability                          | Every task emits structured logs and a machine-readable summary suitable for GitHub annotations.    |
 | Parallel coexistence                   | Existing `./avm`, `./avm.ps1`, `Makefile`, and `utilities/tools/*.ps1` entry points remain untouched in their current repos. Contributors install the new module alongside and test it directly. Phase 6 deletes the old entry points once adoption is broad. No shim layer exists at any point. |
 | Boundary validation only               | Validate at the CLI boundary (verb args, repo detection); trust internal modules.                  |
-| One source of truth per concern        | Module-owned `metadata.json` becomes authoritative per adopted module; generated CSVs remain compatible indexes during dual-source rollout. PSRule baselines stay canonical for Azure best practice. |
+| One source of truth per concern        | Valid module-owned `metadata.json` supplies catalog entries; generated CSVs remain compatible indexes with source-row removal protection. PSRule baselines stay canonical for Azure best practice. |
 
 ---
 
@@ -420,10 +420,11 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   - `avm governance workflow toggle` → `Switch-WorkflowState`.
   - `avm governance reaper run` → port of `tf-repo-mgmt/reaper/ReaperScript.ps1`.
 - A unified `GitHubClient` helper that replaces the per-script REST calls (`Get-GitHubModuleWorkflowList`, `Get-GitHubIssueList`, …).
-- Module-owned `metadata.json` becomes the metadata source of truth through
-  the staged dual-source migration. This repository owns schemas and catalog
-  sync; CSV indexes remain compatible generated outputs. Legacy rows are
-  retained until the explicit per-ecosystem cutover.
+- Module-owned `metadata.json` is the metadata source of truth. This repository
+  owns schemas and catalog sync; CSV indexes remain compatible generated outputs.
+  Catalog rows require valid metadata, without legacy-record fallback or ecosystem
+  mode options. Source CSV row removals fail by default; an explicit force option
+  permits intentional removals without weakening validation or publication controls.
   Permanent authoring commands never read CSV inputs. Temporary backfill lives
   outside the module; ordinary checks validate local metadata and warn on
   missing files during rollout.

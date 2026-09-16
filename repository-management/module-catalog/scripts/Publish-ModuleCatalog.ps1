@@ -3,7 +3,8 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [Parameter(Mandatory)][string] $BundlePath,
-    [switch] $Publish
+    [switch] $Publish,
+    [switch] $Force
 )
 
 Set-StrictMode -Version 3.0
@@ -16,7 +17,7 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Publication.ps1')
 
 $configuration = Read-AvmCatalogConfiguration
-$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration
+$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration -Force:$Force
 if (-not $Publish) {
     Write-Output 'Catalog publication plan validated; no remote changes requested.'
     return
@@ -69,6 +70,8 @@ try {
             -WorkingDirectory $state -EnvVars $processEnvironment
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', 'main') -WorkingDirectory $root -EnvVars $processEnvironment
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
+        $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $BundlePath -Configuration $configuration -SourceRoot $root
+        Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
             -ArgumentList @('api', '--method', 'GET', '--paginate', '--slurp', "repos/$repository/pulls?state=open&base=main&per_page=100") `
             -WorkingDirectory $root -EnvVars $processEnvironment
@@ -129,7 +132,7 @@ try {
         $body = [ordered]@{
             title = 'chore: synchronize AVM module catalogs'
             head = $target.Branch; base = 'main'
-            body = "Generated AVM catalog update. Review metadata precedence, deprecation, unresolved identities, and parity before merging.`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
+            body = "Generated AVM catalog update from module metadata. Review deprecation, source CSV row removals in the migration report, and parity before merging. CSV row-removal override: $([bool]$Force).`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
         }
         [System.IO.File]::WriteAllText($bodyPath, (ConvertTo-AvmCatalogJson -Value $body), [System.Text.UTF8Encoding]::new($false))
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
