@@ -156,6 +156,7 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
         $result = Invoke-AvmPreCommitForRepository @script:parameters -forceFileUpdate $true
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $script:events | Should -Be @('clone', 'pre-commit')
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'Avm.Authoring' -and $ErrorAction -eq 'Stop' }
         Should -Invoke Get-AvmRepositoryMetadataBackfillContext -Times 0
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter { -not $ReviewOnly -and -not $StableBranch }
     }
@@ -163,6 +164,7 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
     It 'creates metadata without running unrelated formatters or managed-file changes' {
         $result = Invoke-AvmPreCommitForRepository @script:parameters -metadataBackfill $true
         $script:events | Should -Be @('clone', 'metadata')
+        Should -Invoke Import-Module -Exactly 0
         Should -Invoke Remove-AvmMetadataFileConflict -Times 0
         Should -Invoke Set-TerraformCodeowners -Times 0
         Should -Invoke Resolve-AvmManagedFilesUpgradeDecision -Times 0
@@ -204,5 +206,142 @@ Describe 'Component: metadata backfill repository sync' -Tag Component {
     It 'requires explicit metadata creation before source changes are permitted' {
         { Invoke-AvmPreCommitForRepository @script:parameters -metadataUpdateSource $true } | Should -Throw '*requires explicit metadataBackfill*'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+}
+
+Describe 'Component: metadata backfill checkout module loading' -Tag Component {
+    It 'prepares metadata with no installed module in a fresh process: planOnly=<PlanOnly>' -ForEach @(
+        @{ PlanOnly = 'true' }
+        @{ PlanOnly = 'false' }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $root
+        $pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+        $child = @'
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
+$PSStyle.OutputRendering = 'PlainText'
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
+if (Get-Module Avm.Authoring) { throw 'The child must start without Avm.Authoring loaded.' }
+if (@(Get-Module -ListAvailable Avm.Authoring).Count -ne 0) { throw 'Avm.Authoring must not be discoverable by name.' }
+$manifest = Join-Path $env:BACKFILL_TOOLS_ROOT 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+Import-Module $manifest -Force -ErrorAction Stop
+$modulePath = Join-Path $env:BACKFILL_TOOLS_ROOT 'src' 'Avm.Authoring' 'Avm.Authoring.psm1'
+if ((Get-Module Avm.Authoring).Path -cne $modulePath) { throw 'The trusted checkout module was not loaded.' }
+. (Join-Path $env:BACKFILL_TOOLS_ROOT 'repository-management' 'repository-sync' 'scripts' 'lib' 'AvmPreCommit.ps1')
+
+$repository = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+$csv = "ModuleName,ModuleDisplayName,Description,RepoURL,PrimaryModuleOwnerGHHandle`navm-ptn-example-repo,Example module,Creates example resources.,https://github.com/$repository,example-owner`n"
+function Invoke-RepositoryGitHubApi {
+    param($Endpoint)
+    if ($Endpoint -cne 'repos/Azure/Azure-Verified-Modules/commits/main') { throw "Unexpected API read: $Endpoint" }
+    [pscustomobject]@{ sha = 'a' * 40 }
+}
+function Get-RepositoryFileAtCommit {
+    param($Repository, $Path, $Sha)
+    if ($Repository -cne 'Azure/Azure-Verified-Modules' -or
+        $Path -cne 'docs/static/module-indexes/TerraformPatternModules.csv' -or $Sha -cne ('a' * 40)) {
+        throw 'Unexpected metadata index read.'
+    }
+    [pscustomobject]@{ Content = $csv }
+}
+function Invoke-RepositoryGitHub {
+    param($Arguments, [switch] $AsJson)
+    if (-not $AsJson -or ($Arguments -join ' ') -cne "pr list --repo=$repository --state=open --head=avm-bot/module-metadata-backfill --json=number,url") {
+        throw 'Unexpected GitHub operation.'
+    }
+}
+function Get-RepositoryBranchHead {
+    param($Repository, $Branch)
+    if ($Repository -cne $script:repository -or $Branch -cne 'avm-bot/module-metadata-backfill') { throw 'Unexpected branch read.' }
+}
+function Invoke-RepositoryGit { throw 'No real Git operation is allowed.' }
+function Install-PSResource { throw 'Metadata backfill must not install a module.' }
+function Update-PSResource { throw 'Metadata backfill must not upgrade a module.' }
+function Invoke-AvmPreCommitWithUpgradeRetry { throw 'Metadata backfill must not run ordinary pre-commit.' }
+function Invoke-RepositoryFileSync {
+    param($Repository, $DefaultBranch, [switch] $PlanOnly, $State, $Prepare,
+        $StableBranch, [switch] $ReviewOnly, [switch] $VerifyCandidate, $ExpectedActor, $Title, $Body)
+
+    if ($PlanOnly.IsPresent -ne ($env:BACKFILL_PLAN_ONLY -ceq 'true') -or
+        -not $ReviewOnly -or -not $VerifyCandidate -or $ExpectedActor.id -ne 187664033 -or
+        $StableBranch -cne 'avm-bot/module-metadata-backfill' -or $State.CodeownersContent -or $State.UpdateSource) {
+        throw 'Unexpected metadata publication options.'
+    }
+    Push-Location $env:BACKFILL_TEST_ROOT
+    try {
+        & $Prepare @{
+            Root = $env:BACKFILL_TEST_ROOT
+            Repository = @{ full_name = $Repository }
+            State = $State
+            PlanOnly = $PlanOnly.IsPresent
+        }
+    }
+    finally { Pop-Location }
+    @{
+        HasChanges = Test-Path -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'metadata.json')
+        PullRequestUrl = if ($PlanOnly) { $null } else { 'https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo/pull/1' }
+    }
+}
+
+$source = "locals { unrelated = true }`n"
+[System.IO.File]::WriteAllText((Join-Path $env:BACKFILL_TEST_ROOT 'main.tf'), $source)
+$standalone = Join-Path $env:BACKFILL_TOOLS_ROOT 'repository-management' 'module-metadata' 'Invoke-ModuleMetadataBackfill.ps1'
+$preview = & $standalone -RepositoryRoot $env:BACKFILL_TEST_ROOT -Repository $repository -Ecosystem terraform `
+    -LegacyRecord @(ConvertFrom-AvmMetadataIndex -Content $csv) -UpdateSource -WhatIf
+if ($preview.Status -cne 'planned' -or $preview.Changed -or
+    (Test-Path -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'metadata.json')) -or
+    (Test-Path -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'main.metadata.tf'))) {
+    throw 'Standalone WhatIf must plan without writing metadata or source readers.'
+}
+$result = Invoke-AvmPreCommitForRepository -orgAndRepoName $repository -repoId 'avm-ptn-example-repo' `
+    -repositoryConfigDir $env:BACKFILL_TEST_ROOT -codeOwnersDefaultTeams @() -codeOwnersFileProtectionTeams @() `
+    -defaultBranch main -planOnly ($env:BACKFILL_PLAN_ONLY -ceq 'true') -metadataBackfill $true -issueLog @()
+if ((Get-Command Initialize-AvmModuleMetadata -Module Avm.Authoring).Module.Path -cne $modulePath -or
+    @(Get-Module -ListAvailable Avm.Authoring).Count -ne 0 -or $env:PSModulePath -cne (Join-Path $PSHOME 'Modules')) {
+    throw 'Preparation must retain the checkout module without changing module discovery.'
+}
+if ((Get-Content -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'main.tf') -Raw) -cne $source -or
+    (Test-Path -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'main.metadata.tf'))) {
+    throw 'Default metadata preparation must leave source unchanged.'
+}
+[pscustomobject]@{
+    Result = $result
+    Preview = $preview
+    Metadata = Get-Content -LiteralPath (Join-Path $env:BACKFILL_TEST_ROOT 'metadata.json') -Raw | ConvertFrom-Json
+} | ConvertTo-Json -Depth 10 -Compress
+'@
+        $modulePath = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psm1'
+        $module = Get-Module Avm.Authoring | Where-Object { $_.Path -ceq $modulePath } | Select-Object -First 1
+        $output = & $module {
+            param($Executable, $Code, $ToolsRoot, $FixtureRoot, $Plan)
+            Invoke-AvmProcess -FilePath $Executable -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $Code) `
+                -TimeoutSec 60 -EnvVars @{
+                    BACKFILL_TOOLS_ROOT = $ToolsRoot
+                    BACKFILL_TEST_ROOT = $FixtureRoot
+                    BACKFILL_PLAN_ONLY = $Plan
+                    PSModulePath = Join-Path $PSHOME 'Modules'
+                    AVM_OFFLINE = '1'
+                    GITHUB_EVENT_NAME = 'workflow_dispatch'
+                    GITHUB_ACTIONS = 'true'
+                    GH_TOKEN = $null
+                    GITHUB_TOKEN = $null
+                }
+        } $pwsh $child $repoRoot $root $PlanOnly
+        $output.ExitCode | Should -Be 0
+        $report = ($output.StdOut.TrimEnd() -split '\r?\n')[-1] | ConvertFrom-Json
+        $report.Result.HasChanges | Should -BeTrue
+        $report.Result.MetadataBackfill.Status | Should -BeExactly 'pass'
+        $report.Result.MetadataBackfill.Modules | Should -HaveCount 1
+        $report.Result.MetadataBackfill.Modules[0].Changed | Should -BeTrue
+        $report.Preview.Modules[0].PlannedFiles | Should -Be @('metadata.json', 'main.metadata.tf')
+        $report.Metadata.canonicalType | Should -BeExactly 'example/repo'
+        $report.Metadata.moduleDescription | Should -BeExactly 'Creates example resources.'
+        $report.Metadata.owners | Should -Be @('example-owner')
+        if ($PlanOnly -ceq 'true') {
+            $report.Result.BackfillReviewUrl | Should -BeNullOrEmpty
+        } else {
+            $report.Result.BackfillReviewUrl | Should -BeExactly 'https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo/pull/1'
+        }
     }
 }
