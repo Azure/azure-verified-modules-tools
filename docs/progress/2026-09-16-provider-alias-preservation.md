@@ -1,6 +1,6 @@
 # Provider alias preservation
 
-**Status**: blocked
+**Status**: complete
 **Started**: 2026-09-16
 **Updated**: 2026-09-16
 **Branch**: `jaredfholgate-provider-alias-preservation`
@@ -23,9 +23,62 @@ gates, target constraints, and unrelated provider entries unchanged.
 - [x] Cover the public Fabric workspace proposal with representative Fabric
       and AzAPI aliases, resource/data references, upgrades, and idempotence.
 - [x] Verify official MAPOTF 0.2.0 archive/signature provenance and run all 31 cases.
-- [ ] Pin a compatible MAPOTF release with verified release archive hashes.
+- [x] Pin a compatible MAPOTF release with verified release archive hashes.
+- [x] Validate MAPOTF 0.2.1 through normal pinned-tool selection and existing-module regressions.
 
 ## Validation
+
+### Published MAPOTF 0.2.1 acceptance
+
+- All six official MAPOTF 0.2.1 release archives were downloaded and hashed
+  against `checksums.txt` and GitHub asset digests. Both Windows executables
+  have valid Microsoft Authenticode signatures. Only MAPOTF's version and six
+  hashes changed through `scripts/Update-AvmPins.ps1 -Mapotf 0.2.1`.
+- Normal `Install-AvmTool` / `Resolve-AvmTool` selected `mapotf/0.2.1` from an
+  isolated `AVM_HOME`, with `AVM_MAPOTF_TEST_BINARY` unset. The executable reports
+  release commit `bc1fc9f9d293e853078cae1f5e1aae78e0101ed1`, built
+  `2026-09-16T13:44:05Z`, and has a valid Microsoft signature. Its SHA-256
+  matches the independently extracted official amd64 executable:
+  `ac3aac82dd7eb5841ac7d98a33b36673f695de7f187f89271ec6a05a0b94af40`.
+- `.\build.ps1 pre-commit`: 1,425 unit tests passed, eight skipped; all 117
+  component tests passed. Existing analyzer retries recovered; 187 warnings,
+  no errors.
+
+The safe local integration selection ran through `.\build.ps1 integration`:
+
+| Suite | Passed | Failed | Skipped | Excluded |
+| --- | ---: | ---: | ---: | ---: |
+| Provider requirements, including representative Fabric/AzAPI | 31 | 0 | 0 | 0 |
+| Git module sources and subdirectory resolution | 3 | 0 | 0 | 0 |
+| Deprecated interfaces | 7 | 0 | 0 | 0 |
+| Existing AzAPI/AzureRM module chains | 7 | 0 | 5 | 4 |
+| Total | 48 | 0 | 5 | 4 |
+
+Both existing fixtures remain unchanged after pre-commit. Legacy-header cleanup,
+provider ordering, full-profile drift, and native unit tests with mocked
+providers also pass. The initial run had 47 passes and one GitHub HTTP 500 while
+fetching AzAPI authentication checksums. A requested targeted retry repeated the
+full safe selection and passed all 48 cases; both runs' logs and results are
+retained separately. No source or retry policy was changed to hide that failure.
+
+The five existing fixture-specific skips were:
+
+| Fixture | Test | Reason |
+| --- | --- | --- |
+| AzAPI | unit tier installs modules referenced by run blocks from a cold working directory | Only AzureRM carries the run-block helper. |
+| AzureRM | validates examples that consume deprecated module interfaces without failing | Only AzAPI carries deprecated interfaces. |
+| AzureRM | removes legacy AVM headers and their telemetry helper locals | Legacy AzAPI headers are exercised on the AzAPI fixture. |
+| AzureRM | sorts required provider entries with released MAPOTF nested-block ordering | Ordering is exercised on the AzAPI fixture. |
+| AzureRM | unit tier preserves deprecated aliases and safe defaults through a child-module wrapper | Only AzAPI carries these deprecated interfaces. |
+
+Two tests were explicitly excluded for each fixture, four cases total, because
+they run real Azure-contacting policy plans: `pr-check runs every step, evaluates
+plan policies, and resolves tools from the AVM cache` and `keeps a real policy
+exception scoped to its own example`. The harness's Defender preference calls
+were prevented by a process-local throwing guard; no host protection settings
+changed. No live Terraform apply or cloud operation ran.
+
+### Earlier release and development baselines
 
 - The official [MAPOTF 0.2.0 release](https://github.com/Azure/mapotf/releases/tag/v0.2.0)
   is now published. Its Windows amd64 executable passes 21 of the same 31
@@ -60,34 +113,34 @@ gates, target constraints, and unrelated provider entries unchanged.
 - The tests compare Terraform-formatted copies for expected metadata and
   untouched content, and compare original files byte-for-byte between MAPOTF
   passes for idempotence. `terraform providers` checks the real alias syntax.
-- `.\build.ps1 pre-commit`: passed; 1,425 unit tests passed, 8 skipped;
+- Earlier `.\build.ps1 pre-commit`: passed; 1,425 unit tests passed, 8 skipped;
   all 117 component tests passed. The existing analyzer retry handled transient
-  failures; the latest gate completed with 230 warnings and no errors.
+  failures; that gate completed with 230 warnings and no errors.
 
-The targeted run uses the repository build entry point:
+The final targeted acceptance uses the repository build entry point without a
+binary override:
 
 ```powershell
-$env:AVM_MAPOTF_TEST_BINARY = '<absolute path to the verified executable>'
+Remove-Item Env:\AVM_MAPOTF_TEST_BINARY -ErrorAction SilentlyContinue
+$env:AVM_HOME = '<isolated validation directory>'
 $PesterPreference = @{ Run = @{ TestExtension = 'MapotfProviderRequirements.Integration.Tests.ps1' } }
 .\build.ps1 integration
 ```
 
-The binary override only replaces tool selection in this integration suite;
-execution is real, and no managed cache entry or release pin is fabricated.
+Only earlier development/0.2.0 comparisons used the test-binary override.
 
 ## Dependencies
 
-- Release adoption remains blocked: a published MAPOTF release must contain
+- MAPOTF 0.2.1 is stable and contains
   [Azure/mapotf#129](https://github.com/Azure/mapotf/pull/129), including the
-  opt-in `merge_object_attributes` implementation, and provide all six verified
-  archive hashes. Official MAPOTF 0.2.0 is published and verified but fails all
-  ten alias-upgrade regressions; it is not a compatible release. The existing
-  0.1.12 pin and hashes remain unchanged.
+  opt-in object merge. It is now pinned with all six verified archive hashes;
+  the release-adoption blocker is resolved.
 - Keep [the tools change](https://github.com/Azure/azure-verified-modules-tools/pull/124)
-  draft until that release is pinned and the native suite passes against it.
+  draft for the coordinator's new-head hosted-CI review and readiness decision.
+  Local fixture coverage is not a guarantee for every existing module.
 - Following the user's updated instruction, cover the public pattern in
   [Azure/Azure-Verified-Modules#2932](https://github.com/Azure/Azure-Verified-Modules/issues/2932)
   with representative fixtures. The private implementation was not inspected
   or tested. Capacity is looked up, not provisioned; no cloud activity runs.
-- The separate MAPOTF optional-provider-field panic fix is included in the
-  development binary but was not duplicated in this tools slice.
+- The separate MAPOTF optional-provider-field panic fix is included in 0.2.1
+  but was not duplicated in this tools slice.

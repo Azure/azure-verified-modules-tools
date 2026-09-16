@@ -57,6 +57,8 @@ section when cutting a release.
 
 ### Changed
 
+- Managed MAPOTF now pins 0.2.1, preserving provider aliases during metadata
+  updates and handling optional provider source/version fields safely.
 - Terraform `avm test` now validates every direct example rather than treating
   the reusable library as a root module, supporting deprecated variables and
   outputs. Missing local root/submodule coverage produces warnings only.
