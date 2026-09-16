@@ -128,7 +128,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         Get-NativeBicepTelemetryPrefix -Template ($changed | ConvertFrom-Json) | Should -BeExactly $seed.telemetryIdPrefix
     }
 
-    It 'evaluates root and reduced child metadata in a provider-free Terraform plan' {
+    It 'keeps a provider-free Terraform plan unchanged without generating metadata readers' {
         $root = Join-Path $TestDrive 'terraform-native'
         $child = Join-Path $root 'modules' 'child'
         $null = New-Item -ItemType Directory -Path $child -Force
@@ -137,38 +137,20 @@ module "child" {
   source = "./modules/child"
 }
 
-output "canonical" {
-  value = local.avm_canonical_type
+output "source_value" {
+  value = "root-source"
 }
-output "prefix" {
-  value = local.avm_telemetry_id_prefix
-}
-output "child_canonical" {
-  value = module.child.canonical
-}
-output "child_prefix" {
-  value = module.child.prefix
+output "child_value" {
+  value = module.child.source_value
 }
 '@
         $childSource = @'
-output "canonical" {
-  value = local.avm_canonical_type
-}
-output "prefix" {
-  value = local.avm_telemetry_id_prefix
+output "source_value" {
+  value = "child-source"
 }
 '@
         [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), $rootSource)
         [System.IO.File]::WriteAllText((Join-Path $child 'main.tf'), $childSource)
-        $seed = New-NativeMetadataSeed -Ecosystem terraform
-        $childSeed = New-NativeMetadataSeed -Ecosystem terraform -ChildModule
-        $null = Initialize-AvmModuleMetadata -Path $root -InputObject $seed `
-            -Ecosystem terraform -ModuleType resource -UpdateSource -SkipModuleVersionCheck
-        $null = Initialize-AvmModuleMetadata -Path $child -InputObject $childSeed `
-            -Ecosystem terraform -ModuleType resource -ChildModule -UpdateSource -SkipModuleVersionCheck
-        foreach ($modulePath in @($root, $child)) {
-            Get-Content -LiteralPath (Join-Path $modulePath 'main.metadata.tf') -Raw | Should -Not -Match 'avm_tier'
-        }
         $null = Invoke-MetadataNativeTool -Tool terraform -Root $root `
             -Arguments @('init', '-backend=false', '-input=false', '-no-color')
         $planPath = Join-Path $root 'metadata.tfplan'
@@ -177,15 +159,36 @@ output "prefix" {
         $plan = (Invoke-MetadataNativeTool -Tool terraform -Root $root `
                 -Arguments @('show', '-json', $planPath)) | ConvertFrom-Json
         $outputs = $plan.planned_values.outputs
-        $outputs.canonical.value | Should -BeExactly $seed.canonicalType
-        $outputs.prefix.value | Should -BeExactly $seed.telemetryIdPrefix
-        $outputs.child_canonical.value | Should -BeExactly $childSeed.canonicalType
-        $outputs.child_prefix.value | Should -BeExactly $childSeed.telemetryIdPrefix
+        $outputs.source_value.value | Should -BeExactly 'root-source'
+        $outputs.child_value.value | Should -BeExactly 'child-source'
         $plan.PSObject.Properties.Name | Should -Not -Contain 'resource_changes'
-
         $before = $outputs | ConvertTo-Json -Depth 20
+
+        $seed = New-NativeMetadataSeed -Ecosystem terraform
+        $childSeed = New-NativeMetadataSeed -Ecosystem terraform -ChildModule
+        $null = Initialize-AvmModuleMetadata -Path $root -InputObject $seed `
+            -Ecosystem terraform -ModuleType resource -SkipModuleVersionCheck
+        $null = Initialize-AvmModuleMetadata -Path $child -InputObject $childSeed `
+            -Ecosystem terraform -ModuleType resource -ChildModule -SkipModuleVersionCheck
+        foreach ($modulePath in @($root, $child)) {
+            Test-Path -LiteralPath (Join-Path $modulePath 'metadata.json') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $modulePath 'main.metadata.tf') | Should -BeFalse
+        }
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw | Should -BeExactly $rootSource
+        Get-Content -LiteralPath (Join-Path $child 'main.tf') -Raw | Should -BeExactly $childSource
+        $null = Invoke-MetadataNativeTool -Tool terraform -Root $root `
+            -Arguments @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', "-out=$planPath")
+        $updatedPlan = (Invoke-MetadataNativeTool -Tool terraform -Root $root `
+                -Arguments @('show', '-json', $planPath)) | ConvertFrom-Json
+        ($updatedPlan.planned_values.outputs | ConvertTo-Json -Depth 20) | Should -BeExactly $before
+        $updatedPlan.PSObject.Properties.Name | Should -Not -Contain 'resource_changes'
+
         $seed.owners = @('new-owner', '@Azure/new-team')
+        $seed.canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
+        $seed.telemetryIdPrefix += '-v2'
         [System.IO.File]::WriteAllText((Join-Path $root 'metadata.json'), ($seed | ConvertTo-Json -Depth 20))
+        { Initialize-AvmModuleMetadata -Path $root -InputObject $seed -Ecosystem terraform `
+                -ModuleType resource -UpdateSource -SkipModuleVersionCheck } | Should -Throw '*not supported*'
         $null = Invoke-MetadataNativeTool -Tool terraform -Root $root `
             -Arguments @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', "-out=$planPath")
         $updatedPlan = (Invoke-MetadataNativeTool -Tool terraform -Root $root `

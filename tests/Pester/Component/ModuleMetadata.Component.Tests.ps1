@@ -496,14 +496,19 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
-    It 'validates and plans under WhatIf without creating metadata or source files' {
-        $fixture = New-MetadataFixture
+    It 'validates and plans <Ecosystem> under WhatIf without changing files' -TestCases @(
+        @{ Ecosystem = 'terraform'; UpdateSource = $false; PlannedFiles = @('metadata.json') }
+        @{ Ecosystem = 'bicep'; UpdateSource = $true; PlannedFiles = @('metadata.json', 'main.bicep') }
+    ) {
+        param($Ecosystem, $UpdateSource, $PlannedFiles)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem
         $parameters = $fixture.Parameters
-        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource -WhatIf
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource:$UpdateSource -WhatIf
         $result.Changed | Should -BeFalse
-        $result.PlannedFiles | Should -Contain 'metadata.json'
-        $result.PlannedFiles | Should -Contain 'main.metadata.tf'
+        $result.PlannedFiles | Should -Be $PlannedFiles
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
         @(Get-ChildItem -LiteralPath $fixture.Root -Force -File).Count | Should -Be 1
     }
 
@@ -558,7 +563,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         }
         $parameters = $fixture.Parameters
         $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
         [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
@@ -638,25 +643,20 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'fail'
     }
 
-    It 'writes native Terraform JSON locals for roots and children' {
+    It 'initializes Terraform roots and children without generating source readers' {
         foreach ($child in @($false, $true)) {
             $fixture = New-MetadataFixture -ChildModule:$child
             $parameters = $fixture.Parameters
-            $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
+            $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
             $result.Changed | Should -BeTrue
-            $sourcePath = Join-Path $fixture.Root 'main.metadata.tf'
-            $source = [System.IO.File]::ReadAllText($sourcePath)
-            $source | Should -Match ([regex]::Escape('jsondecode(file("${path.module}/metadata.json"))'))
-            $source | Should -Match 'avm_canonical_type\s*=\s*local.avm_metadata.canonicalType'
-            $source | Should -Match 'avm_telemetry_id_prefix\s*=\s*local.avm_metadata.telemetryIdPrefix'
-            $source | Should -Not -Match 'avm_tier'
-            $source | Should -Not -Match ([regex]::Escape('../../metadata.json'))
+            $result.PlannedFiles | Should -Be @('metadata.json')
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
             $result.Metadata.Contains('tier') | Should -BeFalse
             $result.Metadata.Contains('schemaVersion') | Should -BeFalse
             if ($child) {
                 $result.Metadata.Contains('owners') | Should -BeFalse
             }
-            (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource).Changed | Should -BeFalse
+            (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeFalse
             Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.tf.json') | Should -BeFalse
             (Get-Content -LiteralPath $fixture.SourcePath -Raw) | Should -Match 'unrelated = true'
         }
@@ -666,16 +666,26 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $fixture = New-MetadataFixture -ModuleType utility
         $fixture.Data.Remove('telemetryIdPrefix')
         $parameters = $fixture.Parameters
-        $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
-        Get-Content -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') -Raw | Should -Not -Match 'telemetry'
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.PlannedFiles | Should -Be @('metadata.json')
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
     }
 
-    It 'refuses a conflicting Terraform local before creating metadata' {
-        $fixture = New-MetadataFixture
-        [System.IO.File]::AppendAllText($fixture.SourcePath, "`nlocals {`n  avm_metadata = {}`n}`n")
+    It 'rejects Terraform UpdateSource before writes for child=<Child> and WhatIf=<Preview>' -TestCases @(
+        @{ Child = $false; Preview = $false }
+        @{ Child = $false; Preview = $true }
+        @{ Child = $true; Preview = $false }
+        @{ Child = $true; Preview = $true }
+    ) {
+        param($Child, $Preview)
+        $fixture = New-MetadataFixture -ChildModule:$Child
         $parameters = $fixture.Parameters
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource -WhatIf:$Preview } |
+            Should -Throw '*Terraform -UpdateSource is not supported*'
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
     }
 
     It 'never overwrites an authored Terraform metadata reader' {
@@ -683,9 +693,12 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $sourcePath = Join-Path $fixture.Root 'main.metadata.tf'
         [System.IO.File]::WriteAllText($sourcePath, 'locals { authored = true }')
         $parameters = $fixture.Parameters
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw
+        (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeTrue
+        $before = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } |
+            Should -Throw '*Terraform -UpdateSource is not supported*'
         [System.IO.File]::ReadAllText($sourcePath) | Should -BeExactly 'locals { authored = true }'
-        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $before
     }
 
     It 'registers both metadata commands and exports only their public surface' {

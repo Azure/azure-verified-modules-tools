@@ -26,6 +26,9 @@ function Get-AvmMetadataBackfillPlan {
         [switch] $UpdateSource
     )
 
+    if ($UpdateSource -and $Ecosystem -eq 'terraform') {
+        throw [System.NotSupportedException]::new('Terraform -UpdateSource is not supported. Omit -UpdateSource; Terraform telemetry changes belong in a later MaPoTF update.')
+    }
     $modules = @(Get-AvmMetadataBackfillModule -Root $Root -Ecosystem $Ecosystem -Repository $Repository)
     $plans = [System.Collections.Generic.List[object]]::new()
     $errors = [System.Collections.Generic.List[string]]::new()
@@ -150,6 +153,25 @@ function Resolve-AvmMetadataBackfillRoot {
     $ancestor = $item
     while ($null -ne $ancestor) {
         if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            if ($IsMacOS) {
+                $separator = [System.IO.Path]::DirectorySeparatorChar
+                $temporary = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd($separator) + $separator
+                if ($item.FullName.StartsWith($temporary, [System.StringComparison]::Ordinal)) {
+                    $systemRoot = [System.IO.Path]::GetPathRoot($temporary)
+                    foreach ($name in @('var', 'tmp')) {
+                        if ($ancestor.FullName -ceq (Join-Path $systemRoot $name)) {
+                            # Accept only the direct system alias, not a chain through another link.
+                            $expected = Join-Path $systemRoot 'private' $name
+                            if ($ancestor.LinkTarget -cnotin @((Join-Path 'private' $name), $expected)) { break }
+                            $target = $ancestor.ResolveLinkTarget($false)
+                            if ($null -ne $target -and $target.FullName -ceq $expected) {
+                                $relative = [System.IO.Path]::GetRelativePath($ancestor.FullName, $item.FullName)
+                                return Resolve-AvmMetadataBackfillRoot -Path (Join-Path $target.FullName $relative)
+                            }
+                        }
+                    }
+                }
+            }
             throw [System.ArgumentException]::new("Reparse points are not supported in the checkout path: $($ancestor.FullName)")
         }
         $ancestor = $ancestor.Parent
@@ -233,7 +255,7 @@ function Get-AvmMetadataBackfillModule {
         }
         foreach ($relative in $paths) {
             $directory = Resolve-AvmMetadataBackfillPath -Root $rootPath -RelativePath $relative
-            $sources = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -clike '*.tf' -and $_.Name -cne 'main.metadata.tf' })
+            $sources = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -clike '*.tf' })
             if ($sources.Count -eq 0) {
                 if ($relative -ceq '.') {
                     throw [System.ArgumentException]::new('Terraform checkout has no root .tf source.')
@@ -301,8 +323,7 @@ function Get-AvmMetadataBackfillModule {
                 if ($file.Name -ieq 'metadata.json' -and $file.Name -cne 'metadata.json') {
                     throw [System.ArgumentException]::new("metadata.json has incorrect casing at '$fileRelative'.")
                 }
-                if (($file.Name -ieq 'main.metadata.tf' -and $file.Name -cne 'main.metadata.tf') -or
-                    ($file.Name -ilike '*.tf' -and $file.Name -cnotlike '*.tf')) {
+                if ($file.Name -ilike '*.tf' -and $file.Name -cnotlike '*.tf') {
                     throw [System.ArgumentException]::new("Terraform source has unsupported casing at '$fileRelative'.")
                 }
             }

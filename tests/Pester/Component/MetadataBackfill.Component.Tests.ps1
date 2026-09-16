@@ -49,6 +49,50 @@ BeforeAll {
 }
 
 Describe 'Component: automatic metadata file creation' -Tag Component {
+    It 'accepts the verified macOS system temporary alias and returns its physical checkout path' -Skip:(-not $IsMacOS) {
+        $systemRoot = [System.IO.Path]::GetPathRoot($TestDrive)
+        $alias = Join-Path $systemRoot 'tmp'
+        $name = 'avm-metadata-alias-' + [guid]::NewGuid().ToString('N')
+        $path = Join-Path $alias $name
+        $expected = Join-Path $systemRoot 'private' 'tmp' $name
+        $previousTemporary = $env:TMPDIR
+        try {
+            $env:TMPDIR = $alias
+            $null = New-Item -ItemType Directory -Path $path
+            Resolve-AvmMetadataBackfillRoot -Path $path | Should -BeExactly $expected
+            Test-Path -LiteralPath $expected -PathType Container | Should -BeTrue
+        }
+        finally {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+            [Environment]::SetEnvironmentVariable('TMPDIR', $previousTemporary)
+        }
+    }
+
+    It 'rejects caller-controlled <LinkKind> links without creating metadata' -TestCases @(
+        @{ LinkKind = 'checkout' }
+        @{ LinkKind = 'ancestor' }
+        @{ LinkKind = 'module' }
+    ) {
+        param($LinkKind)
+        $fixture = New-AutomaticMetadataFixture
+        $link = if ($LinkKind -ceq 'module') {
+            $parent = Join-Path $fixture.Root 'modules'
+            $null = New-Item -ItemType Directory -Path $parent
+            Join-Path $parent 'linked'
+        } else { Join-Path $TestDrive ([guid]::NewGuid().ToString('N')) }
+        $itemType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $target = if ($LinkKind -ceq 'ancestor') { Split-Path $fixture.Root -Parent } else { $fixture.Root }
+        $null = New-Item -ItemType $itemType -Path $link -Target $target
+        try {
+            $parameters = $fixture.Parameters.Clone()
+            if ($LinkKind -ceq 'checkout') { $parameters.RepositoryRoot = $link }
+            if ($LinkKind -ceq 'ancestor') { $parameters.RepositoryRoot = Join-Path $link (Split-Path $fixture.Root -Leaf) }
+            { & $script:initialize @parameters } | Should -Throw '*Reparse*'
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+        }
+        finally { Remove-Item -LiteralPath $link -Force }
+    }
+
     It 'creates missing metadata directly from existing rows with no approval file or registry' {
         $fixture = New-AutomaticMetadataFixture
         $parameters = $fixture.Parameters
@@ -109,10 +153,39 @@ This repository serves as a test sandbox for the Azure Verified Modules team.
         $path = Join-Path $fixture.Root 'metadata.json'
         $before = [System.IO.File]::ReadAllBytes($path)
         $fixture.Records[0].ModuleDisplayName = 'Changed index'
-        $result = & $script:initialize @parameters -UpdateSource
+        $result = & $script:initialize @parameters
         $result.Changed | Should -BeFalse
         [System.IO.File]::ReadAllBytes($path) | Should -Be $before
         Test-Path (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'rejects Terraform source updates even with existing metadata or WhatIf: <Existing>, <Preview>' -TestCases @(
+        @{ Existing = $false; Preview = $false }
+        @{ Existing = $false; Preview = $true }
+        @{ Existing = $true; Preview = $false }
+        @{ Existing = $true; Preview = $true }
+    ) {
+        param($Existing, $Preview)
+        $fixture = New-AutomaticMetadataFixture -Child
+        $parameters = $fixture.Parameters
+        if ($Existing) { $null = & $script:initialize @parameters }
+        $before = @(Get-ChildItem $fixture.Root -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" })
+        { & $script:initialize @parameters -UpdateSource -WhatIf:$Preview } |
+            Should -Throw '*Terraform -UpdateSource is not supported*'
+        @(Get-ChildItem $fixture.Root -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }) |
+            Should -Be $before
+        @(Get-ChildItem $fixture.Root -Filter 'main.metadata.tf' -Recurse) | Should -HaveCount 0
+    }
+
+    It 'preserves an existing authored Terraform reader during backfill' {
+        $fixture = New-AutomaticMetadataFixture
+        $parameters = $fixture.Parameters
+        $path = Join-Path $fixture.Root 'main.metadata.tf'
+        $source = "locals { authored = true }`n"
+        [System.IO.File]::WriteAllText($path, $source)
+        ($result = & $script:initialize @parameters).Changed | Should -BeTrue
+        $result.Modules[0].PlannedFiles | Should -Be @('metadata.json')
+        [System.IO.File]::ReadAllText($path) | Should -BeExactly $source
     }
 
     It 'reports planned files without writing them under WhatIf' {

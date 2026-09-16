@@ -126,11 +126,12 @@ reading `metadata.json`. `Initialize-AvmModuleMetadata` requires explicit values
 preserves existing files, and supports `-WhatIf`. None of these commands reads
 CSV indexes or infers backfill values.
 
-Source readers are opt-in with `Initialize-AvmModuleMetadata -UpdateSource`:
-Bicep loads only its telemetry prefix; Terraform adds JSON, canonical type,
-and optional telemetry prefix locals. Metadata-only use does not rewrite
-source. Pre-commit and PR checks warn for missing metadata during rollout but
-fail for invalid existing files.
+Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
+telemetry prefix. Terraform rejects `-UpdateSource` before writes and never
+generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
+Existing authored source files are preserved. Metadata-only initialization
+does not rewrite source. Pre-commit and PR checks warn for missing metadata
+during rollout but fail for invalid existing files.
 
 ## Local smoke test
 

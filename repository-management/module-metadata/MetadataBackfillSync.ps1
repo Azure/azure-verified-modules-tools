@@ -1,14 +1,9 @@
-. (Join-Path $PSScriptRoot 'MetadataBackfill.ps1')
+#Requires -Version 7.4
+[CmdletBinding(SupportsShouldProcess)]
+param([Parameter(Mandatory)][hashtable] $Context)
 
-function Assert-AvmMetadataBackfillTrigger {
-    if ($env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch') {
-        throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
-    }
-}
-
-function Get-AvmMetadataBackfillActor {
-    return [pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }
-}
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
 
 function ConvertFrom-AvmMetadataIndex {
     param([Parameter(Mandatory)][string] $Content)
@@ -29,7 +24,6 @@ function Get-AvmRepositoryMetadataBackfillContext {
     $moduleId = $Matches.id
     $moduleType = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$Matches.kind]
     $toolsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..'))
-    Assert-AvmMetadataBackfillCapability
     . (Join-Path $toolsRoot 'repository-management' 'module-catalog' 'scripts' 'ModuleCatalog.ps1')
     $configuration = Read-AvmCatalogConfiguration
     $index = @($configuration.outputs | Where-Object {
@@ -50,35 +44,47 @@ function Get-AvmRepositoryMetadataBackfillContext {
     return @{
         LegacyRecord = $records
         SourceSha = $source.sha
-        ScriptPath = Join-Path $PSScriptRoot 'Invoke-ModuleMetadataBackfill.ps1'
     }
 }
 
-function Get-AvmMetadataBackfillReview {
-    param([string] $orgAndRepoName, [string] $branchName)
-
-    $reviews = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
-            'pr', 'list', "--repo=$orgAndRepoName", '--state=open', "--head=$branchName", '--json=number,url'
-        ))
-    if ($reviews.Count -gt 0) {
-        return @{ Exists = $true; Reason = "An open metadata backfill review already exists: $($reviews[0].url)" }
-    }
-    $head = Get-RepositoryBranchHead -Repository $orgAndRepoName -Branch $branchName
-    if ($head) {
-        return @{ Exists = $true; Reason = "Backfill branch '$branchName' already exists; it will not be overwritten." }
-    }
-    return @{ Exists = $false; Reason = '' }
+if ($env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch') {
+    throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
 }
-
-function Invoke-AvmMetadataBackfillPreparation {
-    param([Parameter(Mandatory)][hashtable] $Context)
-
-    $backfill = $Context.State.BackfillContext
-    $result = & $backfill.ScriptPath -RepositoryRoot $Context.Root `
-        -Repository $Context.Repository.full_name -Ecosystem terraform -LegacyRecord $backfill.LegacyRecord `
-        -UpdateSource:$Context.State.UpdateSource -Confirm:$false
-    if ($result.Status -cne 'pass') {
-        throw [System.InvalidOperationException]::new("Metadata file creation returned '$($result.Status)'.")
+if (-not $PSCmdlet.ShouldProcess($Context.Root, 'Create missing metadata in the temporary repository checkout')) {
+    return
+}
+$backfill = Get-AvmRepositoryMetadataBackfillContext -orgAndRepoName $Context.Repository.full_name
+Write-Host "$($Context.Repository.full_name) - preparing metadata from index commit $($backfill.SourceSha)."
+$temporary = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-metadata-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $temporary
+try {
+    $inputPath = Join-Path $temporary 'input.json'
+    $outputPath = Join-Path $temporary 'result.json'
+    $inputData = @{
+        RepositoryRoot = $Context.Root
+        Repository = $Context.Repository.full_name
+        LegacyRecord = $backfill.LegacyRecord
+    }
+    [System.IO.File]::WriteAllText($inputPath, (ConvertTo-Json -InputObject $inputData -Depth 64), [System.Text.UTF8Encoding]::new($false))
+    $executable = Join-Path $PSHOME $(if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' })
+    $worker = Join-Path $PSScriptRoot 'Invoke-ModuleMetadataBackfillWorker.ps1'
+    $process = Invoke-RepositorySyncProcess -Command $executable -Arguments @(
+        '-NoProfile', '-NonInteractive', '-File', $worker, '-InputPath', $inputPath, '-OutputPath', $outputPath
+    ) -WorkingDirectory $Context.Root -EnvVars @{ AVM_OFFLINE = '1'; GH_TOKEN = $null }
+    if (-not [string]::IsNullOrWhiteSpace($process.StdOut)) {
+        Write-Information -MessageData $process.StdOut -InformationAction Continue
+    }
+    if ($process.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new("Metadata preparation failed (exit $($process.ExitCode)): $($process.StdErr)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($process.StdErr)) { Write-Warning $process.StdErr }
+    $result = Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json -AsHashtable -Depth 64
+    if ($result -isnot [System.Collections.IDictionary] -or $result['Status'] -cne 'pass') {
+        throw [System.InvalidOperationException]::new('Metadata preparation did not return one successful result.')
     }
     return $result
+}
+finally {
+    try { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction Stop }
+    catch { Write-Warning "Failed to clean up metadata preparation files at $temporary : $($_.Exception.Message)" }
 }

@@ -5,8 +5,9 @@ function Initialize-AvmModuleMetadata {
     .DESCRIPTION
         Validates the metadata values before writing UTF-8/LF metadata.json.
         Existing metadata is validated and preserved instead of regenerated.
-        Optional source wiring adds native JSON readers without changing the
-        telemetry transport. WhatIf performs validation and returns the plan.
+        Optional Bicep source wiring loads the telemetry prefix without changing
+        its transport. Terraform source wiring is not supported.
+        WhatIf performs validation and returns the plan.
     .PARAMETER Path
         Existing module directory to initialize.
     .PARAMETER InputObject
@@ -18,8 +19,8 @@ function Initialize-AvmModuleMetadata {
     .PARAMETER ChildModule
         Initialize the reduced child shape, inheriting root ownership.
     .PARAMETER UpdateSource
-        Wire Bicep's scoped telemetry prefix load, or Terraform's native JSON
-        locals in main.metadata.tf. Existing conflicting readers are not replaced.
+        Wire Bicep's scoped telemetry prefix load. Existing conflicting readers
+        are not replaced. Terraform rejects this switch before any writes.
     .PARAMETER SkipModuleVersionCheck
         Skip the standard installed-module version check for offline initialization.
     .EXAMPLE
@@ -53,6 +54,9 @@ function Initialize-AvmModuleMetadata {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    if ($UpdateSource -and $Ecosystem -eq 'terraform') {
+        throw [AvmNotSupportedException]::new('Terraform -UpdateSource is not supported. Omit -UpdateSource; Terraform telemetry changes belong in a later MaPoTF update.')
+    }
     $sentinel = Test-AvmDisableSentinel -Path $Path
     if ($sentinel) {
         throw [AvmConfigurationException]::new("avm is disabled in this repository (remove '$sentinel' to re-enable).")
@@ -90,8 +94,7 @@ function Initialize-AvmModuleMetadata {
         $plans.Add([pscustomobject]@{ Path = $metadataPath; Content = $content; Original = $null })
     }
     if ($UpdateSource) {
-        foreach ($plan in @(Get-AvmMetadataSourcePlan -Path $root -Metadata $validation.Metadata `
-                    -Ecosystem $Ecosystem -ChildModule:$ChildModule)) {
+        foreach ($plan in @(Get-AvmMetadataSourcePlan -Path $root -Metadata $validation.Metadata)) {
             $plans.Add($plan)
         }
     }

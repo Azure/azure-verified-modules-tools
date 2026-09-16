@@ -1,16 +1,19 @@
 # Module metadata rollout
 
-**Status: review findings resolved; current hosted checks and operator approval
-are required before rollout. No rollout operations have been performed.**
-Recheck each change immediately before merging.
+**Status: core tools and Bicep metadata changes are merged. The full-standard
+Terraform backfill follow-up requires review and fresh hosted checks.
+Production runs still require explicit operator approval.**
 This document is a plan, not approval to run production commands.
 
 ## What is being deployed
 
-- Bicep receives 572 `metadata.json` files directly through its repository change.
-  The Bicep Sync workflow does not create them.
-- Terraform creates missing files through its existing sync workflow. Existing
-  metadata is never overwritten, and no intermediate approval file is required.
+- Bicep's 572 `metadata.json` files were added directly through its merged
+  repository change. The Bicep Sync workflow does not create them.
+- Terraform's manual, default-off `metadata_backfill` input creates missing
+  files before normal pre-commit. This is full repository sync, including
+  managed files, formatting, CODEOWNERS, repository/Azure management and normal
+  publication/merge on apply. Existing metadata is never overwritten, and no
+  intermediate approval file is required.
 - The catalog workflow reads module metadata and registry information, then
   proposes updated CSV/JSON indexes for review. It does not change tier lists
   or repository configuration.
@@ -18,9 +21,10 @@ This document is a plan, not approval to run production commands.
   and require an explicit override.
   CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
   remain unchanged. The new JSON catalog keeps `v1/modules.json`.
-- Engineering owners or module owners must review metadata changes; either
-  team's approval satisfies the code-owner requirement. The existing AVM App bypass
-  is retained; this plan does not grant a new bypass or permission.
+- Either engineering owners or module owners can satisfy metadata code-owner
+  review. Backfill apply uses the already-authorized standard AVM App merge
+  process, not a separate human-review-only lane. No new bypass or permission
+  is granted; operator approval must cover the full sync scope.
 - Avm.Authoring's metadata commands are permanent authoring tools, with no CSV
   input dependency. Both `pre-commit` and `pr-check` validate local metadata.
   Missing files warn during rollout; invalid existing files fail.
@@ -34,16 +38,17 @@ This document is a plan, not approval to run production commands.
 | --- | --- | --- | --- |
 | Prerequisite | [#119: Terraform CODEOWNERS generation](https://github.com/Azure/azure-verified-modules-tools/pull/119) | Merged | Supplies the generator used by the ownership-policy change. |
 | Prerequisite | [Azure/bicep-registry-modules#7343](https://github.com/Azure/bicep-registry-modules/pull/7343) | Merged | Required by the existing Bicep CODEOWNERS merge check. |
-| Safety gate | [Disable Bicep Sync](../.github/workflows/repository-management-bicep-sync.yml) with operator approval | Required before the tools change merges | The combined tools change contains the new ownership rule. Keep the workflow disabled until the Bicep governance change is merged too. |
 | 1 | [Azure/Azure-Verified-Modules#2929: pipeline template](https://github.com/Azure/Azure-Verified-Modules/pull/2929) | Merged; current main retains the exclusion | Makes future generated Bicep pipelines exclude metadata-only publishing. |
-| 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Consolidated tools change | Includes schemas and ownership generators; [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) is closed as superseded. Bicep Sync must already be disabled. Require fresh full hosted checks before merging. |
-| 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Open; merge blocked pending completion of requirements | Adds metadata, the two-team ownership rule, compatible governance tests, and existing pipeline exclusions together. |
+| 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Merged | Includes schemas and ownership generators; [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) is closed as superseded. |
+| 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Merged | Adds metadata, the two-team ownership rule, compatible governance tests, and existing pipeline exclusions together. |
+| 4 | [#125: checkout module import fix](https://github.com/Azure/azure-verified-modules-tools/pull/125) | Merged | Fixed the former metadata-only flow's import dependency. |
+| Next | [Full-standard Terraform backfill](progress/2026-09-16-standard-metadata-backfill.md) | Pending review | Replaces the metadata-only flow with full normal sync and standard merge; removes Terraform source-reader generation. |
 | After data adoption and CSV cutover | [Azure/Azure-Verified-Modules#2936: metadata maintenance processes](https://github.com/Azure/Azure-Verified-Modules/pull/2936) | Draft | Updates ownership, orphaning, adoption, and generated-index processes once the new sources and review protections are in use. |
 
-**Do not run the new Bicep generator before the Bicep repository change.** The
-old governance tests reject the new final metadata rule and would fail across
-all modules. Conversely, the old tools generator rejects the new target
-CODEOWNERS. The mandatory pause covers both incompatible combinations.
+The initial tools/Bicep compatibility window is complete because both changes
+are merged. Do not infer current workflow enablement from that fact: verify
+live state before an approved run. This Terraform follow-up does not require
+another Bicep metadata merge.
 
 Do not treat a successful CodeQL or CLA check as a completed build. Every required
 check must have run successfully against the exact head being merged, with
@@ -52,16 +57,14 @@ address confirmed Opus findings first.
 If an earlier merge causes conflicts in a later change, keep automation paused,
 resolve the later branch, and obtain fresh checks before continuing.
 
-## Before merging
+## Before a Terraform rollout
 
 Obtain operator approval for the merge/run window and for any pause or enable
 operation below. Record the current workflow states and relevant variable values
 so they can be restored deliberately.
 
-- Disable `repository-management-bicep-sync.yml` in the tools repository before
-  the tools change merges, even if its old enable variable appears absent.
-  Verify the workflow is disabled and keep it disabled until both the Bicep
-  governance tests and the tools generator accept the same ownership rules.
+- Confirm the merged Bicep governance tests and tools generator still accept
+  the same ownership rules before authorizing Bicep Sync to resume, if paused.
 - Disable Terraform Sync for the merge window if its automatic writes must
   pause. There is no pause variable; disabling also prevents manual dispatch.
   Re-enabling requires approval covering automatic applies as well as trials.
@@ -88,20 +91,23 @@ GitHub's workflow disable control rather than restoring that variable.
 The separate BAMI activation gate, `AVM_BAMI_TEST_TENANT_SYNC_ENABLED`, is
 retained. It controls test-tenant/identity propagation, not metadata backfill or
 catalog publication. Bicep variable propagation additionally requires the
-manual `enable_test_tenant_sync` input. Metadata-only Terraform backfill skips
-both legacy/BAMI tenant parsing and identity/state operations, even for a
-BAMI-selected repository.
+manual `enable_test_tenant_sync` input. Terraform backfill includes normal tenant
+parsing and identity/state operations. A BAMI-selected repository with a disabled gate or pending identity
+validation stops before file preparation, including metadata creation.
 
 Ordinary installed authoring commands receive the new metadata checks through
 a separately approved Avm.Authoring release. Merging tools does not update
 users' installed module. Migration and repository creation load the trusted
-tools checkout directly, so they do not require that release first.
+tools checkout for metadata creation, so those APIs do not require that release
+first. Full Terraform sync still installs and uses the normal released authoring
+module. The temporary metadata worker imports checkout code in a separate
+PowerShell process without replacing caller commands or changing `PSModulePath`.
 
 ## Bicep file adoption and CODEOWNERS
 
-Follow the merge order above: combined tools schemas/generators first, then the
-Bicep files, compatible governance tests and ownership rule.
-Keep Bicep Sync disabled throughout.
+The Bicep files, compatible governance tests, ownership rule and tools generator
+are already merged. Verify their current state rather than attempting to merge
+the old branches again.
 
 Confirm that all 572 intended files are present, including complete owner lists.
 Keep empty owners genuinely empty. Nondeprecated unowned modules are Orphaned;
@@ -113,9 +119,9 @@ Metadata-only edits must not select module releases. Mixed source/version edits
 must still follow the normal release rules. Preserve the known budget and
 Resource Graph telemetry values; correcting those belongs to a normal release.
 
-After all listed changes are merged and the tools template, target CODEOWNERS,
-and Bicep governance tests agree, obtain explicit approval to re-enable Bicep
-Sync. That approval must include scheduled applies, not just the next dry run.
+If Bicep Sync is paused and the tools template, target CODEOWNERS and Bicep
+governance tests agree, obtain explicit approval to re-enable it. That approval
+must include scheduled applies, not just the next dry run.
 Then run its strict dry run:
 
 ```powershell
@@ -145,26 +151,20 @@ $module = 'avm-ptn-example-repo'
 $ref = 'main'
 ```
 
-Before the implementation is merged, `$ref` can be the metadata feature branch
-for the metadata-only trial, provided the protected environment allows it. The
-metadata mode loads that checkout rather than relying on a Gallery release.
+Before the follow-up is merged, `$ref` can be its approved feature branch if the
+protected environment allows it. This still runs the full normal sync with
+installed authoring; only the metadata worker loads the selected checkout.
 
-### Establish the review rule
+The existing metadata-only
+[Azure/terraform-azurerm-avm-ptn-example-repo#298](https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo/pull/298)
+and its branch are not adopted, overwritten, merged or deleted by this follow-up.
+Review that outstanding work before authorizing another production run; resolve
+it through the normal operator-approved process, not automatic cleanup.
 
-After the ownership-policy change is merged, check the example repository's
-current CODEOWNERS. If it has not adopted the two-team rule, run an
-ordinary sync plan first:
+### Check the review rule in the full sync plan
 
-```powershell
-gh workflow run repository-management-sync.yml --repo $tools --ref main `
-    -f repositories=$module -f plan_only=true -f sync_project_items=false
-```
-
-Ordinary sync includes GitHub/Azure management planning. Inspect all proposed
-changes. Only after approval, repeat with `plan_only=false` to adopt the
-ownership rule. Do not treat this ordinary apply as metadata-only work.
-
-Confirm the final matching rule is:
+Normal sync prepares CODEOWNERS in the same file change as metadata. Confirm
+the final matching rule is:
 
 ```text
 metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners
@@ -179,39 +179,49 @@ both teams' write access, and the unchanged branch approval requirements.
 ```powershell
 gh workflow run repository-management-sync.yml --repo $tools --ref $ref `
     -f repositories=$module -f metadata_backfill=true -f plan_only=true `
-    -f metadata_update_source=false -f sync_project_items=false
+    -f sync_project_items=true
 ```
 
 **Proceed only if:** the intended repository is selected; the run uses the
-selected checkout's metadata code; changes are missing `metadata.json` files
-only; existing files are unchanged; and Azure state/settings, ordinary
-formatting/managed files, and project updates are skipped.
+selected checkout's metadata code; metadata creation adds only missing
+`metadata.json` files; and existing metadata and authored Terraform readers
+are unchanged. Inspect all normal managed-file, formatting, CODEOWNERS,
+repository/Azure and project plans too. No `main.metadata.tf` is generated.
+Plan-only does not publish a branch or merge a file change.
 
-### Create the reviewable change
+### Apply through standard sync and merge
 
 After inspecting the dry run and receiving approval:
 
 ```powershell
 gh workflow run repository-management-sync.yml --repo $tools --ref $ref `
     -f repositories=$module -f metadata_backfill=true -f plan_only=false `
-    -f metadata_update_source=false -f sync_project_items=false
+    -f sync_project_items=true
 ```
 
-This opens a file change; it does not automatically merge it. Inspect names,
-descriptions, canonical types, flat owner handles, and telemetry identifiers.
-Require normal review/approval or the already-authorized App process; do not
-self-approve or introduce new bypasses.
+**This is an apply, not a request to open a review-only change.** It performs
+normal repository/Azure management, runs pre-commit and CODEOWNERS preparation,
+then uses the standard timestamped branch, commit/title/body and `[skip ci]`
+publication followed by the existing authorized App squash merge with exact-head
+matching. Merge behavior and failure handling are unchanged; no extra bypass
+or failed-check override is introduced.
+
+Review names, descriptions, canonical types, flat owner handles and telemetry
+identifiers in the plan before approving apply. Metadata/script failure stops
+file publication, but cannot roll back management steps already applied earlier.
+Normal project synchronization still follows its existing input and conditions.
+Terraform `-UpdateSource` is unsupported; future telemetry wiring belongs in
+MaPoTF and is not part of this rollout.
 
 After the change is merged, repeat the dry run. It should produce no metadata
-changes. If the completed backfill branch still exists, the tool deliberately
-defers it: inspect and remove that specific completed branch through normal
-approved controls before retrying. Never force-update someone else's work.
+changes, although ordinary sync may find other drift. There is no special stable
+backfill branch or review-deferral path. Never force-update someone else's work.
 
 ## Expand Terraform in small groups
 
 After the example passes, select a small explicit comma-separated repository
-list. Adopt and verify the two-team CODEOWNERS rule on every target
-before creating metadata. Use the same plan-then-apply sequence, with source updates disabled.
+list. Verify the two-team CODEOWNERS rule on every target and review all normal
+sync changes. Use the same full plan-then-apply sequence.
 Include a resource module, a pattern module, and a repository with children.
 Inspect every failed module rather than widening the run immediately.
 
@@ -336,7 +346,9 @@ metadata, truncated collection, unexplained row loss, owner omissions,
 unexpected repository-setting changes, or a release selected by metadata-only changes.
 
 Pause the relevant automation first. Keep run links, logs, artifacts, and commit
-IDs. Correct data/tooling and generate again from fresh inputs. If an applied
+IDs. A metadata preparation failure does not undo earlier normal repository/Azure
+management; inspect those results before retrying. Correct data/tooling and
+generate again from fresh inputs. If an applied
 change must be reverted, revert only its reviewed commits; do not bulk-delete
 metadata or restore an old CSV over newer module-owned data.
 
