@@ -168,9 +168,9 @@ function Invoke-AvmPreCommitForRepository {
     }
 
     try {
-        Import-Module Avm.Authoring -ErrorAction Stop
         $codeowners = $null
         if (-not $metadataBackfill) {
+            Import-Module Avm.Authoring -ErrorAction Stop
             $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
             $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
                 -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
