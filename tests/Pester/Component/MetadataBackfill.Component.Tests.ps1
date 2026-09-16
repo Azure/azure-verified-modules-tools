@@ -49,6 +49,50 @@ BeforeAll {
 }
 
 Describe 'Component: automatic metadata file creation' -Tag Component {
+    It 'accepts the verified macOS system temporary alias and returns its physical checkout path' -Skip:(-not $IsMacOS) {
+        $systemRoot = [System.IO.Path]::GetPathRoot($TestDrive)
+        $alias = Join-Path $systemRoot 'tmp'
+        $name = 'avm-metadata-alias-' + [guid]::NewGuid().ToString('N')
+        $path = Join-Path $alias $name
+        $expected = Join-Path $systemRoot 'private' 'tmp' $name
+        $previousTemporary = $env:TMPDIR
+        try {
+            $env:TMPDIR = $alias
+            $null = New-Item -ItemType Directory -Path $path
+            Resolve-AvmMetadataBackfillRoot -Path $path | Should -BeExactly $expected
+            Test-Path -LiteralPath $expected -PathType Container | Should -BeTrue
+        }
+        finally {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+            [Environment]::SetEnvironmentVariable('TMPDIR', $previousTemporary)
+        }
+    }
+
+    It 'rejects caller-controlled <LinkKind> links without creating metadata' -TestCases @(
+        @{ LinkKind = 'checkout' }
+        @{ LinkKind = 'ancestor' }
+        @{ LinkKind = 'module' }
+    ) {
+        param($LinkKind)
+        $fixture = New-AutomaticMetadataFixture
+        $link = if ($LinkKind -ceq 'module') {
+            $parent = Join-Path $fixture.Root 'modules'
+            $null = New-Item -ItemType Directory -Path $parent
+            Join-Path $parent 'linked'
+        } else { Join-Path $TestDrive ([guid]::NewGuid().ToString('N')) }
+        $itemType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $target = if ($LinkKind -ceq 'ancestor') { Split-Path $fixture.Root -Parent } else { $fixture.Root }
+        $null = New-Item -ItemType $itemType -Path $link -Target $target
+        try {
+            $parameters = $fixture.Parameters.Clone()
+            if ($LinkKind -ceq 'checkout') { $parameters.RepositoryRoot = $link }
+            if ($LinkKind -ceq 'ancestor') { $parameters.RepositoryRoot = Join-Path $link (Split-Path $fixture.Root -Leaf) }
+            { & $script:initialize @parameters } | Should -Throw '*Reparse*'
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+        }
+        finally { Remove-Item -LiteralPath $link -Force }
+    }
+
     It 'creates missing metadata directly from existing rows with no approval file or registry' {
         $fixture = New-AutomaticMetadataFixture
         $parameters = $fixture.Parameters

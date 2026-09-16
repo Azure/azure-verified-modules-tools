@@ -153,6 +153,25 @@ function Resolve-AvmMetadataBackfillRoot {
     $ancestor = $item
     while ($null -ne $ancestor) {
         if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            if ($IsMacOS) {
+                $separator = [System.IO.Path]::DirectorySeparatorChar
+                $temporary = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd($separator) + $separator
+                if ($item.FullName.StartsWith($temporary, [System.StringComparison]::Ordinal)) {
+                    $systemRoot = [System.IO.Path]::GetPathRoot($temporary)
+                    foreach ($name in @('var', 'tmp')) {
+                        if ($ancestor.FullName -ceq (Join-Path $systemRoot $name)) {
+                            # Accept only the direct system alias, not a chain through another link.
+                            $expected = Join-Path $systemRoot 'private' $name
+                            if ($ancestor.LinkTarget -cnotin @((Join-Path 'private' $name), $expected)) { break }
+                            $target = $ancestor.ResolveLinkTarget($false)
+                            if ($null -ne $target -and $target.FullName -ceq $expected) {
+                                $relative = [System.IO.Path]::GetRelativePath($ancestor.FullName, $item.FullName)
+                                return Resolve-AvmMetadataBackfillRoot -Path (Join-Path $target.FullName $relative)
+                            }
+                        }
+                    }
+                }
+            }
             throw [System.ArgumentException]::new("Reparse points are not supported in the checkout path: $($ancestor.FullName)")
         }
         $ancestor = $ancestor.Parent

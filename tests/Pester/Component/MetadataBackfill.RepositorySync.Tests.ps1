@@ -396,6 +396,11 @@ Describe 'Component: metadata backfill worker isolation and errors' -Tag Compone
 
     It 'surfaces <Failure> and warnings without writing a success result' -TestCases @(
         @{ Failure = 'terminating errors'; Code = "throw 'worker terminating failure'"; Expected = '*worker terminating failure*' }
+        @{
+            Failure = 'long unwrapped diagnostics'
+            Code = "throw '$('prefix ' * 30)No files were written. Original validation details stay intact.'"
+            Expected = "*$('prefix ' * 30)No files were written. Original validation details stay intact.*"
+        }
         @{ Failure = 'nonterminating errors'; Code = "Write-Error 'worker nonterminating failure' -ErrorAction Continue; [pscustomobject]@{ Status = 'pass' }"; Expected = '*worker nonterminating failure*' }
         @{ Failure = 'missing results'; Code = ''; Expected = '*successful result*' }
         @{ Failure = 'unsuccessful results'; Code = "[pscustomobject]@{ Status = 'planned' }"; Expected = '*successful result*' }

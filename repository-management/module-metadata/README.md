@@ -69,8 +69,10 @@ Import-Module .\src\Avm.Authoring\Avm.Authoring.psd1 -Force
 ```
 
 The code checks every discovered module before writing files. A disabled module,
-missing required data, invalid metadata, path traversal, or linked path stops
-the operation. Removing `-WhatIf` writes only missing files.
+missing required data, invalid metadata, path traversal, or caller-controlled
+linked path stops the operation. Only the genuine macOS system temporary aliases
+are verified and resolved; the resulting physical path is validated again.
+Removing `-WhatIf` writes only missing files.
 This local script creates files only; repository publication and management
 belong to the normal sync workflow above.
 
