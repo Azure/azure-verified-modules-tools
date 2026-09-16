@@ -8,10 +8,11 @@ BeforeAll {
         '# This file is managed by azure-verified-modules-tools. Do not edit manually.'
         '# Template: https://github.com/Azure/azure-verified-modules-tools/blob/main/repository-management/repository-sync/CODEOWNERS.template'
     ) -join "`n"
+    $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
 }
 
 Describe 'Terraform CODEOWNERS rendering' {
-    It 'renders only the configured rules for <Scenario>' -ForEach @(
+    It 'renders configured rules before mandatory metadata protection for <Scenario>' -ForEach @(
         @{ Scenario = 'default and protection teams'; DefaultTeams = @('module-owners'); ProtectionTeams = @('engineering-owners'); Rules = @('* @Azure/module-owners', '.github/CODEOWNERS @Azure/engineering-owners') }
         @{ Scenario = 'protection teams only'; DefaultTeams = @(); ProtectionTeams = @('engineering-owners'); Rules = @('.github/CODEOWNERS @Azure/engineering-owners') }
         @{ Scenario = 'default teams only'; DefaultTeams = @('module-owners'); ProtectionTeams = @(); Rules = @('* @Azure/module-owners') }
@@ -20,17 +21,16 @@ Describe 'Terraform CODEOWNERS rendering' {
     ) {
         $content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams $DefaultTeams `
             -FileProtectionTeams $ProtectionTeams -Template $script:template
-        $expected = $script:header
-        if ($Rules.Count -gt 0) { $expected += "`n`n" + ($Rules -join "`n") }
-        $content | Should -BeExactly ($expected + "`n")
+        $expected = $script:header + "`n`n" + ($Rules -join "`n") + "`n`n$script:metadataRule`n"
+        $content | Should -BeExactly $expected
         $content | Should -Not -Match '__AVM_CODEOWNERS_RULES__'
         $content | Should -Not -Match ('avm-terraform-' + 'governance')
     }
 
-    It 'qualifies configured teams with the target organization rather than Azure' {
+    It 'qualifies configured teams with the target organization while retaining fixed metadata ownership' {
         $content = ConvertTo-TerraformCodeowners -Organization Contoso -DefaultTeams @('module-reviewers') `
             -FileProtectionTeams @('security-reviewers') -Template $script:template
-        $content | Should -BeExactly ($script:header + "`n`n* @Contoso/module-reviewers`n.github/CODEOWNERS @Contoso/security-reviewers`n")
+        $content | Should -BeExactly ($script:header + "`n`n* @Contoso/module-reviewers`n.github/CODEOWNERS @Contoso/security-reviewers`n`n$script:metadataRule`n")
     }
 
     It 'rejects invalid team slugs in <Setting>' -ForEach @(
@@ -108,6 +108,8 @@ Describe 'Repository-specific Terraform ownership configuration' {
 * @Contoso/global-reviewers @Contoso/product-reviewers @Contoso/module-reviewers
 .github/CODEOWNERS @Contoso/engineering-owners @Contoso/product-admins @Contoso/module-admins
 
+$script:metadataRule
+
 "@)
     }
 
@@ -121,6 +123,7 @@ Describe 'Repository-specific Terraform ownership configuration' {
         $content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams $settings.CodeOwnersDefaultTeams `
             -FileProtectionTeams $settings.CodeOwnersFileProtectionTeams -Template $script:template
         $content | Should -Match '(?m)^\.github/CODEOWNERS @Azure/azure-verified-modules-engineering-owners$'
+        $content.TrimEnd("`n").Split("`n")[-1] | Should -BeExactly $script:metadataRule
         ($content -cmatch '(?m)^\* @Azure/azure-verified-modules-engineering-owners$') | Should -Be $RequireDefault
     }
 

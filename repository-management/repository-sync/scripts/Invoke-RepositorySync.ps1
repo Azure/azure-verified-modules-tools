@@ -31,11 +31,20 @@ param(
         "azurecla-write"
     ),
     [switch]$forceFileUpdate,
+    [switch]$metadataBackfill,
+    [switch]$metadataUpdateSource,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @(),
     [bool]$bamiTestTenantSyncEnabled = $false,
     [hashtable]$bamiSettings = @{}
 )
+
+if ($metadataUpdateSource -and -not $metadataBackfill) {
+    throw [System.ArgumentException]::new('metadataUpdateSource requires explicit metadataBackfill opt-in.')
+}
+if ($metadataBackfill -and $env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+    throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
+}
 
 Write-Host "Running repo sync script"
 
@@ -54,6 +63,32 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "TeamsAndUsers.ps1")
 . (Join-Path $libDir "TerraformOperations.ps1")
 . (Join-Path $libDir "TestTenant.ps1")
+
+if ($metadataBackfill) {
+    if ($repositoryCreationModeEnabled) {
+        throw [System.ArgumentException]::new('One-off metadata backfill only supports existing module repositories.')
+    }
+    $uri = [uri]$repoUrl
+    if ($uri.Scheme -cne 'https' -or $uri.Host -cne 'github.com') {
+        throw [System.ArgumentException]::new('Metadata creation requires an HTTPS GitHub repository URL.')
+    }
+    $backfillRepo = $uri.AbsolutePath.Trim('/')
+    $tree = Get-RepositoryDefaultBranchTree -orgAndRepoName $backfillRepo
+    if (-not $tree.Success) {
+        throw [System.InvalidOperationException]::new('Cannot resolve the target repository for metadata creation.')
+    }
+    return Invoke-AvmPreCommitForRepository `
+        -orgAndRepoName $backfillRepo `
+        -repoId $repoId `
+        -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
+        -codeOwnersDefaultTeams @() `
+        -codeOwnersFileProtectionTeams @() `
+        -defaultBranch $tree.DefaultBranch `
+        -planOnly $planOnly `
+        -metadataBackfill $true `
+        -metadataUpdateSource $metadataUpdateSource.IsPresent `
+        -issueLog @()
+}
 
 if (!$repositoryCreationModeEnabled) {
     $null = Resolve-RepositorySyncStateIdentity `
@@ -274,6 +309,8 @@ if(!$repositoryCreationModeEnabled) {
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
+            -metadataBackfill $metadataBackfill.IsPresent `
+            -metadataUpdateSource $metadataUpdateSource.IsPresent `
             -issueLog $issueLog
         $issueLog = $preCommitResult.IssueLog
     }

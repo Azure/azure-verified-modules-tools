@@ -1,9 +1,19 @@
 # Repository management
 
 This area owns the managed files, scheduled repository synchronization, and
-operator-driven repository creation used by AVM Terraform repositories.
+operator-driven repository creation used by AVM Terraform repositories, plus
+shared Bicep/Terraform metadata tooling.
 
-Repository sync and repository creation are intentionally independent.
+[Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
+indexes and source CSV row-removal protection. [Metadata file creation](module-metadata/README.md)
+uses existing indexes and source without intermediate approval files.
+Terraform supports this operation in its sync; Bicep files are added directly
+to the module repository.
+
+Repository sync and [repository creation](repository-creation/README.md) are
+intentionally independent. New repositories initialize their own metadata from
+explicit creation inputs before publishing module files. The existing tooling
+inventory PR update remains a separate compatibility step.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.
@@ -132,10 +142,24 @@ means verified variable contents, not working Azure authentication.
 Repository sync renders [CODEOWNERS.template](repository-sync/CODEOWNERS.template)
 from [repository configuration](repository-config/config.json). Matching groups,
 including the wildcard `default` group, contribute `codeOwnersTeams` for the
-default `*` rule and `codeOwnersFileProtectionTeams` for the final
+default `*` rule and `codeOwnersFileProtectionTeams` for the subsequent
 `.github/CODEOWNERS` rule. Teams are deduplicated and qualified with the target
 organization; a group targeting one repository can supply its specific owners.
-An empty team list omits that rule.
+An empty team list omits that configured rule.
+
+The final rule is always
+`metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`, including when
+configured team lists are empty. The unrooted basename covers root and child
+metadata files; other files retain their configured owners. The teams are
+alternatives: approval from either team satisfies code-owner review, not both.
+
+Review enforcement also requires the existing active ruleset's
+`require_code_owner_review = true` and visible teams with repository write
+access. Default Terraform configuration grants both teams `push` without
+adding environment approvals; the existing CODEOWNERS-file rule remains
+engineering-only. Initial backfill uses only the existing AVM App's authorized
+pull-request bypass. Neither the template nor its generation grants or broadens
+that bypass; authorized operators must verify these prerequisites before rollout.
 
 The generated file replaces stale content or creates a missing file after
 `avm pre-commit` succeeds, in the same temporary checkout and publication flow.

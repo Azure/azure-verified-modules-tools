@@ -199,7 +199,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.0.0)'
     }
 
-    It 'pre-commit composes the five-step terraform chain end-to-end (sync first) via launcher-resolved stubs and the in-module check-convention rules' {
+    It 'pre-commit composes the six-step terraform chain end-to-end (sync first) via launcher-resolved stubs and built-in checks' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -207,12 +207,17 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 5
-        $expected = @('sync', 'check convention', 'transform', 'format', 'docs')
+        $steps.Count | Should -Be 6
+        $expected = @('sync', 'check convention', 'transform', 'format', 'docs', 'metadata')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
+        $byName['metadata'].Status | Should -Be 'pass'
+        $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
+        $byName['metadata'].Result.Issues.Code | Should -Contain 'AVM_METADATA_MISSING'
+        @($byName['metadata'].Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeFalse
 
         # sync runs FIRST against an empty local managed-files source
         # (AVM_MANAGED_FILES_LOCAL_PATH -> TestDrive/managed-files-src with an
@@ -294,7 +299,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
     }
 
-    It 'pr-check composes eight steps (sync drift-check first) with the transform engine running a mapotf drift-check' {
+    It 'pr-check composes nine steps (sync drift-check first) with a metadata check after the drift checks' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -302,12 +307,17 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 8
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $steps.Count | Should -Be 9
+        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs', 'metadata')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
+        $byName['metadata'].Status | Should -Be 'pass'
+        $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
+        $byName['metadata'].Result.Issues.Code | Should -Contain 'AVM_METADATA_MISSING'
+        @($byName['metadata'].Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeFalse
 
         # sync runs FIRST under -CheckDrift (drift-check mode) against the empty
         # local managed-files source (AVM_MANAGED_FILES_LOCAL_PATH -> an empty

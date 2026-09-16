@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "repositories": {
+    "docs": "Azure/Azure-Verified-Modules",
+    "bicep": "Azure/bicep-registry-modules",
+    "tools": "Azure/azure-verified-modules-tools"
+  },
+  "destinations": {
+    "docs": { "repository": "docs", "path": "docs/static/module-indexes" }
+  },
+  "outputs": [
+    { "kind": "csv", "sourceFile": "BicepResourceModules.csv", "file": "test-BicepResourceModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "resource" },
+    { "kind": "csv", "sourceFile": "BicepPatternModules.csv", "file": "test-BicepPatternModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "pattern" },
+    { "kind": "csv", "sourceFile": "BicepUtilityModules.csv", "file": "test-BicepUtilityModules.csv", "destination": "docs", "ecosystem": "bicep", "moduleType": "utility" },
+    { "kind": "csv", "sourceFile": "TerraformResourceModules.csv", "file": "test-TerraformResourceModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "resource" },
+    { "kind": "csv", "sourceFile": "TerraformPatternModules.csv", "file": "test-TerraformPatternModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "pattern" },
+    { "kind": "csv", "sourceFile": "TerraformUtilityModules.csv", "file": "test-TerraformUtilityModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "utility" },
+    { "kind": "mar", "file": "BicepMARModules.json", "destination": "docs" },
+    {
+      "kind": "catalog",
+      "file": "v1/modules.json",
+      "destination": "docs",
+      "schema": "src/Avm.Authoring/Resources/Schemas/v1/avm-modules-catalog.schema.json"
+    },
+    { "kind": "migration-report", "file": "v1/migration-report.json", "destination": "docs" },
+    { "kind": "publication-plan", "file": "plan.json", "destination": null }
+  ]
+}

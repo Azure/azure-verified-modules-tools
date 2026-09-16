@@ -14,7 +14,7 @@ $sharedLib = Join-Path $repositoryRoot 'repository-management' 'repository-sync'
 . (Join-Path $PSScriptRoot 'lib' 'CodeownersSync.ps1')
 
 $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'CODEOWNERS.template') -Raw
-$action = if ($PlanOnly) { 'Open or update the CODEOWNERS plan pull request without merging' } else { 'Synchronize and app-bypass merge only .github/CODEOWNERS' }
+$action = if ($PlanOnly) { 'Inspect CODEOWNERS changes without remote writes' } else { 'Synchronize and app-bypass merge only .github/CODEOWNERS' }
 if ($PSCmdlet.ShouldProcess('Azure/bicep-registry-modules', $action)) {
     $result = Invoke-AvmBicepCodeownersSync -Template $template -PlanOnly:$PlanOnly
     $result | ConvertTo-Json -Depth 5

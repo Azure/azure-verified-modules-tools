@@ -75,14 +75,15 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Should -Invoke Invoke-RepositoryFileSync -Exactly 2
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/terraform-test' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and -not $OpenPlanPullRequest -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
+            $PlanOnly -and -not $ReviewOnly -and -not $KeepBranch -and -not $StableBranch -and -not $VerifyCandidate -and
             $null -ne $Prepare -and $State.RepoId -ceq 'avm-res-test' -and $State.RepositoryConfigDir -ceq 'configuration' -and
             $State.CodeownersContent -cmatch '(?m)^\* @Azure/module-reviewers$' -and
-            $State.CodeownersContent -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$'
+            $State.CodeownersContent -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$' -and
+            $State.CodeownersContent.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n")
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and $OpenPlanPullRequest -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
+            $PlanOnly -and -not $ReviewOnly -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
             $GeneratedFiles.Count -eq 1 -and $GeneratedFiles['.github/CODEOWNERS'] -ceq $script:snapshot.Content -and
             ($AllowedPaths -join ',') -ceq '.github/CODEOWNERS' -and $ExpectedActor.id -eq 187664033 -and
             $null -ne $ValidateChange -and -not $Prepare
@@ -134,7 +135,8 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         Should -Invoke Set-TerraformCodeowners -Exactly 1 -ParameterFilter {
             $RepositoryRoot -ceq 'isolated-clone' -and
             $Content -cmatch '(?m)^\* @Azure/module-reviewers$' -and
-            $Content -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$'
+            $Content -cmatch '(?m)^\.github/CODEOWNERS @Azure/engineering-reviewers$' -and
+            $Content.EndsWith("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n")
         }
     }
 
@@ -324,6 +326,35 @@ Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
         $script:context.Phase = $_
         Mock Get-RepositoryFileAtCommit { [pscustomobject]@{ Content = "# Keep this comment`n" + $script:content; Sha = 'c' * 40 } }
         { Test-BicepCodeownersSyncChange -Context $script:context } | Should -Throw '*static CODEOWNERS*'
+    }
+
+    It 'accepts pre-metadata generated content only on the base or old candidate' -ForEach @('Base', 'Existing') {
+        $script:context.Phase = $_
+        Mock Get-RepositoryFileAtCommit {
+            [pscustomobject]@{
+                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n", '')
+                Sha = 'c' * 40
+            }
+        }
+        { Test-BicepCodeownersSyncChange -Context $script:context } | Should -Not -Throw
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0
+    }
+
+    It 'rejects missing metadata protection on newly published and merged content' -ForEach @('Candidate', 'Merged') {
+        $script:context.Phase = $_
+        Mock Get-RepositoryFileAtCommit {
+            [pscustomobject]@{
+                Content = $script:content.Replace("metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners`n", '')
+                Sha = $script:snapshot.BlobSha
+            }
+        }
+        { Test-BicepCodeownersSyncChange -Context $script:context } | Should -Throw '*static CODEOWNERS*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0
+    }
+
+    It 'accepts exact metadata-protected content at every validation phase' -ForEach @('Base', 'Existing', 'Candidate', 'Merged') {
+        $script:context.Phase = $_
+        { Test-BicepCodeownersSyncChange -Context $script:context } | Should -Not -Throw
     }
 
     It 'loads all official indexes through the shared transport at one source commit' {

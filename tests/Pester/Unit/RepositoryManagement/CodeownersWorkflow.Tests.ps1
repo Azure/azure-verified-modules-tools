@@ -20,17 +20,17 @@ Describe 'Bicep CODEOWNERS workflow contract' {
         $script:workflow | Should -Match "cron: '33 2-23/4 \* \* \*'"
     }
 
-    It 'offers reviewable plan-only dispatch by default with no target or credential overrides' {
+    It 'offers a strict dry run by default with no target or credential overrides' {
         $script:workflow | Should -Match '(?s)workflow_dispatch:\s+inputs:\s+plan_only:.*?default: true\s+type: boolean'
-        $script:workflow | Should -Match 'Create or update the CODEOWNERS pull request for review, but never merge it'
+        $script:workflow | Should -Match 'Dry run only: inspect changes without committing, pushing, opening, or merging pull requests'
         $script:workflow | Should -Match "PLAN_ONLY:.*github.event_name == 'workflow_dispatch' && inputs.plan_only"
         $script:workflow | Should -Not -Match 'pull_request:|pull_request_target:|repository_dispatch:'
     }
 
-    It 'restricts credentials to trusted tools main and requires explicit scheduled enablement' {
+    It 'restricts credentials to trusted tools main without the removed enable variable' {
         $script:workflow | Should -Match "github.repository == 'Azure/azure-verified-modules-tools'"
         $script:workflow | Should -Match "github.ref == 'refs/heads/main'"
-        $script:workflow | Should -Match "vars.AVM_CODEOWNERS_SYNC_ENABLED == 'true'"
+        $script:workflow | Should -Not -Match 'AVM_CODEOWNERS_SYNC_ENABLED'
         $script:workflow | Should -Match 'environment: avm'
         $script:workflow | Should -Match '(?m)^\s+ref: main$'
         $script:workflow | Should -Match 'persist-credentials: false'
@@ -56,17 +56,25 @@ Describe 'Bicep CODEOWNERS workflow contract' {
     }
 
     It 'never interpolates workflow inputs directly into executable PowerShell' {
-        $blocks = [regex]::Matches($script:workflow, '(?m)^        run: \|\r?\n((?:          [^\r\n]*(?:\r?\n|$)|[ \t]*\r?\n)+)')
-        $blocks.Count | Should -BeGreaterThan 0
-        $script:workflow | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
-        foreach ($block in $blocks) {
-            $run = $block.Groups[1].Value
+        $runs = [regex]::Matches($script:workflow, '(?m)^        run: \|\r?\n(?<body>(?:^          .*(?:\r?\n|$)|^\s*\r?\n)+)')
+        $runs.Count | Should -Be 2
+        foreach ($block in $runs) {
+            $run = $block.Groups['body'].Value
             $run | Should -Not -Match '\$\{\{'
             $tokens = $null
             $parseErrors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseInput($run, [ref]$tokens, [ref]$parseErrors)
             $parseErrors | Should -HaveCount 0
         }
+        $codeownersRuns = @($runs | Where-Object { $_.Groups['body'].Value -match 'Invoke-BicepCodeownersSync' })
+        $codeownersRuns | Should -HaveCount 1
+        $codeownersRuns[0].Groups['body'].Value | Should -Match "-PlanOnly:\(\`$env:PLAN_ONLY -eq 'true'\)"
+    }
+
+    It 'has no Bicep metadata backfill or intermediate approval-file path' {
+        $script:workflow | Should -Not -Match 'metadata_backfill|metadata_update_source|Seed|MetadataBackfill'
+        Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'module-metadata' 'Invoke-BicepMetadataBackfillSync.ps1') |
+            Should -BeFalse
     }
 
     It 'keeps the local export entry point independent of remote synchronization' {

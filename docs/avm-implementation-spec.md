@@ -405,6 +405,68 @@ Each source layer applies broadcast templates before concrete paths, so an
 explicit path in that layer is more specific. Later overlays still win over
 earlier layers, and exclusions are evaluated against the expanded target paths.
 
+### Module-owned metadata
+
+Root and child Bicep/Terraform modules may adopt a strict `metadata.json` beside
+their source. The authoritative v1 input and catalog schemas are packaged under
+`Resources/Schemas/v1/` in this repository; validators never fetch a module's
+`$schema` URL at runtime. The required versioned `$schema` reference identifies
+the authored format; module metadata does not also store `schemaVersion`.
+Root metadata owns a flat `owners` string array: bare GitHub usernames and
+qualified `@organization/team-slug` handles. Empty arrays are permitted and
+case-insensitive duplicates are rejected. Tier is not part of this contract.
+Children carry only their own identity, description, and optional telemetry
+prefix; catalog generation inherits ownership from the family root.
+Roots and directly published resource/pattern modules require telemetry.
+Uninstrumented Bicep children without a version file may omit the prefix under
+BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
+prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
+Existing underscore identifiers and the exact historical Resource Graph
+identifier are preserved; file creation does not repair deployed telemetry.
+Empty owner lists are allowed. Unowned modules are reported as Orphaned, while
+existing Deprecated status is retained during transition. New deprecations are
+derived from Bicep `DEPRECATED.md` (covering that module and descendants), or
+the Terraform repository's archived flag (covering all its modules). There is
+no authored metadata status field.
+
+`avm metadata validate` requires the caller's ecosystem, module kind, and child
+scope. `-CheckSource` also verifies Bicep literal name/description declarations.
+`-InputObject` validates supplied metadata values without reading a file.
+`avm metadata show` only reads and validates an existing `metadata.json`; it
+never derives values or reads CSV indexes.
+`avm metadata initialize` writes supplied metadata values, never overwrites
+existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
+load or Terraform JSON reader locals. It does not replace telemetry transport.
+The one-time source rewrite can change compiled Bicep output; subsequent
+owner/canonical metadata edits do not. Terraform source wiring remains
+opt-in until its transport consumes the new locals.
+
+`avm pre-commit` and `avm pr-check` finish with read-only metadata validation for
+the selected root and its module children. Invalid existing metadata fails the
+check. Missing files produce explicit warnings during rollout, without creating
+files or reading indexes. Explicit `avm metadata validate` and `show` still fail
+for missing files. Test, example, and internal helper directories are excluded.
+
+The catalog workflow lives in this tools repository and generates entries only
+from valid module metadata. Invalid present metadata is an error; missing
+metadata never causes a full legacy CSV record to be retained. Generation and
+publication fail by default when source CSV module identities would disappear.
+Explicit `Force` permits those removals only, not other validation failures.
+Source CSVs, not existing preview outputs, are the comparison baseline; this
+remains true after canonical CSV replacement. Hash-protected source-row evidence
+is checked again against the unchanged publication base before writes.
+Matched-row compatibility fields and prior Deprecated status remain preserved.
+Fleet backfill and canonical CSV replacement remain explicit operator actions.
+Metadata is owner-authored, not a managed-file
+overlay that can be replaced on every repository sync.
+Terraform sync creates missing files directly from existing indexes and source,
+without an intermediate approval file or repository registration. Bicep files
+are added directly to the module repository rather than through Bicep Sync.
+CSV conversion and backfill-only source inference live exclusively under
+`repository-management/module-metadata/`, outside the packaged module. That
+temporary directory and its sync hooks can be removed after reconciliation
+without changing the permanent metadata API or normal authoring checks.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

@@ -2,8 +2,8 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     format -> lint -> validate -> docs.
-        terraform: sync -> check convention -> transform -> format -> docs.
+        bicep:     format -> lint -> validate -> docs -> metadata.
+        terraform: sync -> check convention -> transform -> format -> docs -> metadata.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -22,6 +22,9 @@ function Invoke-AvmPreCommit {
         managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
+        The final metadata check validates local root and child metadata without
+        creating files or reading indexes. Missing metadata produces a warning
+        during rollout; invalid existing metadata fails the chain.
         The two checks that require an
         initialised working directory - lint (tflint) and validate
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
@@ -204,6 +207,13 @@ function Invoke-AvmPreCommit {
         )
     }
 
+    $stepDefs += [pscustomobject]@{
+        Name = 'metadata'
+        Cmdlet = 'Test-AvmMetadataModules'
+        ContextOnly = $true
+        ExtraArgs = @{ Context = $context; WarnIfMissing = $true }
+    }
+
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
     $stepIndex = 0
@@ -232,10 +242,13 @@ function Invoke-AvmPreCommit {
         Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info | Out-Null
 
         try {
-            $stepParameters = @{
-                Path              = $context.Root
-                Ecosystem         = $context.Ecosystem
-                AllowPathFallback = $AllowPathFallback
+            $stepParameters = @{}
+            if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
+                $stepParameters = @{
+                    Path              = $context.Root
+                    Ecosystem         = $context.Ecosystem
+                    AllowPathFallback = $AllowPathFallback
+                }
             }
             if ($def.PSObject.Properties.Name -contains 'ExtraArgs') {
                 foreach ($parameterName in $def.ExtraArgs.Keys) {

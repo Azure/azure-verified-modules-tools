@@ -1,7 +1,10 @@
 BeforeAll {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
-    . (Join-Path $repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TerraformCodeowners.ps1')
-    $script:content = "# Managed CODEOWNERS`n.github/CODEOWNERS @Azure/engineering-reviewers`n"
+    $syncRoot = Join-Path $repoRoot 'repository-management' 'repository-sync'
+    . (Join-Path $syncRoot 'scripts' 'lib' 'TerraformCodeowners.ps1')
+    $template = Get-Content -LiteralPath (Join-Path $syncRoot 'CODEOWNERS.template') -Raw
+    $script:content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @('module-reviewers') `
+        -FileProtectionTeams @('engineering-reviewers') -Template $template
 }
 
 Describe 'Terraform CODEOWNERS filesystem contract' -Tag Component {
@@ -25,6 +28,8 @@ Describe 'Terraform CODEOWNERS filesystem contract' -Tag Component {
         $second = [System.IO.File]::ReadAllBytes($destination)
         [Convert]::ToBase64String($second) | Should -BeExactly ([Convert]::ToBase64String($first))
         [System.Text.Encoding]::UTF8.GetString($second) | Should -BeExactly $script:content
+        [System.Text.Encoding]::UTF8.GetString($second).TrimEnd("`n").Split("`n")[-1] |
+            Should -BeExactly 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
         Get-Content -LiteralPath $other -Raw | Should -BeExactly 'unchanged'
     }
 

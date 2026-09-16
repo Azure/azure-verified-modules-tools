@@ -1,10 +1,16 @@
+#Requires -Version 7.4
+
+[CmdletBinding(SupportsShouldProcess)]
 param (
-  [string]$tempPath = "~/temp-avm-repo-creation",
+  [string]$tempPath = (Join-Path $PWD.Path 'out' 'repository-creation'),
   [string]$toolingRepoUrl = "https://github.com/Azure/azure-verified-modules-tools",
   [string]$openSourceRepoUrl = "https://github.com/microsoft/github-operations",
   [string]$moduleProvider = "azure",
   [string]$moduleName,
   [string]$moduleDisplayName,
+  [string]$moduleDescription,
+  [string]$canonicalType,
+  [string]$telemetryIdPrefix,
   [string]$resourceProviderNamespace,
   [string]$resourceType,
   [string]$moduleAlternativeNames = "",
@@ -12,6 +18,9 @@ param (
   [string]$ownerPrimaryDisplayName,
   [string]$ownerSecondaryGitHubHandle = "",
   [string]$ownerSecondaryDisplayName = "",
+  [string[]]$ownerGitHubHandles = @(),
+  [string]$ownerTeam,
+  [switch]$planOnly,
   [switch]$metaDataOnly,
   [switch]$skipRepoCreation,
   [switch]$skipMetaDataCreation,
@@ -22,111 +31,121 @@ param (
   )
 )
 
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
 $ProgressPreference = "SilentlyContinue"
 
-& (Join-Path $PSScriptRoot "Test-Tooling.ps1")
-
 $moduleNameRegex = "^avm-(res|ptn|utl)-[a-z-]+$"
-
-if ($moduleName -notmatch $moduleNameRegex) {
-  Write-Error "Module name must be in the format '$moduleNameRegex'" -Category InvalidArgument
-  return
+$moduleMatch = [regex]::Match($moduleName, $moduleNameRegex)
+if (-not $moduleMatch.Success) {
+  throw [System.ArgumentException]::new("Module name must be in the format '$moduleNameRegex'.")
 }
 
-if($moduleDisplayName -eq "") {
-  Write-Error "Module display name must be provided." -Category InvalidArgument
-  return
+if ([string]::IsNullOrWhiteSpace($moduleDisplayName)) {
+  throw [System.ArgumentException]::new('Module display name must be provided.')
 }
 
 if($moduleDisplayName.Length -ge 250) {
-  Write-Error "Module display name must be under 250 characters (was $($moduleDisplayName.Length)). Keep it short, like 'Azure Image Builder' or 'BCDR VM Replication'." -Category InvalidArgument
-  return
+  throw [System.ArgumentException]::new("Module display name must be under 250 characters (was $($moduleDisplayName.Length)).")
 }
 
-if($moduleName.StartsWith("avm-res")) {
-  if($resourceProviderNamespace -eq "") {
-    Write-Error "Resource provider namespace must be provided for resource modules." -Category InvalidArgument
-    return
-  }
-  if($resourceType -eq "") {
-    Write-Error "Resource type must be provided for resource modules." -Category InvalidArgument
-    return
-  }
-}
-
-if($ownerPrimaryGitHubHandle -eq "") {
-  Write-Error "Primary owner GitHub handle must be provided." -Category InvalidArgument
-  return
-}
-
-if($ownerPrimaryDisplayName -eq "") {
-  Write-Error "Primary owner display name must be provided." -Category InvalidArgument
-  return
-}
-
-$metaDataVariables = [PSCustomObject]@{
-  moduleId                   = $moduleName
-  providerNamespace          = $resourceProviderNamespace
-  providerResourceType       = $resourceType
-  moduleDisplayName          = $moduleDisplayName
-  alternativeNames           = $moduleAlternativeNames
-  primaryOwnerGitHubHandle   = $ownerPrimaryGitHubHandle
-  primaryOwnerDisplayName    = $ownerPrimaryDisplayName
-  secondaryOwnerGitHubHandle = $ownerSecondaryGitHubHandle
-  secondaryOwnerDisplayName  = $ownerSecondaryDisplayName
-  isArchived                 = "false"
-}
-
-if (!$skipMetaDataCreation) {
-
-  $currentPath = Get-Location
-  New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
-  Set-Location -Path $tempPath
-  gh repo fork --clone --default-branch-only $toolingRepoUrl
-  $tempRepoFolderName = $toolingRepoUrl.Split('/')[-1]
-  Set-Location -Path $tempRepoFolderName
-  $tempOrgAndRepoName = $toolingRepoUrl.Split('/')[-2..-1] -join '/'
-  gh repo set-default $tempOrgAndRepoName
-  git fetch upstream
-  git reset --hard upstream/main
-  git checkout -b "chore/add/$moduleName"
-
-  $csvPath = "./repository-management/repository-sync/config/repository-metadata.csv"
-  $csvData = Get-Content -Path $csvPath | ConvertFrom-Csv
-  $csvData += $metaDataVariables
-  $csvData = $csvData | Sort-Object -Property moduleId
-  $csvData | Export-Csv -Path $csvPath -NoTypeInformation -UseQuotes AsNeeded -Force
-
-  git add $csvPath
-  git commit -m "chore: add $moduleName metadata"
-  git push --set-upstream origin "chore/add/$moduleName"
-
-  $prUrl = gh pr create --title "chore: add $moduleName metadata" --body "This PR adds metadata for the $moduleName module."
-
-  Write-Host "Created PR for repo meta data: $prUrl"
-
-  Set-Location $tempPath
-  Remove-Item -Path $tempRepoFolderName -Force -Recurse | Out-Null
-
-  Set-Location $currentPath
-
-  if ($metaDataOnly) {
-    Write-Host "Metadata only creation completed. Exiting."
-    return
-  }
-}
-
+. (Join-Path $PSScriptRoot 'RepositoryCreation.ps1')
+$authoringModule = Import-AvmRepositoryCreationModule
+$moduleType = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$moduleMatch.Groups[1].Value]
 $repositoryName = "terraform-$moduleProvider-$moduleName"
 $repositoryUrl = "https://github.com/Azure/$repositoryName"
+$willInitializeRepository = -not $skipRepoCreation -and (-not $metaDataOnly -or $skipMetaDataCreation)
+$inventoryRecord = $null
+$metadata = $null
+$metadataPlan = $null
+
+if (!$skipMetaDataCreation) {
+  if ($moduleType -eq 'resource' -and
+      ([string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or [string]::IsNullOrWhiteSpace($resourceType))) {
+    throw [System.ArgumentException]::new('Resource provider namespace and resource type must be provided for the repository inventory.')
+  }
+  if ([string]::IsNullOrWhiteSpace($ownerPrimaryGitHubHandle) -or [string]::IsNullOrWhiteSpace($ownerPrimaryDisplayName)) {
+    throw [System.ArgumentException]::new('Primary owner GitHub handle and display name must be provided for the repository inventory.')
+  }
+  $inventoryRecord = [pscustomobject][ordered]@{
+    moduleId = $moduleName
+    providerNamespace = $resourceProviderNamespace
+    providerResourceType = $resourceType
+    moduleDisplayName = $moduleDisplayName
+    alternativeNames = $moduleAlternativeNames
+    primaryOwnerGitHubHandle = $ownerPrimaryGitHubHandle
+    primaryOwnerDisplayName = $ownerPrimaryDisplayName
+    secondaryOwnerGitHubHandle = $ownerSecondaryGitHubHandle
+    secondaryOwnerDisplayName = $ownerSecondaryDisplayName
+    isArchived = 'false'
+  }
+}
+
+if ($willInitializeRepository) {
+  if ($moduleType -eq 'resource' -and
+      (-not [string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or -not [string]::IsNullOrWhiteSpace($resourceType))) {
+    if ([string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or [string]::IsNullOrWhiteSpace($resourceType)) {
+      throw [System.ArgumentException]::new('Supply both resourceProviderNamespace and resourceType, or an explicit canonicalType.')
+    }
+    $resourceCanonicalType = "$resourceProviderNamespace/$resourceType"
+    if (-not [string]::IsNullOrWhiteSpace($canonicalType) -and $canonicalType -cne $resourceCanonicalType) {
+      throw [System.ArgumentException]::new('canonicalType conflicts with resourceProviderNamespace/resourceType.')
+    }
+    $canonicalType = $resourceCanonicalType
+  }
+  $metadataArguments = @{
+    AuthoringModule = $authoringModule
+    ModuleDisplayName = $moduleDisplayName
+    ModuleDescription = $moduleDescription
+    CanonicalType = $canonicalType
+    TelemetryIdPrefix = $telemetryIdPrefix
+    OwnerGitHubHandles = @(
+      if (-not [string]::IsNullOrEmpty($ownerPrimaryGitHubHandle)) { $ownerPrimaryGitHubHandle }
+      if (-not [string]::IsNullOrEmpty($ownerSecondaryGitHubHandle)) { $ownerSecondaryGitHubHandle }
+      $ownerGitHubHandles
+    )
+    OwnerTeam = $ownerTeam
+    AlternativeNames = @(
+      $moduleAlternativeNames -split ',' |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_.Length -gt 0 } |
+        Select-Object -Unique
+    )
+  }
+  $metadata = New-AvmRepositoryMetadataInput @metadataArguments
+  $metadataPlan = New-AvmRepositoryContent -AuthoringModule $authoringModule -RepositoryName $repositoryName `
+    -Metadata $metadata -ModuleType $moduleType -WorkPath $tempPath -PlanOnly
+}
+
+if ($planOnly -or -not $PSCmdlet.ShouldProcess($repositoryUrl, 'Run requested repository inventory, creation, and app publication')) {
+  return [pscustomobject]@{
+    Status = 'plan'
+    RepositoryUrl = $repositoryUrl
+    ToolingRepositoryUrl = if ($null -ne $inventoryRecord) { $toolingRepoUrl } else { $null }
+    Inventory = $inventoryRecord
+    Metadata = if ($null -ne $metadataPlan) { $metadataPlan.Metadata } else { $null }
+  }
+}
+
+& (Join-Path $PSScriptRoot 'Test-Tooling.ps1') -AuthoringModule $authoringModule
+
+if (!$skipMetaDataCreation) {
+  . (Join-Path $PSScriptRoot 'RepositoryInventory.ps1')
+  $inventory = Publish-AvmRepositoryInventory -AuthoringModule $authoringModule -InputObject $inventoryRecord `
+    -ToolingRepoUrl $toolingRepoUrl -WorkPath $tempPath -Confirm:$false
+  Write-Host "Created PR for repo meta data: $($inventory.PullRequestUrl)"
+  if ($metaDataOnly) {
+    Write-Host 'Metadata only creation completed. Exiting.'
+    return
+  }
+}
 
 if (!$skipRepoCreation) {
+  $creation = New-AvmRepositoryContent -AuthoringModule $authoringModule -RepositoryName $repositoryName `
+    -Metadata $metadata -ModuleType $moduleType -WorkPath $tempPath -Confirm:$false
   Write-Host ""
-  Write-Host "Creating repository $moduleName"
+  Write-Host "Initialized metadata.json and published repository $moduleName" -ForegroundColor Green
 
-  gh repo create "Azure/$repositoryName" --public --template "Azure/terraform-azurerm-avm-template"
-
-  Write-Host ""
-  Write-Host "Created repository $moduleName" -ForegroundColor Green
   Write-Host "Open https://repos.opensource.microsoft.com/orgs/Azure/repos/$repositoryName" -ForegroundColor Yellow
   if(!$env:CODESPACES) {
     Write-Host "Hit Enter to open the open source portal in your browser now" -ForegroundColor Yellow
@@ -172,7 +191,6 @@ if (!$skipRepoCreation) {
     $response = Read-Host
   }
 }
-
 Write-Host ""
 Write-Host "Repository URL:" -ForegroundColor Cyan
 Write-Host $repositoryUrl
@@ -183,48 +201,60 @@ if ($ownerPrimaryGitHubHandle -ne "") {
   $ownerMention = "@$ownerPrimaryGitHubHandle "
 }
 
-if (!$skipCreateAppInstallationRequest) {
+if (!$skipCreateAppInstallationRequest -and $PSCmdlet.ShouldProcess($repositoryName, 'Request GitHub app installation')) {
   Write-Host "Creating app installation request..." -ForegroundColor Yellow
-  $currentPath = Get-Location
-  New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
-  Set-Location -Path $tempPath
-  gh repo fork --clone --default-branch-only $openSourceRepoUrl
-  $tempRepoFolderName = $openSourceRepoUrl.Split('/')[-1]
-  Set-Location -Path $tempRepoFolderName
-  $tempOrgAndRepoName = $openSourceRepoUrl.Split('/')[-2..-1] -join '/'
-  gh repo set-default $tempOrgAndRepoName
-  git fetch upstream
-  git reset --hard upstream/main
-  git checkout -b "chore/app-install-avm/$moduleName"
-
   Install-Module powershell-yaml -Force
+  $appRoot = Join-Path ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($tempPath)) ([guid]::NewGuid().ToString('N'))
+  $appPublished = $false
+  try {
+    $null = New-Item -ItemType Directory -Path $appRoot -Force
+    $process = @{ AuthoringModule = $authoringModule; WorkingDirectory = $appRoot }
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool gh -ArgumentList @(
+      'repo', 'fork', '--clone', '--default-branch-only', $openSourceRepoUrl
+    )
+    $appRepoName = $openSourceRepoUrl.TrimEnd('/').Split('/')[-1]
+    $appOrgAndRepoName = $openSourceRepoUrl.TrimEnd('/').Split('/')[-2..-1] -join '/'
+    $process.WorkingDirectory = Join-Path $appRoot $appRepoName
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool gh -ArgumentList @('repo', 'set-default', $appOrgAndRepoName)
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('fetch', 'upstream')
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('reset', '--hard', 'upstream/main')
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('checkout', '-b', "chore/app-install-avm/$moduleName")
 
-  foreach ($yamlFilePath in $yamlFilePaths) {
-    if (-Not (Test-Path -Path $yamlFilePath)) {
-      Write-Error "YAML file not found: $yamlFilePath" -Category NotFound
-      return
+    foreach ($yamlFilePath in $yamlFilePaths) {
+      $filePath = [System.IO.Path]::GetFullPath((Join-Path $process.WorkingDirectory $yamlFilePath))
+      $relativePath = [System.IO.Path]::GetRelativePath($process.WorkingDirectory, $filePath)
+      if ($relativePath -eq '..' -or $relativePath.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)") -or
+          [System.IO.Path]::IsPathRooted($relativePath)) {
+        throw [System.ArgumentException]::new("App configuration must remain inside its staging checkout: $yamlFilePath")
+      }
+      if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+        throw [System.IO.FileNotFoundException]::new("YAML file not found: $yamlFilePath")
+      }
+      $yamlData = Get-Content -LiteralPath $filePath -Raw | ConvertFrom-Yaml
+      $yamlData.repositories = @(@($yamlData.repositories) + $repositoryName | Sort-Object)
+      $yamlData | ConvertTo-Yaml -Options WithIndentedSequences | Set-Content -LiteralPath $filePath -Force
+      $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('add', '--', $relativePath)
     }
-
-    $yamlData = Get-Content -Path $yamlFilePath | ConvertFrom-Yaml
-    $repoList = @($yamlData.repositories)
-    $repoList += $repositoryName
-    $repoList = $repoList | Sort-Object
-    $yamlData.repositories = $repoList
-    $yamlData | ConvertTo-Yaml -Options WithIndentedSequences | Set-Content -Path $yamlFilePath -Force
-
-    git add $yamlFilePath
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('commit', '-m', "chore: add $moduleName metadata")
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('push', '--set-upstream', 'origin', "chore/app-install-avm/$moduleName")
+    $prUrl = (Invoke-AvmRepositoryCreationProcess @process -Tool gh -ArgumentList @(
+      'pr', 'create', '--title', "chore: app install avm $moduleName",
+      '--body', "This PR requests an app install for the $moduleName module."
+    )).StdOut.Trim()
+    $appPublished = $true
+    Write-Host "Created app installation request PR: $prUrl" -ForegroundColor Cyan
   }
-
-  git commit -m "chore: add $moduleName metadata"
-  git push --set-upstream origin "chore/app-install-avm/$moduleName"
-
-  $prUrl = gh pr create --title "chore: app install avm $moduleName" --body "This PR requests an app install for the $moduleName module."
-
-  Set-Location $tempPath
-  Remove-Item -Path $tempRepoFolderName -Force -Recurse | Out-Null
-
-  Set-Location $currentPath
-  Write-Host "Created app installation request PR: $prUrl" -ForegroundColor Cyan
+  catch {
+    throw [System.InvalidOperationException]::new(
+      "App installation request failed for $repositoryUrl. Inspect '$appRoot' before retrying. $($_.Exception.Message)",
+      $_.Exception
+    )
+  }
+  finally {
+    if ($appPublished) {
+      Remove-Item -LiteralPath $appRoot -Force -Recurse
+    }
+  }
 }
 
 $completionMessage = @"

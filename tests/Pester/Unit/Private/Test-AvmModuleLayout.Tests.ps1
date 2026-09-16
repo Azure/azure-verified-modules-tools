@@ -62,6 +62,17 @@ Describe 'Test-AvmModuleLayout' {
 }
 
 Describe 'Module Resources packaging' {
+    It 'ships versioned metadata and catalog schemas from this repository' {
+        $schemaDirectory = Join-Path $script:moduleRoot 'Resources' 'Schemas' 'v1'
+        foreach ($name in @('avm-module-metadata.schema.json', 'avm-modules-catalog.schema.json')) {
+            $path = Join-Path $schemaDirectory $name
+            $path | Should -Exist
+            (Get-Item -LiteralPath $path).Name | Should -BeExactly $name
+            $schema = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $schema.'$id' | Should -BeExactly "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/$name"
+        }
+    }
+
     It 'ships the three vendored AVM tflint rulesets under Resources/tflint' {
         $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
         $tflintDir | Should -Exist

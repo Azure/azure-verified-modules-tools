@@ -735,14 +735,13 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:entry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1') -Raw
     }
 
-    It 'preserves the original CODEOWNERS job, writer invocation, token, and scopes exactly' {
+    It 'preserves the CODEOWNERS writer and token scopes without the retired enable gate' {
         $expected = @'
   sync:
     name: Repository Management - Bicep Sync
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' || vars.AVM_CODEOWNERS_SYNC_ENABLED == 'true')
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20

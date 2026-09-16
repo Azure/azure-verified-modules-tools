@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "title": "AVM module metadata v1",
+  "description": "Owner-authored metadata shared by Bicep and Terraform. Module kind and parent identity are derived from the repository, not authored here.",
+  "oneOf": [
+    { "$ref": "#/definitions/root" },
+    { "$ref": "#/definitions/child" }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "telemetryIdPrefix": { "const": "46d3xbcp.resourcegraph-query" } },
+        "required": [ "telemetryIdPrefix" ]
+      },
+      "then": { "properties": { "canonicalType": { "const": "Microsoft.ResourceGraph/queries" } } }
+    }
+  ],
+  "definitions": {
+    "schemaReference": {
+      "type": "string",
+      "const": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json"
+    },
+    "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "description": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "canonicalType": {
+      "type": "string",
+      "description": "ARM resource type, or the shared pattern/utility taxonomy path.",
+      "anyOf": [
+        { "pattern": "^Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+$" },
+        { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)+$" }
+      ]
+    },
+    "telemetryIdPrefix": {
+      "type": "string",
+      "description": "Stable telemetry prefix. The ecosystem and module kind must also match the containing module.",
+      "anyOf": [
+        { "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "const": "46d3xbcp.resourcegraph-query", "description": "Preserve the existing published Resource Graph identifier without rewriting telemetry." }
+      ],
+      "if": { "pattern": "^46d3xbcp\\." },
+      "then": { "maxLength": 50 },
+      "else": { "maxLength": 59 }
+    },
+    "owners": {
+      "type": "array",
+      "description": "GitHub usernames or qualified @organization/team-slug handles, inherited by children. Empty arrays are valid; handles must be unique ignoring case.",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "not": { "pattern": "\\s" },
+        "anyOf": [
+          {
+            "maxLength": 39,
+            "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+          },
+          {
+            "pattern": "^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
+          }
+        ]
+      }
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "canonicalType": { "pattern": "^Microsoft\\." } } },
+          "then": { "required": [ "telemetryIdPrefix" ] }
+        }
+      ],
+      "required": [
+        "$schema",
+        "moduleDisplayName",
+        "moduleDescription",
+        "canonicalType",
+        "owners"
+      ],
+      "properties": {
+        "$schema": { "$ref": "#/definitions/schemaReference" },
+        "moduleDisplayName": { "$ref": "#/definitions/displayName" },
+        "moduleDescription": { "$ref": "#/definitions/description" },
+        "canonicalType": { "$ref": "#/definitions/canonicalType" },
+        "owners": { "$ref": "#/definitions/owners" },
+        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
+        "alternativeNames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+        },
+        "comments": { "type": "string" }
+      }
+    },
+    "child": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "$schema",
+        "moduleDisplayName",
+        "moduleDescription",
+        "canonicalType"
+      ],
+      "properties": {
+        "$schema": { "$ref": "#/definitions/schemaReference" },
+        "moduleDisplayName": { "$ref": "#/definitions/displayName" },
+        "moduleDescription": { "$ref": "#/definitions/description" },
+        "canonicalType": { "$ref": "#/definitions/canonicalType" },
+        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" }
+      }
+    }
+  }
+}
