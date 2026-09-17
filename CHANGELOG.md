@@ -66,10 +66,14 @@ section when cutting a release.
 
 ### Changed
 
-- Terraform example transforms now set `enable_telemetry = false` on module
-  calls only when the called module declares that input. Existing `false`
-  values and modules without the input are unchanged. Examples run after
-  root/submodule transforms and before common attribute ordering.
+- Terraform example transforms now set `enable_telemetry = var.enable_telemetry`
+  on module calls only when the called module declares that input. Existing
+  example variables retain their location and metadata but default to `false`,
+  including formerly required inputs. Missing variables are added as bool
+  inputs with a false default in `variables.tf`. Unsupported modules and
+  examples without relevant calls remain unchanged. Examples run after
+  root/submodule transforms and before common attribute ordering; source-module
+  defaults are unchanged.
 - Manual Terraform metadata backfill now runs the full normal repository sync,
   including managed files, pre-commit, CODEOWNERS, repository/Azure management
   and standard automatic merge on apply. Only metadata creation is optional;

@@ -398,6 +398,10 @@ locals {
             Add-Content -LiteralPath (Join-Path $legacy 'main.telemetry.tf') -Value "`n$legacyLocals" -Encoding utf8NoBOM -NoNewline
 
             $exampleMain = Join-Path $legacy 'examples' 'default' 'main.tf'
+            $exampleVariables = Join-Path $legacy 'examples' 'default' 'variables.tf'
+            $exampleVariables | Should -Exist
+            $originalExampleVariables = [System.IO.File]::ReadAllBytes($exampleVariables)
+            $originalExampleVariables | Should -Not -BeNullOrEmpty
             Add-Content -LiteralPath $exampleMain -Encoding utf8NoBOM -NoNewline -Value @'
 
 variable "single_file_input" {
@@ -447,8 +451,8 @@ locals {
                 Should -Match 'variable "single_file_input"'
             (Get-Content -LiteralPath $exampleMain -Raw) |
                 Should -Match 'output "single_file_output"'
-            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'variables.tf')) |
-                Should -BeFalse
+            $exampleVariables | Should -Exist
+            [System.IO.File]::ReadAllBytes($exampleVariables) | Should -Be $originalExampleVariables
             (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $exampleMain) 'outputs.tf')) |
                 Should -BeFalse
             (Test-Path -LiteralPath (Join-Path $noTerraformExample 'terraform.tf')) |
