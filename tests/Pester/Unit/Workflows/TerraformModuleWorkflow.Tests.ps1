@@ -11,6 +11,24 @@ Describe 'terraform-module reusable workflow' {
         $script:e2eJob = $jobMatch.Value
     }
 
+    It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
+        @{ Job = 'unit-test'; Run = '&install-avm-authoring |' }
+        @{ Job = 'pr-check'; Run = '*install-avm-authoring' }
+        @{ Job = 'integration-test'; Run = '*install-avm-authoring' }
+        @{ Job = 'discover-examples'; Run = '*install-avm-authoring' }
+        @{ Job = 'e2e-test'; Run = '*install-avm-authoring' }
+    ) {
+        $jobPattern = '(?ms)^  ' + [regex]::Escape($Job) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
+        $jobBlock = [regex]::Match($script:workflow, $jobPattern).Value
+        $jobBlock | Should -Match (
+            '(?m)^      - name: Install Avm\.Authoring\r?\n' +
+            '        shell: pwsh\r?\n' +
+            '        env:\r?\n' +
+            '          AVM_AUTHORING_VERSION: \$\{\{ inputs\.avm-authoring-version \}\}\r?\n' +
+            '        run: ' + [regex]::Escape($Run) + '\r?$'
+        )
+    }
+
     It 'passes the non-secret subscription ID as a job output without masking it' {
         $script:workflow | Should -Match '"subscriptionId=\$\(\$chosen\.id\)"'
         $script:workflow | Should -Not -Match '::add-mask::'
