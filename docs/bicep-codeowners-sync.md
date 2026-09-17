@@ -7,7 +7,9 @@ job targets only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
 Bicep metadata files are added directly through a repository change, not this
 workflow.
 The separate BAMI test-tenant job publishes nonsecret execution variables only
-when both the manual input and `AVM_BAMI_TEST_TENANT_SYNC_ENABLED` allow it.
+on trusted-main manual dispatch with `enable_test_tenant_sync=true` and
+`plan_only=false`. The central module groups select the BAMI paths; no global
+activation variable is required.
 
 ## Ownership and template
 
@@ -81,8 +83,9 @@ every-four-hours cadence. Concurrency queues runs without cancelling an active
 writer. CODEOWNERS has no separate repository-variable enable gate. Disable the
 workflow through the normal operator controls when scheduled writes must stop.
 There is no Bicep metadata-backfill mode.
-The retained BAMI activation gate applies only to the separate test-tenant job.
-`plan_only=true` also prevents that job from writing variables.
+The separate BAMI test-tenant job remains manual-only.
+`plan_only=true` also prevents that job from writing variables; scheduled runs
+do not publish them.
 The initial metadata adoption required a pause until the target governance
 tests and generated ownership rules agreed. Both changes are now merged;
 check current workflow state and obtain approval for any pause or resumption.

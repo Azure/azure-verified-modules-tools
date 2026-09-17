@@ -779,19 +779,18 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:originalJob | Should -BeExactly $expected.Replace("`r`n", "`n").TrimEnd()
     }
 
-    It 'keeps activation off by default and behind both dispatch and operator gates' {
+    It 'keeps manual operation and plan defaults without a global activation gate' {
         $script:workflow | Should -Match '(?s)enable_test_tenant_sync:\n\s+description:.*?\n\s+default: false\n\s+type: boolean'
         $script:workflow | Should -Match '(?s)plan_only:\n\s+description:.*?\n\s+default: true\n\s+type: boolean'
         $script:variablesJob | Should -Not -BeNullOrEmpty
-        foreach ($clause in @(
+        $condition = [regex]::Match($script:variablesJob, '(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
+        [regex]::Replace($condition, '\s+', ' ').Trim() | Should -BeExactly (@(
             "github.repository == 'Azure/azure-verified-modules-tools'",
             "github.ref == 'refs/heads/main'",
             "github.event_name == 'workflow_dispatch'",
-            'inputs.enable_test_tenant_sync == true',
-            "vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true'"
-        )) {
-            $script:variablesJob | Should -Match ([regex]::Escape($clause))
-        }
+            'inputs.enable_test_tenant_sync == true'
+        ) -join ' && ')
+        $script:workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
         $script:variablesJob | Should -Not -Match "github\.event_name == 'schedule'|\|\|"
     }
 

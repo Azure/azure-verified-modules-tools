@@ -35,7 +35,6 @@ param(
     [switch]$metadataBackfill,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @(),
-    [bool]$bamiTestTenantSyncEnabled = $false,
     [hashtable]$bamiSettings = @{}
 )
 
@@ -98,12 +97,11 @@ if(!$repositoryCreationModeEnabled){
 $repositoryConfig = Get-Content -Path $repoConfigFilePath -Raw | ConvertFrom-Json
 $settings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId $repoId
 $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'legacy' } else { $settings.TestTenant }
-$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant `
-    -Enabled $bamiTestTenantSyncEnabled -BamiValues $bamiSettings
-if ($testTenant.Status -ceq 'PendingTestTenantActivation') {
-    Write-Warning "${repoId}: BAMI activation is disabled. Repository settings are unchanged; select legacy in configuration for an explicit rollback."
-    return [pscustomobject]@{ Status = $testTenant.Status; RepoId = $repoId; TestTenant = 'bami' }
+if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true' -and
+    ($env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or $env:GITHUB_REF -cne 'refs/heads/main')) {
+    throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
 }
+$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
 Write-Host "$([Environment]::NewLine)Checking $($repoId)"
 
 if(!$skipCleanup) {

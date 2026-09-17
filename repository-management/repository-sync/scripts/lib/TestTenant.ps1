@@ -8,7 +8,6 @@ function Resolve-RepositoryTestTenantSettings {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [object] $TestTenant,
-        [bool] $Enabled = $false,
         [System.Collections.IDictionary] $BamiValues = @{}
     )
 
@@ -16,14 +15,10 @@ function Resolve-RepositoryTestTenantSettings {
         throw [System.ArgumentException]::new('testTenant must be exactly legacy or bami.')
     }
     $settings = $null
-    $status = 'Ready'
-    if ($TestTenant -ceq 'bami' -and $Enabled) {
+    if ($TestTenant -ceq 'bami') {
         $settings = Get-AvmBamiSettings -Values $BamiValues
     }
-    elseif ($TestTenant -ceq 'bami') {
-        $status = 'PendingTestTenantActivation'
-    }
-    return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = $status; Settings = $settings }
+    return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = 'Ready'; Settings = $settings }
 }
 
 function Get-AvmBamiIdentityStateKey {

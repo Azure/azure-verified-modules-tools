@@ -11,32 +11,28 @@ BeforeAll {
     }
 }
 
-Describe 'Terraform selection activation' {
+Describe 'Terraform test tenant selection' {
     It 'keeps explicitly legacy selections on their normal path without candidate dependencies' {
         $result = Resolve-RepositoryTestTenantSettings -TestTenant legacy
         $result.TestTenant | Should -BeExactly 'legacy'
         $result.Status | Should -BeExactly 'Ready'
         $result.Settings | Should -BeNullOrEmpty
-        (Resolve-RepositoryTestTenantSettings -TestTenant legacy -Enabled $true -BamiValues @{ invalid = 'ignored' }).TestTenant |
+        (Resolve-RepositoryTestTenantSettings -TestTenant legacy -BamiValues @{ invalid = 'ignored' }).TestTenant |
             Should -BeExactly 'legacy'
     }
 
-    It 'blocks disabled BAMI selections without silently converting them to legacy' {
-        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami
+    It 'resolves selected BAMI settings without a separate activation parameter' {
+        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami -BamiValues (New-AvmTestBamiSettings)
         $result.TestTenant | Should -BeExactly 'bami'
         $result.SelectedTestTenant | Should -BeExactly 'bami'
-        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
-        $result.Settings | Should -BeNullOrEmpty
-        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $false
-        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
-    }
-
-    It 'requires all candidate settings before activation and never chooses a partial legacy tuple' {
-        { Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $true -BamiValues @{} } | Should -Throw
-        $result = Resolve-RepositoryTestTenantSettings -TestTenant bami -Enabled $true -BamiValues (New-AvmTestBamiSettings)
-        $result.TestTenant | Should -BeExactly 'bami'
         $result.Status | Should -BeExactly 'Ready'
         $result.Settings.Count | Should -Be 8
+        $result.Settings.TEST_BAMI_TENANT_ID | Should -BeExactly '10000000-0000-4000-8000-000000000001'
+        (Get-Command Resolve-RepositoryTestTenantSettings).Parameters.ContainsKey('Enabled') | Should -BeFalse
+    }
+
+    It 'requires the complete selected bundle and rejects invalid selections instead of falling back to legacy' {
+        { Resolve-RepositoryTestTenantSettings -TestTenant bami } | Should -Throw '*complete BAMI bundle*'
         foreach ($value in @('BAMI', 'future', $true, 1)) {
             { Resolve-RepositoryTestTenantSettings -TestTenant $value } | Should -Throw '*exactly*'
         }
@@ -175,15 +171,21 @@ Describe 'Terraform effective contract and state wiring' {
         ([regex]::Matches($candidate, 'use_cli\s*=\s*false')).Count | Should -Be 2
     }
 
-    It 'gates activation off by default before mutations and does not copy or log controller credentials' {
+    It 'validates selected settings and trusted main before mutations without an activation switch' {
         $source = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1')
-        $source | Should -Match '\[bool\]\$bamiTestTenantSyncEnabled = \$false'
+        $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation'
+        $source | Should -Match '\$env:GITHUB_ACTIONS -eq ''true'''
+        $source | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
+        $source | Should -Match '\$env:GITHUB_REF -cne ''refs/heads/main'''
+        $source.IndexOf('$env:GITHUB_REPOSITORY') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
+        $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source.IndexOf('Invoke-AvmBamiRepositoryIdentity') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source | Should -Match 'if \(\$testTenant.TestTenant -ceq ''bami''\)'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
-        $workflow | Should -Match 'vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == ''true'''
-        $workflow | Should -Match 'github.ref == ''refs/heads/main'''
+        $workflow | Should -Match '-bamiSettings \$bamiSettings'
+        $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled'
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
         $helper | Should -Not -Match 'state (mv|rm|push|pull)|force-unlock|Import-Az|az login|Set-Az'

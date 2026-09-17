@@ -30,8 +30,8 @@ Describe 'Component: Terraform metadata workflow scope' -Tag Component {
             $workflow | Should -Match ("(?m)- name: '\[AVM\] " + $step + "'\r?\n        (?!if:)")
         }
         $workflow | Should -Match "github.event_name != 'workflow_dispatch' \|\| inputs.sync_project_items"
-        $workflow | Should -Match "-bamiTestTenantSyncEnabled \(\`$env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true'\)"
-        $workflow | Should -Match "github.repository == 'Azure/azure-verified-modules-tools' && github.ref == 'refs/heads/main' && vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true'"
+        $workflow | Should -Match '-bamiSettings \$bamiSettings'
+        $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled'
         $ci = Get-Content (Join-Path $script:repoRoot '.github' 'workflows' 'ci.yml') -Raw
         $ci | Should -Match "if:.*vars\.ARM_CLIENT_ID != ''"
     }
