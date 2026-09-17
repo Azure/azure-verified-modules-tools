@@ -21,8 +21,6 @@ Describe 'Invoke-TerraformInit' {
             -repositoryCreationModeEnabled $true `
             -repoId 'example' `
             -orgAndRepoName 'Azure/example' `
-            -stateStorageAccountName 'storage' `
-            -stateContainerName 'state' `
             -issueLog @()
 
         Should -Invoke Invoke-TerraformWithRetry -Exactly 1 -ParameterFilter {
@@ -42,6 +40,9 @@ Describe 'Invoke-TerraformInit' {
             -orgAndRepoName 'Azure/example' `
             -stateStorageAccountName 'storage' `
             -stateContainerName 'state' `
+            -stateTenantId '44444444-4444-4444-8444-444444444444' `
+            -stateSubscriptionId '55555555-5555-4555-8555-555555555555' `
+            -stateClientId '66666666-6666-4666-8666-666666666666' `
             -issueLog @()
 
         Should -Invoke Invoke-TerraformWithRetry -Exactly 1 -ParameterFilter {
@@ -51,15 +52,13 @@ Describe 'Invoke-TerraformInit' {
         }
     }
 
-    It 'leaves legacy backend identity discovery unchanged' {
-        Mock Invoke-TerraformWithRetry { [pscustomobject]@{ success = $true } }
-        $null = Invoke-TerraformInit -terraformModulePath $TestDrive `
-            -repoId 'example' -stateStorageAccountName 'storage' -stateContainerName 'tfstate' -issueLog @()
-
-        Should -Invoke Invoke-TerraformWithRetry -Exactly 1 -ParameterFilter {
-            $commands[0].Arguments.Count -eq 5 -and
-            ($commands[0].Arguments -join ' ') -notmatch '(resource_group_name|tenant_id|client_id|subscription_id|oidc_token)='
-        }
+    It 'rejects missing remote identity instead of using provider discovery' {
+        Mock Invoke-TerraformWithRetry { throw 'Terraform must not run' }
+        {
+            Invoke-TerraformInit -terraformModulePath $TestDrive `
+                -repoId 'example' -stateStorageAccountName 'storage' -stateContainerName 'tfstate' -issueLog @()
+        } | Should -Throw '*all five*'
+        Should -Invoke Invoke-TerraformWithRetry -Exactly 0
     }
 
     It 'pins only nonsecret backend metadata without changing provider environment' {
@@ -109,12 +108,12 @@ Describe 'Invoke-TerraformInit' {
 
     }
 
-    It 'rejects partial backend identity before Terraform runs' {
+    It 'rejects partial backend configuration before Terraform runs' {
         Mock Invoke-TerraformWithRetry { throw 'Terraform must not run' }
         {
             Invoke-TerraformInit -terraformModulePath $TestDrive `
                 -stateTenantId '44444444-4444-4444-8444-444444444444' -issueLog @()
-        } | Should -Throw '*all three*'
+        } | Should -Throw '*all five*'
         Should -Invoke Invoke-TerraformWithRetry -Exactly 0
     }
 }
@@ -144,11 +143,14 @@ Describe 'State identity wiring' {
         }
     }
 
-    It 'passes state identity before any repository mutations' {
+    It 'requires complete state configuration before any repository mutations' {
         $source = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             'repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1'
         )) -Raw
-        $source.IndexOf('Resolve-RepositorySyncStateIdentity') |
+        $validationIndex = $source.IndexOf('Resolve-RepositorySyncStateConfiguration')
+        $validationIndex | Should -BeGreaterThan 0
+        $validationIndex | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $validationIndex |
             Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source | Should -Match '(?s)Invoke-TerraformInit\s+`.*?-stateTenantId \$stateTenantId'
         $source | Should -Match '(?s)Invoke-TerraformInit\s+`.*?-stateClientId \$stateClientId'
@@ -176,6 +178,7 @@ Describe 'State identity wiring' {
         $workflow | Should -Match 'ARM_BACKEND_STORAGE_ACCOUNT_NAME: \$\{\{ steps\.state-backend\.outputs\.storage-account \}\}'
         $workflow | Should -Match 'ARM_BACKEND_STORAGE_CONTAINER_NAME: \$\{\{ steps\.state-backend\.outputs\.container \}\}'
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
+        $workflow | Should -Not -Match '(?<![A-Z_])STORAGE_ACCOUNT_(CONTAINER_)?NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
         $workflow | Should -Match 'cancel-in-progress: false'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
@@ -192,13 +195,6 @@ Describe 'State identity wiring' {
 
 Describe 'Resolve-RepositorySyncStateConfiguration' {
     BeforeEach {
-        $script:legacy = @{
-            TenantId = '11111111-1111-4111-8111-111111111111'
-            SubscriptionId = '22222222-2222-4222-8222-222222222222'
-            ClientId = '33333333-3333-4333-8333-333333333333'
-            StorageAccountName = 'originalstorage'
-            ContainerName = 'original-state'
-        }
         $script:backend = @{
             TenantId = '44444444-4444-4444-8444-444444444444'
             SubscriptionId = '55555555-5555-4555-8555-555555555555'
@@ -208,33 +204,42 @@ Describe 'Resolve-RepositorySyncStateConfiguration' {
         }
     }
 
-    It 'selects the complete TME configuration without modifying original settings' {
-        $original = $script:legacy.Clone()
-        $selected = Resolve-RepositorySyncStateConfiguration -Backend $script:backend -Legacy $script:legacy
+    It 'selects the complete backend without modifying the supplied settings' {
+        $original = $script:backend.Clone()
+        $selected = Resolve-RepositorySyncStateConfiguration -Backend $script:backend
         foreach ($key in $script:backend.Keys) {
             $selected.$key | Should -Be $script:backend[$key]
-            $script:legacy[$key] | Should -Be $original[$key]
+            $script:backend[$key] | Should -Be $original[$key]
         }
     }
 
-    It 'falls back to the original identity and storage only when every override is unset' {
-        $selected = Resolve-RepositorySyncStateConfiguration -Backend @{} -Legacy $script:legacy
-        foreach ($key in $script:legacy.Keys) {
-            $selected.$key | Should -Be $script:legacy[$key]
-        }
+    It 'does not accept a legacy configuration source' {
+        (Get-Command Resolve-RepositorySyncStateConfiguration).Parameters.Keys | Should -Not -Contain 'Legacy'
     }
 
-    It 'rejects each partial override combination instead of mixing tenants or accounts' {
+    It 'rejects every incomplete configuration instead of mixing tenants or accounts' {
         $names = @('TenantId', 'SubscriptionId', 'ClientId', 'StorageAccountName', 'ContainerName')
-        foreach ($mask in 1..30) {
+        foreach ($mask in 0..30) {
             $partial = @{}
             foreach ($index in 0..4) {
                 if ($mask -band (1 -shl $index)) {
                     $partial[$names[$index]] = $script:backend[$names[$index]]
                 }
             }
-            { Resolve-RepositorySyncStateConfiguration -Backend $partial -Legacy $script:legacy } |
+            { Resolve-RepositorySyncStateConfiguration -Backend $partial } |
                 Should -Throw '*all five*'
+        }
+    }
+
+    It 'rejects blank values for each backend field' -ForEach @(
+        @{ Value = $null }
+        @{ Value = '' }
+        @{ Value = ' ' }
+    ) {
+        foreach ($key in $script:backend.Keys) {
+            $partial = $script:backend.Clone()
+            $partial[$key] = $Value
+            { Resolve-RepositorySyncStateConfiguration -Backend $partial } | Should -Throw '*all five*'
         }
     }
 
@@ -246,13 +251,13 @@ Describe 'Resolve-RepositorySyncStateConfiguration' {
         @{ Key = 'ContainerName'; Value = 'state/path'; Message = '*state container*' }
     ) {
         $script:backend[$Key] = $Value
-        { Resolve-RepositorySyncStateConfiguration -Backend $script:backend -Legacy $script:legacy } |
+        { Resolve-RepositorySyncStateConfiguration -Backend $script:backend } |
             Should -Throw $Message
     }
 
     It 'rejects invalid identity values even with complete storage configuration' {
         $script:backend.ClientId = 'not-a-guid'
-        { Resolve-RepositorySyncStateConfiguration -Backend $script:backend -Legacy $script:legacy } |
+        { Resolve-RepositorySyncStateConfiguration -Backend $script:backend } |
             Should -Throw '*non-empty GUIDs*'
     }
 }
@@ -261,19 +266,26 @@ Describe 'State backend workflow resolution' {
     It 'resolves the actual workflow script without mixing configurations' -ForEach @(
         @{ Mode = 'backend' }
         @{ Mode = 'legacy' }
+        @{ Mode = 'missing' }
         @{ Mode = 'partial' }
     ) {
         $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
         $step = [regex]::Match($workflow, '(?ms)^      - name: ''\[AVM\] Resolve state backend''\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
         $step.Success | Should -BeTrue
+        $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+        $bindings | Should -Be @(
+            'ARM_BACKEND_CLIENT_ID', 'ARM_BACKEND_STORAGE_ACCOUNT_NAME', 'ARM_BACKEND_STORAGE_CONTAINER_NAME',
+            'ARM_BACKEND_SUBSCRIPTION_ID', 'ARM_BACKEND_TENANT_ID'
+        )
         $body = [regex]::Replace($step.Groups['body'].Value, '(?m)^          ', '')
         $resolve = [scriptblock]::Create($body)
         $variables = @{
             ARM_TENANT_ID = '11111111-1111-4111-8111-111111111111'
             ARM_SUBSCRIPTION_ID = '22222222-2222-4222-8222-222222222222'
             ARM_CLIENT_ID = '33333333-3333-4333-8333-333333333333'
-            STORAGE_ACCOUNT_NAME = 'originalstorage'
-            STORAGE_ACCOUNT_CONTAINER_NAME = 'original-state'
+            STORAGE_ACCOUNT_NAME = ''
+            STORAGE_ACCOUNT_CONTAINER_NAME = ''
             ARM_BACKEND_TENANT_ID = ''
             ARM_BACKEND_SUBSCRIPTION_ID = ''
             ARM_BACKEND_CLIENT_ID = ''
@@ -281,7 +293,11 @@ Describe 'State backend workflow resolution' {
             ARM_BACKEND_STORAGE_CONTAINER_NAME = ''
             GITHUB_OUTPUT = Join-Path $TestDrive "$Mode-outputs.txt"
         }
-        if ($Mode -ne 'legacy') {
+        if ($Mode -eq 'legacy') {
+            $variables.STORAGE_ACCOUNT_NAME = 'originalstorage'
+            $variables.STORAGE_ACCOUNT_CONTAINER_NAME = 'original-state'
+        }
+        if ($Mode -in @('backend', 'partial')) {
             $variables.ARM_BACKEND_TENANT_ID = '44444444-4444-4444-8444-444444444444'
             $variables.ARM_BACKEND_SUBSCRIPTION_ID = '55555555-5555-4555-8555-555555555555'
             $variables.ARM_BACKEND_CLIENT_ID = '66666666-6666-4666-8666-666666666666'
@@ -299,7 +315,7 @@ Describe 'State backend workflow resolution' {
             foreach ($name in $variables.Keys) {
                 [Environment]::SetEnvironmentVariable($name, $variables[$name])
             }
-            if ($Mode -eq 'partial') {
+            if ($Mode -ne 'backend') {
                 { & $resolve } | Should -Throw '*all five*'
                 Test-Path -LiteralPath $variables.GITHUB_OUTPUT | Should -BeFalse
             }
@@ -307,18 +323,14 @@ Describe 'State backend workflow resolution' {
                 & $resolve
                 $output = Get-Content -LiteralPath $variables.GITHUB_OUTPUT
                 $output.Count | Should -Be 5
-                $prefix = if ($Mode -eq 'backend') { 'ARM_BACKEND_' } else { 'ARM_' }
-                $output | Should -Contain "tenant-id=$($variables[$prefix + 'TENANT_ID'])"
-                $output | Should -Contain "subscription-id=$($variables[$prefix + 'SUBSCRIPTION_ID'])"
-                $output | Should -Contain "client-id=$($variables[$prefix + 'CLIENT_ID'])"
-                if ($Mode -eq 'backend') {
-                    $output | Should -Contain 'storage-account=tmestorage'
-                    $output | Should -Contain 'container=tme-state'
-                }
-                else {
-                    $output | Should -Contain 'storage-account=originalstorage'
-                    $output | Should -Contain 'container=original-state'
-                }
+                $output | Should -Contain "tenant-id=$($variables.ARM_BACKEND_TENANT_ID)"
+                $output | Should -Contain "subscription-id=$($variables.ARM_BACKEND_SUBSCRIPTION_ID)"
+                $output | Should -Contain "client-id=$($variables.ARM_BACKEND_CLIENT_ID)"
+                $output | Should -Contain 'storage-account=tmestorage'
+                $output | Should -Contain 'container=tme-state'
+            }
+            foreach ($name in 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID', 'ARM_CLIENT_ID') {
+                [Environment]::GetEnvironmentVariable($name) | Should -Be $variables[$name]
             }
         }
         finally {

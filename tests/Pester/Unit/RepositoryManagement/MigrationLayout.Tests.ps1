@@ -112,8 +112,6 @@ Describe "Repository management migration layout" {
             "AVM_APP_CLIENT_ID"
             "IDENTITY_RESOURCE_GROUP_NAME"
             "MANAGEMENT_GROUP_ID"
-            "STORAGE_ACCOUNT_CONTAINER_NAME"
-            "STORAGE_ACCOUNT_NAME"
             "TEST_SUBSCRIPTION_IDS"
         )
 
