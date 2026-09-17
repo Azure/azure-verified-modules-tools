@@ -99,14 +99,14 @@ workflow permits its scheduled CODEOWNERS apply runs; it is not a preview-only
 switch. This change remains intentional; the required rollout pause uses
 GitHub's workflow disable control rather than restoring that variable.
 
-The separate BAMI activation gate, `AVM_BAMI_TEST_TENANT_SYNC_ENABLED`, is
-retained. It controls test-tenant/identity propagation, not metadata backfill or
-catalog publication. Bicep variable propagation additionally requires the
-manual `enable_test_tenant_sync` input. Optional full-sync backfill includes normal
-tenant parsing and identity/state operations. A BAMI-selected repository with a
-disabled gate or pending identity validation stops before file preparation,
+BAMI routing uses the existing central `testTenant` selections without a global
+activation variable. Bicep variable propagation remains manual-only through
+`enable_test_tenant_sync`, with `plan_only=false` required for publication.
+Optional full-sync backfill includes normal tenant parsing and identity/state
+operations. A BAMI-selected repository with an incomplete bundle, untrusted
+GitHub context, or pending identity validation stops before file preparation,
 including metadata creation. The agent-led migration does not invoke those
-operations or bypass their gates.
+operations or bypass their safeguards.
 
 Consumers must have a compatible released Avm.Authoring package installed before
 adopting single-segment canonical values or `Oracle.Database` metadata. Merging

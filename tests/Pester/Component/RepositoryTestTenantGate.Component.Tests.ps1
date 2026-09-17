@@ -6,15 +6,22 @@ BeforeAll {
     . (Join-Path $libRoot 'RepoTree.ps1')
     . (Join-Path $libRoot 'AvmPreCommit.ps1')
     . (Join-Path $libRoot 'TestTenant.ps1')
+    . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
     foreach ($name in @('Logging', 'RepositoryConfig', 'BranchProtection', 'UnmanagedRulesets', 'CodeQlDefaultSetup', 'TeamsAndUsers', 'TerraformOperations')) {
         . (Join-Path $libRoot "$name.ps1")
     }
 }
 
-Describe 'Repository sync activation gate' -Tag Component {
+Describe 'Repository sync test tenant selection' -Tag Component {
     BeforeEach {
-        $script:previousAzureAdFlag = $env:ARM_USE_AZUREAD
-        $script:previousGitHubEvent = $env:GITHUB_EVENT_NAME
+        $script:previousEnvironment = @{}
+        foreach ($environmentName in @('ARM_USE_AZUREAD', 'GITHUB_EVENT_NAME', 'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REF', 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED')) {
+            $script:previousEnvironment[$environmentName] = [Environment]::GetEnvironmentVariable($environmentName)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_REF = 'refs/heads/main'
+        $env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED = 'false'
         $script:terraformRoot = Join-Path $TestDrive ('terraform-' + [guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:terraformRoot
         $script:configPath = Join-Path $TestDrive 'repository-config.json'
@@ -33,6 +40,7 @@ Describe 'Repository sync activation gate' -Tag Component {
             stateClientId = '66666666-6666-4666-8666-666666666666'
             stateStorageAccountName = 'tmestorage'
             stateContainerName = 'tme-state'
+            bamiSettings = New-AvmTestBamiSettings
         }
         Mock Start-Process { throw [System.InvalidOperationException]::new('ordinary-sync-process-boundary') }
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw [System.InvalidOperationException]::new('candidate-sync-process-boundary') }
@@ -72,43 +80,100 @@ Describe 'Repository sync activation gate' -Tag Component {
     }
 
     AfterEach {
-        [Environment]::SetEnvironmentVariable('GITHUB_EVENT_NAME', $script:previousGitHubEvent)
-        if ($null -eq $script:previousAzureAdFlag) {
-            Remove-Item Env:\ARM_USE_AZUREAD -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:ARM_USE_AZUREAD = $script:previousAzureAdFlag
+        foreach ($environmentName in $script:previousEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($environmentName, $script:previousEnvironment[$environmentName])
         }
     }
 
-    It 'preserves <InitialTenant> with gate <Gate> and PlanOnly <PlanOnly>' -TestCases @(
-        @{ InitialTenant = 'legacy'; Gate = 'absent'; PlanOnly = $false }
-        @{ InitialTenant = 'legacy'; Gate = 'false'; PlanOnly = $false }
-        @{ InitialTenant = 'legacy'; Gate = 'absent'; PlanOnly = $true }
-        @{ InitialTenant = 'legacy'; Gate = 'false'; PlanOnly = $true }
-        @{ InitialTenant = 'bami'; Gate = 'absent'; PlanOnly = $false }
-        @{ InitialTenant = 'bami'; Gate = 'false'; PlanOnly = $false }
-        @{ InitialTenant = 'bami'; Gate = 'absent'; PlanOnly = $true }
-        @{ InitialTenant = 'bami'; Gate = 'false'; PlanOnly = $true }
+    It 'routes selected BAMI on <Event> with removed flag <Flag> and plan <PlanOnly>' -TestCases @(
+        @{ Event = 'workflow_dispatch'; Flag = 'absent'; PlanOnly = $false }
+        @{ Event = 'workflow_dispatch'; Flag = 'false'; PlanOnly = $false }
+        @{ Event = 'workflow_dispatch'; Flag = 'absent'; PlanOnly = $true }
+        @{ Event = 'workflow_dispatch'; Flag = 'false'; PlanOnly = $true }
+        @{ Event = 'schedule'; Flag = 'absent'; PlanOnly = $false }
+        @{ Event = 'schedule'; Flag = 'false'; PlanOnly = $false }
+        @{ Event = 'repository_dispatch'; Flag = 'absent'; PlanOnly = $false }
+        @{ Event = 'repository_dispatch'; Flag = 'false'; PlanOnly = $false }
     ) {
-        param($InitialTenant, $Gate, $PlanOnly)
+        param($Event, $Flag, $PlanOnly)
 
-        $priorSettings = @{
-            ARM_TENANT_ID = "$InitialTenant-tenant"
-            ARM_CLIENT_ID = "$InitialTenant-repository-client"
-            TEST_SUBSCRIPTION_IDS = "$InitialTenant-subscriptions"
-        }
-        $variablesPath = Join-Path $script:terraformRoot 'terraform.tfvars.json'
-        $priorSettings | ConvertTo-Json | Set-Content -LiteralPath $variablesPath
-        $before = (Get-FileHash -LiteralPath $variablesPath -Algorithm SHA256).Hash
+        $env:GITHUB_EVENT_NAME = $Event
+        if ($Flag -ceq 'absent') { [Environment]::SetEnvironmentVariable('AVM_BAMI_TEST_TENANT_SYNC_ENABLED', $null) }
         $script:arguments.planOnly = $PlanOnly
-        if ($Gate -eq 'false') { $script:arguments.bamiTestTenantSyncEnabled = $false }
+        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
+        Mock Clear-TerraformWorkspace {}
 
         $result = & $script:driver @script:arguments
 
-        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
-        $result.TestTenant | Should -BeExactly 'bami'
-        (Get-FileHash -LiteralPath $variablesPath -Algorithm SHA256).Hash | Should -BeExactly $before
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        $expectedPlan = $PlanOnly
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+            $PlanOnly -eq $expectedPlan -and $RepoId -ceq 'avm-ptn-example-repo' -and
+            $Repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
+            $BamiValues.Count -eq 8 -and $BamiValues.TEST_BAMI_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001' -and
+            $Backend.TenantId -ceq '44444444-4444-4444-8444-444444444444'
+        }
+        Should -Invoke Clear-TerraformWorkspace -Exactly 1
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    It 'rejects a missing BAMI value before cleanup or repository work: <Missing>' -ForEach @(
+        @{ Missing = 'TEST_BAMI_TENANT_ID' }
+        @{ Missing = 'TEST_BAMI_CONTROLLER_CLIENT_ID' }
+        @{ Missing = 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID' }
+        @{ Missing = 'TEST_BAMI_SUBSCRIPTION_IDS' }
+        @{ Missing = 'TEST_BAMI_MANAGEMENT_GROUP_ID' }
+        @{ Missing = 'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME' }
+        @{ Missing = 'TEST_BAMI_BICEP_CLIENT_ID' }
+        @{ Missing = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID' }
+        @{ Missing = 'all' }
+    ) {
+        if ($Missing -ceq 'all') { $script:arguments.Remove('bamiSettings') }
+        else { $script:arguments.bamiSettings.Remove($Missing) }
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        foreach ($plan in @($true, $false)) {
+            $script:arguments.planOnly = $plan
+            { & $script:driver @script:arguments } | Should -Throw '*BAMI*'
+        }
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects inconsistent BAMI values before cleanup: <Case>' -ForEach @(
+        @{ Case = 'shared execution identity'; Change = { param($v) $v.TEST_BAMI_BICEP_CLIENT_ID = $v.TEST_BAMI_CONTROLLER_CLIENT_ID } }
+        @{ Case = 'admin in test pool'; Change = { param($v) $v.TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $v.TEST_BAMI_SUBSCRIPTION_IDS[0].id } }
+        @{ Case = 'persistent in test pool'; Change = { param($v) $v.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $v.TEST_BAMI_SUBSCRIPTION_IDS[0].id } }
+    ) {
+        & $Change $script:arguments.bamiSettings
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        { & $script:driver @script:arguments } | Should -Throw '*BAMI*'
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects BAMI Actions execution outside trusted tools main: <Repository> <Ref>' -TestCases @(
+        @{ Repository = 'fork/azure-verified-modules-tools'; Ref = 'refs/heads/main' }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature' }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/pull/1/merge' }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = '' }
+        @{ Repository = ''; Ref = 'refs/heads/main' }
+    ) {
+        param($Repository, $Ref)
+        $env:GITHUB_REPOSITORY = $Repository
+        $env:GITHUB_REF = $Ref
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        { & $script:driver @script:arguments } | Should -Throw '*requires trusted*main*'
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
         Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
@@ -122,7 +187,9 @@ Describe 'Repository sync activation gate' -Tag Component {
         $script:config.repositoryGroups[0].testTenant = 'legacy'
         $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
         $script:arguments.planOnly = $PlanOnly
-        $script:arguments.bamiTestTenantSyncEnabled = $false
+        $script:arguments.bamiSettings = @{ invalid = 'ignored' }
+        $env:GITHUB_REPOSITORY = 'fork/azure-verified-modules-tools'
+        $env:GITHUB_REF = 'refs/heads/feature'
 
         { & $script:driver @script:arguments } | Should -Throw '*ordinary-sync-process-boundary*'
         Should -Invoke Start-Process -Exactly 1 -ParameterFilter { $FilePath -eq 'gh' }
@@ -139,7 +206,7 @@ Describe 'Repository sync activation gate' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    It 'keeps metadata backfill behind the disabled BAMI gate with plan <RequestedPlanOnly>' -TestCases @(
+    It 'keeps metadata backfill pending only for an unready BAMI identity with plan <RequestedPlanOnly>' -TestCases @(
         @{ RequestedPlanOnly = $true }
         @{ RequestedPlanOnly = $false }
     ) {
@@ -148,19 +215,17 @@ Describe 'Repository sync activation gate' -Tag Component {
         $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
         $script:arguments.metadataBackfill = $true
         $script:arguments.planOnly = $RequestedPlanOnly
-        $script:arguments.bamiTestTenantSyncEnabled = $false
         Mock Invoke-AvmPreCommitForRepository {}
-        Mock Invoke-AvmBamiRepositoryIdentity {}
+        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
         Mock Clear-TerraformWorkspace {}
 
         $result = & $script:driver @script:arguments
 
-        $result.Status | Should -BeExactly 'PendingTestTenantActivation'
-        $result.TestTenant | Should -BeExactly 'bami'
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
         $env:ARM_USE_AZUREAD | Should -BeExactly 'true'
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
-        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
-        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $PlanOnly -eq $RequestedPlanOnly }
+        Should -Invoke Clear-TerraformWorkspace -Exactly 1
         Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
@@ -172,19 +237,19 @@ Describe 'Repository sync activation gate' -Tag Component {
         Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
     }
 
+    It 'no longer accepts the removed activation parameter' {
+        { & $script:driver @script:arguments -bamiTestTenantSyncEnabled $false } | Should -Throw '*bamiTestTenantSyncEnabled*'
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
     Context 'Full management with optional metadata creation' {
         BeforeEach {
             $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
             $script:arguments.metadataBackfill = $true
-            $script:arguments.bamiTestTenantSyncEnabled = $true
             $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
             $management = $script:managementState
             Mock Resolve-RepositorySyncStateConfiguration ({ $management.Events.Add('state') }.GetNewClosure())
-            Mock Resolve-RepositoryTestTenantSettings ({
-                param($TestTenant)
-                $management.Events.Add('tenant')
-                @{ TestTenant = $TestTenant; Status = 'Ready'; Settings = @{ fixture = 'bami' } }
-            }.GetNewClosure())
             Mock Clear-TerraformWorkspace ({ $management.Events.Add('cleanup') }.GetNewClosure())
             Mock Invoke-AvmBamiRepositoryIdentity ({
                 $management.Events.Add('identity')
@@ -227,7 +292,7 @@ Describe 'Repository sync activation gate' -Tag Component {
             $script:arguments.planOnly = $Plan
             $null = & $script:driver @script:arguments
 
-            $expected = @('state', 'tenant', 'cleanup')
+            $expected = @('state', 'cleanup')
             if ($Tenant -ceq 'bami') { $expected += 'identity' }
             $expected += @('tree', 'protection', 'rulesets', 'codeql', 'teams', 'collaborators', 'unmanaged-teams', 'init', 'terraform', 'files')
             $script:managementState.Events | Should -Be $expected
@@ -242,6 +307,14 @@ Describe 'Repository sync activation gate' -Tag Component {
             }
             Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
                 $metadataBackfill -and $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
+            }
+            if ($Tenant -ceq 'bami') {
+                Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8
+                }
+            }
+            else {
+                Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
             }
             Should -Invoke Start-Process -Exactly 0
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0

@@ -56,15 +56,18 @@ approval for that consequence before running manual canaries.
 
 ## BAMI candidate identities
 
-The Tools **repository variable** `AVM_BAMI_TEST_TENANT_SYNC_ENABLED` defaults
-off. Do not shadow this shared workflow-admission control in the `avm` environment.
-While off, BAMI-selected repositories report `PendingTestTenantActivation`
-without cleanup, Terraform, or repository mutations. Existing test settings
-remain untouched, whether they are already BAMI or still legacy. Disabling the
-gate is **not rollback**: only selecting `legacy` in configuration restores the
-legacy tuple. Enabling the gate permits selected repositories to use the
-[complete BAMI bundle](../README.md#test-tenant-selection) on trusted `main`
-runs, including subsequent scheduled syncs.
+The central `testTenant` selection determines which repositories use BAMI;
+there is no additional activation variable or script parameter. BAMI-selected
+repositories require the [complete BAMI bundle](../README.md#test-tenant-selection)
+before cleanup, Terraform, or repository mutations. In GitHub Actions they also
+require the trusted Tools repository and `refs/heads/main`. Legacy selections
+retain their normal path without requiring BAMI values.
+
+Selected canaries attempt BAMI preparation during normal trusted-main syncs,
+including scheduled and repository-dispatch applies. Manual `plan_only` still
+defaults to `true`; `false` permits the existing write path. Selecting `legacy`
+in configuration restores the legacy consumer tuple, rather than merely
+pausing the BAMI path.
 
 The [candidate root](bami-identity/main.tf) reuses the Azure identity module
 only for selected repositories. Each candidate has its own
@@ -82,7 +85,7 @@ identity scope, no deletes/replacements, and the required delegation deny
 condition. Failed or uncertain applies do not trigger automatic state repair,
 state imports, or apply retries.
 
-Before any operator-approved activation, verify the
+Before any operator-approved BAMI run, verify the
 [Owner delegation fix](https://github.com/Azure/azure-verified-modules-tools/pull/111)
 has landed: Owner, User Access Administrator, and RBAC Administrator must all
 be denied for delegation in both write and delete clauses. The current

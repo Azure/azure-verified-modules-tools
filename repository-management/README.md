@@ -58,7 +58,7 @@ or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
 Unselected repositories retain their existing settings. See the
-[candidate state and activation prerequisites](repository-sync/README.md#bami-candidate-identities).
+[candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
 Bicep variable sync copies only the five execution fields: tenant, Bicep
 client, subscription pool, management group, and persistent subscription.
@@ -80,22 +80,25 @@ the compact subscription-pool JSON.
 
 Tools rejects malformed arrays, duplicate/noncanonical paths, and incomplete
 candidate bundles before publication. Reserved-subscription and identity
-separation checks are unchanged.
+separation checks are unchanged. These checks do not prove that separately
+published source values came from the same publication; a complete but mixed
+bundle may still pass structural validation.
 Successful variable readback is not proof of Azure authentication or permissions.
 Bicep activation also requires its own execution-identity federated credential
 for the intended subject
 `repository_owner_id:6844498:repository_id:447791597:environment:avm-validation`.
 That credential and runtime login remain unproved; do not reuse the
-Tools-controller credential or enable publication to work around this gate.
+Tools-controller credential or enable publication to bypass an unverified
+authentication prerequisite.
 
 ### Bicep variable publication
 
 The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
-Tools `main`, manual dispatch with `enable_test_tenant_sync=true` (default
-false), and the **repository variable**
-`AVM_BAMI_TEST_TENANT_SYNC_ENABLED=true`. Keep this control out of the `avm`
-environment: [environment-level variables are unavailable during job admission](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence).
-Those gates also apply to planning. `plan_only=true` is the default and never
+Tools `main` and manual dispatch with `enable_test_tenant_sync=true` (default
+false). That input selects the publication operation, not which modules use
+BAMI; only the central module groups select those paths. There is no global
+activation variable. These execution controls also apply to planning.
+`plan_only=true` is the default and never
 writes variables; publication additionally requires `plan_only=false`.
 The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
@@ -109,10 +112,10 @@ the explicit scope.
 The existing CODEOWNERS job still runs on manual dispatch. Setting
 `plan_only=false` also permits that job's existing merge behavior; review both
 effects before dispatching. No workflow is enabled by changing the central
-canary configuration alone.
-Merging does not activate BAMI with the gate off, but BAMI-selected Terraform
-canaries remain pending and skip normal repository sync; it is not a
-zero-behavior-change merge.
+canary configuration alone. Scheduled Bicep Sync continues to run CODEOWNERS
+only; it does not publish test-tenant variables. In contrast, selected Terraform
+canaries attempt BAMI preparation during their normal sync, including scheduled
+applies, subject to the candidate validation prerequisites.
 
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
 defaults to a read-only plan. Standalone publication requires an explicit,

@@ -11,7 +11,7 @@ on:
         default: true
         type: boolean
       enable_test_tenant_sync:
-        description: 'Opt in to nonsecret BAMI variable sync after operator setup and approval (also requires AVM_BAMI_TEST_TENANT_SYNC_ENABLED).'
+        description: 'Run nonsecret BAMI variable sync for the centrally selected module paths.'
         default: false
         type: boolean
 
@@ -68,8 +68,7 @@ jobs:
       github.repository == 'Azure/azure-verified-modules-tools' &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
-      inputs.enable_test_tenant_sync == true &&
-      vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true'
+      inputs.enable_test_tenant_sync == true
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20

@@ -227,7 +227,6 @@ jobs:
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
-            -bamiTestTenantSyncEnabled ($env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED -ceq 'true') `
             -bamiSettings $bamiSettings `
             -forceFileUpdate:$forceFileUpdate `
             -metadataBackfill:$metadataBackfill
@@ -246,7 +245,6 @@ jobs:
           ARM_USE_AZUREAD: true
           ARM_USE_OIDC: true
           TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
-          AVM_BAMI_TEST_TENANT_SYNC_ENABLED: ${{ github.repository == 'Azure/azure-verified-modules-tools' && github.ref == 'refs/heads/main' && vars.AVM_BAMI_TEST_TENANT_SYNC_ENABLED == 'true' }}
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
