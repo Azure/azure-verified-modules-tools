@@ -161,6 +161,12 @@ creates a missing `_header.md` with a folder-derived heading, and creates
 missing `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
+The transform sets `enable_telemetry = false` on example module calls only when
+the called module declares that input. It adds missing arguments and replaces
+other values, leaving existing `false` values and unsupported modules alone.
+Root/submodule call sites and the module's default are unchanged. Examples keep
+their authored file layout; drift checking reports changes without saving them.
+
 Run commands from the Terraform module root, or pass that root explicitly with
 `-Path`. Direct `*.tf` source is sufficient for both automatic and explicit
 Terraform context, so `avm pre-commit -Ecosystem terraform` can create

@@ -8,6 +8,7 @@ module "test" {
 
   location                 = "westus3"
   create_example_resources = false
+  enable_telemetry         = false
 }
 
 output "resource_ids" {

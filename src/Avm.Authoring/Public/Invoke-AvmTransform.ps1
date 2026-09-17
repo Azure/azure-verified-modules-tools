@@ -10,7 +10,9 @@ function Invoke-AvmTransform {
           - terraform  -> Invoke-AvmTerraformTransform  (mapotf transform + clean-backup)
 
         The Terraform engine is wired against the pinned mapotf binary and
-        scoped config profiles under Resources/mapotf/{common,module,root}.
+        scoped config profiles under Resources/mapotf/{common,module,root,example}.
+        Examples set enable_telemetry=false only when the called module
+        declares that input; module defaults remain unchanged.
         A consumer repository can override a profile under
         config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
         The Bicep engine remains intentionally stubbed in

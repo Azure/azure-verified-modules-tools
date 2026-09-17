@@ -66,6 +66,10 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform example transforms now set `enable_telemetry = false` on module
+  calls only when the called module declares that input. Existing `false`
+  values and modules without the input are unchanged. Examples run after
+  root/submodule transforms and before common attribute ordering.
 - Manual Terraform metadata backfill now runs the full normal repository sync,
   including managed files, pre-commit, CODEOWNERS, repository/Azure management
   and standard automatic merge on apply. Only metadata creation is optional;
@@ -123,9 +127,10 @@ section when cutting a release.
 - The packaged MaPoTF rules now remove AVM telemetry contributions from AzAPI
   headers and nested-module tracing chains while preserving unrelated custom
   headers. Cleanup removes the associated forwarding arguments, helper locals,
-  and input variables. MaPoTF rules are split into common, module, and root
-  profiles: root modules run all three, submodules run module plus common, and
-  examples run common only. Examples receive in-place ordering but never
+  and input variables. MaPoTF rules are split into common, module, root, and
+  example profiles: root modules run root, module, and common, submodules run
+  module plus common, and examples run example plus common. Examples receive
+  in-place telemetry opt-out and ordering but never
   module file-layout transforms. Telemetry continues through the root
   `modtm_telemetry` resource.
 - The packaged AVM TFLint plugin now pins 1.0.0 and every AVM rule reference

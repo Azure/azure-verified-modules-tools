@@ -164,7 +164,7 @@ Describe 'Module Resources packaging' {
         $fixture | Should -Not -Match 'replace_triggers_refs\s*='
     }
 
-    It 'ships non-duplicated common, module, and root mapotf profiles' {
+    It 'ships non-duplicated common, module, root, and example mapotf profiles' {
         $mapotfRoot = Join-Path $script:moduleRoot (Join-Path 'Resources' 'mapotf')
         $expected = @{
             common = @(
@@ -184,6 +184,9 @@ Describe 'Module Resources packaging' {
             )
             root = @(
                 'main_telemetry_tf.mptf.hcl'
+            )
+            example = @(
+                'disable_telemetry.mptf.hcl'
             )
         }
 

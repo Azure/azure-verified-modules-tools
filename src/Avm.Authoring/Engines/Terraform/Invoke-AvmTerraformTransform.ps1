@@ -156,7 +156,7 @@ function Get-AvmTerraformTransformTarget {
             $targets.Add([pscustomobject]@{
                     Path     = $example.FullName
                     Scope    = 'example'
-                    Profiles = @('common', 'example')
+                    Profiles = @('example', 'common')
                 })
         }
     }
@@ -285,12 +285,14 @@ function Invoke-AvmTerraformTransform {
         Profile composition:
           - root: root, module, common
           - local module: module, common
-          - example: common, then optional example
+          - example: example, common
 
         Root-only telemetry therefore never runs against submodules or examples.
         Module file-layout and provider rules apply to the root and submodules.
-        Common in-place ordering and cleanup applies everywhere. The final call
-        removes '*.tf.mptfbackup' files.
+        Examples set enable_telemetry=false only on calls whose source module
+        declares that input, before common in-place ordering and cleanup.
+        Common rules apply everywhere. The final call removes '*.tf.mptfbackup'
+        files.
 
         Several of the vendored configs (e.g. order_resource_attrs) read
         provider schemas, so mapotf shells out to 'terraform init' +
@@ -315,10 +317,11 @@ function Invoke-AvmTerraformTransform {
         in CI therefore means the author did not run pre-commit, and pr-check
         flags it.
 
-        Independent root, local-module, and example targets run through the
-        bounded Invoke-AvmParallel scheduler. A configured TF_PLUGIN_CACHE_DIR
-        forces serial target execution because Terraform's shared provider
-        plugin cache is not concurrency-safe.
+        Root and local-module targets finish before examples inspect their
+        inputs. Each group runs through the bounded Invoke-AvmParallel
+        scheduler. A configured TF_PLUGIN_CACHE_DIR forces serial target
+        execution because Terraform's shared provider plugin cache is not
+        concurrency-safe.
 
         mapotf exit codes: 0 = success. A transform failure caused by a
         recognized transient Terraform provider network error is retried twice
@@ -375,7 +378,7 @@ function Invoke-AvmTerraformTransform {
         common = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'common'
         module = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'module'
         root = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'root'
-        example = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'example' -Optional
+        example = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'example'
     }
     $targets = @(Get-AvmTerraformTransformTarget -Root $Context.Root)
     Write-AvmLog ("transform: discovered {0} target(s)" -f $targets.Count) -Level Verbose | Out-Null
@@ -440,11 +443,20 @@ function Invoke-AvmTerraformTransform {
             ProfileDirs = $profileDirs
             EnvVars     = $mapotfEnv
         }
+        $moduleTargets = @($targets | Where-Object Scope -ne 'example')
+        $exampleTargets = @($targets | Where-Object Scope -eq 'example')
         Invoke-AvmParallel `
-            -InputObject $targets `
+            -InputObject $moduleTargets `
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `
             -Argument $transformOptions `
             -ThrottleLimit $effectiveThrottle
+        if ($exampleTargets.Count -gt 0) {
+            Invoke-AvmParallel `
+                -InputObject $exampleTargets `
+                -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+                -Argument $transformOptions `
+                -ThrottleLimit $effectiveThrottle
+        }
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 
         foreach ($target in $targets) {
