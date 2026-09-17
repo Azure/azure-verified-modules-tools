@@ -221,7 +221,7 @@ run "direct" {
         $result = Invoke-AvmTest -Path $fixture -Ecosystem terraform
 
         $result.Status | Should -Be 'pass' -Because ($result.Issues | ConvertTo-Json -Depth 4 -Compress)
-        $result.FilesProcessed | Should -Be 7
+        $result.FilesProcessed | Should -Be 10 -Because 'all three examples now include a telemetry variables.tf file'
         @($result.Issues | Where-Object Severity -eq 'error').Count | Should -Be 0
         @($result.Issues | Where-Object {
                 $_.Code -in @('terraform.module-coverage', 'terraform.module-coverage-unavailable')

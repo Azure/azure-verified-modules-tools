@@ -600,6 +600,43 @@ $Argument
         $checked | Should -Be 5
     }
 
+    It 'preserves inline example declarations beside an existing telemetry variables file' {
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        Copy-Item -LiteralPath (Join-Path $script:fixturesRoot 'terraform-azure-avm-res-mock' 'examples' 'default' 'variables.tf') `
+            -Destination $exampleVariables
+        $exampleVariables | Should -Exist
+        $originalVariables = [System.IO.File]::ReadAllBytes($exampleVariables)
+        $originalVariables | Should -Not -BeNullOrEmpty
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -NoNewline -Value @'
+module "example" {
+  source           = "../../modules/support"
+  enable_telemetry = var.enable_telemetry
+}
+
+variable "single_file_input" {
+  type    = string
+  default = "example"
+}
+
+output "single_file_output" {
+  value = var.single_file_input
+}
+
+'@
+
+        Invoke-TelemetryProfiles -Root $script:target
+
+        $exampleVariables | Should -Exist
+        [System.IO.File]::ReadAllBytes($exampleVariables) | Should -Be $originalVariables
+        $main = Get-Content -LiteralPath $script:main -Raw
+        $main | Should -Match 'variable "single_file_input"'
+        $main | Should -Match 'output "single_file_output"'
+        $main | Should -Match 'value\s*=\s*var\.single_file_input'
+        @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File | Sort-Object Name).Name |
+            Should -Be @('main.tf', 'variables.tf')
+        Assert-TelemetryExampleValid -Root $script:target
+    }
+
     It 'sees newly generated root inputs, preserves module calls, and restores drift checks' {
         $rootProfile = Join-Path $script:root 'config' 'mapotf' 'root'
         $wrapper = Join-Path $script:root 'modules' 'wrapper'
