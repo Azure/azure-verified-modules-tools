@@ -5,7 +5,11 @@ locals {
 }
 
 transform "reorder_attributes" "var_attrs" {
-  for_each                 = local.variables_for_attr_order
+  # Inline blocks have at most one argument and must retain their inline tokens.
+  for_each = {
+    for name, variable in local.variables_for_attr_order : name => variable
+    if variable.mptf.range.start_line != variable.mptf.range.end_line
+  }
   target_block_address     = "variable.${each.key}"
   head_attributes          = ["type", "default", "description", "nullable", "sensitive", "ephemeral"]
   sort_body_alphabetically = false

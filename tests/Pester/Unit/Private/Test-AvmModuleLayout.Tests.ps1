@@ -215,6 +215,18 @@ Describe 'Module Resources packaging' {
         $content | Should -Match 'nested_block_path\s*=\s*\["required_providers"\]'
     }
 
+    It 'ships example-only telemetry variable creation and in-place defaults' {
+        $path = Join-Path $script:moduleRoot 'Resources' 'mapotf' 'example' 'disable_telemetry.mptf.hcl'
+        $content = Get-Content -LiteralPath $path -Raw
+
+        $content | Should -Match 'contains\(keys\(source\.variables\), "enable_telemetry"\)'
+        $content | Should -Match 'name == "enable_telemetry"'
+        $content | Should -Match 'filename\s*=\s*"variables\.tf"'
+        $content | Should -Match 'enable_telemetry\s*=\s*var\.enable_telemetry'
+        $content | Should -Match '(?s)transform "update_in_place" "default_example_telemetry_variable".*?asraw \{\s*default = false\s*\}'
+        $content | Should -Not -Match 'enable_telemetry\s*=\s*false'
+    }
+
     It 'ships the consolidated pin manifest and no legacy tools lock' {
         $resources = Join-Path $script:moduleRoot 'Resources'
         (Join-Path $resources 'avm.pins.jsonc') | Should -Exist

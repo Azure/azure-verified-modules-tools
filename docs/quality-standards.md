@@ -548,12 +548,22 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 ## Appendix B. Decision: mapotf replacement strategy
 
 > **UPDATE 2026-09-17 - example telemetry.** Examples run `example,common`.
-> The example profile sets `enable_telemetry = false` only when the called
-> module declares that input. Existing literal `false` values are untouched;
-> other values are replaced. Modules without the input are unchanged. Root and
-> local-module targets finish first so examples see any newly generated inputs.
-> Root/submodule call-site values and the module's telemetry default are not
-> changed by the example profile.
+> The example profile sets `enable_telemetry = var.enable_telemetry` only when
+> the called module declares that input. It preserves correct references and
+> comments, replacing other call-site values. Existing example variables retain
+> their location and metadata, but their default is set to false, including for
+> required inputs. Missing declarations are added as bool inputs with a false
+> default in `variables.tf`, only for examples with supported calls. Modules
+> without the input are unchanged. Root and local-module targets finish first so
+> examples see newly generated inputs. The example profile does not change
+> root/submodule call sites or source-module telemetry defaults.
+
+MaPoTF 0.2.1 must not reorder an existing inline variable argument before
+updating it. The example profile uses scalar-safe `update_in_place` mode for
+existing inline defaults, and expands only inline declarations missing a
+default before adding one. Common variable ordering leaves inline blocks alone:
+they have at most one argument, and reordering their tokens can produce invalid
+HCL. Multiline variable ordering and attribute hygiene remain unchanged.
 
 > **UPDATE 2026-09-08 - provider requirements.** The module profile inserts AzAPI
 > only for direct `azapi_*` resources/data sources or an existing AzAPI
@@ -1015,7 +1025,7 @@ Two telemetry channels exist in the AVM contract. They must stay separate.
 **Concrete rules this implies:**
 
 - `Avm.Authoring` MUST NOT read or write the `modtm` resource's UUID (`resource.random_uuid.telemetry`).
-- CLI telemetry settings MUST NOT influence `var.enable_telemetry` in any module under test. The separate MaPoTF example profile sets supported module-call inputs to `false`, independently of CLI telemetry settings and without changing the called module's default.
+- CLI telemetry settings MUST NOT influence `var.enable_telemetry` in any module under test. The separate MaPoTF example profile passes `var.enable_telemetry` to supported calls and ensures the example input defaults to `false`, independently of CLI telemetry settings and without changing the called module's default.
 - `Avm.Authoring`'s install-id and the `modtm` UUID are unrelated; they MUST NOT be derived from each other.
 - The two endpoints MUST be different. `modtm` posts to Microsoft's telemetry endpoint (`modtm.azurewebsites.net` as of 2026-06); `Avm.Authoring` will post to a separate Application Insights resource owned by the AVM core team.
 - `avm format` running `mapotf transform` against a module emits the module's `main.telemetry.tf` (because that's the AVM contract). That is *module-side* code-generation, not CLI-side telemetry. The mapotf-emitted file is shipped to the user's module, not invoked by the CLI.

@@ -31,17 +31,18 @@ Describe 'Integration: MAPOTF example telemetry' -Tag 'Integration' -Skip:($env:
         }
 
         function Invoke-TelemetryProcess {
-            param([string] $Tool, [string[]] $Arguments, [string] $Root)
+            param([string] $Tool, [string[]] $Arguments, [string] $Root, [switch] $IgnoreExitCode)
 
             InModuleScope 'Avm.Authoring' -Parameters @{
                 Tool = $script:tools[$Tool]
                 Arguments = $Arguments
                 Root = $Root
                 Environment = $script:processEnvironment
+                IgnoreExitCode = [bool]$IgnoreExitCode
             } {
-                param($Tool, $Arguments, $Root, $Environment)
+                param($Tool, $Arguments, $Root, $Environment, $IgnoreExitCode)
                 Invoke-AvmProcess -FilePath $Tool -ArgumentList $Arguments `
-                    -WorkingDirectory $Root -EnvVars $Environment
+                    -WorkingDirectory $Root -EnvVars $Environment -IgnoreExitCode:$IgnoreExitCode
             }
         }
 
@@ -68,15 +69,19 @@ Describe 'Integration: MAPOTF example telemetry' -Tag 'Integration' -Skip:($env:
         }
 
         function Invoke-TelemetryEngine {
-            param([string] $Root, [switch] $CheckDrift)
+            param([string] $Root, [switch] $CheckDrift, [switch] $WhatIf)
 
-            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $Root; CheckDrift = [bool]$CheckDrift } {
-                param($Root, $CheckDrift)
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                Root = $Root
+                CheckDrift = [bool]$CheckDrift
+                WhatIf = [bool]$WhatIf
+            } {
+                param($Root, $CheckDrift, $WhatIf)
                 Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
                         Kind = 'terraform-module-repo'
                         Root = $Root
                         Ecosystem = 'terraform'
-                    }) -CheckDrift:$CheckDrift -ThrottleLimit 4
+                    }) -CheckDrift:$CheckDrift -WhatIf:$WhatIf -ThrottleLimit 4
             }
         }
 
@@ -115,10 +120,13 @@ variable "z_optional" {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
-    It 'disables <Name> on the first pass and stays ordered and idempotent' -TestCases @(
+    It 'connects <Name> to the example variable on the first pass and stays ordered and idempotent' -TestCases @(
         @{ Name = 'an omitted optional input'; Value = ''; Required = $false }
         @{ Name = 'an enabled input'; Value = 'true'; Required = $false }
+        @{ Name = 'a disabled input'; Value = 'false'; Required = $false }
         @{ Name = 'a variable expression'; Value = 'var.enable_telemetry'; Required = $false }
+        @{ Name = 'a reference-looking string literal'; Value = '"var.enable_telemetry"'; Required = $false }
+        @{ Name = 'a conditional expression'; Value = 'var.enable_telemetry ? true : false'; Required = $false }
         @{ Name = 'a null input'; Value = 'null'; Required = $false }
         @{ Name = 'an omitted required input'; Value = ''; Required = $true }
     ) {
@@ -154,7 +162,7 @@ output "example" {
         $first = Get-Content -LiteralPath $script:main -Raw
         $body = [regex]::Match($first, '(?ms)^module "example" \{(?<body>.*?)^\}').Groups['body'].Value
         $body | Should -Not -BeNullOrEmpty
-        $body | Should -Match '(?m)^\s+enable_telemetry\s*=\s*false\s*$'
+        $body | Should -Match '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry\s*$'
         $names = @([regex]::Matches($body, '(?m)^\s+(\w+)\s*=') | ForEach-Object { $_.Groups[1].Value })
         $expected = if ($Required) {
             'source,enable_telemetry,a_optional,z_optional,depends_on'
@@ -163,7 +171,7 @@ output "example" {
             'source,a_optional,enable_telemetry,z_optional,depends_on'
         }
         ($names -join ',') | Should -BeExactly $expected
-        $first | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
+        $first | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
         $first | Should -Match 'output "example"'
         @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File).Name | Should -Be @('main.tf')
         (Get-FileHash -LiteralPath $script:variables).Hash | Should -BeExactly $sourceHash
@@ -173,42 +181,300 @@ output "example" {
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
     }
 
-    It 'leaves an existing literal false and its comment untouched' {
-        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+    It 'creates variables.tf for <Name> while preserving the call comment' -TestCases @(
+        @{ Name = 'literal false'; Value = 'false' }
+        @{ Name = 'an existing variable reference'; Value = 'var.enable_telemetry' }
+    ) {
+        param($Name, $Value)
+
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
 module "example" {
   source = "../../modules/support"
 
-  enable_telemetry = false # Keep telemetry disabled.
+  enable_telemetry = $Value # see variables.tf
 }
-'@
-        $before = Get-Content -LiteralPath $script:main -Raw
+"@
         Invoke-TelemetryProfiles -Root $script:target -Profile example
-        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $before
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry # see variables\.tf$'
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        $declaration = Get-Content -LiteralPath $exampleVariables -Raw
+        $declaration | Should -Match '(?s)variable "enable_telemetry" \{\s*type\s*=\s*bool\s*default\s*=\s*false'
+        @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File).Name |
+            Should -Be @('main.tf', 'variables.tf')
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
+    }
+
+    It 'leaves an already-correct reference and false-default declaration byte-identical' {
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -NoNewline -Value @'
+module "example" {
+  source = "../../modules/support"
+
+  enable_telemetry = var.enable_telemetry # see variables.tf
+}
+
+'@
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        Set-Content -LiteralPath $exampleVariables -Encoding utf8NoBOM -NoNewline -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = false # Keep this default.
+}
+
+'@
+        $beforeMain = Get-Content -LiteralPath $script:main -Raw
+        $beforeVariables = Get-Content -LiteralPath $exampleVariables -Raw
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $beforeMain
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $beforeVariables
         Assert-TelemetryExampleValid -Root $script:target
     }
 
+    It 'reuses the <Name> declaration without moving it or changing metadata' -TestCases @(
+        @{ Name = 'required input'; File = 'inputs.tf'; Default = ''; Type = 'any'; Nullable = 'true'; Sensitive = 'false' }
+        @{ Name = 'true default'; File = 'variables.telemetry.tf'; Default = 'true'; Type = 'bool'; Nullable = 'false'; Sensitive = 'true' }
+        @{ Name = 'null default'; File = 'variable.tf'; Default = 'null'; Type = 'bool'; Nullable = 'false'; Sensitive = 'true' }
+        @{ Name = 'string false default'; File = 'settings.tf'; Default = '"false"'; Type = 'bool'; Nullable = 'false'; Sensitive = 'true' }
+        @{ Name = 'false default in main'; File = 'main.tf'; Default = 'false'; Type = 'bool'; Nullable = 'true'; Sensitive = 'false' }
+    ) {
+        param($Name, $File, $Default, $Type, $Nullable, $Sensitive)
+
+        $defaultLine = if ($Default) { "  default = $Default # Keep this comment." } else { '' }
+        $description = "Retain this authored description.`nIt spans multiple lines."
+        $declaration = @"
+variable "enable_telemetry" {
+  type = $Type
+$defaultLine
+  description = <<DESCRIPTION
+$description
+DESCRIPTION
+  nullable  = $Nullable
+  sensitive = $Sensitive
+
+  validation {
+    condition     = var.enable_telemetry != null
+    error_message = "Telemetry must not be null."
+  }
+}
+"@
+        $call = @'
+module "example" {
+  source           = "../../modules/support"
+  enable_telemetry = true
+}
+'@
+        $declarationPath = Join-Path $script:target $File
+        Set-Content -LiteralPath $script:main -Value $call -Encoding utf8NoBOM
+        $content = if ($File -eq 'main.tf') { "$declaration`n`n$call" } else { $declaration }
+        Set-Content -LiteralPath $declarationPath -Value $content -Encoding utf8NoBOM
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        $first = Get-Content -LiteralPath $declarationPath -Raw
+        $first | Should -Match '(?m)^\s+default\s*=\s*false'
+        $first | Should -Match "(?m)^\s+type\s*=\s*$Type\s*$"
+        $first | Should -Match "(?m)^\s+nullable\s*=\s*$Nullable\s*$"
+        $first | Should -Match "(?m)^\s+sensitive\s*=\s*$Sensitive\s*$"
+        $first | Should -Match ([regex]::Escape($description))
+        $first | Should -Match 'condition\s*=\s*var\.enable_telemetry != null'
+        $first | Should -Match 'error_message\s*=\s*"Telemetry must not be null\."'
+        if ($Default) {
+            $first | Should -Match 'default\s*=\s*false # Keep this comment\.'
+        }
+        $files = @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File | Sort-Object Name)
+        $files.Name | Should -Be @(@('main.tf', $File) | Sort-Object -Unique)
+        $allContent = ($files | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+        @([regex]::Matches($allContent, '(?m)^variable "enable_telemetry"')) | Should -HaveCount 1
+        $allContent | Should -Match 'enable_telemetry\s*=\s*var\.enable_telemetry'
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        Get-Content -LiteralPath $declarationPath -Raw | Should -BeExactly $first
+    }
+
+    It 'appends the exact variable after <Name> and a trailing comment without a newline' -TestCases @(
+        @{ Name = 'an unrelated input'; Variable = 'name' }
+        @{ Name = 'the enabled_telemetry spelling'; Variable = 'enabled_telemetry' }
+        @{ Name = 'a differently cased variable'; Variable = 'Enable_telemetry' }
+        @{ Name = 'a longer variable name'; Variable = 'enable_telemetry_extra' }
+    ) {
+        param($Name, $Variable)
+
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        $originalVariable = "variable `"$Variable`" { default = true }"
+        $comment = '# variable "enable_telemetry" { default = true }'
+        $before = "$originalVariable`n$comment"
+        Set-Content -LiteralPath $exampleVariables -Value $before -NoNewline -Encoding utf8NoBOM
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+module "example" {
+  source = "../../modules/support"
+}
+'@
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        $first = Get-Content -LiteralPath $exampleVariables -Raw
+        $first | Should -Match (
+            '^' + [regex]::Escape($originalVariable) + '\r?\n(?:\r?\n)?' +
+            [regex]::Escape($comment) + '\r?\nvariable "enable_telemetry" \{')
+        $first | Should -Match '(?ms)^variable "enable_telemetry" \{\s*type\s*=\s*bool\s*default\s*=\s*false'
+        @([regex]::Matches($first, '(?m)^variable "enable_telemetry"')) | Should -HaveCount 1
+        Get-Content -LiteralPath $script:main -Raw | Should -Match 'enable_telemetry\s*=\s*var\.enable_telemetry'
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile example
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $first
+    }
+
+    It 'defaults an inline <Name> declaration without duplicating it' -TestCases @(
+        @{ Name = 'empty'; Body = '' }
+        @{ Name = 'required bool'; Body = 'type = bool' }
+        @{ Name = 'true-default'; Body = 'default = true' }
+        @{ Name = 'false-default'; Body = 'default = false' }
+    ) {
+        param($Name, $Body)
+
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
+variable "enable_telemetry" { $Body }
+
+module "example" {
+  source = "../../modules/support"
+}
+"@
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
+        $first | Should -Match 'enable_telemetry\s*=\s*var\.enable_telemetry'
+        @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File).Name | Should -Be @('main.tf')
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+    }
+
+    It 'repairs stranded telemetry variables without TFLint unused declarations for <Calls> calls' -TestCases @(
+        @{ Calls = 1 }
+        @{ Calls = 2 }
+    ) {
+        param($Calls)
+
+        $script:tools['tflint'] = InModuleScope 'Avm.Authoring' {
+            (Resolve-AvmTool -Name tflint).Path
+        }
+        $config = Join-Path $script:root 'unused.tflint.hcl'
+        Set-Content -LiteralPath $config -Encoding utf8NoBOM -Value @'
+config {
+  disabled_by_default = true
+}
+
+plugin "terraform" {
+  enabled = true
+}
+
+rule "terraform_unused_declarations" {
+  enabled = true
+}
+'@
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        Set-Content -LiteralPath $exampleVariables -Encoding utf8NoBOM -Value @'
+variable "name" {
+  type = string
+}
+
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+  description = <<DESCRIPTION
+This variable controls whether or not telemetry is enabled for the module.
+For more information see <https://aka.ms/avm/telemetryinfo>.
+If it is set to false, then no telemetry will be collected.
+DESCRIPTION
+}
+'@
+        $callBlocks = foreach ($index in 1..$Calls) {
+            @"
+module "call$index" {
+  source = "../../modules/support"
+
+  enable_telemetry = false # see variables.tf
+}
+"@
+        }
+        $output = @'
+output "name" {
+  value = var.name
+}
+'@
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value (
+            ($callBlocks -join "`n`n") + "`n`n" + $output)
+        Assert-TelemetryExampleValid -Root $script:target
+        $arguments = @('--config', $config, '--format=json', '--call-module-type=none')
+        $before = Invoke-TelemetryProcess -Tool tflint -Root $script:target -Arguments $arguments -IgnoreExitCode
+        $before.ExitCode | Should -Be 2
+        $before.StdOut | Should -Not -BeNullOrEmpty
+        $diagnostic = $before.StdOut | ConvertFrom-Json
+        @($diagnostic.errors) | Should -HaveCount 0
+        @($diagnostic.issues) | Should -HaveCount 1
+        $diagnostic.issues[0].rule.name | Should -BeExactly 'terraform_unused_declarations'
+        $diagnostic.issues[0].message | Should -Match 'enable_telemetry'
+        $diagnostic.issues[0].range.filename | Should -BeExactly 'variables.tf'
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        @([regex]::Matches($first, '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry # see variables\.tf$')) |
+            Should -HaveCount $Calls
+        $declaration = Get-Content -LiteralPath $exampleVariables -Raw
+        $declaration | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
+        $declaration | Should -Match '(?s)description = <<DESCRIPTION\nThis variable controls whether or not telemetry is enabled for the module\.\nFor more information see <https://aka\.ms/avm/telemetryinfo>\.\nIf it is set to false, then no telemetry will be collected\.\nDESCRIPTION'
+        @([regex]::Matches($declaration, '(?m)^variable "enable_telemetry"')) | Should -HaveCount 1
+        $after = Invoke-TelemetryProcess -Tool tflint -Root $script:target -Arguments $arguments
+        $after.ExitCode | Should -Be 0
+        $after.StdOut | Should -Not -BeNullOrEmpty
+        $clean = $after.StdOut | ConvertFrom-Json
+        @($clean.errors) | Should -HaveCount 0
+        @($clean.issues) | Should -HaveCount 0
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
+    }
+
     It 'does not add an unsupported input for <Name>' -TestCases @(
+        @{ Name = 'a utility without an example variable'; Source = 'output "name" { value = "utility" }'; DeclareVariable = $false }
         @{ Name = 'a utility with no variables'; Source = 'output "name" { value = "utility" }' }
         @{ Name = 'the enabled_telemetry spelling'; Source = 'variable "enabled_telemetry" { default = true }' }
         @{ Name = 'a differently cased input'; Source = 'variable "Enable_telemetry" { default = true }' }
         @{ Name = 'a commented-out input'; Source = "# variable `"enable_telemetry`" {}`noutput `"name`" { value = `"utility`" }" }
     ) {
-        param($Name, $Source)
+        param($Name, $Source, [bool] $DeclareVariable = $true)
 
         Set-Content -LiteralPath $script:variables -Value $Source -Encoding utf8NoBOM
-        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+        $declaration = if ($DeclareVariable) {
+            @'
 variable "enable_telemetry" {
   type    = bool
   default = true
 }
+'@
+        }
+        else {
+            ''
+        }
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
+$declaration
 
 module "utility" {
   source = "../../modules/support"
 }
-'@
+"@
         $before = Get-Content -LiteralPath $script:main -Raw
         Invoke-TelemetryProfiles -Root $script:target -Profile example
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $before
+        @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File).Name | Should -Be @('main.tf')
         Assert-TelemetryExampleValid -Root $script:target
     }
 
@@ -217,7 +483,9 @@ module "utility" {
 
         Invoke-TelemetryProfiles -Root $script:target
         $first = Get-Content -LiteralPath $script:main -Raw
-        $first | Should -Match '(?m)^\s+enable_telemetry\s*=\s*false\s*$'
+        $first | Should -Match '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry\s*$'
+        Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw |
+            Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
         Assert-TelemetryExampleValid -Root $script:target
         Invoke-TelemetryProfiles -Root $script:target
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
@@ -252,8 +520,12 @@ module "utility" {
         Invoke-TelemetryProfiles -Root $script:target
         $main = Get-Content -LiteralPath $script:main -Raw
         $helperContent = Get-Content -LiteralPath $helpers -Raw
-        @([regex]::Matches($main, '(?m)^\s+enable_telemetry\s*=\s*false\s*$')) | Should -HaveCount 2
-        @([regex]::Matches($helperContent, '(?m)^\s+enable_telemetry\s*=\s*false\s*$')) | Should -HaveCount 1
+        @([regex]::Matches($main, '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry\s*$')) | Should -HaveCount 2
+        @([regex]::Matches($helperContent, '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry\s*$')) | Should -HaveCount 1
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        $declaration = Get-Content -LiteralPath $exampleVariables -Raw
+        $declaration | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
+        @([regex]::Matches($declaration, '(?m)^variable "enable_telemetry"')) | Should -HaveCount 1
         $utilityBody = [regex]::Match($helperContent, '(?ms)^module "utility" \{(?<body>.*?)^\}').Groups['body'].Value
         $utilityBody | Should -Match 'source\s*=\s*"\.\./\.\./modules/support/utility"'
         $utilityBody | Should -Not -Match 'enable_telemetry'
@@ -262,22 +534,36 @@ module "utility" {
         Invoke-TelemetryProfiles -Root $script:target
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $main
         Get-Content -LiteralPath $helpers -Raw | Should -BeExactly $helperContent
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
     }
 
-    It 'leaves an example without module calls untouched' {
-        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value 'output "name" { value = "example" }'
+    It 'leaves an example without module calls <Name> untouched' -TestCases @(
+        @{ Name = 'and without a telemetry variable'; Content = 'output "name" { value = "example" }' }
+        @{ Name = 'but with a telemetry variable'; Content = 'variable "enable_telemetry" { default = true }' }
+    ) {
+        param($Name, $Content)
+
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value $Content
         $before = Get-Content -LiteralPath $script:main -Raw
 
         Invoke-TelemetryProfiles -Root $script:target -Profile example
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $before
+        @(Get-ChildItem -LiteralPath $script:target -Filter '*.tf' -File).Name | Should -Be @('main.tf')
     }
 
-    It 'reports an unreadable module source instead of assuming telemetry is unsupported' {
-        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+    It 'reports an unreadable source with <Name> instead of assuming telemetry is unsupported' -TestCases @(
+        @{ Name = 'no argument'; Argument = '' }
+        @{ Name = 'a literal false'; Argument = '  enable_telemetry = false' }
+        @{ Name = 'a variable reference'; Argument = '  enable_telemetry = var.enable_telemetry' }
+    ) {
+        param($Name, $Argument)
+
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
 module "example" {
   source = "./missing"
+$Argument
 }
-'@
+"@
         { Invoke-TelemetryProfiles -Root $script:target -Profile example } | Should -Throw '*cannot fetch module source*'
     }
 
@@ -292,10 +578,13 @@ module "example" {
             $examples = Join-Path $fixture 'examples'
             foreach ($example in Get-ChildItem -LiteralPath $examples -Directory) {
                 $main = Join-Path $example.FullName 'main.tf'
+                $variables = Join-Path $example.FullName 'variables.tf'
                 $readme = Join-Path $example.FullName 'README.md'
                 $beforeMain = Get-Content -LiteralPath $main -Raw
+                $beforeVariables = Get-Content -LiteralPath $variables -Raw
                 $beforeReadme = Get-Content -LiteralPath $readme -Raw
-                $beforeMain | Should -Match '(?m)^\s+enable_telemetry\s*=\s*false\s*$'
+                $beforeMain | Should -Match '(?m)^\s+enable_telemetry\s*=\s*var\.enable_telemetry\s*$'
+                $beforeVariables | Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
 
                 Invoke-TelemetryProfiles -Root $example.FullName -Profile example
                 $null = Invoke-TelemetryProcess -Tool terraform -Root $example.FullName -Arguments @('fmt', '-check', '-diff', '.')
@@ -303,6 +592,7 @@ module "example" {
                     '-c', (Join-Path $examples '.terraform-docs.yml'), '.'
                 )
                 Get-Content -LiteralPath $main -Raw | Should -BeExactly $beforeMain
+                Get-Content -LiteralPath $variables -Raw | Should -BeExactly $beforeVariables
                 Get-Content -LiteralPath $readme -Raw | Should -BeExactly $beforeReadme
                 $checked++
             }
@@ -357,22 +647,36 @@ module "wrapper" {
             $before[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
         }
         $examplePath = Join-Path 'examples' 'default' 'main.tf'
+        $exampleVariablesPath = Join-Path 'examples' 'default' 'variables.tf'
+        $dryRun = Invoke-TelemetryEngine -Root $script:root -WhatIf
+        $dryRun.Status | Should -Be 'skipped'
+        $untouched = @(Get-ChildItem -LiteralPath $script:root -Recurse -Filter '*.tf' -File)
+        $untouched | Should -HaveCount $before.Count
+        foreach ($file in $untouched) {
+            (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $before[$file.FullName]
+        }
+
         $drift = Invoke-TelemetryEngine -Root $script:root -CheckDrift
         $drift.Status | Should -Be 'fail'
         @($drift.Issues | Where-Object { $_.File -eq $examplePath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
+        @($drift.Issues | Where-Object { $_.File -eq $exampleVariablesPath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         $restored = @(Get-ChildItem -LiteralPath $script:root -Recurse -Filter '*.tf' -File)
         $restored | Should -HaveCount $before.Count
         foreach ($file in $restored) {
             (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $before[$file.FullName]
         }
         (Join-Path $script:root 'variables.tf') | Should -Not -Exist
+        (Join-Path $script:root $exampleVariablesPath) | Should -Not -Exist
 
         $result = Invoke-TelemetryEngine -Root $script:root
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -Contain $examplePath
+        $result.Changed | Should -Contain $exampleVariablesPath
         $example = Get-Content -LiteralPath $script:main -Raw
-        $example | Should -Match '(?ms)^module "example" \{[^}]*enable_telemetry\s*=\s*false'
+        $example | Should -Match '(?ms)^module "example" \{[^}]*enable_telemetry\s*=\s*var\.enable_telemetry'
         $example | Should -Match '(?ms)^module "wrapper" \{\s*source\s*=\s*"\.\./\.\./modules/wrapper"\s*\}'
+        Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
+            Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*false'
         Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
         foreach ($module in @($script:root, $wrapper)) {
