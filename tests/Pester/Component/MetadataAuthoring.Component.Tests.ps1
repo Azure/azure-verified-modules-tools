@@ -246,6 +246,38 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
             Should -Be 'avm/res/storage/storage-account/blob-service/container/metadata.json'
     }
 
+    It 'validates a single canonical type on grouped Bicep <Kind> roots and reduced children' -TestCases @(
+        @{ Kind = 'ptn'; Canonical = 'alz' }
+        @{ Kind = 'utl'; Canonical = 'naming' }
+    ) {
+        param($Kind, $Canonical)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
+        $modulePath = Join-Path $fixture.Root 'avm' $Kind 'group' 'module'
+        $childPath = Join-Path $modulePath 'child'
+        $null = New-Item -ItemType Directory -Path $childPath -Force
+        foreach ($path in @($modulePath, $childPath)) {
+            [System.IO.File]::WriteAllText((Join-Path $path 'main.bicep'), "metadata name = 'Storage'`nmetadata description = 'Creates storage.'`n")
+        }
+        $fixture.Data.canonicalType = $Canonical
+        if ($Kind -eq 'utl') { $fixture.Data.Remove('telemetryIdPrefix') }
+        else { $fixture.Data.telemetryIdPrefix = "46d3xbcp.ptn.$Canonical" }
+        $fixture.Paths = @($modulePath, $childPath)
+        $fixture.Root = $modulePath
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $fixture.Context.Scope = $null
+        $monorepo = $fixture.Context.Root
+        foreach ($path in @($monorepo, $modulePath, $childPath)) {
+            $fixture.Context.Root = $path
+            $fixture.Context.Kind = if ($path -ceq $monorepo) { 'bicep-monorepo' } else { 'bicep-module' }
+            foreach ($command in @('Invoke-AvmPreCommit', 'Invoke-AvmPrCheck')) {
+                $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $command
+                $probe.Result.Status | Should -Be 'pass'
+                ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+                $probe.Warnings | Should -HaveCount 0
+            }
+        }
+    }
+
     It 'does not turn a disabled child into a missing-file warning or a skipped validation' {
         $fixture = New-AuthoringMetadataFixture -Ecosystem terraform -Child
         Save-AuthoringMetadataFixture -Fixture $fixture

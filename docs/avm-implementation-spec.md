@@ -412,6 +412,10 @@ their source. The authoritative v1 input and catalog schemas are packaged under
 `Resources/Schemas/v1/` in this repository; validators never fetch a module's
 `$schema` URL at runtime. The required versioned `$schema` reference identifies
 the authored format; module metadata does not also store `schemaVersion`.
+Resource `canonicalType` values remain full ARM resource types. Pattern and
+utility values may be single taxonomy names such as `naming`, or slash-separated
+paths such as `lz/sub-vending`, for both root and reduced child metadata.
+This does not change repository naming or grouped Bicep module-path conventions.
 Root metadata owns a flat `owners` string array: bare GitHub usernames and
 qualified `@organization/team-slug` handles. Empty arrays are permitted and
 case-insensitive duplicates are rejected. Tier is not part of this contract.

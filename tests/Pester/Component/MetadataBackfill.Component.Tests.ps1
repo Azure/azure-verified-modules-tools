@@ -293,3 +293,175 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         $metadata.owners.Count | Should -Be 0
     }
 }
+
+Describe 'Component: single-segment metadata backfill' -Tag Component {
+    BeforeAll {
+        . (Join-Path $script:adapterRoot '..' 'module-catalog' 'scripts' 'ModuleCatalog.ps1')
+    }
+
+    It 'round-trips <ModuleId> and a reduced child through backfill, authoring checks, and catalog output' -TestCases @(
+        @{ ModuleId = 'avm-utl-naming'; ModuleType = 'utility'; Canonical = 'naming'; DisplayName = 'Module Naming' }
+        @{ ModuleId = 'avm-ptn-alz'; ModuleType = 'pattern'; Canonical = 'alz'; DisplayName = 'Illustrative pattern' }
+        @{ ModuleId = 'avm-utl-helpers2'; ModuleType = 'utility'; Canonical = 'helpers2'; DisplayName = 'Example utility' }
+    ) {
+        param($ModuleId, $ModuleType, $Canonical, $DisplayName)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $bicep = Join-Path $root 'bicep'
+        $terraform = Join-Path $root 'terraform'
+        $legacy = Join-Path $root 'legacy'
+        $repository = "Azure/terraform-azure-$ModuleId"
+        $moduleRoot = Join-Path $terraform "terraform-azure-$ModuleId"
+        $childPath = Join-Path $moduleRoot 'modules' 'helper'
+        $null = New-Item -ItemType Directory -Path $bicep, $legacy, $childPath -Force
+        $source = "locals { unrelated = true }`n"
+        foreach ($path in @($moduleRoot, $childPath)) {
+            [System.IO.File]::WriteAllText((Join-Path $path 'main.tf'), $source)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $moduleRoot '_header.md'), "# $DisplayName`n`nProvides an example module.`n")
+        $row = [ordered]@{
+            ModuleName = $ModuleId
+            ModuleDisplayName = $DisplayName
+            RepoURL = "https://github.com/$repository"
+            ModuleStatus = 'Proposed'
+            Description = ''
+            PrimaryModuleOwnerGHHandle = 'jaredfholgate'
+            SecondaryModuleOwnerGHHandle = ''
+        }
+        $configuration = Read-AvmCatalogConfiguration
+        foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
+            $rows = @(if ($output.ecosystem -eq 'terraform' -and $output.moduleType -eq $ModuleType) { $row })
+            $csv = ConvertTo-AvmCatalogCsv -Headers @($row.Keys) -Rows $rows
+            [System.IO.File]::WriteAllText((Join-Path $legacy $output.sourceFile), $csv)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $legacy 'BicepMARModules.json'), "[]`n")
+        $csvOutput = @($configuration.outputs | Where-Object {
+                $_.kind -eq 'csv' -and $_.ecosystem -eq 'terraform' -and $_.moduleType -eq $ModuleType
+            })[0]
+        $childRow = @{
+            ModulePath = 'modules/helper'
+            RepoURL = "https://github.com/$repository"
+            ModuleDisplayName = 'Helper'
+            Description = 'Provides a helper.'
+            CanonicalType = 'helper'
+        }
+        if ($ModuleType -eq 'pattern') {
+            $childRow.TelemetryIdPrefix = "46d3xtrf.ptn.$Canonical-helper"
+        }
+        $result = & $script:initialize -RepositoryRoot $moduleRoot -Repository $repository -Ecosystem terraform `
+            -LegacyCsvPath (Join-Path $legacy $csvOutput.sourceFile) -LegacyRecord @($childRow)
+        $result.Status | Should -Be 'pass'
+        $result.Modules | Should -HaveCount 2
+        foreach ($plan in $result.Modules) { $plan.PlannedFiles | Should -Be @('metadata.json') }
+        $metadata = Read-AvmCatalogJson -Path (Join-Path $moduleRoot 'metadata.json')
+        $metadata.canonicalType | Should -BeExactly $Canonical
+        $metadata.moduleDisplayName | Should -BeExactly $DisplayName
+        $metadata.moduleDescription | Should -BeExactly 'Provides an example module.'
+        $metadata.owners | Should -Be @('jaredfholgate')
+        $metadata.Contains('telemetryIdPrefix') | Should -Be ($ModuleType -eq 'pattern')
+        if ($ModuleType -eq 'pattern') {
+            $metadata.telemetryIdPrefix | Should -BeExactly "46d3xtrf.ptn.$Canonical"
+        }
+        $childMetadata = Read-AvmCatalogJson -Path (Join-Path $childPath 'metadata.json')
+        $childMetadata.canonicalType | Should -BeExactly 'helper'
+        $childMetadata.Contains('owners') | Should -BeFalse
+        $authoring = Get-Module Avm.Authoring
+        $validation = & $authoring {
+            param($Path)
+            Test-AvmMetadataModules -Context ([pscustomobject]@{ Root = $Path; Ecosystem = 'terraform'; Kind = 'terraform-module-repo' })
+        } $moduleRoot
+        $validation.Status | Should -Be 'pass'
+        $validation.Issues | Should -HaveCount 0
+
+        $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy
+        $registry = @{}
+        foreach ($item in $inventory.Items) {
+            $registry[$item.Identity.Key] = @{
+                status = 'not-published'; currentVersion = $null; firstPublishedIn = $null
+                downloads = $null; marRegistered = $null
+            }
+        }
+        $github = @{
+            users = @{ jaredfholgate = @{ login = 'jaredfholgate'; name = $null; type = 'User' } }
+            teams = @{}
+        }
+        $bundle = New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub $github `
+            -RepositoryRevisions @(@{ repository = $repository; commit = 'a' * 40; status = 'collected'; archived = $false })
+        $outputPath = Join-Path $root 'generated'
+        Write-AvmCatalogBundle -Bundle $bundle -OutputPath $outputPath
+        $catalogPath = (Get-AvmCatalogOutput -Configuration $configuration -Kind catalog).bundlePath
+        $catalog = Read-AvmCatalogJson -Path (Join-Path $outputPath $catalogPath)
+        $catalog.modules.Count | Should -Be 2
+        foreach ($canonicalType in @($Canonical, 'helper')) {
+            $record = $catalog.modules[$canonicalType].terraform[0]
+            $record.canonicalType | Should -BeExactly $canonicalType
+            $record.owners | Should -Be @('jaredfholgate')
+            $record.provider | Should -BeExactly 'azure'
+            ($null -eq $record.providerNamespace) | Should -BeTrue
+            ($null -eq $record.resourceType) | Should -BeTrue
+            if ($ModuleType -eq 'utility') { ($null -eq $record.telemetryIdPrefix) | Should -BeTrue }
+        }
+        ($null -eq $catalog.modules[$Canonical].terraform[0].parentModule) | Should -BeTrue
+        $catalog.modules['helper'].terraform[0].parentModule | Should -BeExactly '.'
+        $catalog.modules['helper'].terraform[0].familyModule | Should -BeExactly '.'
+        $catalog.modules['helper'].terraform[0].modulePath | Should -BeExactly 'modules/helper'
+        $generatedRows = @($bundle.Files[$csvOutput.bundlePath] | ConvertFrom-Csv)
+        @($generatedRows.CanonicalType | Sort-Object) | Should -Be @(@($Canonical, 'helper') | Sort-Object)
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        foreach ($path in @($moduleRoot, $childPath)) {
+            [System.IO.File]::ReadAllText((Join-Path $path 'main.tf')) | Should -BeExactly $source
+            Test-Path -LiteralPath (Join-Path $path 'main.metadata.tf') | Should -BeFalse
+        }
+    }
+
+    It 'preserves explicit canonical precedence and existing mappings: <Case>' -TestCases @(
+        @{ Case = 'single CSV value'; ModuleId = 'avm-utl-naming'; Kind = 'utility'; Csv = 'shared'; Override = @{}; Expected = 'shared' }
+        @{ Case = 'override before CSV'; ModuleId = 'avm-utl-naming'; Kind = 'utility'; Csv = 'types/common'; Override = @{ canonicalType = 'supplied' }; Expected = 'supplied' }
+        @{ Case = 'explicit multi-segment'; ModuleId = 'avm-utl-naming'; Kind = 'utility'; Csv = 'types/common'; Override = @{}; Expected = 'types/common' }
+        @{ Case = 'ambiguous name with explicit value'; ModuleId = 'avm-ptn-long-hyphenated-name'; Kind = 'pattern'; Csv = 'alz'; Override = @{}; Expected = 'alz' }
+        @{ Case = 'existing two-part utility'; ModuleId = 'avm-utl-types-common'; Kind = 'utility'; Csv = ''; Override = @{}; Expected = 'types/common' }
+    ) {
+        param($ModuleId, $Kind, $Csv, $Override, $Expected)
+        $fixture = New-AutomaticMetadataFixture -Pattern
+        $fixture.Records[0].CanonicalType = $Csv
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId $ModuleId `
+            -Ecosystem terraform -ModuleType $Kind -LegacyRecord $fixture.Records -Override $Override -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.canonicalType | Should -BeExactly $Expected
+    }
+
+    It 'does not guess a canonical type from unsupported names: <ModuleId>' -TestCases @(
+        @{ ModuleId = 'avm-utl-'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl--naming'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-naming-'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-naming--helper'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-Naming'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-naming_helper'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-../naming'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-naming/child'; Kind = 'utility' }
+        @{ ModuleId = 'avm-utl-types-common-extra'; Kind = 'utility' }
+        @{ ModuleId = 'avm-ptn-team-long-name'; Kind = 'pattern' }
+        @{ ModuleId = 'avm-res-naming'; Kind = 'resource' }
+    ) {
+        param($ModuleId, $Kind)
+        $fixture = New-AutomaticMetadataFixture -Pattern
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId $ModuleId `
+            -Ecosystem terraform -ModuleType $Kind -LegacyRecord $fixture.Records -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Candidate.Contains('canonicalType') | Should -BeFalse
+        @($result.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_REQUIRED' -and $_.Message -like '*canonicalType*' }) |
+            Should -HaveCount 1
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+    }
+
+    It 'preserves grouped Bicep module path requirements for <Kind>' -TestCases @(
+        @{ Kind = 'res' }, @{ Kind = 'ptn' }, @{ Kind = 'utl' }
+    ) {
+        param($Kind)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $path = Join-Path $root 'avm' $Kind 'example'
+        $null = New-Item -ItemType Directory -Path $path -Force
+        [System.IO.File]::WriteAllText((Join-Path $path 'main.bicep'), "metadata name = 'Example'`nmetadata description = 'Example module.'`n")
+        { Get-AvmMetadataBackfillModule -Root $root -Repository Azure/bicep-registry-modules -Ecosystem bicep } |
+            Should -Throw '*expected avm/kind/group/name*'
+    }
+}

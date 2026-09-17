@@ -184,6 +184,67 @@ AfterAll {
 }
 
 Describe 'Component: module catalog transformations' -Tag Component {
+    It 'retains grouped Bicep identity requirements for <Kind>' -TestCases @(
+        @{ Kind = 'res' }, @{ Kind = 'ptn' }, @{ Kind = 'utl' }
+    ) {
+        param($Kind)
+        { New-AvmCatalogIdentity -Ecosystem bicep -Repository Azure/bicep-registry-modules -ModulePath "avm/$Kind/example" } |
+            Should -Throw '*Unsupported Bicep identity*'
+    }
+
+    It 'groups single-segment <ModuleType> canonical types without changing root or child identities' -TestCases @(
+        @{ ModuleType = 'pattern'; Canonical = 'alz' }
+        @{ ModuleType = 'utility'; Canonical = 'naming' }
+    ) {
+        param($ModuleType, $Canonical)
+        $fixture = New-CatalogFixture -AdoptAll
+        foreach ($module in @($fixture.Modules | Where-Object ModuleType -eq $ModuleType)) {
+            $metadata = Read-AvmCatalogJson -Path (Join-Path $module.Directory 'metadata.json')
+            $metadata.canonicalType = $Canonical
+            if ($ModuleType -eq 'utility') { $metadata.Remove('telemetryIdPrefix') }
+            Save-CatalogJson -Path (Join-Path $module.Directory 'metadata.json') -Data $metadata
+            $childPath = if ($module.Ecosystem -eq 'bicep') { "$($module.ModulePath)/child" } else { 'modules/child' }
+            $child = Add-CatalogModule -Fixture $fixture -Ecosystem $module.Ecosystem -Repository $module.Repository `
+                -ModulePath $childPath -Canonical $Canonical -Child -Adopt
+            if ($ModuleType -eq 'utility') {
+                $metadata = Read-AvmCatalogJson -Path (Join-Path $child.Directory 'metadata.json')
+                $metadata.Remove('telemetryIdPrefix')
+                Save-CatalogJson -Path (Join-Path $child.Directory 'metadata.json') -Data $metadata
+            }
+        }
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $records = $bundle.Catalog.modules[$Canonical][$ecosystem]
+            $records | Should -HaveCount 2
+            $root = @($records | Where-Object { $null -eq $_.parentModule })[0]
+            $child = @($records | Where-Object { $null -ne $_.parentModule })[0]
+            $child.parentModule | Should -BeExactly $root.modulePath
+            $child.familyModule | Should -BeExactly $root.modulePath
+            $child.owners | Should -Be $root.owners
+            foreach ($record in $records) {
+                ($null -eq $record.providerNamespace) | Should -BeTrue
+                ($null -eq $record.resourceType) | Should -BeTrue
+                if ($ModuleType -eq 'utility') { ($null -eq $record.telemetryIdPrefix) | Should -BeTrue }
+            }
+            $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$ecosystem] | Should -HaveCount 1
+        }
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+    }
+
+    It 'keeps catalog resource and non-resource canonical types separate: <ModuleType>' -TestCases @(
+        @{ ModuleType = 'resource'; Canonical = 'naming' }
+        @{ ModuleType = 'utility'; Canonical = 'Microsoft.Storage/storageAccounts' }
+    ) {
+        param($ModuleType, $Canonical)
+        $fixture = New-CatalogFixture -AdoptAll
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $key = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'types/common' }
+        $bundle.Catalog.modules[$key].terraform[0].canonicalType = $Canonical
+        $schema = (Get-AvmCatalogOutput -Configuration $bundle.Configuration -Kind catalog).schema
+        Test-Json -Json (ConvertTo-AvmCatalogJson -Value $bundle.Catalog) -SchemaFile (Join-Path $repoRoot $schema) `
+            -ErrorAction SilentlyContinue | Should -BeFalse
+    }
+
     It 'blocks source CSV row removal by default and emits no legacy records when forced' {
         $fixture = New-CatalogFixture
         { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*6 row(s)*source CSVs*'

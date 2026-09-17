@@ -168,6 +168,22 @@ metadata description = 'Literal \${value} and \\ path\nnext line'
 }
 
 Describe 'Metadata module identity' {
+    It 'recognizes a single-segment Terraform <ModuleType> identity without telemetry' -TestCases @(
+        @{ Kind = 'ptn'; Canonical = 'alz'; ModuleType = 'pattern' }
+        @{ Kind = 'utl'; Canonical = 'naming'; ModuleType = 'utility' }
+    ) {
+        param($Kind, $Canonical, $ModuleType)
+        InModuleScope Avm.Authoring -Parameters @{ Kind = $Kind; Canonical = $Canonical; ModuleType = $ModuleType } {
+            param($Kind, $Canonical, $ModuleType)
+            $context = [pscustomobject]@{
+                Root = Join-Path $TestDrive "terraform-azure-avm-$Kind-$Canonical"
+                Ecosystem = 'terraform'
+            }
+            Get-AvmMetadataModuleType -Context $context -Path $context.Root -Metadata @{ canonicalType = $Canonical } |
+                Should -Be $ModuleType
+        }
+    }
+
     It 'uses the Terraform root directory rather than a misleading ancestor name' {
         InModuleScope Avm.Authoring {
             $context = [pscustomobject]@{

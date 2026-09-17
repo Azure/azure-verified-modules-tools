@@ -116,6 +116,63 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
+    It 'initializes single-segment <ModuleType> metadata for <Ecosystem>, child=<Child>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('pattern', 'utility')) {
+                foreach ($child in @($false, $true)) {
+                    @{ Ecosystem = $ecosystem; ModuleType = $kind; Child = $child }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType, $Child)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$Child
+        $fixture.Data.canonicalType = if ($ModuleType -eq 'pattern') { 'alz' } else { 'naming' }
+        if ($ModuleType -eq 'utility') {
+            $fixture.Data.Remove('telemetryIdPrefix')
+            if ($Ecosystem -eq 'bicep') {
+                [System.IO.File]::WriteAllText($fixture.SourcePath, "metadata name = 'Storage Accounts'`nmetadata description = 'Deploys a Storage Account.'`n")
+            }
+        }
+        $parameters = $fixture.Parameters
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.PlannedFiles | Should -Be @('metadata.json')
+        $result.Metadata.canonicalType | Should -BeExactly $fixture.Data.canonicalType
+        $result.Metadata.Contains('owners') | Should -Be (-not $Child)
+        $result.Metadata.Contains('telemetryIdPrefix') | Should -Be ($ModuleType -eq 'pattern')
+        (Test-AvmModuleMetadata @parameters -CheckSource:($Ecosystem -eq 'bicep')).Status | Should -Be 'pass'
+        (Get-AvmModuleMetadata @parameters).Metadata.canonicalType | Should -BeExactly $fixture.Data.canonicalType
+        (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'rejects empty or unsafe non-resource canonical types: <Case>' -TestCases @(
+        @{ Case = 'empty'; Canonical = '' }
+        @{ Case = 'whitespace'; Canonical = ' ' }
+        @{ Case = 'uppercase'; Canonical = 'Naming' }
+        @{ Case = 'underscore'; Canonical = 'naming_helper' }
+        @{ Case = 'traversal'; Canonical = '../naming' }
+        @{ Case = 'child traversal'; Canonical = 'naming/..' }
+        @{ Case = 'absolute path'; Canonical = '/naming' }
+        @{ Case = 'trailing slash'; Canonical = 'naming/' }
+        @{ Case = 'empty segment'; Canonical = 'naming//child' }
+        @{ Case = 'backslash'; Canonical = 'naming\child' }
+    ) {
+        param($Canonical)
+        foreach ($kind in @('pattern', 'utility')) {
+            $fixture = New-MetadataFixture -ModuleType $kind
+            $fixture.Data.canonicalType = $Canonical
+            $parameters = $fixture.Parameters
+            $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+            $result.Status | Should -Be 'fail'
+            $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+            { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
+            Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        }
+    }
+
     It 'preserves many individual and team owners without an ownership limit' {
         $fixture = New-MetadataFixture
         $fixture.Data.owners = @('first-owner', '@Azure/team-one', 'second-owner', 'third-owner', '@Azure/team-two', 'fourth-owner')
@@ -141,6 +198,7 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         @{ Case = 'empty description'; Property = 'moduleDescription'; Value = '' }
         @{ Case = 'whitespace name'; Property = 'moduleDisplayName'; Value = ' ' }
         @{ Case = 'wrong canonical kind'; Property = 'canonicalType'; Value = 'types/example' }
+        @{ Case = 'single non-resource canonical'; Property = 'canonicalType'; Value = 'naming' }
         @{ Case = 'invalid canonical'; Property = 'canonicalType'; Value = 'Microsoft.Storage' }
         @{ Case = 'wrong ecosystem'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.storage-storageaccount' }
         @{ Case = 'wrong telemetry kind'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.storage-storageaccount' }
@@ -256,6 +314,31 @@ Describe 'Component: shared module metadata schema' -Tag Component {
             $parameters = $fixture.Parameters
             $expected = if ($kind -eq 'utility') { 'pass' } else { 'fail' }
             (Test-AvmModuleMetadata @parameters).Status | Should -Be $expected
+        }
+    }
+
+    It 'preserves single-segment pattern telemetry requirements for <Ecosystem>, child=<Child>, published=<Published>' -TestCases @(
+        @{ Ecosystem = 'terraform'; Child = $false; Published = $false; Status = 'fail' }
+        @{ Ecosystem = 'terraform'; Child = $true; Published = $false; Status = 'fail' }
+        @{ Ecosystem = 'bicep'; Child = $false; Published = $false; Status = 'fail' }
+        @{ Ecosystem = 'bicep'; Child = $true; Published = $false; Status = 'pass' }
+        @{ Ecosystem = 'bicep'; Child = $true; Published = $true; Status = 'fail' }
+    ) {
+        param($Ecosystem, $Child, $Published, $Status)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType pattern -ChildModule:$Child
+        $fixture.Data.canonicalType = 'alz'
+        $fixture.Data.Remove('telemetryIdPrefix')
+        if ($Ecosystem -eq 'bicep') {
+            [System.IO.File]::WriteAllText($fixture.SourcePath, "metadata name = 'Storage Accounts'`nmetadata description = 'Deploys a Storage Account.'`n")
+        }
+        if ($Published) {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        }
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be $Status
+        if ($Status -eq 'fail') {
+            $result.Issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
         }
     }
 

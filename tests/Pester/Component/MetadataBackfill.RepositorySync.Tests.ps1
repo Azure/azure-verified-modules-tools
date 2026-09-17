@@ -373,12 +373,16 @@ Describe 'Component: metadata backfill worker isolation and errors' -Tag Compone
         $script:executable = Join-Path $PSHOME $(if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' })
     }
 
-    It 'imports checkout metadata without an installed module and preserves <Description>' -TestCases @(
-        @{ Description = 'Creates example resources.' }
-        @{ Description = '2024-07-01T00:30:00Z' }
+    It 'imports checkout metadata for <ModuleId> without an installed module and preserves <Description>' -TestCases @(
+        @{ ModuleId = 'avm-ptn-example-repo'; Canonical = 'example/repo'; Description = 'Creates example resources.' }
+        @{ ModuleId = 'avm-ptn-example-repo'; Canonical = 'example/repo'; Description = '2024-07-01T00:30:00Z' }
+        @{ ModuleId = 'avm-ptn-alz'; Canonical = 'alz'; Description = 'An illustrative pattern module.' }
     ) {
-        param($Description)
+        param($ModuleId, $Canonical, $Description)
         $request = Get-Content $script:inputPath -Raw | ConvertFrom-Json -AsHashtable
+        $request.Repository = "Azure/terraform-azurerm-$ModuleId"
+        $request.LegacyRecord[0].ModuleName = $ModuleId
+        $request.LegacyRecord[0].RepoURL = "https://github.com/$($request.Repository)"
         $request.LegacyRecord[0].Description = $Description
         $request | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:inputPath
         $process = Invoke-RepositorySyncProcess -Command $script:executable -Arguments @(
@@ -389,9 +393,53 @@ Describe 'Component: metadata backfill worker isolation and errors' -Tag Compone
         $result.Status | Should -BeExactly 'pass'
         $result.Modules[0].PlannedFiles | Should -Be @('metadata.json')
         $metadata = Get-AvmModuleMetadata -Path $script:target -Ecosystem terraform -ModuleType pattern -SkipModuleVersionCheck
-        $metadata.Metadata.canonicalType | Should -BeExactly 'example/repo'
+        $metadata.Status | Should -Be 'pass'
+        $metadata.Metadata.canonicalType | Should -BeExactly $Canonical
+        $metadata.Metadata.telemetryIdPrefix | Should -BeExactly ('46d3xtrf.ptn.' + $ModuleId.Substring('avm-ptn-'.Length))
         $metadata.Metadata.moduleDescription | Should -BeExactly $Description
         Test-Path (Join-Path $script:target 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'prepares the naming utility through the real ordinary hook and isolated worker without inventing telemetry' {
+        $sourceSha = '4d3d65ffa23e5e16c4fe8b3a1d0f6df85b7ec142'
+        Mock Invoke-RepositoryGitHubApi { [pscustomobject]@{ sha = '4d3d65ffa23e5e16c4fe8b3a1d0f6df85b7ec142' } } `
+            -ParameterFilter { $Endpoint -ceq 'repos/Azure/Azure-Verified-Modules/commits/main' }
+        Mock Get-RepositoryFileAtCommit {
+            [pscustomobject]@{ Content = "ModuleName,ModuleDisplayName,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm-utl-naming,Module Naming,jaredfholgate,`n" }
+        } -ParameterFilter {
+            $Repository -ceq 'Azure/Azure-Verified-Modules' -and
+            $Path -ceq 'docs/static/module-indexes/TerraformUtilityModules.csv' -and $Sha -ceq $sourceSha
+        }
+        Mock Invoke-RepositoryGit { throw 'Metadata preparation must not change Git state.' }
+        Mock Invoke-RepositoryGitHub { throw 'Metadata preparation must not publish anything.' }
+        [System.IO.File]::WriteAllText((Join-Path $script:target '_header.md'), "# Module Naming`n`nGenerates resource names.`n")
+        $before = [System.IO.File]::ReadAllBytes((Join-Path $script:target 'main.tf'))
+        $savedEvent = $env:GITHUB_EVENT_NAME
+        try {
+            $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+            $result = & $script:adapter -Context @{
+                Root = $script:target
+                Repository = @{ full_name = 'Azure/terraform-azure-avm-utl-naming' }
+                PlanOnly = $false
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('GITHUB_EVENT_NAME', $savedEvent)
+        }
+        $result.Status | Should -BeExactly 'pass'
+        $result.Modules[0].PlannedFiles | Should -Be @('metadata.json')
+        $metadata = Get-AvmModuleMetadata -Path $script:target -Ecosystem terraform -ModuleType utility -SkipModuleVersionCheck
+        $metadata.Status | Should -Be 'pass'
+        $metadata.Metadata.canonicalType | Should -BeExactly 'naming'
+        $metadata.Metadata.moduleDisplayName | Should -BeExactly 'Module Naming'
+        $metadata.Metadata.moduleDescription | Should -BeExactly 'Generates resource names.'
+        $metadata.Metadata.owners | Should -Be @('jaredfholgate')
+        $metadata.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
+        [System.IO.File]::ReadAllBytes((Join-Path $script:target 'main.tf')) | Should -Be $before
+        Test-Path (Join-Path $script:target 'main.metadata.tf') | Should -BeFalse
+        Should -Invoke Get-RepositoryFileAtCommit -Exactly 1
+        Should -Invoke Invoke-RepositoryGit -Exactly 0
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0
     }
 
     It 'surfaces <Failure> and warnings without writing a success result' -TestCases @(

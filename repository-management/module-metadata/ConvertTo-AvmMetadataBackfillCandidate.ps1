@@ -110,6 +110,9 @@ function ConvertTo-AvmMetadataBackfillCandidate {
         elseif ($Ecosystem -eq 'bicep' -and $ModuleId -cmatch '^avm/(ptn|utl)/(?<taxonomy>[a-z0-9-]+(?:/[a-z0-9-]+)+)$') {
             $metadata.canonicalType = $Matches.taxonomy
         }
+        elseif ($Ecosystem -eq 'terraform' -and $ModuleId -cmatch '^avm-(ptn|utl)-(?<name>[a-z0-9]+)$') {
+            $metadata.canonicalType = $Matches.name
+        }
         elseif ($Ecosystem -eq 'terraform' -and $ModuleId -cmatch '^avm-(ptn|utl)-(?<group>[a-z0-9]+)-(?<name>[a-z0-9]+)$') {
             $metadata.canonicalType = "$($Matches.group)/$($Matches.name)"
         }

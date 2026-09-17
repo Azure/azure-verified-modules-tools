@@ -27,14 +27,24 @@ has no public row yet, its entry in the tools repository's existing
 `repository-metadata.csv` is used. Descriptions can also come from `_header.md`.
 Missing information is reported rather than invented.
 
+Explicit canonical overrides take precedence over the index's `CanonicalType`,
+then lossless inference. For Terraform patterns/utilities, a single alphanumeric
+suffix is retained (`avm-utl-naming` becomes `naming`); the existing two-component
+mapping is unchanged (`avm-utl-types-common` becomes `types/common`). Longer,
+ambiguous hyphenated names still require an explicit canonical value. Resource
+ARM types and grouped Bicep paths retain their existing requirements.
+Telemetry-free utilities remain telemetry-free.
+
 One conditional call in ordinary checkout preparation invokes
 `MetadataBackfillSync.ps1` before pre-commit. That temporary script collects CSV
 context and starts `Invoke-ModuleMetadataBackfillWorker.ps1` through the existing
 repository process transport. Request/result files stay outside the target
 checkout and are removed afterward. The worker imports metadata APIs from the
-selected tools checkout; it does not require a new Gallery release or change
-the caller's module discovery. Ordinary sync still installs and uses the normal
-released Avm.Authoring module, including its existing version/upgrade checks.
+selected tools checkout without changing the caller's module discovery.
+Ordinary sync still installs and uses the normal released Avm.Authoring module,
+including its existing version/upgrade checks. Single-segment canonical values
+require a compatible released schema for normal pre-commit validation; worker
+success alone does not establish full-sync compatibility.
 
 Normal managed files, formatting, CODEOWNERS, repository/Azure management,
 state setup, tenant gates and selected project synchronization all still run.
