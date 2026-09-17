@@ -58,37 +58,31 @@ function Resolve-RepositorySyncStateIdentity {
 function Resolve-RepositorySyncStateConfiguration {
     param(
         [Parameter(Mandatory)]
-        [hashtable]$Backend,
-        [Parameter(Mandatory)]
-        [hashtable]$Legacy
+        [hashtable]$Backend
     )
 
     $names = @('TenantId', 'SubscriptionId', 'ClientId', 'StorageAccountName', 'ContainerName')
     $configured = @($names | Where-Object { -not [string]::IsNullOrWhiteSpace($Backend[$_]) })
-    if ($configured.Count -gt 0 -and $configured.Count -ne $names.Count) {
+    if ($configured.Count -ne $names.Count) {
         throw [System.ArgumentException]::new(
-            'Set all five backend identity and storage variables, or leave all five unset. Backend and original settings cannot be mixed.'
+            'Set all five backend identity and storage values (tenant, subscription, client, storage account, container).'
         )
     }
-    $selected = if ($configured.Count -eq 0) { $Legacy } else { $Backend }
     $identity = Resolve-RepositorySyncStateIdentity `
-        -TenantId $selected.TenantId -SubscriptionId $selected.SubscriptionId -ClientId $selected.ClientId
-    if ($null -eq $identity) {
-        throw [System.ArgumentException]::new('The state identity is not configured.')
-    }
-    if ($selected.StorageAccountName -cnotmatch '^[a-z0-9]{3,24}$') {
+        -TenantId $Backend.TenantId -SubscriptionId $Backend.SubscriptionId -ClientId $Backend.ClientId
+    if ($Backend.StorageAccountName -cnotmatch '^[a-z0-9]{3,24}$') {
         throw [System.ArgumentException]::new('The state storage account must have 3-24 lowercase letters or digits.')
     }
-    if ($selected.ContainerName -cnotmatch '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$' -or
-        $selected.ContainerName.Contains('--')) {
+    if ($Backend.ContainerName -cnotmatch '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$' -or
+        $Backend.ContainerName.Contains('--')) {
         throw [System.ArgumentException]::new('The state container must have 3-63 lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.')
     }
     return [pscustomobject]@{
         TenantId = $identity.TenantId
         SubscriptionId = $identity.SubscriptionId
         ClientId = $identity.ClientId
-        StorageAccountName = $selected.StorageAccountName
-        ContainerName = $selected.ContainerName
+        StorageAccountName = $Backend.StorageAccountName
+        ContainerName = $Backend.ContainerName
     }
 }
 
@@ -126,28 +120,28 @@ terraform {
             -workingDirectory $terraformModulePath `
             -printOutput
     } else {
-        $stateIdentity = Resolve-RepositorySyncStateIdentity `
-            -TenantId $stateTenantId -SubscriptionId $stateSubscriptionId -ClientId $stateClientId
+        $state = Resolve-RepositorySyncStateConfiguration -Backend @{
+            TenantId = $stateTenantId
+            SubscriptionId = $stateSubscriptionId
+            ClientId = $stateClientId
+            StorageAccountName = $stateStorageAccountName
+            ContainerName = $stateContainerName
+        }
         $initArguments = @(
             "init",
             "-upgrade",
-            "-backend-config=`"storage_account_name=$stateStorageAccountName`"",
-            "-backend-config=`"container_name=$stateContainerName`"",
-            "-backend-config=`"key=$($repoId).tfstate`""
+            "-backend-config=`"storage_account_name=$($state.StorageAccountName)`"",
+            "-backend-config=`"container_name=$($state.ContainerName)`"",
+            "-backend-config=`"key=$($repoId).tfstate`"",
+            "-backend-config=tenant_id=$($state.TenantId)",
+            "-backend-config=subscription_id=$($state.SubscriptionId)",
+            "-backend-config=client_id=$($state.ClientId)",
+            "-backend-config=use_azuread_auth=true",
+            "-backend-config=use_oidc=true",
+            "-backend-config=use_cli=false",
+            "-backend-config=use_msi=false",
+            "-backend-config=lookup_blob_endpoint=false"
         )
-        if ($null -ne $stateIdentity) {
-            # Only stable, non-secret identity settings are cached with the backend.
-            $initArguments += @(
-                "-backend-config=tenant_id=$($stateIdentity.TenantId)",
-                "-backend-config=subscription_id=$($stateIdentity.SubscriptionId)",
-                "-backend-config=client_id=$($stateIdentity.ClientId)",
-                "-backend-config=use_azuread_auth=true",
-                "-backend-config=use_oidc=true",
-                "-backend-config=use_cli=false",
-                "-backend-config=use_msi=false",
-                "-backend-config=lookup_blob_endpoint=false"
-            )
-        }
         $result = Invoke-TerraformWithRetry `
             -commands @(
                 @{
@@ -156,10 +150,10 @@ terraform {
                 }
             ) `
             -workingDirectory $terraformModulePath `
-            -stateStorageAccountName $stateStorageAccountName `
-            -stateContainerName $stateContainerName `
+            -stateStorageAccountName $state.StorageAccountName `
+            -stateContainerName $state.ContainerName `
             -stateBlobName "$($repoId).tfstate" `
-            -stateSubscriptionId $stateSubscriptionId `
+            -stateSubscriptionId $state.SubscriptionId `
             -printOutput
     }
 

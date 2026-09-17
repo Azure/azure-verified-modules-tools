@@ -28,9 +28,47 @@ Describe 'Repository sync activation gate' -Tag Component {
             repoConfigFilePath = $script:configPath
             terraformModulePath = $script:terraformRoot
             outputDirectory = $TestDrive
+            stateTenantId = '44444444-4444-4444-8444-444444444444'
+            stateSubscriptionId = '55555555-5555-4555-8555-555555555555'
+            stateClientId = '66666666-6666-4666-8666-666666666666'
+            stateStorageAccountName = 'tmestorage'
+            stateContainerName = 'tme-state'
         }
         Mock Start-Process { throw [System.InvalidOperationException]::new('ordinary-sync-process-boundary') }
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw [System.InvalidOperationException]::new('candidate-sync-process-boundary') }
+    }
+
+    It 'rejects an incomplete backend before tenant selection or repository work' -ForEach @(
+        @{ Missing = 'stateTenantId' }
+        @{ Missing = 'stateSubscriptionId' }
+        @{ Missing = 'stateClientId' }
+        @{ Missing = 'stateStorageAccountName' }
+        @{ Missing = 'stateContainerName' }
+        @{ Missing = 'all' }
+    ) {
+        foreach ($name in @($script:arguments.Keys | Where-Object { $_ -like 'state*' })) {
+            if ($Missing -eq 'all' -or $name -eq $Missing) { $script:arguments.Remove($name) }
+        }
+        Mock Resolve-RepositoryTestTenantSettings {}
+        Mock Clear-TerraformWorkspace {}
+
+        { & $script:driver @script:arguments } | Should -Throw '*all five*'
+        Should -Invoke Resolve-RepositoryTestTenantSettings -Exactly 0
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    It 'rejects invalid backend storage before repository work' -ForEach @(
+        @{ Name = 'stateStorageAccountName'; Value = 'UpperCaseAccount'; Message = '*state storage account*' }
+        @{ Name = 'stateContainerName'; Value = 'state/path'; Message = '*state container*' }
+    ) {
+        $script:arguments[$Name] = $Value
+        { & $script:driver @script:arguments } | Should -Throw $Message
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
     }
 
     AfterEach {
@@ -93,6 +131,9 @@ Describe 'Repository sync activation gate' -Tag Component {
 
     It 'does not gate repository creation, which does not publish test secrets' {
         $script:arguments.repositoryCreationModeEnabled = $true
+        foreach ($name in @($script:arguments.Keys | Where-Object { $_ -like 'state*' })) {
+            $script:arguments.Remove($name)
+        }
         { & $script:driver @script:arguments } | Should -Throw '*ordinary-sync-process-boundary*'
         Should -Invoke Start-Process -Exactly 1 -ParameterFilter { $FilePath -eq 'terraform' }
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
@@ -138,7 +179,7 @@ Describe 'Repository sync activation gate' -Tag Component {
             $script:arguments.bamiTestTenantSyncEnabled = $true
             $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
             $management = $script:managementState
-            Mock Resolve-RepositorySyncStateIdentity ({ $management.Events.Add('state') }.GetNewClosure())
+            Mock Resolve-RepositorySyncStateConfiguration ({ $management.Events.Add('state') }.GetNewClosure())
             Mock Resolve-RepositoryTestTenantSettings ({
                 param($TestTenant)
                 $management.Events.Add('tenant')
@@ -190,7 +231,15 @@ Describe 'Repository sync activation gate' -Tag Component {
             if ($Tenant -ceq 'bami') { $expected += 'identity' }
             $expected += @('tree', 'protection', 'rulesets', 'codeql', 'teams', 'collaborators', 'unmanaged-teams', 'init', 'terraform', 'files')
             $script:managementState.Events | Should -Be $expected
-            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $Plan }
+            Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter {
+                $stateTenantId -eq '44444444-4444-4444-8444-444444444444' -and
+                $stateSubscriptionId -eq '55555555-5555-4555-8555-555555555555' -and
+                $stateClientId -eq '66666666-6666-4666-8666-666666666666' -and
+                $stateStorageAccountName -eq 'tmestorage' -and $stateContainerName -eq 'tme-state'
+            }
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
+                $planOnly -eq $Plan -and $stateSubscriptionId -eq '55555555-5555-4555-8555-555555555555'
+            }
             Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
                 $metadataBackfill -and $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
             }
