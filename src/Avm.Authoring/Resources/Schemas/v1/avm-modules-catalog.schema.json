@@ -47,7 +47,7 @@
   "definitions": {
     "canonicalType": {
       "type": "string",
-      "pattern": "^(Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+|[a-z0-9-]+(/[a-z0-9-]+)+)$"
+      "pattern": "^(Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+|[a-z0-9-]+(/[a-z0-9-]+)*)$"
     },
     "nullableText": { "type": [ "string", "null" ] },
     "version": {
@@ -170,7 +170,7 @@
           },
           "else": {
             "properties": {
-              "canonicalType": { "pattern": "^[a-z0-9-]+/" },
+              "canonicalType": { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)*$" },
               "providerNamespace": { "type": "null" },
               "resourceType": { "type": "null" }
             }

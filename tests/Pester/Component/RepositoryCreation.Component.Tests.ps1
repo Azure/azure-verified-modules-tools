@@ -189,13 +189,15 @@ Describe 'Component: repository creation metadata' -Tag Component {
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
     }
 
-    It 'initializes explicit <Kind> metadata with no invented owners' -TestCases @(
-        @{ Kind = 'ptn'; Canonical = 'networking/hub-spoke'; Prefix = '46d3xtrf.ptn.existing-prefix' }
-        @{ Kind = 'utl'; Canonical = 'utilities/naming'; Prefix = '' }
+    It 'initializes explicit <Kind> metadata for <Canonical> with no invented owners' -TestCases @(
+        @{ Kind = 'ptn'; Name = 'example-module'; Canonical = 'networking/hub-spoke'; Prefix = '46d3xtrf.ptn.existing-prefix' }
+        @{ Kind = 'utl'; Name = 'example-module'; Canonical = 'utilities/naming'; Prefix = '' }
+        @{ Kind = 'ptn'; Name = 'alz'; Canonical = 'alz'; Prefix = '46d3xtrf.ptn.alz' }
+        @{ Kind = 'utl'; Name = 'naming'; Canonical = 'naming'; Prefix = '' }
     ) {
-        param($Kind, $Canonical, $Prefix)
+        param($Kind, $Name, $Canonical, $Prefix)
         $parameters = New-CreationScriptArguments
-        $parameters.moduleName = "avm-$Kind-example-module"
+        $parameters.moduleName = "avm-$Kind-$Name"
         $parameters.canonicalType = $Canonical
         $parameters.telemetryIdPrefix = $Prefix
         $result = & $creationScript @parameters -PlanOnly

@@ -1,7 +1,8 @@
 # Module metadata rollout
 
-**Status: core tools and Bicep metadata changes are merged. The full-standard
-Terraform backfill follow-up requires review and fresh hosted checks.
+**Status: core tools, Bicep metadata, and full-standard Terraform backfill changes
+are merged. Single-segment canonical support requires its tools change and a
+compatible authoring release.
 Production runs still require explicit operator approval.**
 This document is a plan, not approval to run production commands.
 
@@ -42,7 +43,8 @@ This document is a plan, not approval to run production commands.
 | 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Merged | Includes schemas and ownership generators; [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) is closed as superseded. |
 | 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Merged | Adds metadata, the two-team ownership rule, compatible governance tests, and existing pipeline exclusions together. |
 | 4 | [#125: checkout module import fix](https://github.com/Azure/azure-verified-modules-tools/pull/125) | Merged | Fixed the former metadata-only flow's import dependency. |
-| Next | [Full-standard Terraform backfill](progress/2026-09-16-standard-metadata-backfill.md) | Pending review | Replaces the metadata-only flow with full normal sync and standard merge; removes Terraform source-reader generation. |
+| 5 | [#126: full-standard Terraform backfill](https://github.com/Azure/azure-verified-modules-tools/pull/126) | Merged | Replaces the metadata-only flow with full normal sync and standard merge; removes Terraform source-reader generation. |
+| Next | [Single-segment canonical support](progress/2026-09-17-single-segment-module-metadata.md) | Pending review | Supports pattern/utility canonical names such as `naming`; full sync also needs a compatible released authoring schema. |
 | After data adoption and CSV cutover | [Azure/Azure-Verified-Modules#2936: metadata maintenance processes](https://github.com/Azure/Azure-Verified-Modules/pull/2936) | Draft | Updates ownership, orphaning, adoption, and generated-index processes once the new sources and review protections are in use. |
 
 The initial tools/Bicep compatibility window is complete because both changes
@@ -102,6 +104,10 @@ tools checkout for metadata creation, so those APIs do not require that release
 first. Full Terraform sync still installs and uses the normal released authoring
 module. The temporary metadata worker imports checkout code in a separate
 PowerShell process without replacing caller commands or changing `PSModulePath`.
+For single-segment canonical values, verify that the normal released module
+accepts that schema before an approved full-sync trial. A successful checkout
+worker does not prove that the installed module can validate its output. Do not
+skip normal pre-commit or substitute checkout commands to bypass this dependency.
 
 ## Bicep file adoption and CODEOWNERS
 
