@@ -1,8 +1,15 @@
 # Temporary module metadata migration
 
 Create missing `metadata.json` files from the existing module indexes and source.
-Existing files are validated and left unchanged. There are no intermediate
-approval files, approval flags, or repository-registration lists.
+Existing files are validated and left unchanged. These adapters do not require
+intermediate approval files, approval flags, or repository-registration lists.
+
+The current one-off Terraform migration is instead **agent-led and
+metadata-only**, using a reviewed inclusion/exclusion inventory because source
+inference is ambiguous. It preserves valid metadata and owners, creates no
+Terraform wiring, and does not run the full-sync hook below. This is a migration
+procedure, not a new workflow switch or runner. See the
+[rollout plan](../../docs/metadata-rollout.md#current-one-off-terraform-migration).
 
 This directory is disposable after the one-off migration and reconciliation.
 It owns CSV conversion, source inference, owner-snapshot processing, and the
@@ -10,11 +17,12 @@ backfill adapter. None of that code is packaged in Avm.Authoring.
 The permanent module only reads existing metadata, validates files or supplied
 values, and initializes files from supplied values.
 
-## Terraform repository sync
+## Optional Terraform repository sync
 
-Use the existing Terraform sync workflow with `metadata_backfill: true` and a
-repository filter such as `avm-ptn-example-repo`. This is **full normal repository
-sync**, not a metadata-only operation. `plan_only: true` runs normal planning and
+The existing Terraform sync workflow remains available with
+`metadata_backfill: true` and a repository filter such as `avm-ptn-example-repo`.
+This is **full normal repository sync**, not a metadata-only operation.
+`plan_only: true` runs normal planning and
 prepares files in a disposable checkout without publishing them.
 Workflow backfill requires `workflow_dispatch` and `metadata_backfill: true`.
 Scheduled and `repository_dispatch` runs cannot activate it; the runtime adapter
@@ -43,8 +51,9 @@ checkout and are removed afterward. The worker imports metadata APIs from the
 selected tools checkout without changing the caller's module discovery.
 Ordinary sync still installs and uses the normal released Avm.Authoring module,
 including its existing version/upgrade checks. Single-segment canonical values
-require a compatible released schema for normal pre-commit validation; worker
-success alone does not establish full-sync compatibility.
+and `Oracle.Database` ARM types require compatible installed/released schemas
+for normal pre-commit validation; worker or local CI success is not a release
+and does not establish full-sync compatibility.
 
 Normal managed files, formatting, CODEOWNERS, repository/Azure management,
 state setup, tenant gates and selected project synchronization all still run.

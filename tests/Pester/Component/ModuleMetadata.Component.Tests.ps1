@@ -88,6 +88,144 @@ AfterAll {
     Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Component: Oracle metadata compatibility' -Tag Component {
+    It 'initializes and preserves <Canonical> for <Ecosystem>, child=<Child>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($child in @($false, $true)) {
+                foreach ($canonical in @(
+                        'Oracle.Database/cloudExadataInfrastructures',
+                        'Oracle.Database/cloudVmClusters',
+                        'Oracle.Database/autonomousDatabases'
+                    )) {
+                    @{ Ecosystem = $ecosystem; Child = $child; Canonical = $canonical }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $Child, $Canonical)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ChildModule:$Child
+        $fixture.Data.canonicalType = $Canonical
+        $parameters = $fixture.Parameters
+        $sourceBefore = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $plan = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -WhatIf
+        $plan.PlannedFiles | Should -Be @('metadata.json')
+        $plan.Changed | Should -BeFalse
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.canonicalType | Should -BeExactly $Canonical
+        $result.Metadata.Contains('owners') | Should -Be (-not $Child)
+        $result.Metadata.telemetryIdPrefix | Should -BeExactly $fixture.Data.telemetryIdPrefix
+        (Test-AvmModuleMetadata @parameters -CheckSource:($Ecosystem -eq 'bicep')).Status | Should -Be 'pass'
+        (Get-AvmModuleMetadata @parameters).Metadata.canonicalType | Should -BeExactly $Canonical
+
+        $metadataBefore = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        $fixture.Data.canonicalType = 'Microsoft.Storage/storageAccounts'
+        if (-not $Child) { $fixture.Data.owners = @() }
+        (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data).Changed | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $metadataBefore
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $sourceBefore
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'keeps root ownership and telemetry strict: <Case>' -TestCases @(
+        @{ Case = 'missing owners'; Property = 'owners'; Remove = $true; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'nested owners'; Property = 'owners'; Value = @{ individuals = @() }; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'duplicate owner casing'; Property = 'owners'; Value = @('owner', 'OWNER'); Code = 'AVM_METADATA_OWNER' }
+        @{ Case = 'missing telemetry'; Property = 'telemetryIdPrefix'; Remove = $true; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'pattern telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.oracle'; Code = 'AVM_METADATA_TELEMETRY' }
+        @{ Case = 'Bicep telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.oracle'; Code = 'AVM_METADATA_TELEMETRY' }
+        @{ Case = 'legacy Resource Graph telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.resourcegraph-query'; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'authored tier'; Property = 'tier'; Value = 'core'; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'authored schemaVersion'; Property = 'schemaVersion'; Value = 1; Code = 'AVM_METADATA_SCHEMA' }
+        @{ Case = 'authored status'; Property = 'status'; Value = 'Available'; Code = 'AVM_METADATA_SCHEMA' }
+    ) {
+        param($Property, $Value, $Remove, $Code)
+        $fixture = New-MetadataFixture
+        $fixture.Data.canonicalType = 'Oracle.Database/cloudVmClusters'
+        if ($Remove) { $fixture.Data.Remove($Property) }
+        else { $fixture.Data[$Property] = $Value }
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be $Code
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+    }
+
+    It 'preserves telemetry requirements for <Ecosystem>, child=<Child>, published=<Published>, instrumented=<Instrumented>' -TestCases @(
+        @{ Ecosystem = 'bicep'; Child = $false; Published = $false; Instrumented = $false; Status = 'fail' }
+        @{ Ecosystem = 'bicep'; Child = $true; Published = $false; Instrumented = $false; Status = 'pass' }
+        @{ Ecosystem = 'bicep'; Child = $true; Published = $true; Instrumented = $false; Status = 'fail' }
+        @{ Ecosystem = 'bicep'; Child = $true; Published = $false; Instrumented = $true; Status = 'fail' }
+        @{ Ecosystem = 'terraform'; Child = $false; Published = $false; Instrumented = $false; Status = 'fail' }
+        @{ Ecosystem = 'terraform'; Child = $true; Published = $false; Instrumented = $false; Status = 'fail' }
+    ) {
+        param($Ecosystem, $Child, $Published, $Instrumented, $Status)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ChildModule:$Child
+        $fixture.Data.canonicalType = 'Oracle.Database/cloudVmClusters'
+        $fixture.Data.Remove('telemetryIdPrefix')
+        if ($Ecosystem -eq 'bicep' -and -not $Instrumented) {
+            [System.IO.File]::WriteAllText($fixture.SourcePath, "metadata name = 'Storage Accounts'`nmetadata description = 'Deploys a Storage Account.'`n")
+        }
+        if ($Published) {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        }
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be $Status
+        if ($Status -eq 'pass') {
+            $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+            $result.Metadata.Contains('owners') | Should -BeFalse
+            $result.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
+        }
+        else {
+            { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -WhatIf } | Should -Throw
+        }
+    }
+
+    It 'does not treat an Oracle ARM type as a <ModuleType> taxonomy' -TestCases @(
+        @{ ModuleType = 'pattern' }
+        @{ ModuleType = 'utility' }
+    ) {
+        param($ModuleType)
+        $fixture = New-MetadataFixture
+        $fixture.Data.canonicalType = 'Oracle.Database/autonomousDatabases'
+        $parameters = $fixture.Parameters
+        $parameters.ModuleType = $ModuleType
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'AVM_METADATA_KIND'
+    }
+
+    It 'rejects malformed ARM canonical types for roots and reduced children: <Canonical>' -TestCases @(
+        @{ Canonical = 'Oracle.Database' }
+        @{ Canonical = 'oracle.Database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Other/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database.Extra/cloudVmClusters' }
+        @{ Canonical = 'Contoso.Database/cloudVmClusters' }
+        @{ Canonical = 'Microsoft.Oracle.Database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database//cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/../autonomousDatabases' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings' }
+        @{ Canonical = 'Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings' }
+    ) {
+        param($Canonical)
+        foreach ($child in @($false, $true)) {
+            $fixture = New-MetadataFixture -ChildModule:$child
+            $fixture.Data.canonicalType = $Canonical
+            $parameters = $fixture.Parameters
+            $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+            $result.Status | Should -Be 'fail'
+            $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+            { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
+            Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        }
+    }
+}
+
 Describe 'Component: shared module metadata schema' -Tag Component {
     It 'accepts both ecosystems and root/child shapes: <Ecosystem>, child=<Child>' -TestCases @(
         @{ Ecosystem = 'bicep'; Child = $false }

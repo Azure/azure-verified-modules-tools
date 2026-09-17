@@ -240,6 +240,52 @@ This repository serves as a test sandbox for the Azure Verified Modules team.
 }
 
 Describe 'Component: metadata values from existing source' -Tag Component {
+    It 'classifies Oracle ARM types in the optional Bicep source reader: <Canonical>' -TestCases @(
+        @{ Canonical = 'Oracle.Database/cloudExadataInfrastructures'; Status = 'pass' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters'; Status = 'pass' }
+        @{ Canonical = 'Oracle.Database/autonomousDatabases'; Status = 'pass' }
+        @{ Canonical = 'Oracle.Other/cloudVmClusters'; Status = 'fail' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings'; Status = 'fail' }
+    ) {
+        param($Canonical, $Status)
+        $fixture = New-AutomaticMetadataFixture
+        $sourcePath = Join-Path $fixture.Root 'main.bicep'
+        [System.IO.File]::WriteAllText($sourcePath, @"
+metadata name = 'Oracle child'
+metadata description = 'Creates an Oracle resource.'
+resource database '$Canonical@2025-09-01' = {}
+"@)
+        $before = [System.IO.File]::ReadAllBytes($sourcePath)
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId 'avm/res/oracle/database/child' `
+            -Ecosystem bicep -ModuleType resource -ChildModule -SkipModuleVersionCheck
+        $result.Status | Should -Be $Status
+        if ($Status -eq 'pass') {
+            $result.Metadata.canonicalType | Should -BeExactly $Canonical
+            $result.Metadata.Contains('owners') | Should -BeFalse
+            $result.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
+        }
+        else {
+            $result.Candidate.Contains('canonicalType') | Should -BeFalse
+        }
+        [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $before
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+    }
+
+    It 'does not infer a canonical type from mixed Oracle and Microsoft Bicep resources' {
+        $fixture = New-AutomaticMetadataFixture
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'main.bicep'), @'
+metadata name = 'Multiple resources'
+metadata description = 'Canonical identity must be supplied.'
+resource database 'Oracle.Database/cloudVmClusters@2025-09-01' = {}
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {}
+'@)
+        $result = Get-AvmMetadataBackfillCandidate -Path $fixture.Root -ModuleId 'avm/res/oracle/database/child' `
+            -Ecosystem bicep -ModuleType resource -ChildModule -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Candidate.Contains('canonicalType') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'metadata.json') | Should -BeFalse
+    }
+
     It 'derives Bicep values in migration scripts while the permanent reader still requires a file' {
         $fixture = New-AutomaticMetadataFixture
         [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'main.bicep'), @'

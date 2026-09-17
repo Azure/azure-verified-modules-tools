@@ -97,6 +97,54 @@ AfterAll {
 }
 
 Describe 'Component: metadata in authoring checks' -Tag Component {
+    It 'validates Oracle roots and children without changing files in <Command> for <Ecosystem>' -TestCases @(
+        @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPreCommit' }
+        @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPrCheck' }
+        @{ Ecosystem = 'terraform'; Command = 'Invoke-AvmPreCommit' }
+        @{ Ecosystem = 'terraform'; Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Ecosystem, $Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
+        $fixture.Context.Scope = $null
+        $fixture.Data.canonicalType = 'Oracle.Database/cloudVmClusters'
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        if ($Ecosystem -eq 'bicep') {
+            $childFile = Join-Path $fixture.Paths[1] 'metadata.json'
+            $child = Get-Content -LiteralPath $childFile -Raw | ConvertFrom-Json -AsHashtable
+            $child.Remove('telemetryIdPrefix')
+            [System.IO.File]::WriteAllText($childFile, ($child | ConvertTo-Json -Depth 20))
+        }
+        $before = @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash)
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'pass'
+        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+        $probe.Warnings | Should -HaveCount 0
+        @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
+    }
+
+    It 'discovers Oracle metadata-only children and reports missing telemetry for <Ecosystem>' -TestCases @(
+        @{ Ecosystem = 'bicep'; Extension = 'bicep' }
+        @{ Ecosystem = 'terraform'; Extension = 'tf' }
+    ) {
+        param($Ecosystem, $Extension)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
+        $fixture.Context.Scope = $null
+        $fixture.Data.canonicalType = 'Oracle.Database/autonomousDatabases'
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $childFile = Join-Path $fixture.Paths[1] 'metadata.json'
+        $child = Get-Content -LiteralPath $childFile -Raw | ConvertFrom-Json -AsHashtable
+        $child.Remove('telemetryIdPrefix')
+        [System.IO.File]::WriteAllText($childFile, ($child | ConvertTo-Json -Depth 20))
+        [System.IO.File]::Delete((Join-Path $fixture.Paths[1] "main.$Extension"))
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck
+        $probe.Result.Status | Should -Be 'fail'
+        $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+        $issues[0].File | Should -Match 'blob-service/metadata.json$'
+        $probe.Warnings | Should -HaveCount 0
+    }
+
     It 'emits GitHub warning annotations for missing metadata without failing CI' {
         $fixture = New-AuthoringMetadataFixture -Ecosystem terraform -Child
         $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck -Actions

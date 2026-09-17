@@ -74,6 +74,9 @@ keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. `v1/migration-report.json` records missing metadata, unresolved
 source identities, source-row snapshots, removals, and cross-ecosystem parity.
 Canonical types come from metadata, not inferred CSV taxonomy.
+Resources use case-sensitive `Microsoft.*` or `Oracle.Database` ARM types.
+For `Oracle.Database/cloudVmClusters`, `providerNamespace` is `Oracle.Database`
+and `resourceType` is `cloudVmClusters`; Terraform's `provider` remains separate.
 Pattern and utility canonical keys may be single names such as `naming` or
 slash-separated paths. Their ARM-only `providerNamespace` and `resourceType`
 fields remain null; module paths and parent identities are unchanged.
