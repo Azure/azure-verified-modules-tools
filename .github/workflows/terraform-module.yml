@@ -185,22 +185,37 @@ jobs:
         shell: pwsh
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
-        run: |
+        run: &install-avm-authoring |
           $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet'
-
           $params = @{
               Name            = 'Avm.Authoring'
               Scope           = 'CurrentUser'
               TrustRepository = $true
+              ErrorAction     = 'Stop'
           }
           if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
               $params['Version'] = $env:AVM_AUTHORING_VERSION
           }
-          Install-PSResource @params
+
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                  if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
+                      Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                  }
+                  Import-Module 'Microsoft.PowerShell.PSResourceGet'
+                  Install-PSResource @params
+                  break
+              }
+              catch {
+                  if ($attempt -eq $maxAttempts) {
+                      throw
+                  }
+                  $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+                  Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+                  Start-Sleep -Seconds $delaySeconds
+              }
+          }
 
           Import-Module Avm.Authoring
           avm version
@@ -305,25 +320,7 @@ jobs:
         shell: pwsh
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet'
-
-          $params = @{
-              Name            = 'Avm.Authoring'
-              Scope           = 'CurrentUser'
-              TrustRepository = $true
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
-              $params['Version'] = $env:AVM_AUTHORING_VERSION
-          }
-          Install-PSResource @params
-
-          Import-Module Avm.Authoring
-          avm version
+        run: *install-avm-authoring
 
       - name: Run pr-check
         shell: pwsh
@@ -422,25 +419,7 @@ jobs:
         shell: pwsh
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet'
-
-          $params = @{
-              Name            = 'Avm.Authoring'
-              Scope           = 'CurrentUser'
-              TrustRepository = $true
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
-              $params['Version'] = $env:AVM_AUTHORING_VERSION
-          }
-          Install-PSResource @params
-
-          Import-Module Avm.Authoring
-          avm version
+        run: *install-avm-authoring
 
       - name: Run integration tests
         shell: pwsh
@@ -467,22 +446,7 @@ jobs:
         shell: pwsh
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet'
-
-          $params = @{
-              Name            = 'Avm.Authoring'
-              Scope           = 'CurrentUser'
-              TrustRepository = $true
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
-              $params['Version'] = $env:AVM_AUTHORING_VERSION
-          }
-          Install-PSResource @params
+        run: *install-avm-authoring
 
       - name: List runnable examples
         id: list
@@ -637,25 +601,7 @@ jobs:
         shell: pwsh
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
-              Install-Module -Name 'Microsoft.PowerShell.PSResourceGet' -Scope CurrentUser -Force -AllowClobber
-          }
-          Import-Module 'Microsoft.PowerShell.PSResourceGet'
-
-          $params = @{
-              Name            = 'Avm.Authoring'
-              Scope           = 'CurrentUser'
-              TrustRepository = $true
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
-              $params['Version'] = $env:AVM_AUTHORING_VERSION
-          }
-          Install-PSResource @params
-
-          Import-Module Avm.Authoring
-          avm version
+        run: *install-avm-authoring
 
       - name: Run end-to-end tests
         shell: pwsh

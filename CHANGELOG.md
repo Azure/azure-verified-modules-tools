@@ -246,6 +246,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Retry failed `Avm.Authoring` installations in repository sync and all reusable
+  Terraform workflow jobs, including PSResourceGet bootstrap where needed.
+  Three attempts use 5- and 10-second delays; exhausted retries still fail.
 - Preserve provider `configuration_aliases` as HCL traversals when MAPOTF
   upgrades AzAPI or Random requirements, retaining unrelated provider entries
   and comments.

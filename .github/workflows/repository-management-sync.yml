@@ -106,7 +106,22 @@ jobs:
       - name: '[AVM] Install Avm.Authoring'
         shell: pwsh
         run: |
-          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository
+          $ErrorActionPreference = 'Stop'
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              break
+            }
+            catch {
+              if ($attempt -eq $maxAttempts) {
+                throw
+              }
+              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
           Import-Module Avm.Authoring
           if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
             throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
