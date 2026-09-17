@@ -47,7 +47,7 @@
   "definitions": {
     "canonicalType": {
       "type": "string",
-      "pattern": "^(Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+|[a-z0-9-]+(/[a-z0-9-]+)*)$"
+      "pattern": "^((Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+|[a-z0-9-]+(/[a-z0-9-]+)*)$"
     },
     "nullableText": { "type": [ "string", "null" ] },
     "version": {
@@ -163,7 +163,7 @@
           "if": { "properties": { "moduleType": { "const": "resource" } } },
           "then": {
             "properties": {
-              "canonicalType": { "pattern": "^Microsoft\\." },
+              "canonicalType": { "pattern": "^(Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+$" },
               "providerNamespace": { "type": "string" },
               "resourceType": { "type": "string" }
             }

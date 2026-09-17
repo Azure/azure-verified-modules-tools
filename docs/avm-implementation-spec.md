@@ -412,9 +412,13 @@ their source. The authoritative v1 input and catalog schemas are packaged under
 `Resources/Schemas/v1/` in this repository; validators never fetch a module's
 `$schema` URL at runtime. The required versioned `$schema` reference identifies
 the authored format; module metadata does not also store `schemaVersion`.
-Resource `canonicalType` values remain full ARM resource types. Pattern and
-utility values may be single taxonomy names such as `naming`, or slash-separated
-paths such as `lz/sub-vending`, for both root and reduced child metadata.
+Resource `canonicalType` values remain full, case-sensitive ARM resource types
+under `Microsoft.*` or the exact `Oracle.Database` namespace. Resource segments
+cannot contain another dotted namespace; synthetic family-qualified types such
+as `Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings`
+are invalid. Pattern and utility values may be single taxonomy names such as
+`naming`, or slash-separated paths such as `lz/sub-vending`, for both root and
+reduced child metadata.
 This does not change repository naming or grouped Bicep module-path conventions.
 Root metadata owns a flat `owners` string array: bare GitHub usernames and
 qualified `@organization/team-slug` handles. Empty arrays are permitted and
@@ -464,10 +468,19 @@ Matched-row compatibility fields and prior Deprecated status remain preserved.
 Fleet backfill and canonical CSV replacement remain explicit operator actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
-Terraform sync can create missing files directly from existing indexes and source,
-without an intermediate approval file or repository registration. The manual,
+The current one-off Terraform migration is agent-led and metadata-only because
+source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,
+preserves valid existing metadata and owners, and creates no Terraform wiring.
+Helper omissions are explicit decisions for that migration, not a blanket
+exclusion of submodules or modules without metadata. Migration data remains
+outside the packaged module. Compatible installed/released schemas are required
+for adoption; successful checkout validation or CI is not a release.
+Separately, Terraform sync can create missing files directly from existing
+indexes and source, without an intermediate approval file or repository
+registration. The manual,
 default-off `metadata_backfill` input adds preparation before ordinary pre-commit
-in the temporary checkout. It does not select a metadata-only execution or
+in the temporary checkout. This optional facility is unchanged and is not used
+by the current one-off migration. It does not select a metadata-only execution or
 publication path: normal managed files, CODEOWNERS, repository/Azure management,
 tenant gates and standard publication/merge controls still apply. The temporary
 worker loads checkout metadata APIs in a separate PowerShell process; ordinary

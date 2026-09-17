@@ -120,6 +120,11 @@ unique ignoring case. Children omit `owners` and inherit root ownership.
 Authored files have no `schemaVersion`, `tier`, or lifecycle status property;
 unknown properties are rejected.
 
+Resource `canonicalType` values use full, case-sensitive `Microsoft.*` or
+`Oracle.Database` ARM types, such as `Oracle.Database/cloudVmClusters`.
+Pattern/utility taxonomy names such as `naming` and paths such as `lz/sub-vending`
+remain distinct. A resource type cannot embed a second dotted namespace.
+
 `Get-AvmModuleMetadata` reads existing files only and fails when a file is
 missing. `Test-AvmModuleMetadata -InputObject` validates supplied values without
 reading `metadata.json`. `Initialize-AvmModuleMetadata` requires explicit values,

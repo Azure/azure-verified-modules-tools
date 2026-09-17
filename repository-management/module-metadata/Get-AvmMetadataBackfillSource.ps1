@@ -18,7 +18,11 @@ function Get-AvmMetadataBackfillSource {
     $literals = $null
     if ($Ecosystem -eq 'bicep') {
         $authoring = (Get-Command Test-AvmModuleMetadata -Module Avm.Authoring -ErrorAction Stop).Module
-        foreach ($helper in @('Get-AvmBicepMetadataLiteral.ps1', 'Get-AvmBicepCommentFreeSource.ps1')) {
+        foreach ($helper in @(
+                'Get-AvmBicepMetadataLiteral.ps1',
+                'Get-AvmBicepCommentFreeSource.ps1',
+                'Test-AvmMetadataResourceType.ps1'
+            )) {
             . (Join-Path $authoring.ModuleBase 'Private' 'Metadata' $helper)
         }
         $source = Get-Content -LiteralPath (Join-Path -Path $Path -ChildPath 'main.bicep') -Raw
@@ -43,7 +47,7 @@ function Get-AvmMetadataBackfillSource {
                 continue
             }
             $type = $token.Groups['type'].Value
-            if ($type -cmatch '^Microsoft\.[A-Z]\w+(/[a-zA-Z]\w*)+$') {
+            if (Test-AvmMetadataResourceType -CanonicalType $type) {
                 $null = $types.Add($type)
             }
             else {

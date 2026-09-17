@@ -184,6 +184,91 @@ AfterAll {
 }
 
 Describe 'Component: module catalog transformations' -Tag Component {
+    It 'projects Oracle <ResourceType> into resource catalog records and CSV rows' -TestCases @(
+        @{ ResourceType = 'cloudExadataInfrastructures' }
+        @{ ResourceType = 'cloudVmClusters' }
+        @{ ResourceType = 'autonomousDatabases' }
+    ) {
+        param($ResourceType)
+        $fixture = New-CatalogFixture -AdoptAll
+        $canonical = "Oracle.Database/$ResourceType"
+        $rootPaths = @{ bicep = 'avm/res/oracle/database'; terraform = '.' }
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $repository = if ($ecosystem -eq 'bicep') { 'Azure/bicep-registry-modules' } else { 'Azure/terraform-azurerm-avm-res-oracle-database' }
+            $rootPath = $rootPaths[$ecosystem]
+            $null = Add-CatalogModule -Fixture $fixture -Ecosystem $ecosystem -Repository $repository `
+                -ModulePath $rootPath -Canonical $canonical -Adopt
+            $childPath = if ($ecosystem -eq 'bicep') { "$rootPath/child" } else { 'modules/child' }
+            $child = Add-CatalogModule -Fixture $fixture -Ecosystem $ecosystem -Repository $repository `
+                -ModulePath $childPath -Canonical $canonical -Child -Adopt
+            if ($ecosystem -eq 'bicep') {
+                $metadata = Read-AvmCatalogJson -Path (Join-Path $child.Directory 'metadata.json')
+                $metadata.Remove('telemetryIdPrefix')
+                Save-CatalogJson -Path (Join-Path $child.Directory 'metadata.json') -Data $metadata
+            }
+        }
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $records = $published.modules[$canonical][$ecosystem]
+            $records | Should -HaveCount 2
+            $root = @($records | Where-Object { $null -eq $_.parentModule })[0]
+            $child = @($records | Where-Object { $null -ne $_.parentModule })[0]
+            $child.parentModule | Should -BeExactly $rootPaths[$ecosystem]
+            $child.familyModule | Should -BeExactly $rootPaths[$ecosystem]
+            $child.owners | Should -Be $root.owners
+            $root.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+            foreach ($record in $records) {
+                $record.moduleType | Should -BeExactly 'resource'
+                $record.canonicalType | Should -BeExactly $canonical
+                $record.providerNamespace | Should -BeExactly 'Oracle.Database'
+                $record.resourceType | Should -BeExactly $ResourceType
+                $record.provider | Should -Be $(if ($ecosystem -eq 'terraform') { 'azurerm' } else { $null })
+                $record.Contains('tier') | Should -BeFalse
+            }
+            if ($ecosystem -eq 'bicep') { $child.telemetryIdPrefix | Should -BeNullOrEmpty }
+            $file = if ($ecosystem -eq 'bicep') { 'BicepResourceModules.csv' } else { 'TerraformResourceModules.csv' }
+            $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.CanonicalType -ceq $canonical })
+            $rows | Should -HaveCount 2
+            foreach ($row in $rows) {
+                $row.ProviderNamespace | Should -BeExactly 'Oracle.Database'
+                $row.ResourceType | Should -BeExactly $ResourceType
+            }
+            $published.modules['Microsoft.Storage/storageAccounts'][$ecosystem] | Should -HaveCount 1
+        }
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+    }
+
+    It 'rejects malformed Oracle or synthetic ARM types in catalog keys and records: <Canonical>' -TestCases @(
+        @{ Canonical = 'Oracle.Database' }
+        @{ Canonical = 'oracle.Database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Other/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database.Extra/cloudVmClusters' }
+        @{ Canonical = 'Contoso.Database/cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database//cloudVmClusters' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings' }
+        @{ Canonical = 'Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings' }
+    ) {
+        param($Canonical)
+        $fixture = New-CatalogFixture -AdoptAll
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $schema = (Get-AvmCatalogOutput -Configuration $bundle.Configuration -Kind catalog).schema
+        foreach ($surface in @('key', 'record')) {
+            $catalog = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
+            $key = 'Microsoft.Storage/storageAccounts'
+            if ($surface -eq 'key') {
+                $catalog.modules[$Canonical] = $catalog.modules[$key]
+                $catalog.modules.Remove($key)
+            }
+            else {
+                $catalog.modules[$key].terraform[0].canonicalType = $Canonical
+            }
+            Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile (Join-Path $repoRoot $schema) `
+                -ErrorAction SilentlyContinue | Should -BeFalse
+        }
+    }
+
     It 'retains grouped Bicep identity requirements for <Kind>' -TestCases @(
         @{ Kind = 'res' }, @{ Kind = 'ptn' }, @{ Kind = 'utl' }
     ) {
@@ -234,6 +319,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
     It 'keeps catalog resource and non-resource canonical types separate: <ModuleType>' -TestCases @(
         @{ ModuleType = 'resource'; Canonical = 'naming' }
         @{ ModuleType = 'utility'; Canonical = 'Microsoft.Storage/storageAccounts' }
+        @{ ModuleType = 'utility'; Canonical = 'Oracle.Database/autonomousDatabases' }
     ) {
         param($ModuleType, $Canonical)
         $fixture = New-CatalogFixture -AdoptAll

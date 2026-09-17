@@ -25,9 +25,9 @@
     "description": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "canonicalType": {
       "type": "string",
-      "description": "ARM resource type, or a shared pattern/utility taxonomy name or slash-separated path.",
+      "description": "Case-sensitive Microsoft.* or Oracle.Database ARM resource type, or a shared pattern/utility taxonomy name or slash-separated path.",
       "anyOf": [
-        { "pattern": "^Microsoft\\.[A-Z]\\w+(/[a-zA-Z]\\w*)+$" },
+        { "pattern": "^(Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+$" },
         { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)*$" }
       ]
     },
@@ -65,7 +65,7 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "if": { "properties": { "canonicalType": { "pattern": "^Microsoft\\." } } },
+          "if": { "properties": { "canonicalType": { "pattern": "^(Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+$" } } },
           "then": { "required": [ "telemetryIdPrefix" ] }
         }
       ],

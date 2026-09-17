@@ -40,7 +40,7 @@ function Get-AvmMetadataModuleType {
     if ($prefix.Success) {
         return $kinds[$prefix.Groups['kind'].Value]
     }
-    if ([string]$Metadata['canonicalType'] -cmatch '^Microsoft\.') {
+    if (Test-AvmMetadataResourceType -CanonicalType ([string]$Metadata['canonicalType'])) {
         return 'resource'
     }
     throw [System.ArgumentException]::new(

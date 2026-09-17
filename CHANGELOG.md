@@ -246,6 +246,9 @@ section when cutting a release.
 
 ### Fixed
 
+- Support real `Oracle.Database` ARM canonical types in metadata schemas,
+  validation, fallback discovery, initialization, and catalog output. Preserve
+  strict resource syntax, ownership, telemetry, and pattern/utility taxonomy.
 - Retry failed `Avm.Authoring` installations in repository sync and all reusable
   Terraform workflow jobs, including PSResourceGet bootstrap where needed.
   Three attempts use 5- and 10-second delays; exhausted retries still fail.

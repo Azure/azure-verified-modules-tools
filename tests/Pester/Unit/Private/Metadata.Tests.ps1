@@ -167,7 +167,83 @@ metadata description = 'Literal \${value} and \\ path\nnext line'
     }
 }
 
+Describe 'Metadata ARM resource classification' {
+    It 'classifies the complete case-sensitive canonical value <Canonical>' -TestCases @(
+        @{ Canonical = 'Oracle.Database/cloudExadataInfrastructures'; Expected = $true }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters'; Expected = $true }
+        @{ Canonical = 'Oracle.Database/autonomousDatabases'; Expected = $true }
+        @{ Canonical = 'Microsoft.Storage/storageAccounts'; Expected = $true }
+        @{ Canonical = 'Microsoft.Network/dnsZones/A'; Expected = $true }
+        @{ Canonical = 'Microsoft.Example/a_b/c'; Expected = $true }
+        @{ Canonical = 'naming'; Expected = $false }
+        @{ Canonical = 'lz/sub-vending'; Expected = $false }
+        @{ Canonical = ''; Expected = $false }
+        @{ Canonical = 'Oracle.Database'; Expected = $false }
+        @{ Canonical = 'oracle.Database/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.database/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Other/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.DatabaseExtra/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database.Extra/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Contoso.Database/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Microsoft.Oracle.Database/cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database//cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/1cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/cloud-vm-clusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/../autonomousDatabases'; Expected = $false }
+        @{ Canonical = 'Oracle.Database\cloudVmClusters'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters@2025-09-01'; Expected = $false }
+        @{ Canonical = 'Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings'; Expected = $false }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings'; Expected = $false }
+    ) {
+        param($Canonical, $Expected)
+        InModuleScope Avm.Authoring -Parameters @{ Canonical = $Canonical; Expected = $Expected } {
+            param($Canonical, $Expected)
+            Test-AvmMetadataResourceType -CanonicalType $Canonical | Should -Be $Expected
+        }
+    }
+}
+
 Describe 'Metadata module identity' {
+    It 'recognizes Oracle metadata without path, scope, Git, or telemetry identity: <Ecosystem>, <Canonical>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($canonical in @(
+                    'Oracle.Database/cloudExadataInfrastructures',
+                    'Oracle.Database/cloudVmClusters',
+                    'Oracle.Database/autonomousDatabases'
+                )) {
+                @{ Ecosystem = $ecosystem; Canonical = $canonical }
+            }
+        }
+    ) {
+        param($Ecosystem, $Canonical)
+        InModuleScope Avm.Authoring -Parameters @{ Ecosystem = $Ecosystem; Canonical = $Canonical } {
+            param($Ecosystem, $Canonical)
+            $context = [pscustomobject]@{ Root = Join-Path $TestDrive 'renamed'; Ecosystem = $Ecosystem }
+            Mock Test-Path { $false }
+            Mock Invoke-AvmProcess { throw 'Fallback discovery must not run a subprocess.' }
+            Get-AvmMetadataModuleType -Context $context -Path $context.Root -Metadata @{ canonicalType = $Canonical } |
+                Should -Be 'resource'
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+    }
+
+    It 'does not infer resource identity from a malformed namespace prefix: <Canonical>' -TestCases @(
+        @{ Canonical = 'Microsoft.Storage' }
+        @{ Canonical = 'Oracle.Database' }
+        @{ Canonical = 'Oracle.Other/cloudVmClusters' }
+        @{ Canonical = 'Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings' }
+        @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings' }
+    ) {
+        param($Canonical)
+        InModuleScope Avm.Authoring -Parameters @{ Canonical = $Canonical } {
+            param($Canonical)
+            $context = [pscustomobject]@{ Root = Join-Path $TestDrive 'renamed'; Ecosystem = 'bicep' }
+            { Get-AvmMetadataModuleType -Context $context -Path $context.Root -Metadata @{ canonicalType = $Canonical } } |
+                Should -Throw '*Cannot determine whether*'
+        }
+    }
+
     It 'recognizes a single-segment Terraform <ModuleType> identity without telemetry' -TestCases @(
         @{ Kind = 'ptn'; Canonical = 'alz'; ModuleType = 'pattern' }
         @{ Kind = 'utl'; Canonical = 'naming'; ModuleType = 'utility' }

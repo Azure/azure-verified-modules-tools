@@ -46,7 +46,7 @@ function Test-AvmMetadataContent {
         return [pscustomobject]@{ Metadata = $metadata; Issues = $issues.ToArray() }
     }
 
-    $resourceType = $metadata.canonicalType.StartsWith('Microsoft.', [System.StringComparison]::Ordinal)
+    $resourceType = Test-AvmMetadataResourceType -CanonicalType $metadata.canonicalType
     if (($ModuleType -eq 'resource') -ne $resourceType) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_KIND' `
                     -Message "canonicalType '$($metadata.canonicalType)' does not identify a $ModuleType module."))

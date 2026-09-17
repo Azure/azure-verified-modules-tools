@@ -169,6 +169,23 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $result.Metadata.canonicalType | Should -Be 'Microsoft.Storage/storageAccounts'
     }
 
+    It 'plans Oracle resource metadata from explicit provider fields: <ResourceType>' -TestCases @(
+        @{ ResourceType = 'cloudExadataInfrastructures' }
+        @{ ResourceType = 'cloudVmClusters' }
+        @{ ResourceType = 'autonomousDatabases' }
+    ) {
+        param($ResourceType)
+        $parameters = New-CreationScriptArguments
+        $parameters.Remove('canonicalType')
+        $parameters.resourceProviderNamespace = 'Oracle.Database'
+        $parameters.resourceType = $ResourceType
+        $result = & $creationScript @parameters -PlanOnly
+        $result.Status | Should -Be 'plan'
+        $result.Metadata.canonicalType | Should -BeExactly "Oracle.Database/$ResourceType"
+        Test-Path -LiteralPath $script:workRoot | Should -BeFalse
+        Should -Invoke Invoke-AvmRepositoryCreationProcess -Times 0 -Exactly
+    }
+
     It 'rejects conflicting explicit resource types before any publication' {
         $parameters = New-CreationScriptArguments
         $parameters.resourceProviderNamespace = 'Microsoft.Compute'
