@@ -18,13 +18,14 @@ The identity and storage settings below are GitHub **`avm` environment variables
 | `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` | Existing provider identity and Azure resource targets; do not change these during migration |
 | `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID` | TME state-only identity |
 | `ARM_BACKEND_STORAGE_ACCOUNT_NAME`, `ARM_BACKEND_STORAGE_CONTAINER_NAME` | TME state location, selected with the state identity |
-| `STORAGE_ACCOUNT_NAME`, `STORAGE_ACCOUNT_CONTAINER_NAME` | Original state location; keep unchanged for the original workflow and rollback |
 
-Set all five `ARM_BACKEND_*` values together. They can be staged while `main`
-still runs the original workflow: it does not consume these variables. With all
-five unset, the updated workflow selects the original provider identity and
-storage together. Partial overrides are rejected before repository mutations;
-it never combines TME identity with the original account by fallback.
+Set all five `ARM_BACKEND_*` values together. The workflow and sync command
+reject missing or partial backend configuration before repository mutations;
+provider identity and storage aliases are not fallbacks. The shared backend
+is required for both legacy and BAMI test tenants. Direct calls to
+`Invoke-RepositorySync.ps1` must supply `stateTenantId`, `stateSubscriptionId`,
+`stateClientId`, `stateStorageAccountName`, and `stateContainerName`.
+Repository-creation mode continues to use a local backend without these values.
 
 The sync script passes the complete backend configuration through `terraform init
 -backend-config`, together with Entra/OIDC authentication and disabled CLI/MSI
@@ -33,10 +34,9 @@ require native Terraform support for backend-specific environment variables.
 
 The runtime no longer accepts a state resource-group name. Entra/OIDC access
 uses the standard blob endpoint with `lookup_blob_endpoint=false`, and
-blob-lease recovery uses account/container/blob names. Retain
-`STORAGE_ACCOUNT_RESOURCE_GROUP_NAME` for the original workflow; the deployed
-resource group is still needed for bootstrap and management commands, not
-runtime state access.
+blob-lease recovery uses account/container/blob names. The deployed resource
+group is still needed for bootstrap and management commands, not runtime state
+access.
 
 Only non-secret identifiers and authentication flags are persisted in backend
 configuration and plans. GitHub provides fresh OIDC tokens for both identities;
@@ -70,7 +70,7 @@ The [candidate root](bami-identity/main.tf) reuses the Azure identity module
 only for selected repositories. Each candidate has its own
 `bami-identities/<tenantGuid>/<repoId>.tfstate` key in the **same configured TME
 backend**. The legacy `<repoId>.tfstate`, `module.azure[0]`, provider `ARM_*`,
-`ARM_BACKEND_*`, and `STORAGE_ACCOUNT_*` settings remain unchanged. Switching
+and `ARM_BACKEND_*` settings remain unchanged. Switching
 the central selection back to `legacy` restores legacy consumer secrets
 without touching candidate identities or state. A later candidate tenant uses
 a different internal key; it does not replace the previous tenant's identities.
@@ -102,8 +102,8 @@ controller as an execution identity to bypass a failed prerequisite.
 
 ## Isolated branch testing
 
-After an approved snapshot copy, test the migration branch explicitly without
-merging or changing the original storage variables:
+After an approved snapshot copy, test the migration branch explicitly with all
+five backend variables set for that snapshot, without changing provider settings:
 
 ```powershell
 $migrationRef = 'YOUR-MIGRATION-BRANCH'
@@ -127,10 +127,10 @@ runtime state identity cross-tenant or provider-management permissions.
 
 1. Deploy the [Terraform AVM bootstrap](../../../infra/README.md). Save its
    `workflowVariables` output to `infra/tme.outputs.json` before discarding the
-   local bootstrap state. This non-secret file contains the five new environment
+   local bootstrap state. This non-secret file contains the five backend environment
    values and is ignored by Git. For an already-deployed bootstrap with no local
    file, use the infrastructure README's read-only output recovery commands.
-   The new backend variables may already be staged; leave original variables unchanged.
+   Leave provider and test-tenant variables unchanged.
 1. Before merging the tools change, disable the workflow
    and agree that no other
    operators will run manual sync or Terraform during the copy:
@@ -240,8 +240,7 @@ runtime state identity cross-tenant or provider-management permissions.
    }
    ```
 
-   Leave the original `STORAGE_ACCOUNT_*`, provider `ARM_*`, management group,
-   identity resource group, and test
+   Leave provider `ARM_*`, management group, identity resource group, and test
    subscription variables unchanged. No state migration flags are needed during
    normal init: fresh workflow checkouts select the copied state by the unchanged
    `<repoId>.tfstate` key.
@@ -279,11 +278,11 @@ runtime state identity cross-tenant or provider-management permissions.
 ## Rollback
 
 Pause automatic sync and drain all writers again. **Before any apply has written
-to TME**, remove all five `ARM_BACKEND_*` variables together; the updated
-workflow then uses the original provider identity and unchanged
-`STORAGE_ACCOUNT_*` account/container values. Keep sync disabled while removing
-the values so no run sees a partial configuration. Confirm a canary plan before
-resuming.
+to TME**, set all five `ARM_BACKEND_*` values to the original state tenant,
+subscription, client, storage account, and container from the approved migration
+record. Do not unset them or rely on provider settings or storage aliases.
+Keep sync disabled while updating the values so no run sees a partial
+configuration. Confirm a canary plan before resuming.
 
 **After an apply has written to TME, the old blobs are stale.** Do not simply
 point the workflow back. Export the latest TME state, verify lineage/serial and

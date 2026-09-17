@@ -197,7 +197,7 @@ function Invoke-AvmBamiRepositoryIdentity {
 
     $settings = Get-AvmBamiSettings -Values $BamiValues
     $stateKey = Get-AvmBamiIdentityStateKey -TenantId $settings['TEST_BAMI_TENANT_ID'] -RepoId $RepoId
-    $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend -Legacy @{}
+    $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend
     if ($Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
         throw [System.ArgumentException]::new('Candidate identities are limited to the selected Azure AVM repository.')
     }

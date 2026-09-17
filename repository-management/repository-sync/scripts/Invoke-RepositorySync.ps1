@@ -65,8 +65,14 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "TestTenant.ps1")
 
 if (!$repositoryCreationModeEnabled) {
-    $null = Resolve-RepositorySyncStateIdentity `
-        -TenantId $stateTenantId -SubscriptionId $stateSubscriptionId -ClientId $stateClientId
+    $stateBackend = @{
+        TenantId = $stateTenantId
+        SubscriptionId = $stateSubscriptionId
+        ClientId = $stateClientId
+        StorageAccountName = $stateStorageAccountName
+        ContainerName = $stateContainerName
+    }
+    $null = Resolve-RepositorySyncStateConfiguration -Backend $stateBackend
 }
 
 $env:ARM_USE_AZUREAD = "true"
@@ -115,13 +121,7 @@ if ($testTenant.TestTenant -ceq 'bami') {
         RepoId = $repoId
         Repository = $orgAndRepoName
         BamiValues = $testTenant.Settings
-        Backend = @{
-            TenantId = $stateTenantId
-            SubscriptionId = $stateSubscriptionId
-            ClientId = $stateClientId
-            StorageAccountName = $stateStorageAccountName
-            ContainerName = $stateContainerName
-        }
+        Backend = $stateBackend
         Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
         PlanOnly = $planOnly
     }
