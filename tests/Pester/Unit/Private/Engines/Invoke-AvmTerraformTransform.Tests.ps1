@@ -80,7 +80,44 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'schedules independent targets with the requested throttle' {
+    It 'runs example rules before common rules without applying them to modules' {
+        $ctx = $script:context
+        $example = Join-Path $ctx.Root 'examples' 'default'
+        $child = Join-Path $ctx.Root 'modules' 'child'
+        New-Item -ItemType Directory -Path $example, $child -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Value 'locals {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $child 'terraform.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; Example = $example } {
+            param($C, $Example)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name"
+                }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+
+            Invoke-AvmTerraformTransform -Context $C | Out-Null
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and
+                $WorkingDirectory -eq $Example -and
+                $ArgumentList -contains '/fake/example' -and
+                $ArgumentList -contains '/fake/common' -and
+                ([array]::IndexOf($ArgumentList, '/fake/example')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
+                $ArgumentList -notcontains '/fake/root' -and
+                $ArgumentList -notcontains '/fake/module'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and
+                $WorkingDirectory -ne $Example -and
+                $ArgumentList -notcontains '/fake/example'
+            }
+        }
+    }
+
+    It 'finishes module targets before scheduling examples with the requested throttle' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -94,19 +131,23 @@ Describe 'Invoke-AvmTerraformTransform' {
             Mock Get-AvmTerraformTransformTarget {
                 @(
                     [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
-                    [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('common', 'example') }
+                    [pscustomobject]@{ Path = '/fake/module'; Scope = 'module'; Profiles = @('module', 'common') }
+                    [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'common') }
+                    [pscustomobject]@{ Path = '/fake/second-example'; Scope = 'example'; Profiles = @('example', 'common') }
                 )
             }
-            Mock Invoke-AvmParallel
+            $script:transformBatches = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-AvmParallel { $script:transformBatches.Add(($InputObject.Scope -join ',')) }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
 
             Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
-            Should -Invoke Invoke-AvmParallel -Exactly 1 -ParameterFilter {
+            Should -Invoke Invoke-AvmParallel -Exactly 2 -ParameterFilter {
                 $FunctionName -eq 'Invoke-AvmMapotfTransformTarget' -and
                 $InputObject.Count -eq 2 -and
                 $ThrottleLimit -eq 4
             }
+            $script:transformBatches.ToArray() | Should -Be @('root,module', 'example,example')
         }
     }
 
@@ -127,7 +168,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
-                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('common', 'example') }
+                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'common') }
                     )
                 }
                 Mock Invoke-AvmParallel
@@ -135,7 +176,7 @@ Describe 'Invoke-AvmTerraformTransform' {
 
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
-                Should -Invoke Invoke-AvmParallel -Exactly 1 -ParameterFilter {
+                Should -Invoke Invoke-AvmParallel -Exactly 2 -ParameterFilter {
                     $ThrottleLimit -eq 1
                 }
             }
@@ -667,7 +708,7 @@ Describe 'Get-AvmTerraformTransformTarget' {
         ($targets | Where-Object Path -eq $root).Profiles | Should -Be @('root', 'module', 'common')
         ($targets | Where-Object Path -eq $direct).Profiles | Should -Be @('module', 'common')
         ($targets | Where-Object Path -eq $nested).Profiles | Should -Be @('module', 'common')
-        ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('common', 'example')
+        ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('example', 'common')
         @($targets.Path) | Should -Not -Contain $notModule
     }
 }
@@ -754,13 +795,28 @@ Describe 'Resolve-AvmMapotfConfigDir' {
         @(Get-ChildItem -LiteralPath $resolved -Filter '*.mptf.hcl' -File).Count | Should -BeGreaterThan 0
     }
 
-    It 'returns null for an absent optional example profile' {
+    It 'resolves the packaged example telemetry profile without an override' {
         Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
         $root = Join-Path $TestDrive ("bare-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $root -Force | Out-Null
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
             param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -Profile example
+        }
+        $resolved | Should -Not -BeNullOrEmpty
+        $resolved | Should -BeExactly (Join-Path $script:moduleRoot 'Resources' 'mapotf' 'example')
+        (Join-Path $resolved 'disable_telemetry.mptf.hcl') | Should -Exist
+    }
+
+    It 'returns null for an absent optional profile' {
+        Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
+        $root = Join-Path $TestDrive ("bare-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+        $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Mock Test-Path { $false }
             Resolve-AvmMapotfConfigDir -Root $R -Profile example -Optional
         }
         $resolved | Should -BeNullOrEmpty
