@@ -52,6 +52,12 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match 'avm test e2e --example'
     }
 
+    It 'defaults e2e telemetry off through a workflow input' {
+        $script:workflow | Should -Match '(?ms)enable-telemetry:\r?\n.*?type:\s*boolean\r?\n.*?default:\s*false'
+        $script:workflow | Should -Match 'TF_VAR_enable_telemetry:\s*\$\{\{ inputs\.enable-telemetry \}\}'
+        ([regex]::Matches($script:workflow, '(?m)^\s*TF_VAR_enable_telemetry:')).Count | Should -Be 1
+    }
+
     It 'skips the e2e matrix when no runnable examples were discovered' {
         $script:workflow | Should -Match "needs\.discover-examples\.outputs\.hasExamples == 'true'"
     }

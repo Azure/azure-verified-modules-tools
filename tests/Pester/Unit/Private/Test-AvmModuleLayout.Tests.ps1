@@ -223,7 +223,7 @@ Describe 'Module Resources packaging' {
         $content | Should -Match 'name == "enable_telemetry"'
         $content | Should -Match 'filename\s*=\s*"variables\.tf"'
         $content | Should -Match 'enable_telemetry\s*=\s*var\.enable_telemetry'
-        $content | Should -Match '(?s)transform "update_in_place" "default_example_telemetry_variable".*?asraw \{\s*default = false\s*\}'
+        $content | Should -Match '(?s)transform "update_in_place" "default_example_telemetry_variable".*?asraw \{\s*default = true\s*\}'
         $content | Should -Not -Match 'enable_telemetry\s*=\s*false'
     }
 

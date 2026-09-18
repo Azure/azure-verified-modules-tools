@@ -17,7 +17,7 @@ locals {
   }
   example_telemetry_variables_to_update = {
     for name, variable in data.variable.example_telemetry.result : name => variable
-    if name == "enable_telemetry" && length(local.example_telemetry_modules) > 0 && try(variable.default != false, true)
+    if name == "enable_telemetry" && length(local.example_telemetry_modules) > 0 && try(variable.default != true, true)
   }
 }
 
@@ -28,7 +28,7 @@ transform "new_block" "new_example_telemetry_variable" {
   filename       = "variables.tf"
   asraw {
     type        = bool
-    default     = false
+    default     = true
     description = <<DESCRIPTION
 This variable controls whether or not telemetry is enabled for the module.
 For more information see <https://aka.ms/avm/telemetryinfo>.
@@ -52,7 +52,7 @@ transform "update_in_place" "default_example_telemetry_variable" {
   # Scalar merge mode can update an existing inline argument without expanding it.
   merge_object_attributes = each.value.mptf.range.start_line == each.value.mptf.range.end_line && contains(keys(each.value), "default")
   asraw {
-    default = false
+    default = true
   }
   depends_on = [
     transform.reorder_attributes.expand_example_telemetry_variables,

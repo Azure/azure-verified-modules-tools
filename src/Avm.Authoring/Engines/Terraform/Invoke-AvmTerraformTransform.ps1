@@ -291,7 +291,7 @@ function Invoke-AvmTerraformTransform {
         Module file-layout and provider rules apply to the root and submodules.
         Examples set enable_telemetry=var.enable_telemetry only on calls whose
         source module declares that input. The example variable defaults to
-        false: existing declarations retain their location and metadata, and a
+        true: existing declarations retain their location and metadata, and a
         missing declaration is added to variables.tf. This runs before common
         in-place ordering and cleanup; source-module defaults are unchanged.
         Common rules apply everywhere. The final call removes '*.tf.mptfbackup'

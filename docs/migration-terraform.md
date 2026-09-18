@@ -165,8 +165,8 @@ The transform sets `enable_telemetry = var.enable_telemetry` on example module
 calls only when the called module declares that input. It adds missing arguments
 and replaces other values while preserving comments and correct references.
 Existing example variables stay in their original file with their metadata, but
-their default is set to `false` (added for required inputs). If the variable is
-absent, a bool input with a false default is appended to `variables.tf`, creating
+their default is set to `true` (added for required inputs). If the variable is
+absent, a bool input with a true default is appended to `variables.tf`, creating
 that file if needed. Unsupported modules and examples without relevant calls
 are unchanged. Root/submodule call sites and source-module defaults are unchanged.
 Other example files retain their layout; drift checking reports and restores
@@ -313,7 +313,7 @@ exactly this status today.
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): PowerShell hooks → `init -upgrade` → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. `pre.sh` and `post.sh` are rejected with PowerShell migration guidance. Requires provider credentials for planning. |
-| `avm transform`       | `mapotf`                | root: `root,module,common`; each `modules/**/terraform.tf`: `module,common`; each direct `examples/*`: `example,common`; then `clean-backup` per target |   ✅   | Repeated `--mptf-dir` values compose scoped profiles. Root/submodule transforms finish before examples inspect their inputs. Supported example calls use `var.enable_telemetry`, with a false-default example variable reused in place or added to `variables.tf`. Module file-layout rules never reach examples. Pr-check snapshots and restores source files, including new variable files, while reporting transform drift. |
+| `avm transform`       | `mapotf`                | root: `root,module,common`; each `modules/**/terraform.tf`: `module,common`; each direct `examples/*`: `example,common`; then `clean-backup` per target |   ✅   | Repeated `--mptf-dir` values compose scoped profiles. Root/submodule transforms finish before examples inspect their inputs. Supported example calls use `var.enable_telemetry`, with a true-default example variable reused in place or added to `variables.tf`. Module file-layout rules never reach examples. Pr-check snapshots and restores source files, including new variable files, while reporting transform drift. |
 | `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
 The pinned tool versions live in
