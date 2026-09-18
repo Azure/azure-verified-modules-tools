@@ -365,7 +365,9 @@ Describe 'Component: module catalog helpers' -Tag Component {
             [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy "test-$file"), 'Preview rows must not be read as source.')
         }
         $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
-        { Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory } | Should -Throw '*6 row(s)*CSV row removals are blocked*'
+        $held = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+        $held.HeldBackSourceFiles | Should -HaveCount 6
+        $held.HeldBack | Should -Contain 'docs/v1/modules.json'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force
         $bundle.Report.counts.catalogEntries | Should -Be 12
         $bundle.Report.csvRowRemovals | Should -HaveCount 6
