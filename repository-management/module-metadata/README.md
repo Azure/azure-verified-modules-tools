@@ -11,6 +11,13 @@ Terraform wiring, and does not run the full-sync hook below. This is a migration
 procedure, not a new workflow switch or runner. See the
 [rollout plan](../../docs/metadata-rollout.md#current-one-off-terraform-migration).
 
+All selected helper submodules receive valid metadata with exact lowercase
+`canonicalType: "helper"`, superseding their earlier one-off omission. This does
+not include the excluded `test-repo5` root or change archived/missing/private
+repository restrictions. Existing valid files and owners remain preserved.
+Catalog JSON includes helpers; every generated CSV excludes them. Adoption waits
+for compatible released/installed tooling.
+
 This directory is disposable after the one-off migration and reconciliation.
 It owns CSV conversion, source inference, owner-snapshot processing, and the
 backfill adapter. None of that code is packaged in Avm.Authoring.
@@ -41,7 +48,10 @@ suffix is retained (`avm-utl-naming` becomes `naming`); the existing two-compone
 mapping is unchanged (`avm-utl-types-common` becomes `types/common`). Longer,
 ambiguous hyphenated names still require an explicit canonical value. Resource
 ARM types and grouped Bicep paths retain their existing requirements.
-Telemetry-free utilities remain telemetry-free.
+Explicit child overrides or supplied `CanonicalType` values may select `helper`;
+missing or ambiguous types are never automatically classified as helpers.
+Telemetry-free utilities and child helpers may omit telemetry. Supplied helper
+prefixes remain preserved and validated against the ecosystem and family kind.
 
 One conditional call in ordinary checkout preparation invokes
 `MetadataBackfillSync.ps1` before pre-commit. That temporary script collects CSV
@@ -50,10 +60,10 @@ repository process transport. Request/result files stay outside the target
 checkout and are removed afterward. The worker imports metadata APIs from the
 selected tools checkout without changing the caller's module discovery.
 Ordinary sync still installs and uses the normal released Avm.Authoring module,
-including its existing version/upgrade checks. Single-segment canonical values
-and `Oracle.Database` ARM types require compatible installed/released schemas
-for normal pre-commit validation; worker or local CI success is not a release
-and does not establish full-sync compatibility.
+including its existing version/upgrade checks. Single-segment canonical values,
+`Oracle.Database` ARM types, and child helper markers require compatible
+installed/released schemas for normal pre-commit validation; worker or local CI
+success is not a release and does not establish full-sync compatibility.
 
 Normal managed files, formatting, CODEOWNERS, repository/Azure management,
 state setup, tenant gates and selected project synchronization all still run.
@@ -111,9 +121,9 @@ Unowned modules may have an empty owner list. Catalog output reports them as
 Orphaned unless the existing index already marks them Deprecated, which is
 preserved. Unpublished Bicep children without their own telemetry omit
 `telemetryIdPrefix`, as allowed by [BCPFR4](https://azure.github.io/Azure-Verified-Modules/spec/BCPFR4).
-Roots, independently published children, and instrumented modules still require
-the field. Existing telemetry identifiers are preserved rather than repaired
-during metadata-file creation.
+Non-helper resource/pattern roots, independently published children, and
+instrumented non-helper modules still require the field. Existing telemetry
+identifiers are preserved rather than repaired during metadata-file creation.
 Bicep alone still supports optional `-UpdateSource` telemetry-prefix wiring.
 
 ## Removing migration after reconciliation

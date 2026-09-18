@@ -419,13 +419,19 @@ as `Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings`
 are invalid. Pattern and utility values may be single taxonomy names such as
 `naming`, or slash-separated paths such as `lz/sub-vending`, for both root and
 reduced child metadata.
+Exact lowercase `helper` is reserved for child/submodule metadata in either
+ecosystem and any resource, pattern, or utility family. It is not an ARM type
+or a new authored module kind; roots cannot use it.
 This does not change repository naming or grouped Bicep module-path conventions.
 Root metadata owns a flat `owners` string array: bare GitHub usernames and
 qualified `@organization/team-slug` handles. Empty arrays are permitted and
 case-insensitive duplicates are rejected. Tier is not part of this contract.
 Children carry only their own identity, description, and optional telemetry
 prefix; catalog generation inherits ownership from the family root.
-Roots and directly published resource/pattern modules require telemetry.
+Helpers may omit telemetry even when published or instrumented. Supplied helper
+prefixes are preserved and retain ecosystem, family-kind, format, and length
+validation. Non-helper resource/pattern roots and directly published children
+require telemetry.
 Uninstrumented Bicep children without a version file may omit the prefix under
 BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
 prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
@@ -454,13 +460,19 @@ owner/canonical metadata edits do not.
 the selected root and its module children. Invalid existing metadata fails the
 check. Missing files produce explicit warnings during rollout, without creating
 files or reading indexes. Explicit `avm metadata validate` and `show` still fail
-for missing files. Test, example, and internal helper directories are excluded.
+for missing files. Discovered helper children are validated; existing test,
+example, and internal-only source-directory exclusions remain unchanged.
 
 The catalog workflow lives in this tools repository and generates entries only
-from valid module metadata. Invalid present metadata is an error; missing
-metadata never causes a full legacy CSV record to be retained. Generation and
+from valid module metadata. Helpers remain in catalog JSON under `helper`, with
+stable repository/module-path identities, inherited owners, the derived family
+`moduleType`, and null ARM `providerNamespace`/`resourceType`. Every generated
+CSV omits them, including previews and canonical outputs. Invalid present
+metadata is an error; missing metadata never causes a full legacy CSV record
+to be retained. Generation and
 publication fail by default when source CSV module identities would disappear.
 Explicit `Force` permits those removals only, not other validation failures.
+Helper source rows are subject to this same removal report and guard.
 Source CSVs, not existing preview outputs, are the comparison baseline; this
 remains true after canonical CSV replacement. Hash-protected source-row evidence
 is checked again against the unchanged publication base before writes.
@@ -480,9 +492,10 @@ reviewed updates; generated public catalog CSVs are unaffected.
 The current one-off Terraform migration is agent-led and metadata-only because
 source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,
 preserves valid existing metadata and owners, and creates no Terraform wiring.
-Helper omissions are explicit decisions for that migration, not a blanket
-exclusion of submodules or modules without metadata. Migration data remains
-outside the packaged module. Compatible installed/released schemas are required
+All selected helper submodules receive valid metadata marked `helper`,
+superseding their previous one-off omission. The excluded `test-repo5` root and
+archived/missing/private repository restrictions remain unchanged. Migration
+data remains outside the packaged module. Compatible installed/released schemas are required
 for adoption; successful checkout validation or CI is not a release.
 Separately, Terraform sync can create missing files directly from existing
 indexes and source, without an intermediate approval file or repository

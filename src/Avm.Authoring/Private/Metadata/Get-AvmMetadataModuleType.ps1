@@ -36,6 +36,12 @@ function Get-AvmMetadataModuleType {
             return $kinds[$identity.Groups['kind'].Value]
         }
     }
+    if ($Metadata['canonicalType'] -ceq 'helper' -and $Path -cne $Context.Root) {
+        $familyMetadataPath = Join-Path $Context.Root 'metadata.json'
+        if (Test-Path -LiteralPath $familyMetadataPath -PathType Leaf) {
+            $Metadata = ConvertFrom-AvmMetadataJson -Json (Read-AvmMetadataJson -Path $familyMetadataPath)
+        }
+    }
     $prefix = [regex]::Match([string]$Metadata['telemetryIdPrefix'], '^46d3x(?:bcp|trf)\.(?<kind>res|ptn|utl)\.')
     if ($prefix.Success) {
         return $kinds[$prefix.Groups['kind'].Value]
