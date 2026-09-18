@@ -213,6 +213,7 @@ jobs:
           Write-Host "Authenticating gh cli"
           gh auth login -h "GitHub.com"
           Write-Host "Running repo sync"
+          Import-Module Avm.Authoring -Force -ErrorAction Stop
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
             -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
