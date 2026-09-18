@@ -431,6 +431,7 @@ function Test-AvmTerraformTransientError {
         'Allocation ?Failed'
         'results in exceeding approved'
         'LocationNotAvailableForResourceGroup'
+        'currently experiencing high demand in .*? region'
     )
 
     if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
