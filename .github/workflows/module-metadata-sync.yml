@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       plan_only:
-        description: 'Generate artifacts only. Non-plan publication requires the trusted main branch.'
+        description: 'Dry run: build the catalog and upload the results as artifacts, without opening any pull requests. Untick to also publish, which only works when this workflow runs on the main branch.'
         type: boolean
         default: true
       force:

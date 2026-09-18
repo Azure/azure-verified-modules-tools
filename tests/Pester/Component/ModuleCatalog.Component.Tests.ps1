@@ -38,7 +38,8 @@ BeforeAll {
     function Add-CatalogModule {
         param(
             [object] $Fixture, [string] $Ecosystem, [string] $Repository,
-            [string] $ModulePath, [string] $Canonical, [switch] $Child, [switch] $Adopt
+            [string] $ModulePath, [string] $Canonical, [switch] $Child, [switch] $Adopt,
+            [switch] $SourcePending
         )
         $identity = New-AvmCatalogIdentity -Ecosystem $Ecosystem -Repository $Repository -ModulePath $ModulePath
         $root = if ($Ecosystem -eq 'bicep') { $Fixture.Bicep } else { Join-Path $Fixture.Terraform $Repository.Substring('Azure/'.Length) }
@@ -51,7 +52,9 @@ BeforeAll {
             "terraform {}`n"
         }
         $name = if ($Ecosystem -eq 'bicep') { 'main.bicep' } else { 'main.tf' }
-        [System.IO.File]::WriteAllText((Join-Path $directory $name), $source)
+        if (-not $SourcePending) {
+            [System.IO.File]::WriteAllText((Join-Path $directory $name), $source)
+        }
         $module = [pscustomobject]@{
             Ecosystem = $Ecosystem; Repository = $Repository; ModulePath = $ModulePath
             ModuleType = $identity.ModuleType; Canonical = $Canonical; Directory = $directory; Identity = $identity
@@ -145,8 +148,10 @@ BeforeAll {
         $registry = [ordered]@{}
         foreach ($item in $Inventory.Items) {
             $registry[$item.Identity.Key] = [ordered]@{
-                status = 'available'; currentVersion = '1.2.3'; firstPublishedIn = '2024-02'
-                downloads = if ($item.Identity.Ecosystem -eq 'terraform' -and $item.Identity.ModulePath -eq '.') { 123 } else { $null }
+                status = if ($item.Identity.SourcePending) { 'not-published' } else { 'available' }
+                currentVersion = if ($item.Identity.SourcePending) { $null } else { '1.2.3' }
+                firstPublishedIn = if ($item.Identity.SourcePending) { $null } else { '2024-02' }
+                downloads = if (-not $item.Identity.SourcePending -and $item.Identity.Ecosystem -eq 'terraform' -and $item.Identity.ModulePath -eq '.') { 123 } else { $null }
                 marRegistered = if ($item.Identity.Ecosystem -eq 'bicep') { $true } else { $null }
             }
         }
@@ -823,6 +828,58 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $null = [System.IO.Directory]::CreateDirectory($helper)
         [System.IO.File]::WriteAllText((Join-Path $helper 'keyVaultExport.bicep'), 'param value string')
         (Get-CatalogFixtureInventory -Fixture $fixture).Sources | Should -HaveCount 6
+    }
+
+    It 'adopts scaffolded modules that have metadata but no source yet' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $scaffolds = @{
+            bicep = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+                -ModulePath 'avm/ptn/ai-ml/landing-zone' -Canonical 'ai-ml/landing-zone' -Adopt -SourcePending
+            terraform = Add-CatalogModule -Fixture $fixture -Ecosystem terraform `
+                -Repository 'Azure/terraform-azurerm-avm-ptn-ai-ml-landing-zone' `
+                -ModulePath '.' -Canonical 'ai-ml/landing-zone' -Adopt -SourcePending
+        }
+
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $inventory.Report.missingMetadata | Should -HaveCount 0
+        foreach ($scaffold in $scaffolds.Values) {
+            $source = @($inventory.Sources | Where-Object { $_.Key -ceq $scaffold.Identity.Key })[0]
+            $source | Should -Not -BeNullOrEmpty
+            $source.SourcePending | Should -BeTrue
+        }
+
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $record = @($bundle.Catalog.modules['ai-ml/landing-zone'][$ecosystem])[0]
+            $record.moduleStatus | Should -BeExactly 'Proposed'
+            $record.moduleDisplayName | Should -BeExactly 'Authoritative module'
+        }
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+    }
+
+    It 'still refuses a published module whose source has gone missing' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $scaffold = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/ptn/ai-ml/landing-zone' -Canonical 'ai-ml/landing-zone' -Adopt -SourcePending
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $registry = [ordered]@{}
+        foreach ($item in $inventory.Items) {
+            $registry[$item.Identity.Key] = [ordered]@{
+                status = 'available'; currentVersion = '1.2.3'; firstPublishedIn = '2024-02'
+                downloads = $null; marRegistered = $true
+            }
+        }
+        { New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub ([ordered]@{ users = @{}; teams = @{} }) `
+                -RepositoryRevisions @() } |
+            Should -Throw "*$($scaffold.Identity.Key)*registry reports it as available*"
+    }
+
+    It 'still rejects a Bicep source file whose name is not exactly main.bicep' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $scaffold = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/ptn/ai-ml/landing-zone' -Canonical 'ai-ml/landing-zone' -Adopt -SourcePending
+        [System.IO.File]::WriteAllText((Join-Path $scaffold.Directory 'Main.bicep'), "metadata name = 'Authoritative module'`n")
+        { Get-CatalogFixtureInventory -Fixture $fixture } | Should -Throw '*has no main.bicep*'
     }
 }
 
