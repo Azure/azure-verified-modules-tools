@@ -3,7 +3,6 @@
 [CmdletBinding(SupportsShouldProcess)]
 param (
   [string]$tempPath = (Join-Path $PWD.Path 'out' 'repository-creation'),
-  [string]$toolingRepoUrl = "https://github.com/Azure/azure-verified-modules-tools",
   [string]$openSourceRepoUrl = "https://github.com/microsoft/github-operations",
   [string]$moduleProvider = "azure",
   [string]$moduleName,
@@ -15,15 +14,11 @@ param (
   [string]$resourceType,
   [string]$moduleAlternativeNames = "",
   [string]$ownerPrimaryGitHubHandle,
-  [string]$ownerPrimaryDisplayName,
   [string]$ownerSecondaryGitHubHandle = "",
-  [string]$ownerSecondaryDisplayName = "",
   [string[]]$ownerGitHubHandles = @(),
   [string]$ownerTeam,
   [switch]$planOnly,
-  [switch]$metaDataOnly,
   [switch]$skipRepoCreation,
-  [switch]$skipMetaDataCreation,
   [switch]$skipCreateAppInstallationRequest,
   [string[]]$yamlFilePaths = @(
     "./apps/azure/azure-verified-modules.yaml",
@@ -54,34 +49,10 @@ $authoringModule = Import-AvmRepositoryCreationModule
 $moduleType = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$moduleMatch.Groups[1].Value]
 $repositoryName = "terraform-$moduleProvider-$moduleName"
 $repositoryUrl = "https://github.com/Azure/$repositoryName"
-$willInitializeRepository = -not $skipRepoCreation -and (-not $metaDataOnly -or $skipMetaDataCreation)
-$inventoryRecord = $null
 $metadata = $null
 $metadataPlan = $null
 
-if (!$skipMetaDataCreation) {
-  if ($moduleType -eq 'resource' -and
-      ([string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or [string]::IsNullOrWhiteSpace($resourceType))) {
-    throw [System.ArgumentException]::new('Resource provider namespace and resource type must be provided for the repository inventory.')
-  }
-  if ([string]::IsNullOrWhiteSpace($ownerPrimaryGitHubHandle) -or [string]::IsNullOrWhiteSpace($ownerPrimaryDisplayName)) {
-    throw [System.ArgumentException]::new('Primary owner GitHub handle and display name must be provided for the repository inventory.')
-  }
-  $inventoryRecord = [pscustomobject][ordered]@{
-    moduleId = $moduleName
-    providerNamespace = $resourceProviderNamespace
-    providerResourceType = $resourceType
-    moduleDisplayName = $moduleDisplayName
-    alternativeNames = $moduleAlternativeNames
-    primaryOwnerGitHubHandle = $ownerPrimaryGitHubHandle
-    primaryOwnerDisplayName = $ownerPrimaryDisplayName
-    secondaryOwnerGitHubHandle = $ownerSecondaryGitHubHandle
-    secondaryOwnerDisplayName = $ownerSecondaryDisplayName
-    isArchived = 'false'
-  }
-}
-
-if ($willInitializeRepository) {
+if (!$skipRepoCreation) {
   if ($moduleType -eq 'resource' -and
       (-not [string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or -not [string]::IsNullOrWhiteSpace($resourceType))) {
     if ([string]::IsNullOrWhiteSpace($resourceProviderNamespace) -or [string]::IsNullOrWhiteSpace($resourceType)) {
@@ -117,28 +88,16 @@ if ($willInitializeRepository) {
     -Metadata $metadata -ModuleType $moduleType -WorkPath $tempPath -PlanOnly
 }
 
-if ($planOnly -or -not $PSCmdlet.ShouldProcess($repositoryUrl, 'Run requested repository inventory, creation, and app publication')) {
+if ($planOnly -or -not $PSCmdlet.ShouldProcess($repositoryUrl, 'Run requested repository creation and app publication')) {
   return [pscustomobject]@{
     Status = 'plan'
     RepositoryUrl = $repositoryUrl
-    ToolingRepositoryUrl = if ($null -ne $inventoryRecord) { $toolingRepoUrl } else { $null }
-    Inventory = $inventoryRecord
     Metadata = if ($null -ne $metadataPlan) { $metadataPlan.Metadata } else { $null }
+    InitialPush = if ($null -ne $metadataPlan) { $metadataPlan.InitialPush } else { $null }
   }
 }
 
 & (Join-Path $PSScriptRoot 'Test-Tooling.ps1') -AuthoringModule $authoringModule
-
-if (!$skipMetaDataCreation) {
-  . (Join-Path $PSScriptRoot 'RepositoryInventory.ps1')
-  $inventory = Publish-AvmRepositoryInventory -AuthoringModule $authoringModule -InputObject $inventoryRecord `
-    -ToolingRepoUrl $toolingRepoUrl -WorkPath $tempPath -Confirm:$false
-  Write-Host "Created PR for repo meta data: $($inventory.PullRequestUrl)"
-  if ($metaDataOnly) {
-    Write-Host 'Metadata only creation completed. Exiting.'
-    return
-  }
-}
 
 if (!$skipRepoCreation) {
   $creation = New-AvmRepositoryContent -AuthoringModule $authoringModule -RepositoryName $repositoryName `

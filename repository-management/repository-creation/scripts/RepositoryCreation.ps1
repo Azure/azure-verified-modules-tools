@@ -78,8 +78,92 @@ function Invoke-AvmRepositoryCreationProcess {
     $executable = (Get-Command -Name $Tool -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     & $AuthoringModule {
         param($Executable, $Arguments, $Directory)
-        Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory
+        Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
+            -EnvVars @{ GH_HOST = 'github.com'; GH_DEBUG = $null; GH_PROMPT_DISABLED = '1' }
     } $executable $ArgumentList $WorkingDirectory
+}
+
+function Get-AvmRepositoryDefaultRulesetProperty {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo] $AuthoringModule,
+
+        [Parameter(Mandatory)]
+        [string] $Repository,
+
+        [Parameter(Mandatory)]
+        [string] $WorkingDirectory
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $response = Invoke-AvmRepositoryCreationProcess -AuthoringModule $AuthoringModule -Tool gh `
+        -WorkingDirectory $WorkingDirectory -ArgumentList @(
+            'api', '--hostname', 'github.com', '--method', 'GET',
+            '--header', 'X-GitHub-Api-Version: 2022-11-28', "repos/$Repository/properties/values"
+        )
+    $properties = ConvertFrom-Json -InputObject $response.StdOut -AsHashtable -NoEnumerate
+    if ($properties -isnot [array]) {
+        throw [System.IO.InvalidDataException]::new("GitHub returned invalid custom properties for $Repository.")
+    }
+    $matching = @($properties | Where-Object { $_.property_name -ceq 'rulesets-default-opt-in' })
+    if ($matching.Count -gt 1) {
+        throw [System.IO.InvalidDataException]::new("GitHub returned duplicate default-ruleset properties for $Repository.")
+    }
+    $value = if ($matching.Count -eq 1) { $matching[0].value } else { $null }
+    if ($null -ne $value -and ($value -isnot [string] -or $value -cnotin @('true', 'false'))) {
+        throw [System.IO.InvalidDataException]::new("GitHub returned an invalid rulesets-default-opt-in value for $Repository.")
+    }
+    return [pscustomobject]@{ Value = $value }
+}
+
+function Set-AvmRepositoryDefaultRulesetProperty {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo] $AuthoringModule,
+
+        [Parameter(Mandatory)]
+        [string] $Repository,
+
+        [Parameter(Mandatory)]
+        [string] $WorkingDirectory,
+
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object] $Value
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    if ($null -ne $Value -and ($Value -isnot [string] -or $Value -cnotin @('true', 'false'))) {
+        throw [System.ArgumentException]::new('rulesets-default-opt-in must be the string true, false, or null to reset it.')
+    }
+    $valueDescription = if ($null -eq $Value) { 'inherited (null)' } else { $Value }
+    if (-not $PSCmdlet.ShouldProcess($Repository, "Set rulesets-default-opt-in to $valueDescription")) {
+        return
+    }
+    $arguments = @(
+        'api', '--hostname', 'github.com', '--method', 'PATCH',
+        '--header', 'X-GitHub-Api-Version: 2022-11-28', "repos/$Repository/properties/values",
+        '--raw-field', 'properties[][property_name]=rulesets-default-opt-in'
+    )
+    $arguments += if ($null -eq $Value) {
+        @('--field', 'properties[][value]=null')
+    } else {
+        @('--raw-field', "properties[][value]=$Value")
+    }
+    $null = Invoke-AvmRepositoryCreationProcess -AuthoringModule $AuthoringModule -Tool gh `
+        -WorkingDirectory $WorkingDirectory -ArgumentList $arguments
+    $current = Get-AvmRepositoryDefaultRulesetProperty -AuthoringModule $AuthoringModule `
+        -Repository $Repository -WorkingDirectory $WorkingDirectory
+    if ($current.Value -cne $Value) {
+        throw [System.InvalidOperationException]::new(
+            "Could not verify rulesets-default-opt-in=$valueDescription for $Repository."
+        )
+    }
 }
 
 function New-AvmRepositoryContent {
@@ -115,11 +199,16 @@ function New-AvmRepositoryContent {
     if ($validation.Status -ne 'pass') {
         throw [System.ArgumentException]::new("Invalid repository metadata: $($validation.Issues.Message -join ' ')")
     }
-    if ($PlanOnly -or -not $PSCmdlet.ShouldProcess($repository, 'Initialize module metadata and publish the new repository')) {
+    if ($PlanOnly -or -not $PSCmdlet.ShouldProcess($repository, 'Initialize metadata and publish the new repository with a temporary default-ruleset opt-out')) {
         return [pscustomobject]@{
             Status = 'plan'
             RepositoryUrl = $repositoryUrl
             Metadata = $validation.Metadata
+            InitialPush = [pscustomobject]@{
+                Branch = 'main'
+                TemporaryRulesetProperty = 'rulesets-default-opt-in'
+                RestoreOriginalValue = $true
+            }
         }
     }
 
@@ -128,6 +217,7 @@ function New-AvmRepositoryContent {
     $stagingRoot = Join-Path $workRoot ([guid]::NewGuid().ToString('N'))
     $modulePath = Join-Path $stagingRoot $RepositoryName
     $repositoryCreated = $false
+    $initialPushCompleted = $false
     $published = $false
     try {
         $null = New-Item -ItemType Directory -Path $stagingRoot -Force
@@ -154,7 +244,54 @@ function New-AvmRepositoryContent {
         $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('remote', 'add', 'origin', "$repositoryUrl.git")
         $null = Invoke-AvmRepositoryCreationProcess @process -Tool gh -ArgumentList @('repo', 'create', $repository, '--public')
         $repositoryCreated = $true
-        $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('push', '--set-upstream', 'origin', 'HEAD:refs/heads/main')
+        $propertyParameters = @{
+            AuthoringModule = $AuthoringModule
+            Repository = $repository
+            WorkingDirectory = $modulePath
+        }
+        $originalProperty = Get-AvmRepositoryDefaultRulesetProperty @propertyParameters
+        $restoreProperty = $originalProperty.Value -cne 'false'
+        $publicationError = $null
+        $recoveryPath = Join-Path $stagingRoot 'ruleset-recovery.json'
+        $recovery = [ordered]@{
+            repository = $repository
+            propertyName = 'rulesets-default-opt-in'
+            value = $originalProperty.Value
+        }
+        [System.IO.File]::WriteAllText(
+            $recoveryPath,
+            ($recovery | ConvertTo-Json).Replace("`r`n", "`n") + "`n", [System.Text.UTF8Encoding]::new($false)
+        )
+        try {
+            if ($restoreProperty) {
+                Set-AvmRepositoryDefaultRulesetProperty @propertyParameters -Value 'false' -Confirm:$false
+            }
+            $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('push', '--set-upstream', 'origin', 'HEAD:refs/heads/main')
+            $initialPushCompleted = $true
+        }
+        catch {
+            $publicationError = $_
+        }
+        finally {
+            if ($restoreProperty) {
+                try {
+                    Set-AvmRepositoryDefaultRulesetProperty @propertyParameters -Value $originalProperty.Value -Confirm:$false
+                }
+                catch {
+                    $failures = @($_.Exception)
+                    if ($null -ne $publicationError) {
+                        $failures = @($publicationError.Exception) + $failures
+                    }
+                    throw [System.AggregateException]::new(
+                        "Default-ruleset restoration failed for $repository. Restore rulesets-default-opt-in using '$recoveryPath' before retrying.",
+                        [System.Exception[]]$failures
+                    )
+                }
+            }
+        }
+        if ($null -ne $publicationError) {
+            throw $publicationError
+        }
         $published = $true
         return [pscustomobject]@{
             Status = 'pass'
@@ -163,7 +300,10 @@ function New-AvmRepositoryContent {
         }
     }
     catch {
-        $state = if ($repositoryCreated) {
+        $state = if ($initialPushCompleted) {
+            "The initial commit was pushed to $repositoryUrl, but repository setup did not complete."
+        }
+        elseif ($repositoryCreated) {
             "The repository was created at $repositoryUrl but initial publication failed. It has not been deleted."
         }
         else {

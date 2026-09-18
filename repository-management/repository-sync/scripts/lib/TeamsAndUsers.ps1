@@ -68,13 +68,19 @@ function Remove-DirectCollaborators {
         [array]$issueLog
     )
 
-    $allowedUsers = @()
-    if ($moduleMetaData) {
-        $allowedUsers = @(
-            $moduleMetaData.primaryOwnerGitHubHandle,
-            $moduleMetaData.secondaryOwnerGitHubHandle
-        )
+    $hasOwners = if ($moduleMetaData -is [System.Collections.IDictionary]) {
+        $moduleMetaData.Contains('owners')
+    } else {
+        $null -ne $moduleMetaData -and $null -ne $moduleMetaData.PSObject.Properties['owners']
     }
+    if (-not $hasOwners) {
+        $message = "Skipping direct collaborator cleanup for $orgAndRepoName because metadata.json ownership is unavailable."
+        Write-Warning $message
+        return Add-IssueToLog -orgAndRepoName $orgAndRepoName -type 'repo-metadata-missing' `
+            -message $message -data $null -issueLog $issueLog -severity warning
+    }
+    $allowedUsers = @($moduleMetaData.owners | Where-Object { -not $_.StartsWith('@') })
+    $ownerTeams = @($moduleMetaData.owners | Where-Object { $_.StartsWith('@') })
 
     Write-Host "Checking repository: $orgAndRepoName for existing users."
     $repoUsers = Invoke-GitHubCliWithRetry `
@@ -90,6 +96,27 @@ function Remove-DirectCollaborators {
         Write-Warning "Failed to get repository users for: $orgAndRepoName. Skipping."
         $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "repo-users-fetch-failed" -message "Failed to fetch repository users for $orgAndRepoName." -data $null -issueLog $issueLog
         exit 1
+    }
+
+    if (@($repoUsers.output | Where-Object { $_.role_name -eq 'admin' }).Count -gt 0) {
+        foreach ($ownerTeam in $ownerTeams) {
+            $teamParts = $ownerTeam.TrimStart('@').Split('/')
+            $members = Invoke-GitHubCliWithRetry -commands @(
+                @{
+                    Arguments = @('api', "orgs/$($teamParts[0])/teams/$($teamParts[1])/members?per_page=100", '--paginate', '--slurp')
+                    OutputLog = "owner-team-$($teamParts[0])-$($teamParts[1]).json"
+                }
+            ) -returnOutputParsedFromJson
+            if (-not $members.success) {
+                $message = "Skipping direct collaborator cleanup for $orgAndRepoName because owners in $ownerTeam could not be resolved."
+                Write-Warning $message
+                return Add-IssueToLog -orgAndRepoName $orgAndRepoName -type 'owner-team-fetch-failed' `
+                    -message $message -data $ownerTeam -issueLog $issueLog
+            }
+            foreach ($page in $members.output) {
+                $allowedUsers += @($page | ForEach-Object { $_.login })
+            }
+        }
     }
 
     Write-Host "Found $($repoUsers.output.Count) users in repository: $orgAndRepoName"

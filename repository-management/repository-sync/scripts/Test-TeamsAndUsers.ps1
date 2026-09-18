@@ -18,6 +18,7 @@ function Assert-Equal {
 $script:repoUsers = @(
     [pscustomobject]@{ login = "primary-owner"; role_name = "admin" }
     [pscustomobject]@{ login = "secondary-owner"; role_name = "admin" }
+    [pscustomobject]@{ login = "third-owner"; role_name = "admin" }
     [pscustomobject]@{ login = "primary-owner"; role_name = "write" }
     [pscustomobject]@{ login = "outside-user"; role_name = "admin" }
 )
@@ -54,8 +55,7 @@ Assert-Equal `
     -Description "forceUserRemoval parameter presence"
 
 $moduleMetaData = [pscustomobject]@{
-    primaryOwnerGitHubHandle   = "primary-owner"
-    secondaryOwnerGitHubHandle = "secondary-owner"
+    owners = @("primary-owner", "secondary-owner", "third-owner")
 }
 
 $null = Remove-DirectCollaborators `

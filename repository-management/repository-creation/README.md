@@ -3,16 +3,15 @@
 [`scripts/New-Repository.ps1`](scripts/New-Repository.ps1) is the operator-driven
 Terraform repository creation entry point. It initializes `metadata.json`
 through `Initialize-AvmModuleMetadata` before publishing the repository's first
-commit. The existing tooling-repository CSV inventory update and its pull
-request are preserved as a separate compatibility step. That step reads the
-index only to append, sort, and publish it; it never supplies metadata.json values.
-Creation does not run metadata backfill.
+commit. There is no separate tooling-repository inventory registration.
+Creation does not read CSV indexes or run metadata backfill.
 
 Run from a trusted checkout of this tools repository using PowerShell 7.4+.
 Creation imports `src/Avm.Authoring/Avm.Authoring.psd1` directly, not an installed
 Gallery version. It does not install or update Avm.Authoring. Applying requires
-authenticated `gh`, Git push access, and a configured Git commit identity. The optional app
-installation request retains its existing `powershell-yaml` installation step.
+authenticated `gh`, repository-creation and Git push access, permission to edit
+repository custom properties, and a configured Git commit identity. The optional
+app installation request retains its existing `powershell-yaml` installation step.
 Existing open-source portal setup prompts still run after publication.
 
 ## Explicit inputs
@@ -26,9 +25,7 @@ $request = @{
     resourceType = 'storageAccounts'
     telemetryIdPrefix = '46d3xtrf.res.storage-storageaccount'
     ownerPrimaryGitHubHandle = 'first-owner'
-    ownerPrimaryDisplayName = 'First Owner'
     ownerSecondaryGitHubHandle = 'second-owner'
-    ownerSecondaryDisplayName = 'Second Owner'
     ownerGitHubHandles = @('third-owner')
     ownerTeam = '@Azure/storage-owners'
 }
@@ -56,18 +53,12 @@ No owner is inferred. An empty owner array is valid; there is no two-owner
 limit. Handles must satisfy the schema, without a leading `@` for individuals.
 Teams use `@organization/team-slug`. The versioned `$schema` is required;
 module metadata has no additional `schemaVersion` or `tier` field.
-Legacy owner display names are inventory fields, not metadata.json fields.
-The compatibility inventory retains its required primary owner handle/display
-name and, for resource modules, resource provider namespace/type inputs. When
-inventory publication is skipped, these CSV-only requirements do not prevent
-metadata initialization with an explicitly empty owner list.
 Pattern and utility canonical taxonomy paths must be supplied explicitly;
 creation never guesses them from a repository name. Conflicting resource
 namespace/type and canonical type inputs fail visibly.
 
-`moduleAlternativeNames` retains its original string parameter type and is
-published unchanged in the CSV cell. Only the explicit creation argument is
-split into metadata aliases; the CSV is never read to supply them.
+`moduleAlternativeNames` retains its string parameter type and is split into
+metadata aliases. No values are inferred from an inventory.
 
 The module kind comes from `avm-res-`, `avm-ptn-`, or `avm-utl-`; the ecosystem is
 Terraform. Creation does not initialize child modules.
@@ -76,28 +67,27 @@ Terraform. Creation does not initialize child modules.
 
 `-PlanOnly` and `-WhatIf` validate supplied metadata through the permanent
 `Test-AvmModuleMetadata -InputObject` API. They do not clone templates, require
-GitHub authentication, read or update the inventory, write metadata, create
+GitHub authentication, write metadata, change custom properties, create
 repositories, install modules, or submit app installation requests.
 Template-specific checks therefore happen during apply.
 Apply checks Git, GitHub CLI, and GitHub authentication before any publication
 or app-request dependency installation, including app-only runs.
 
-Apply first validates the supplied metadata when a new repository is requested.
-Unless `-skipMetaDataCreation` is set, it then performs the original inventory
-publication: fork/clone `toolingRepoUrl`, refresh from `upstream/main`, append the
-explicit creation row to
-`repository-management/repository-sync/config/repository-metadata.csv`, sort by
-`moduleId`, and publish the `chore/add/{moduleName}` branch and
-`chore: add {moduleName} metadata` pull request. Existing CSV rows are not replaced
-or used as input to metadata.json; the legacy primary/secondary owner columns
-also do not truncate metadata.json's full owner array.
-
-For repository creation, apply next clones the existing Terraform template into
+Apply validates the supplied metadata, then clones the Terraform template into
 an isolated working directory, calls the permanent initializer, and prepares a
 fresh initial commit locally. Only then does it create the empty public
-repository and push that commit.
+repository.
 The remote-template creation shortcut is deliberately not used: it would publish
 files before metadata had been initialized.
+
+Before the first push to `main`, creation records the new repository's
+`rulesets-default-opt-in` custom-property value in `ruleset-recovery.json`
+outside the staged module. Unless already `"false"`, it temporarily sets that
+property to `"false"` and verifies readback. A `finally` block restores and
+verifies the original value after success or failure; `null` resets an
+originally unset property. An existing `"false"` is left unchanged.
+No production/global ruleset properties, organization rulesets, or established
+repository protections are changed. Plans include this temporary exception.
 
 Initialization honors `.avm/.disable`. An existing `metadata.json` is validated
 and preserved byte-for-byte, including its telemetry identifier; an invalid file
@@ -113,15 +103,17 @@ location. Successful publication removes its own staging directory. Failures
 retain it and report the location. If repository creation succeeds but the push
 fails, the error also identifies the created repository. Nothing automatically
 deletes a remote repository or force-pushes during rollback; inspect the retained
-content and remote state before retrying. Inventory and module publication remain
-separate operations: an inventory PR may already exist if a later template check
-or module publication fails.
+content and remote state before retrying. If the push succeeded but restoration
+failed, the error explicitly reports the published commit and the required
+recovery. Restore the recorded property before retrying. Abrupt process
+termination may prevent `finally` from running: inspect any retained
+`ruleset-recovery.json` and the live property rather than assuming restoration.
 
-`-metaDataOnly` exits after the inventory update, when that update is enabled;
-it does not require the new metadata.json fields. `-skipRepoCreation` still permits
-inventory/app publication but does not initialize an existing repository.
-`-skipMetaDataCreation` skips only the compatibility inventory update, not
-metadata.json initialization for a new repository.
+`-skipRepoCreation` permits app-installation requests only; it does not initialize
+metadata or change protection on an existing repository.
 `-skipCreateAppInstallationRequest` still skips the app request.
-`-toolingRepoUrl` retains its inventory publication override; it never selects
-the Avm.Authoring implementation. No inventory/catalog cutover is made here.
+The CSV-only `-metaDataOnly`, `-skipMetaDataCreation`, `-toolingRepoUrl`,
+`-ownerPrimaryDisplayName`, and `-ownerSecondaryDisplayName` parameters are
+removed. For existing repositories, initialize metadata locally through
+`avm metadata initialize` and use the normal reviewed contribution process.
+Generated public catalog CSVs are unchanged.

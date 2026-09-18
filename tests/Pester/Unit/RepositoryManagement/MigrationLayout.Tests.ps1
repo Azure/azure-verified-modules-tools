@@ -11,7 +11,7 @@ Describe "Repository management migration layout" {
             "repository-management/repository-sync/terraform/main.tf"
             "repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1"
             "repository-management/repository-sync/actions/avm-repos/action.yml"
-            "repository-management/repository-sync/config/repository-metadata.csv"
+            "repository-management/repository-sync/scripts/lib/RepositoryMetadata.ps1"
             "repository-management/repository-creation/scripts/New-Repository.ps1"
             ".github/workflows/repository-management-sync.yml"
             ".github/workflows/repository-management-config-test.yml"
@@ -21,6 +21,15 @@ Describe "Repository management migration layout" {
             Test-Path -LiteralPath (Join-Path $script:repoRoot $relativePath) |
                 Should -BeTrue -Because "$relativePath must be migrated"
         }
+    }
+
+    It 'retires the repository inventory CSV without retaining runtime references' {
+        Test-Path -LiteralPath (Join-Path $script:repoRoot 'repository-management/repository-sync/config/repository-metadata.csv') |
+            Should -BeFalse
+        $files = Get-ChildItem -LiteralPath (Join-Path $script:repoRoot 'repository-management') -Recurse -File |
+            Where-Object { $_.Extension -in @('.ps1', '.yml', '.json') }
+        @($files | Select-String -Pattern 'repository-metadata\.csv|metaDataFilePath|Publish-AvmRepositoryInventory') |
+            Should -BeNullOrEmpty
     }
 
     It "no longer carries the legacy managed files tree" {

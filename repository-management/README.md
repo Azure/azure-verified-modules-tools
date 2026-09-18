@@ -12,8 +12,8 @@ to the module repository.
 
 Repository sync and [repository creation](repository-creation/README.md) are
 intentionally independent. New repositories initialize their own metadata from
-explicit creation inputs before publishing module files. The existing tooling
-inventory PR update remains a separate compatibility step.
+explicit creation inputs before publishing module files. No separate tooling
+inventory registration is required.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.
@@ -21,6 +21,25 @@ the independent state identity, deployment, migration, and rollback.
 The current snapshot came from the legacy Terraform governance repository at commit
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
+
+## Terraform repository metadata
+
+Repository discovery reads and validates each selected repository's root
+`metadata.json` on its default branch. The display name and full `owners` array
+replace the retired tools-local CSV inventory. GitHub's archived flag is
+authoritative; archived repositories are skipped without reading metadata.
+The generated public module indexes remain separate catalog outputs.
+
+During rollout, a missing file produces a warning and leaves the repository
+eligible for sync and optional metadata backfill, but direct collaborator
+cleanup is skipped until ownership is available. Invalid metadata or API
+failures exclude the affected repository and produce an error.
+
+Direct administrators listed as owners, including members of qualified owning
+teams, retain the existing just-in-time access exemption. Unresolvable teams
+stop collaborator cleanup with an error; an explicitly empty owner array is
+not treated as unavailable metadata. Other direct access remains subject to
+the existing cleanup policy.
 
 ## Test tenant selection
 

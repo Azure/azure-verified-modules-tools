@@ -30,10 +30,10 @@ also rejects non-manual events. The local command below remains an explicit
 operator action, not an automatic workflow trigger.
 
 The sync reads the matching canonical public CSV at one commit, never a `test-`
-catalog preview. If a repository
-has no public row yet, its entry in the tools repository's existing
-`repository-metadata.csv` is used. Descriptions can also come from `_header.md`.
-Missing information is reported rather than invented.
+catalog preview. There is no tools-local inventory fallback. Descriptions can
+also come from `_header.md`; missing information is reported rather than
+invented. A missing root `metadata.json` remains eligible for this optional
+backfill, with direct collaborator cleanup skipped until ownership is available.
 
 Explicit canonical overrides take precedence over the index's `CanonicalType`,
 then lossless inference. For Terraform patterns/utilities, a single alphanumeric

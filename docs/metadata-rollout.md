@@ -198,6 +198,13 @@ automatic merge path, release exception, or access-gate change.
 
 ## Optional full repository sync
 
+Discovery now reads each repository's root `metadata.json`, not a tools-local
+inventory CSV. Missing metadata warns and allows remaining sync/backfill, but
+skips direct collaborator cleanup; invalid metadata or API failures exclude
+the affected repository. GitHub archive state is authoritative.
+Optional backfill still uses the canonical public CSV at a pinned commit for
+roots and children, without a tools inventory fallback.
+
 The existing hook below is not the current one-off migration. Use it only for a
 separately approved full-sync trial, starting with `avm-ptn-example-repo`.
 The commands are for an operator after approval; none are executed by writing

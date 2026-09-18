@@ -11,9 +11,6 @@ inputs:
   outputDirectory:
     description: "Output directory for the repository data"
     default: "${{ github.workspace }}"
-  metaDataFilePath:
-    description: "Path to the meta-data.csv file used to determine expected archive state for repositories."
-    default: "${{ github.workspace }}/repository-management/repository-sync/config/repository-metadata.csv"
   clientId:
     description: "GitHub App Client ID"
     required: true
@@ -66,8 +63,7 @@ runs:
         $matrix = @(& "${{ github.action_path }}/scripts/Get-RepositoriesWhereAppInstalled.ps1" `
           -repoFilter $repositories `
           -outputDirectory "${{ inputs.outputDirectory }}" `
-          -additionalReposToSkip $repositoriesToSkip `
-          -metaDataFilePath "${{ inputs.metaDataFilePath }}")
+          -additionalReposToSkip $repositoriesToSkip)
 
         $matrixJson = ConvertTo-Json $matrix -Depth 10 -Compress
         Write-Host (ConvertTo-Json $matrix -Depth 10)

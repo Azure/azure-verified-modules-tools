@@ -21,7 +21,6 @@ function Get-AvmRepositoryMetadataBackfillContext {
     if ($orgAndRepoName -cnotmatch '^Azure/terraform-(azurerm|azapi|azure)-(?<id>avm-(?<kind>res|ptn|utl)-[a-z0-9-]+)$') {
         throw [System.ArgumentException]::new('Metadata backfill requires a supported Azure Terraform module repository.')
     }
-    $moduleId = $Matches.id
     $moduleType = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$Matches.kind]
     $toolsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..'))
     . (Join-Path $toolsRoot 'repository-management' 'module-catalog' 'scripts' 'ModuleCatalog.ps1')
@@ -35,12 +34,6 @@ function Get-AvmRepositoryMetadataBackfillContext {
     }
     $file = Get-RepositoryFileAtCommit -Repository $configuration.repositories.docs -Path $index.sourcePath -Sha $source.sha
     $records = @(ConvertFrom-AvmMetadataIndex -Content $file.Content)
-    $matching = @($records | Where-Object { $_['ModuleName'] -ceq $moduleId -or $_['RepoURL'] -ceq "https://github.com/$orgAndRepoName" })
-    if ($matching.Count -eq 0) {
-        $localIndex = Join-Path $toolsRoot 'repository-management' 'repository-sync' 'config' 'repository-metadata.csv'
-        $records += @(ConvertFrom-AvmMetadataIndex -Content (Get-Content -LiteralPath $localIndex -Raw) |
-                Where-Object { $_['moduleId'] -ceq $moduleId })
-    }
     return @{
         LegacyRecord = $records
         SourceSha = $source.sha
