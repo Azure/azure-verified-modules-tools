@@ -554,7 +554,11 @@ function Get-AvmCatalogInventory {
 
 function Resolve-AvmCatalogOwnerProfiles {
     [CmdletBinding()]
-    param([AllowEmptyCollection()][string[]] $Owners, [System.Collections.IDictionary] $Cache)
+    param(
+        [AllowEmptyCollection()][string[]] $Owners,
+        [System.Collections.IDictionary] $Cache,
+        [System.Collections.Generic.List[string]] $Missing
+    )
 
     if ($Cache['users'] -isnot [System.Collections.IDictionary] -or $Cache['teams'] -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('GitHub cache requires users and teams dictionaries.')
@@ -565,6 +569,13 @@ function Resolve-AvmCatalogOwnerProfiles {
             throw [System.IO.InvalidDataException]::new("GitHub profile cache is missing owner $handle.")
         }
         $profile = $Cache.users[$handle]
+        if ($null -eq $profile) {
+            if ($null -ne $Missing) {
+                $Missing.Add($handle)
+            }
+            $names.Add('')
+            continue
+        }
         if ($profile.login -ine $handle -or $profile.type -cnotin @('User', 'Bot') -or
             -not $profile.Contains('name') -or ($null -ne $profile.name -and $profile.name -isnot [string])) {
             throw [System.IO.InvalidDataException]::new("GitHub profile cache does not validate owner $handle.")
@@ -577,6 +588,12 @@ function Resolve-AvmCatalogOwnerProfiles {
             throw [System.IO.InvalidDataException]::new("GitHub team cache is missing Azure owner team $team.")
         }
         $entry = $Cache.teams[$team]
+        if ($null -eq $entry) {
+            if ($null -ne $Missing) {
+                $Missing.Add($team)
+            }
+            continue
+        }
         if ($entry.slug -cne $parts[1] -or $entry.organization -cne 'Azure') {
             throw [System.IO.InvalidDataException]::new("GitHub team cache does not validate $team.")
         }
@@ -611,6 +628,7 @@ function New-AvmCatalogBundle {
     foreach ($canonical in (Get-AvmCatalogOrdinal -Values @($canonicalTypes))) {
         $modules[$canonical] = [ordered]@{ bicep = @(); terraform = @() }
     }
+    $ownerDefects = [System.Collections.Generic.List[object]]::new()
     foreach ($item in $Inventory.Items) {
         $record = $item.Record
         if (-not $Registry.Contains($item.Identity.Key)) {
@@ -656,7 +674,16 @@ function New-AvmCatalogBundle {
                 $item.Identity.RepositoryId, $record.provider, $record.registry.currentVersion, $record.modulePath.Substring('modules/'.Length)
         }
         if ($record.metadataSource -eq 'metadata') {
-            $names = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub
+            $missingOwners = [System.Collections.Generic.List[string]]::new()
+            $names = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub -Missing $missingOwners
+            if ($missingOwners.Count -gt 0) {
+                $ownerDefects.Add([ordered]@{
+                        sourceFile = [string]$item.File
+                        moduleName = [string]$record.moduleName
+                        repoURL = [string]$record.repoURL
+                        owners = @($missingOwners)
+                    })
+            }
             $owners = @($record.owners | Where-Object { -not $_.StartsWith('@') })
             $teams = @($record.owners | Where-Object { $_.StartsWith('@') })
             $values = @{
@@ -731,6 +758,17 @@ function New-AvmCatalogBundle {
     $report['csvRowRenames'] = $renames
     $heldBackFiles = Resolve-AvmCatalogCsvRowRetention -Removals $retained -Renames $renames `
         -Reasons $reasons -Force:$Force -DiagnosticsPath $DiagnosticsPath
+    $report['missingOwners'] = @($ownerDefects)
+    if ($ownerDefects.Count -gt 0) {
+        Write-AvmCatalogMissingOwner -Defects $ownerDefects.ToArray() -Force:$Force -DiagnosticsPath $DiagnosticsPath
+        if (-not $Force) {
+            $union = [System.Collections.Generic.HashSet[string]]::new([string[]]@($heldBackFiles), [StringComparer]::Ordinal)
+            foreach ($defect in $ownerDefects) {
+                $null = $union.Add([string]$defect.sourceFile)
+            }
+            $heldBackFiles = @(Get-AvmCatalogOrdinal -Values @($union))
+        }
+    }
     $heldBack = [System.Collections.Generic.List[string]]::new()
     foreach ($file in $heldBackFiles) {
         $heldBack.Add([string]$bundlePathBySourceFile[$file])
@@ -739,7 +777,7 @@ function New-AvmCatalogBundle {
     $files[$catalogOutput.bundlePath] = $json
     if ($heldBack.Count -gt 0) {
         $heldBack.Add([string]$catalogOutput.bundlePath)
-        Write-AvmCatalogProgress ("Holding back the module catalog JSON because source CSV rows would be lost.")
+        Write-AvmCatalogProgress ("Holding back the module catalog JSON because some source CSV files are held back.")
     }
     $report['heldBackOutputs'] = $heldBack.ToArray()
     $report['heldBackSourceFiles'] = @($heldBackFiles)

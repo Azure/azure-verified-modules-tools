@@ -141,7 +141,7 @@ BeforeAll {
     }
 
     function Get-CatalogFixtureBundle {
-        param([object] $Fixture, [object] $Inventory, [switch] $Force, [string] $DiagnosticsPath)
+        param([object] $Fixture, [object] $Inventory, [switch] $Force, [string] $DiagnosticsPath, [string[]] $MissingOwner = @())
         if ($null -eq $Inventory) {
             $Inventory = Get-CatalogFixtureInventory -Fixture $Fixture
         }
@@ -175,6 +175,13 @@ BeforeAll {
             teams = @{
                 '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' }
                 '@Azure/second-team' = @{ slug = 'second-team'; organization = 'Azure' }
+            }
+        }
+        foreach ($handle in $MissingOwner) {
+            if ($handle.StartsWith('@')) {
+                $github.teams[$handle] = $null
+            } else {
+                $github.users[$handle] = $null
             }
         }
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'registry.json') -Data $registry
@@ -1228,6 +1235,45 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile One'
         $row.ModuleOwnersGHTeam | Should -BeExactly '@Azure/avm-core-modules'
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners | Should -Be $metadata.owners
+    }
+
+    It 'holds back only the CSV that names a GitHub owner who no longer exists' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $metadataPath = Join-Path $fixture.Modules[0].Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $metadataPath
+        $metadata.owners = @('owner-gone', 'owner-two')
+        Save-CatalogJson -Path $metadataPath -Data $metadata
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -MissingOwner 'owner-gone' -DiagnosticsPath $diagnostics
+        $bundle.HeldBackSourceFiles | Should -Be @('BicepResourceModules.csv')
+        $bundle.HeldBack | Should -Contain 'docs/v1/modules.json'
+        $bundle.HeldBack | Should -Not -Contain 'docs/test-BicepPatternModules.csv'
+        $bundle.Report.missingOwners | Should -HaveCount 1
+        $bundle.Report.missingOwners[0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
+        $bundle.Report.missingOwners[0].owners | Should -Be @('owner-gone')
+        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-gone'
+        $row.PrimaryModuleOwnerDisplayName | Should -BeExactly ''
+        $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile Two'
+        $report = Read-AvmCatalogJson -Path (Join-Path $diagnostics 'missing-owners.json')
+        $report.missingOwnerCount | Should -Be 1
+        $report.missingOwners[0].sourceFile | Should -BeExactly 'BicepResourceModules.csv'
+        ([System.IO.File]::ReadAllText((Join-Path $diagnostics 'missing-owners.csv')) -split "`n")[0] |
+            Should -BeExactly 'SourceFile,ModuleName,RepoURL,MissingOwners,Published'
+    }
+
+    It 'publishes every CSV with force even when a GitHub owner no longer exists' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $metadataPath = Join-Path $fixture.Modules[0].Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $metadataPath
+        $metadata.owners = @('owner-gone', '@Azure/team-gone')
+        Save-CatalogJson -Path $metadataPath -Data $metadata
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -MissingOwner @('owner-gone', '@Azure/team-gone') -Force
+        $bundle.HeldBack | Should -HaveCount 0
+        $bundle.Report.missingOwners | Should -HaveCount 1
+        $bundle.Report.missingOwners[0].owners | Should -Be @('owner-gone', '@Azure/team-gone')
+        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row.ModuleOwnersGHTeam | Should -BeExactly '@Azure/team-gone'
     }
 
     It 'rejects incomplete or ambiguous archive evidence: <Case>' -TestCases @(

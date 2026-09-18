@@ -262,3 +262,60 @@ function Assert-AvmCatalogCsvRowRetention {
     }
     Write-Warning "Force permits these source CSV row removals:`n$details"
 }
+
+function Write-AvmCatalogMissingOwner {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Defects,
+        [switch] $Force,
+        [string] $DiagnosticsPath
+    )
+
+    if ($Defects.Count -eq 0) {
+        return
+    }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($file in @($Defects | ForEach-Object { [string]$_.sourceFile } | Sort-Object -Unique)) {
+        $rows = @($Defects | Where-Object { [string]$_.sourceFile -eq $file })
+        $lines.Add('')
+        $lines.Add("  $file  -  $($rows.Count) module(s)")
+        $lines.Add('  ' + ('-' * ($file.Length + 20)))
+        $width = (@($rows | ForEach-Object { ([string]$_.moduleName).Length }) | Measure-Object -Maximum).Maximum
+        foreach ($row in ($rows | Sort-Object { [string]$_.moduleName })) {
+            $lines.Add(('    {0}  {1}' -f ([string]$row.moduleName).PadRight($width), (@($row.owners) -join ', ')))
+        }
+    }
+    Write-AvmCatalogProgress ("{0} module(s) name a GitHub owner that no longer exists:`n{1}`n" -f $Defects.Count, ($lines -join "`n"))
+    if ($DiagnosticsPath) {
+        $destination = [System.IO.Path]::GetFullPath($DiagnosticsPath)
+        $null = [System.IO.Directory]::CreateDirectory($destination)
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        $report = [ordered]@{
+            generatedAt = [datetime]::UtcNow.ToString('o')
+            missingOwnerCount = $Defects.Count
+            missingOwnersForced = [bool]$Force
+            missingOwners = @($Defects)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $destination 'missing-owners.json'),
+            (ConvertTo-AvmCatalogJson -Value $report), $encoding)
+        $rows = [System.Collections.Generic.List[object]]::new()
+        foreach ($defect in $Defects) {
+            $rows.Add([ordered]@{
+                    SourceFile = [string]$defect.sourceFile
+                    ModuleName = [string]$defect.moduleName
+                    RepoURL = [string]$defect.repoURL
+                    MissingOwners = (@($defect.owners) -join ' ')
+                    Published = if ($Force) { 'yes' } else { 'no' }
+                })
+        }
+        [System.IO.File]::WriteAllText((Join-Path $destination 'missing-owners.csv'),
+            (ConvertTo-AvmCatalogCsv -Headers @('SourceFile', 'ModuleName', 'RepoURL', 'MissingOwners', 'Published') -Rows $rows.ToArray()), $encoding)
+        Write-AvmCatalogProgress ("Missing-owner report written to {0} ({1} module(s))." -f $destination, $Defects.Count)
+    }
+    if ($Force) {
+        Write-Warning ("Force permits publishing {0} module(s) whose GitHub owner no longer exists." -f $Defects.Count)
+        return
+    }
+    Write-AvmCatalogProgress ("Holding back the affected CSV file(s) until the owners are corrected: {0}" -f
+        ((@($Defects | ForEach-Object { [string]$_.sourceFile } | Sort-Object -Unique)) -join ', '))
+}

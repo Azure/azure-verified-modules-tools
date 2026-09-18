@@ -608,16 +608,26 @@ function Get-AvmCatalogEnrichment {
         }
     }
     $profiles = Invoke-AvmCatalogRequestSet -Activity 'GitHub owner profiles' -GitHubToken $GitHubToken -Requests @(foreach ($handle in $handles) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/users/$handle"
+            New-AvmCatalogRequest -Uri "https://api.github.com/users/$handle" -AllowNotFound
         })
     for ($index = 0; $index -lt $handles.Count; $index++) {
+        if ($profiles[$index].StatusCode -eq 404) {
+            $github.users[$handles[$index]] = $null
+            Write-AvmCatalogProgress ("GitHub owner {0} no longer exists; the modules that name them cannot be published." -f $handles[$index])
+            continue
+        }
         $body = Get-AvmCatalogResponseJson -Response $profiles[$index]
         $github.users[$handles[$index]] = [ordered]@{ login = $body.login; name = $body.name; type = $body.type }
     }
     $memberships = Invoke-AvmCatalogRequestSet -Activity 'GitHub team memberships' -GitHubToken $GitHubToken -Requests @(foreach ($team in $teams) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/orgs/Azure/teams/$($team.Substring('@Azure/'.Length))"
+            New-AvmCatalogRequest -Uri "https://api.github.com/orgs/Azure/teams/$($team.Substring('@Azure/'.Length))" -AllowNotFound
         })
     for ($index = 0; $index -lt $teams.Count; $index++) {
+        if ($memberships[$index].StatusCode -eq 404) {
+            $github.teams[$teams[$index]] = $null
+            Write-AvmCatalogProgress ("GitHub owner team {0} no longer exists; the modules that name it cannot be published." -f $teams[$index])
+            continue
+        }
         $body = Get-AvmCatalogResponseJson -Response $memberships[$index]
         $github.teams[$teams[$index]] = [ordered]@{ slug = $body.slug; organization = $body.organization.login }
     }
