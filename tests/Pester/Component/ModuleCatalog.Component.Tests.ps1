@@ -1086,6 +1086,60 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Available'
     }
 
+    It 'resolves Bicep <Case> publication independently of the rest of the family' -TestCases @(
+        @{ Case = 'child-ahead-of-root'; Published = @('avm/res/storage/storage-account/blob-service') }
+        @{ Case = 'root-ahead-of-child'; Published = @('avm/res/storage/storage-account') }
+        @{ Case = 'grandchild-only'; Published = @('avm/res/storage/storage-account/blob-service/container') }
+    ) {
+        param($Case, $Published)
+        $fixture = New-CatalogFixture -AdoptAll
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/storage-account/blob-service' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/storage-account/blob-service/container' -Canonical 'Microsoft.Storage/storageAccounts/blobServices/containers' -Child -Adopt
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $registry = [ordered]@{}
+        foreach ($item in $inventory.Items) {
+            $isBicep = $item.Identity.Ecosystem -eq 'bicep'
+            $live = -not $isBicep -or $Published -ccontains $item.Identity.ModulePath
+            $registry[$item.Identity.Key] = [ordered]@{
+                status = if ($live) { 'available' } else { 'not-published' }
+                currentVersion = if ($live) { '1.2.3' } else { $null }
+                firstPublishedIn = if ($live) { '2024-02' } else { $null }
+                downloads = $null
+                marRegistered = if ($isBicep) { $true } else { $null }
+            }
+        }
+        $github = [ordered]@{
+            users = @{
+                'owner-one' = @{ login = 'owner-one'; name = 'Profile One'; type = 'User' }
+                'owner-two' = @{ login = 'owner-two'; name = 'Profile Two'; type = 'User' }
+                'owner-three' = @{ login = 'owner-three'; name = $null; type = 'User' }
+            }
+            teams = @{ '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' } }
+        }
+        $revisions = @(
+            foreach ($repository in @($inventory.Items | Where-Object { $_.Identity.Ecosystem -eq 'terraform' } |
+                    ForEach-Object { $_.Identity.Repository } | Sort-Object -Unique)) {
+                [ordered]@{ repository = $repository; commit = 'a' * 40; status = 'collected'; archived = $false }
+            }
+        )
+        $bundle = New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions
+        $rows = @{}
+        foreach ($row in @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)) {
+            $rows[$row.ModuleName] = $row
+        }
+        foreach ($path in @('avm/res/storage/storage-account', 'avm/res/storage/storage-account/blob-service',
+                'avm/res/storage/storage-account/blob-service/container')) {
+            $expected = if ($Published -ccontains $path) { 'Available' } else { 'Proposed' }
+            $record = @($bundle.Catalog.modules.Values.bicep | Where-Object { $_.modulePath -ceq $path })[0]
+            $record.moduleStatus | Should -BeExactly $expected
+            $record.registry.status | Should -BeExactly $(if ($expected -eq 'Available') { 'available' } else { 'not-published' })
+            $rows[$path].ModuleStatus | Should -BeExactly $expected
+            $rows[$path].FirstPublishedIn | Should -BeExactly $(if ($expected -eq 'Available') { '2024-02' } else { '' })
+        }
+    }
+
     It 'requires the removal override for deprecated <Ecosystem> source rows without metadata' -TestCases @(
         @{ Ecosystem = 'bicep'; File = 'BicepResourceModules.csv' }
         @{ Ecosystem = 'terraform'; File = 'TerraformResourceModules.csv' }
