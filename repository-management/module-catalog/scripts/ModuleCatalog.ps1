@@ -113,6 +113,7 @@ function New-AvmCatalogIdentity {
         Directory    = $null
         Metadata     = $null
         Deprecated   = $false
+        SourcePending = $false
     }
 }
 
@@ -151,10 +152,12 @@ function Get-AvmCatalogSources {
     foreach ($modulePath in (Get-AvmCatalogOrdinal -Values @($bicepPaths))) {
         $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep -ModulePath $modulePath -Configuration $Configuration
         $directory = Join-Path $BicepRoot $modulePath
-        $mainPath = Join-Path $directory 'main.bicep'
-        if (-not (Test-Path -LiteralPath $mainPath -PathType Leaf) -or (Get-Item -LiteralPath $mainPath).Name -cne 'main.bicep') {
+        $mainFile = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -ieq 'main.bicep' })
+        $hasMain = $mainFile.Count -gt 0
+        if ($hasMain -and $mainFile[0].Name -cne 'main.bicep') {
             throw [System.IO.InvalidDataException]::new("Bicep module has no main.bicep: $modulePath")
         }
+        $identity.SourcePending = -not $hasMain
         $identity.Directory = $directory
         $identity.Deprecated = Test-AvmCatalogDeprecationMarker -Path $directory
         $ancestor = $modulePath
@@ -197,10 +200,7 @@ function Get-AvmCatalogSources {
             $files = @(Get-ChildItem -LiteralPath $scope.Directory -File -Force)
             $hasSource = @($files | Where-Object { $_.Name -cmatch '\.tf(\.json)?$' }).Count -gt 0
             $hasMetadata = @($files | Where-Object { $_.Name -ieq 'metadata.json' }).Count -gt 0
-            if (-not $hasSource) {
-                if ($hasMetadata) {
-                    throw [System.IO.InvalidDataException]::new("Metadata has no Terraform source: $name/$($scope.Path)")
-                }
+            if (-not $hasSource -and -not $hasMetadata) {
                 continue
             }
             if ($scope.Path -eq '.') {
@@ -210,6 +210,7 @@ function Get-AvmCatalogSources {
                 throw [System.IO.InvalidDataException]::new("Terraform child has no source-bearing family root: $name/$($scope.Path)")
             }
             $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository "Azure/$name" -ModulePath $scope.Path -Configuration $Configuration
+            $identity.SourcePending = -not $hasSource
             $identity.Directory = $scope.Directory
             if ($scope.Path -ne '.') {
                 $identity.ParentModule = '.'
@@ -230,7 +231,7 @@ function Get-AvmCatalogSources {
         if ($metadataFiles.Count -gt 0) {
             $result = Test-AvmModuleMetadata -Path $source.Directory -Ecosystem $source.Ecosystem `
                 -ModuleType $source.ModuleType -ChildModule:($null -ne $source.ParentModule) `
-                -CheckSource:($source.Ecosystem -eq 'bicep') -SkipModuleVersionCheck
+                -CheckSource:($source.Ecosystem -eq 'bicep' -and -not $source.SourcePending) -SkipModuleVersionCheck
             if ($result.Status -cne 'pass') {
                 $messages = @($result.Issues | ForEach-Object { $_.Message }) -join '; '
                 throw [System.IO.InvalidDataException]::new("Invalid present metadata for $($source.Key): $messages")
@@ -584,6 +585,10 @@ function New-AvmCatalogBundle {
             throw [System.IO.InvalidDataException]::new("Registry snapshot is incomplete: $($item.Identity.Key)")
         }
         $record.registry = $Registry[$item.Identity.Key]
+        if ($item.Identity.SourcePending -and $record.registry.status -cne 'not-published') {
+            throw [System.IO.InvalidDataException]::new(
+                "Module $($item.Identity.Key) has metadata but no source, yet the registry reports it as $($record.registry.status). Only proposed modules may be registered ahead of their source.")
+        }
         if ($record.ecosystem -eq 'terraform' -and -not $archivedRepositories.ContainsKey($record.repository)) {
             throw [System.IO.InvalidDataException]::new("Repository archive snapshot is incomplete: $($record.repository). Collect a new snapshot.")
         }
