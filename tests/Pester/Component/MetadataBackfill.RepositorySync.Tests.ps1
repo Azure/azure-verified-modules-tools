@@ -261,6 +261,7 @@ Describe 'Component: metadata preparation through normal repository sync' -Tag C
     It 'stops publication on <Failure> while keeping normal preparation ordering' -TestCases @(
         @{ Failure = 'invalid metadata'; Expected = '*No files were written*'; Prepared = 0 }
         @{ Failure = 'missing description'; Expected = '*No files were written*'; Prepared = 0 }
+        @{ Failure = 'missing public row'; Expected = '*No files were written*'; Prepared = 0 }
         @{ Failure = 'disabled'; Expected = '*disabled*'; Prepared = 0 }
         @{ Failure = 'pre-commit'; Expected = '*formatter failed*'; Prepared = 1 }
         @{ Failure = 'codeowners'; Expected = '*'; Prepared = 1 }
@@ -269,6 +270,7 @@ Describe 'Component: metadata preparation through normal repository sync' -Tag C
         $script:state.Failure = $Failure
         if ($Failure -ceq 'invalid metadata') { $script:state.ExistingMetadata = '{}' }
         if ($Failure -ceq 'missing description') { $script:state.Csv = $script:state.Csv.Replace('Creates example resources.', '') }
+        if ($Failure -ceq 'missing public row') { $script:state.Csv = $script:state.Csv.Split("`n")[0] + "`n" }
         { Invoke-AvmPreCommitForRepository @script:parameters -metadataBackfill $true } | Should -Throw $Expected
         Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Exactly $Prepared
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0

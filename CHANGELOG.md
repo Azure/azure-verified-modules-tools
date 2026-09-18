@@ -66,6 +66,11 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform repository sync reads each repository's root `metadata.json` instead
+  of the tools-local inventory CSV, including every owner and qualified owning
+  team. GitHub archive state is authoritative. New repositories publish metadata
+  in their first commit with a temporary, restored default-ruleset opt-out;
+  CSV registration and its obsolete creation parameters are removed.
 - Terraform example transforms now set `enable_telemetry = var.enable_telemetry`
   on module calls only when the called module declares that input. Existing
   example variables retain their location and metadata but default to `false`,

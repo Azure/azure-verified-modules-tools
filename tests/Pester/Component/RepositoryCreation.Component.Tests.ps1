@@ -25,7 +25,6 @@ BeforeAll {
             canonicalType = 'Microsoft.Storage/storageAccounts'
             telemetryIdPrefix = '46d3xtrf.res.storage-account'
             tempPath = $script:workRoot
-            skipMetaDataCreation = $true
         }
     }
 }
@@ -46,6 +45,11 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $script:sourceAtCreate = $null
         $script:clonePath = $null
         $script:failure = ''
+        $script:propertyValue = 'true'
+        $script:propertyAtPush = $null
+        $script:propertyFailure = ''
+        $script:propertyReads = 0
+        $script:propertyWrites = [System.Collections.Generic.List[object]]::new()
         $script:processCalls = [System.Collections.Generic.List[object]]::new()
         $script:createArguments = @{
             AuthoringModule = $script:authoringModule
@@ -61,7 +65,13 @@ Describe 'Component: repository creation metadata' -Tag Component {
             if ($Tool -eq 'gh' -and $ArgumentList[0] -eq 'repo') {
                 $operation += " $($ArgumentList[1])"
             }
+            if ($Tool -eq 'gh' -and $ArgumentList[0] -eq 'api') {
+                $operation += " $($ArgumentList[[array]::IndexOf($ArgumentList, '--method') + 1])"
+            }
             $script:processCalls.Add([pscustomobject]@{ Operation = $operation; Arguments = $ArgumentList })
+            if ($operation -eq 'git push') {
+                $script:propertyAtPush = $script:propertyValue
+            }
             if ($operation -eq $script:failure) {
                 throw [System.InvalidOperationException]::new("Simulated failure: $operation")
             }
@@ -76,6 +86,38 @@ Describe 'Component: repository creation metadata' -Tag Component {
                 if ($script:templateDisabled) {
                     $null = New-Item -ItemType Directory -Path (Join-Path $script:clonePath '.avm')
                     [System.IO.File]::WriteAllText((Join-Path $script:clonePath '.avm' '.disable'), '')
+                }
+            }
+
+            if ($operation -eq 'gh api GET') {
+                $script:propertyReads++
+                $value = $script:propertyValue
+                if ($script:propertyFailure -eq 'disable-readback' -and $script:propertyReads -eq 2) {
+                    $value = 'true'
+                }
+                if ($script:propertyFailure -eq 'restore-readback' -and $script:propertyReads -eq 3) {
+                    $value = 'false'
+                }
+                $properties = @(
+                    @{ property_name = 'global-rulesets-opt-out'; value = 'false' }
+                    if ($null -ne $value) { @{ property_name = 'rulesets-default-opt-in'; value = $value } }
+                )
+                return [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $properties); StdErr = '' }
+            }
+            if ($operation -eq 'gh api PATCH') {
+                if ($ArgumentList -notcontains 'properties[][property_name]=rulesets-default-opt-in') {
+                    throw 'Only the default-ruleset property may be changed.'
+                }
+                $field = @($ArgumentList | Where-Object { $_.StartsWith('properties[][value]=') })[0]
+                $value = $field.Split('=')[-1]
+                if ($value -eq 'null') { $value = $null }
+                $script:propertyWrites.Add($value)
+                if ($script:propertyFailure -eq 'restore' -and $script:propertyWrites.Count -eq 2) {
+                    throw [System.InvalidOperationException]::new('Simulated restoration failure.')
+                }
+                $script:propertyValue = $value
+                if ($script:propertyFailure -eq 'disable-ambiguous' -and $script:propertyWrites.Count -eq 1) {
+                    throw [System.InvalidOperationException]::new('The opt-out request lost its response.')
                 }
             }
 
@@ -104,6 +146,9 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $result = New-AvmRepositoryContent @script:createArguments @options
         $result.Status | Should -Be 'plan'
         $result.Metadata.canonicalType | Should -Be 'Microsoft.Storage/storageAccounts'
+        $result.InitialPush.Branch | Should -BeExactly 'main'
+        $result.InitialPush.TemporaryRulesetProperty | Should -BeExactly 'rulesets-default-opt-in'
+        $result.InitialPush.RestoreOriginalValue | Should -BeTrue
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
         Should -Invoke Invoke-AvmRepositoryCreationProcess -Times 0 -Exactly
         Should -Invoke Import-Csv -Times 0 -Exactly
@@ -317,7 +362,7 @@ Describe 'Component: repository creation metadata' -Tag Component {
         Should -Invoke Invoke-AvmRepositoryCreationProcess -Times 0 -Exactly
     }
 
-    It 'keeps module metadata required when inventory publication is skipped' {
+    It 'requires module metadata in the ordinary creation request' {
         $parameters = New-CreationScriptArguments
         $parameters.Remove('moduleDescription')
         { & $creationScript @parameters -PlanOnly } |
@@ -352,5 +397,124 @@ Describe 'Component: repository creation metadata' -Tag Component {
         Test-Path -LiteralPath $script:workRoot | Should -BeFalse
         Should -Invoke Import-Csv -Times 0 -Exactly
         Should -Invoke ConvertFrom-Csv -Times 0 -Exactly
+    }
+
+    It 'disables only the default ruleset for the initial push and restores its prior value' {
+        $result = New-AvmRepositoryContent @script:createArguments -Confirm:$false
+        $result.Status | Should -Be 'pass'
+        $script:propertyAtPush | Should -BeExactly 'false'
+        @($script:propertyWrites) | Should -Be @('false', 'true')
+        $script:propertyValue | Should -BeExactly 'true'
+        $operations = @($script:processCalls.Operation)
+        [array]::IndexOf($operations, 'gh repo create') | Should -BeLessThan ([array]::IndexOf($operations, 'gh api GET'))
+        [array]::IndexOf($operations, 'gh api PATCH') | Should -BeLessThan ([array]::IndexOf($operations, 'git push'))
+        [array]::LastIndexOf($operations, 'gh api PATCH') | Should -BeGreaterThan ([array]::IndexOf($operations, 'git push'))
+        $script:propertyReads | Should -Be 3
+        foreach ($call in @($script:processCalls | Where-Object Operation -eq 'gh api PATCH')) {
+            $call.Arguments | Should -Contain 'repos/Azure/terraform-azure-avm-res-storage-storageaccount/properties/values'
+            @($call.Arguments | Where-Object { $_ -match '\[property_name\]=' }) |
+                Should -Be @('properties[][property_name]=rulesets-default-opt-in')
+        }
+    }
+
+    It 'resets an originally unset property with JSON null instead of a string or an assumed true value' {
+        $script:propertyValue = $null
+        $null = New-AvmRepositoryContent @script:createArguments -Confirm:$false
+        $script:propertyAtPush | Should -BeExactly 'false'
+        $script:propertyWrites.Count | Should -Be 2
+        $script:propertyWrites[0] | Should -BeExactly 'false'
+        $script:propertyWrites[1] | Should -BeNullOrEmpty
+        $restore = @($script:processCalls | Where-Object Operation -eq 'gh api PATCH')[-1]
+        $valueIndex = [array]::IndexOf($restore.Arguments, 'properties[][value]=null')
+        $valueIndex | Should -BeGreaterThan 0
+        $restore.Arguments[$valueIndex - 1] | Should -BeExactly '--field'
+        $script:propertyValue | Should -BeNullOrEmpty
+    }
+
+    It 'leaves an existing false property unchanged' {
+        $script:propertyValue = 'false'
+        $null = New-AvmRepositoryContent @script:createArguments -Confirm:$false
+        $script:propertyAtPush | Should -BeExactly 'false'
+        $script:propertyWrites | Should -HaveCount 0
+        $script:propertyReads | Should -Be 1
+    }
+
+    It 'does not push or change properties if the original value cannot be read' {
+        $script:failure = 'gh api GET'
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } | Should -Throw '*Simulated failure*'
+        $script:propertyWrites | Should -HaveCount 0
+        @($script:processCalls.Operation) | Should -Not -Contain 'git push'
+    }
+
+    It 'rejects unexpected property types before changing protection' {
+        $script:propertyValue = $true
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } | Should -Throw '*invalid rulesets-default-opt-in value*'
+        $script:propertyWrites | Should -HaveCount 0
+        @($script:processCalls.Operation) | Should -Not -Contain 'git push'
+    }
+
+    It 'restores protection and retains a recovery record after a failed push' {
+        $script:failure = 'git push'
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } | Should -Throw '*initial publication failed*'
+        @($script:propertyWrites) | Should -Be @('false', 'true')
+        $script:propertyValue | Should -BeExactly 'true'
+        $record = Get-Content (Join-Path (Split-Path $script:clonePath -Parent) 'ruleset-recovery.json') -Raw | ConvertFrom-Json
+        $record.repository | Should -BeExactly 'Azure/terraform-azure-avm-res-storage-storageaccount'
+        $record.propertyName | Should -BeExactly 'rulesets-default-opt-in'
+        $record.value | Should -BeExactly 'true'
+    }
+
+    It 'restores protection and does not push after an ambiguous opt-out failure' {
+        $script:propertyFailure = 'disable-ambiguous'
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } | Should -Throw '*opt-out request lost its response*'
+        @($script:propertyWrites) | Should -Be @('false', 'true')
+        $script:propertyValue | Should -BeExactly 'true'
+        @($script:processCalls.Operation) | Should -Not -Contain 'git push'
+    }
+
+    It 'requires verified opt-out before pushing and still restores on a readback mismatch' {
+        $script:propertyFailure = 'disable-readback'
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } | Should -Throw '*Could not verify rulesets-default-opt-in=false*'
+        @($script:propertyWrites) | Should -Be @('false', 'true')
+        $script:propertyValue | Should -BeExactly 'true'
+        @($script:processCalls.Operation) | Should -Not -Contain 'git push'
+    }
+
+    It 'reports incomplete setup and keeps staging if restoration <Failure> after the push' -TestCases @(
+        @{ Failure = 'restore' }
+        @{ Failure = 'restore-readback' }
+    ) {
+        param($Failure)
+        $script:propertyFailure = $Failure
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } |
+            Should -Throw '*initial commit was pushed*Default-ruleset restoration failed*ruleset-recovery.json*'
+        Test-Path -LiteralPath (Join-Path $script:clonePath 'metadata.json') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path (Split-Path $script:clonePath -Parent) 'ruleset-recovery.json') | Should -BeTrue
+    }
+
+    It 'preserves both diagnostics when the push and restoration fail' {
+        $script:failure = 'git push'
+        $script:propertyFailure = 'restore'
+        { New-AvmRepositoryContent @script:createArguments -Confirm:$false } |
+            Should -Throw '*Default-ruleset restoration failed*Simulated failure: git push*Simulated restoration failure*'
+        Test-Path -LiteralPath $script:clonePath | Should -BeTrue
+    }
+}
+
+Describe 'Component: repository creation process transport' -Tag Component {
+    BeforeAll {
+        Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+        $script:transportModule = Import-AvmRepositoryCreationModule
+    }
+
+    It 'pins creation and property operations to the same GitHub host without interactive prompts' {
+        Mock Get-Command { [pscustomobject]@{ Source = 'fixture-gh' } } -ParameterFilter { $Name -eq 'gh' }
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+        $null = Invoke-AvmRepositoryCreationProcess -AuthoringModule $script:transportModule -Tool gh `
+            -ArgumentList @('repo', 'create', 'Azure/terraform-azure-avm-utl-example', '--public') -WorkingDirectory $TestDrive
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+            $FilePath -ceq 'fixture-gh' -and $EnvVars.GH_HOST -ceq 'github.com' -and
+            $EnvVars.GH_PROMPT_DISABLED -ceq '1' -and $EnvVars.ContainsKey('GH_DEBUG') -and $null -eq $EnvVars.GH_DEBUG
+        }
     }
 }

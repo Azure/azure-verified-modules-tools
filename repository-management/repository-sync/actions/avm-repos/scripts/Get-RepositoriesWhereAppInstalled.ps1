@@ -1,7 +1,6 @@
-# Requires Environment Variables for GitHub Actions
-# GH_TOKEN
-# Must run gh auth login -h "GitHub.com" before running this script
+#Requires -Version 7.4
 
+[CmdletBinding()]
 param(
   [array]$repoFilter = @(),
   [array]$validProviders = @("azure", "azurerm", "azapi"),
@@ -23,18 +22,24 @@ param(
     "Azure-Verified-Modules-Workflows"
   ),
   [array]$additionalReposToSkip = @(),
-  [string]$outputDirectory = ".",
-  [string]$metaDataFilePath = "./config/repository-metadata.csv"
+  [string]$outputDirectory = "."
 )
+
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
+$syncRoot = Join-Path $PSScriptRoot '..' '..' '..'
+$manifest = Join-Path $syncRoot '..' '..' 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+$null = Import-Module -Name $manifest -Scope Local -Force -ErrorAction Stop
+. (Join-Path $syncRoot 'scripts' 'lib' 'RetryHelpers.ps1')
+. (Join-Path $syncRoot 'scripts' 'lib' 'RepoTree.ps1')
+. (Join-Path $syncRoot 'scripts' 'lib' 'RepositoryMetadata.ps1')
 
 Write-Host "Generating matrix for AVM repositories"
 
-$env:ARM_USE_AZUREAD = "true"
-$repos = @()
+$repos = [System.Collections.Generic.List[object]]::new()
 
 Write-Host "Getting repositories from app installation"
 
-# Get the list of installed repositories for the GitHub App
 $itemsPerPage = 100
 $page = 1
 $incompleteResults = $true
@@ -43,34 +48,32 @@ $installedRepositories = @()
 
 while ($incompleteResults)
 {
-  $response = ConvertFrom-Json $(gh api "/installation/repositories?per_page=$itemsPerPage&page=$page")
+  $result = Invoke-RepositorySyncProcess -Command gh -Arguments @(
+    'api', '--hostname', 'github.com', '--method', 'GET',
+    "/installation/repositories?per_page=$itemsPerPage&page=$page"
+  )
+  if ($result.ExitCode -ne 0) {
+    throw [System.InvalidOperationException]::new("Cannot list the app's repositories: $($result.StdErr)")
+  }
+  $response = $result.StdOut | ConvertFrom-Json
   $installedRepositories += $response.repositories
   $incompleteResults = $page * $itemsPerPage -lt $response.total_count
   $page++
 }
 
-$issues = @()
+$issues = [System.Collections.Generic.List[object]]::new()
 
 $moduleTypes = @{
   "res"      = "resource"
   "ptn"      = "pattern"
   "utl"      = "utility"
-  "template" = "template"
 }
 
 $finalReposToSkip = $reposToSkip + $additionalReposToSkip
+$providerPattern = ($validProviders | ForEach-Object { [regex]::Escape($_) }) -join '|'
+$repositoryPattern = "^terraform-($providerPattern)-(?<module>avm-(?<kind>res|ptn|utl)-[a-z0-9-]+)$"
 
 Write-Host "Skipping repositories: $(ConvertTo-Json $finalReposToSkip)"
-
-$metaData = @()
-if (Test-Path $metaDataFilePath)
-{
-  $metaData = Get-Content -Path $metaDataFilePath | ConvertFrom-Csv
-}
-else
-{
-  throw "Meta data file not found at $metaDataFilePath. Cannot validate expected archive state."
-}
 
 foreach ($installedRepository in $installedRepositories | Sort-Object -Property name)
 {
@@ -80,90 +83,73 @@ foreach ($installedRepository in $installedRepositories | Sort-Object -Property 
     continue
   }
 
-  # Use regex to check if the repository name starts with "terraform-(azurerm|azure|azapi)-avm-(res|ptn|utl|template)"
-  $matchesNamingConvention = $installedRepository.name -match "^terraform-(azurerm|azure|azapi)-avm-(res|ptn|utl|template)"
-
-  $moduleName = $null
-  if ($matchesNamingConvention)
-  {
-    $parts = $installedRepository.name.Split("-")
-    $moduleName = $parts[2..($parts.Length - 1)] -join "-"
-  }
-
   if ($installedRepository.archived)
   {
-    $expectedArchived = $false
-    if ($matchesNamingConvention)
-    {
-      $metaDataEntry = $metaData | Where-Object { $_.moduleId -eq $moduleName }
-      if ($null -ne $metaDataEntry -and $metaDataEntry.isArchived -eq "true")
-      {
-        $expectedArchived = $true
-      }
-    }
-
-    if ($expectedArchived)
-    {
-      Write-Host "Skipping $($installedRepository.name) as it is archived (expected per meta-data)..."
-      continue
-    }
-
-    $issue = @{
-      repoId   = $installedRepository.name
-      message  = "$($installedRepository.name) is archived but is not flagged as archived in meta-data.csv. Either un-archive the repository or set isArchived=true in meta-data.csv."
-      severity = "error"
-    }
-    Write-Warning $issue.message
-    $issues += $issue
+    Write-Host "Skipping $($installedRepository.name) as it is archived in GitHub..."
     continue
   }
 
-  if (!$matchesNamingConvention)
+  $nameMatch = [regex]::Match($installedRepository.name, $repositoryPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (!$nameMatch.Success)
   {
     $issue = @{
       repoId   = $installedRepository.name
-      message  = "Skipping $($installedRepository.name) as it does not match the required naming convention: terraform-(azurerm|azure|azapi)-avm-(res|ptn|utl|template)..."
+      message  = "Skipping $($installedRepository.name) as it does not match the required naming convention: terraform-($providerPattern)-avm-(res|ptn|utl)-..."
       severity = "error"
     }
     Write-Warning $issue.message
-    $issues += $issue
+    $issues.Add($issue)
     continue
   }
 
-  $repoMetaData = $metaData | Where-Object { $_.moduleId -eq $moduleName } | Select-Object -First 1
-  if ($null -eq $repoMetaData)
+  $moduleName = $nameMatch.Groups['module'].Value
+  if ($repoFilter.Count -gt 0 -and $repoFilter -notcontains $moduleName)
+  {
+    continue
+  }
+  $moduleType = $moduleTypes[$nameMatch.Groups['kind'].Value]
+  try
+  {
+    $metadata = Get-RepositoryModuleMetadata -Repository $installedRepository.full_name `
+      -DefaultBranch $installedRepository.default_branch -ModuleType $moduleType
+  }
+  catch
+  {
+    $issue = @{
+      repoId = $installedRepository.name
+      message = "Skipping $($installedRepository.name): $($_.Exception.Message)"
+      severity = "error"
+    }
+    Write-Warning $issue.message
+    $issues.Add($issue)
+    continue
+  }
+  if ($metadata.Status -eq 'missing')
   {
     $issue = @{
       repoId   = $installedRepository.name
-      message  = "$($installedRepository.name) does not have a corresponding entry in meta-data.csv (expected moduleId '$moduleName'). Add an entry to meta-data.csv."
+      message  = "$($installedRepository.name) has no root metadata.json on its default branch. Initialize metadata.json; direct collaborator cleanup will be skipped until ownership is available."
       severity = "warning"
     }
     Write-Warning $issue.message
-    $issues += $issue
+    $issues.Add($issue)
   }
 
-  $repos += @{
+  $repos.Add(@{
     repoId              = $moduleName
     repoName            = $installedRepository.name
     repoFullName        = $installedRepository.full_name
     repoUrl             = $installedRepository.html_url
     repoType            = "avm"
-    repoSubType         = ($moduleTypes[$parts[3]] ?? "unknown")
-    repoMetaData        = $repoMetaData
-  }
+    repoSubType         = $moduleType
+    repoMetaData        = $metadata.Metadata
+  })
 }
 
-if (!$issues.Count -eq 0)
+if ($issues.Count -gt 0)
 {
-  Write-Host "Issues found for"
-  $issuesJson = ConvertTo-Json $issues -Depth 100
-  $issuesJson | Out-File "$outputDirectory/issues.log.json"
-}
-
-if ($repoFilter.Length -gt 0)
-{
-  Write-Host "Filtering repositories"
-  $repos = $repos | Where-Object { $repoFilter -contains $_.repoId }
+  $issuesJson = ConvertTo-Json -InputObject $issues.ToArray() -Depth 100
+  $issuesJson | Set-Content -LiteralPath (Join-Path $outputDirectory 'issues.log.json') -Encoding utf8NoBOM
 }
 
 Write-Host "Found $($repos.Count) repositories"

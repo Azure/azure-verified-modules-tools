@@ -468,6 +468,15 @@ Matched-row compatibility fields and prior Deprecated status remain preserved.
 Fleet backfill and canonical CSV replacement remain explicit operator actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
+Terraform repository discovery reads validated root metadata from each
+repository's default branch. Missing files warn during rollout and suppress
+direct collaborator cleanup; invalid files or API failures exclude that
+repository. Archive state comes from GitHub, not an authored metadata field.
+New-repository creation initializes metadata before the first commit without a
+tools-local CSV registration. Its initial push temporarily changes only
+`rulesets-default-opt-in`, preserving the prior value in a recovery record and
+verifying restoration on success or failure. Existing repositories use normal
+reviewed updates; generated public catalog CSVs are unaffected.
 The current one-off Terraform migration is agent-led and metadata-only because
 source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,
 preserves valid existing metadata and owners, and creates no Terraform wiring.
