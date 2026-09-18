@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string] $InputPath,
     [Parameter(Mandatory)][string] $OutputPath,
     [switch] $Force,
+    [string] $DiagnosticsPath,
     [string] $ConfigurationPath = (Join-Path $PSScriptRoot '..' 'config.json')
 )
 
@@ -16,16 +17,22 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.ps1')
 
 $configuration = Read-AvmCatalogConfiguration -Path $ConfigurationPath
+Write-AvmCatalogProgress 'Reading the collected snapshot inventory.'
 $inventory = Get-AvmCatalogInventory -BicepRoot (Join-Path $InputPath 'sources' 'bicep') `
     -TerraformRoot (Join-Path $InputPath 'sources' 'terraform') -LegacyPath (Join-Path $InputPath 'legacy') `
     -Configuration $configuration
+Write-AvmCatalogProgress ("Inventory loaded: {0} catalog item(s)." -f $inventory.Items.Count)
+Write-AvmCatalogProgress 'Building and validating the catalog bundle.'
 $bundle = New-AvmCatalogBundle -Inventory $inventory `
     -Registry (Read-AvmCatalogJson -Path (Join-Path $InputPath 'registry.json')) `
     -GitHub (Read-AvmCatalogJson -Path (Join-Path $InputPath 'github.json')) `
-    -RepositoryRevisions (Read-AvmCatalogJson -Path (Join-Path $InputPath 'revisions.json')) -Force:$Force
+    -RepositoryRevisions (Read-AvmCatalogJson -Path (Join-Path $InputPath 'revisions.json')) -Force:$Force `
+    -DiagnosticsPath $DiagnosticsPath
+Write-AvmCatalogProgress ("Bundle validated: {0} output file(s)." -f $bundle.Files.Count)
 
 $publicationPath = Join-Path $InputPath 'publication.json'
 if (Test-Path -LiteralPath $publicationPath -PathType Leaf) {
+    Write-AvmCatalogProgress 'Recording publication plan output hashes.'
     $plan = Read-AvmCatalogJson -Path $publicationPath
     if ($plan['manifestHash'] -cne $configuration.hash) {
         throw [System.IO.InvalidDataException]::new('The catalog manifest changed after collection. Collect a new snapshot.')
@@ -40,4 +47,5 @@ if (Test-Path -LiteralPath $publicationPath -PathType Leaf) {
 }
 if ($PSCmdlet.ShouldProcess($OutputPath, 'Write the validated metadata catalog and source CSV row-removal report')) {
     Write-AvmCatalogBundle -Bundle $bundle -OutputPath $OutputPath -Configuration $configuration -Confirm:$false
+    Write-AvmCatalogProgress ("Catalog bundle written to {0}." -f $OutputPath)
 }

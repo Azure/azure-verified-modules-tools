@@ -7,6 +7,25 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'ModuleCatalog.CsvRows.ps1')
 
+function Write-AvmCatalogProgress {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Progress must always reach the workflow log and is never consumed as pipeline output.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)][string] $Message,
+        [int] $Current = -1,
+        [int] $Total = -1
+    )
+
+    $stamp = [datetime]::UtcNow.ToString('HH:mm:ss')
+    if ($Total -ge 0) {
+        $percent = if ($Total -gt 0) { [Math]::Floor(($Current / $Total) * 100) } else { 100 }
+        Write-Host ('[{0}] {1} ({2}/{3}, {4}%)' -f $stamp, $Message, $Current, $Total, $percent)
+        return
+    }
+    Write-Host ('[{0}] {1}' -f $stamp, $Message)
+}
+
 function ConvertTo-AvmCatalogJson {
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowNull()][object] $Value)
@@ -540,7 +559,8 @@ function New-AvmCatalogBundle {
         [Parameter(Mandatory)][System.Collections.IDictionary] $GitHub,
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $RepositoryRevisions,
         [switch] $Force,
-        [string] $SchemaPath
+        [string] $SchemaPath,
+        [string] $DiagnosticsPath
     )
 
     $configuration = $Inventory.Configuration
@@ -666,7 +686,7 @@ function New-AvmCatalogBundle {
     $report['sourceCsvRows'] = $sourceCsvRows
     $report['csvRowRemovals'] = $removals.ToArray()
     $report['csvRowRemovalsForced'] = [bool]$Force
-    Assert-AvmCatalogCsvRowRetention -Removals $removals.ToArray() -Force:$Force
+    Assert-AvmCatalogCsvRowRetention -Removals $removals.ToArray() -Force:$Force -DiagnosticsPath $DiagnosticsPath
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
     $files[$catalogOutput.bundlePath] = $json
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).bundlePath] = ConvertTo-AvmCatalogJson -Value $report

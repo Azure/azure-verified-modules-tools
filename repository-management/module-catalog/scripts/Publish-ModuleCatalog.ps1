@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory)][string] $BundlePath,
     [switch] $Publish,
-    [switch] $Force
+    [switch] $Force,
+    [string] $DiagnosticsPath
 )
 
 Set-StrictMode -Version 3.0
@@ -17,7 +18,8 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Publication.ps1')
 
 $configuration = Read-AvmCatalogConfiguration
-$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration -Force:$Force
+Write-AvmCatalogProgress 'Validating the catalog publication bundle.'
+$plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration -Force:$Force -DiagnosticsPath $DiagnosticsPath
 if (-not $Publish) {
     Write-Output 'Catalog publication plan validated; no remote changes requested.'
     return
@@ -64,6 +66,7 @@ try {
     $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
     foreach ($role in $paths.Keys) {
         $repository = $paths[$role].repository
+        Write-AvmCatalogProgress ("Preparing publication branch for {0}." -f $repository)
         $allowed = @($paths[$role].files.Values)
         $root = Join-Path $state $role
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('clone', '--filter=blob:none', '--no-checkout', '--branch', 'main', "https://github.com/$repository", $root) `
@@ -71,7 +74,7 @@ try {
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', 'main') -WorkingDirectory $root -EnvVars $processEnvironment
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
         $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $BundlePath -Configuration $configuration -SourceRoot $root
-        Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force
+        Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
             -ArgumentList @('api', '--method', 'GET', '--paginate', '--slurp', "repos/$repository/pulls?state=open&base=main&per_page=100") `
             -WorkingDirectory $root -EnvVars $processEnvironment

@@ -29,7 +29,8 @@ function Test-AvmCatalogPublicationBundle {
     param(
         [Parameter(Mandatory)][string] $Path,
         [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration),
-        [switch] $Force
+        [switch] $Force,
+        [string] $DiagnosticsPath
     )
 
     $paths = Get-AvmCatalogPublicationPaths -Configuration $Configuration
@@ -94,7 +95,7 @@ function Test-AvmCatalogPublicationBundle {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }
     $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $Path -Configuration $Configuration
-    Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force
+    Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath
     return $plan
 }
 
