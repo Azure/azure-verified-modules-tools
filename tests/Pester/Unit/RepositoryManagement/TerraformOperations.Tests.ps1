@@ -161,6 +161,7 @@ Describe 'State identity wiring' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
+        $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+Import-Module Avm\.Authoring -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
         foreach ($name in 'TENANT', 'SUBSCRIPTION', 'CLIENT') {
             $workflow | Should -Match ('ARM_' + $name + '_ID: \$\{\{ vars\.ARM_' + $name + '_ID \}\}')
             $workflow | Should -Match ('ARM_BACKEND_' + $name + '_ID: \$\{\{ vars\.ARM_BACKEND_' + $name + '_ID \}\}')
