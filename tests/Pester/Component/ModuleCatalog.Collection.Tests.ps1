@@ -8,6 +8,71 @@ BeforeAll {
     . (Join-Path $catalogScripts 'ModuleCatalog.Collection.ps1')
     . (Join-Path $catalogScripts 'ModuleCatalog.Publication.ps1')
     $originalOffline = $env:AVM_OFFLINE
+
+    if (-not ('AvmCatalogStubHandler' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class AvmCatalogStubHandler : HttpMessageHandler
+{
+    public List<string> Requested = new List<string>();
+    public Dictionary<string, int> AttemptsByUri = new Dictionary<string, int>();
+    public Dictionary<string, int> TransientByUri = new Dictionary<string, int>();
+    public Dictionary<string, int> StatusByUri = new Dictionary<string, int>();
+    public HashSet<string> FaultUris = new HashSet<string>();
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        string uri = request.RequestUri.AbsoluteUri;
+        lock (Requested)
+        {
+            Requested.Add(uri);
+            AttemptsByUri[uri] = AttemptsByUri.ContainsKey(uri) ? AttemptsByUri[uri] + 1 : 1;
+        }
+        if (FaultUris.Contains(uri))
+        {
+            var failed = new TaskCompletionSource<HttpResponseMessage>();
+            failed.SetException(new HttpRequestException("stub transport failure"));
+            return failed.Task;
+        }
+        int remaining;
+        if (TransientByUri.TryGetValue(uri, out remaining) && remaining > 0)
+        {
+            TransientByUri[uri] = remaining - 1;
+            return Task.FromResult(new HttpResponseMessage((HttpStatusCode)503) { Content = new StringContent("{}") });
+        }
+        int status;
+        if (!StatusByUri.TryGetValue(uri, out status))
+        {
+            status = 200;
+        }
+        var response = new HttpResponseMessage((HttpStatusCode)status);
+        response.Content = new StringContent("{\"uri\":\"" + uri + "\"}");
+        return Task.FromResult(response);
+    }
+}
+'@
+    }
+
+    function Use-CatalogStubHandler {
+        param([scriptblock] $Body)
+        $handler = [AvmCatalogStubHandler]::new()
+        $client = [System.Net.Http.HttpClient]::new($handler, $true)
+        $client.Timeout = [TimeSpan]::FromSeconds(100)
+        Set-Variable -Name AvmCatalogClient -Scope Script -Value $client
+        try {
+            & $Body $handler
+        }
+        finally {
+            Set-Variable -Name AvmCatalogClient -Scope Script -Value $null
+            $client.Dispose()
+        }
+    }
 }
 
 AfterAll {
@@ -84,6 +149,93 @@ Describe 'Component: module catalog HTTP boundary' -Tag Component {
         $env:AVM_OFFLINE = '1'
         { Assert-AvmCatalogUri -Uri 'https://api.github.com/users/test' } | Should -Throw '*AVM_OFFLINE=1*'
         { Invoke-AvmCatalogRequest -Uri 'https://api.github.com/users/test' } | Should -Throw '*AVM_OFFLINE=1*'
+    }
+
+    It 'issues and returns <Count> batched request(s) in the caller supplied order' -TestCases @(
+        @{ Count = 1 }
+        @{ Count = 2 }
+        @{ Count = 25 }
+    ) {
+        param($Count)
+        Use-CatalogStubHandler {
+            param($handler)
+            $uris = @(1..$Count | ForEach-Object { "https://mcr.microsoft.com/v2/bicep/avm/res/test/module$_/tags/list" })
+            $requests = @($uris | ForEach-Object { New-AvmCatalogRequest -Uri $_ })
+            $results = Invoke-AvmCatalogRequestSet -Requests $requests
+            @($results) | Should -HaveCount $Count
+            for ($index = 0; $index -lt $Count; $index++) {
+                $results[$index].StatusCode | Should -Be 200
+                ($results[$index].Content | ConvertFrom-Json).uri | Should -BeExactly $uris[$index]
+            }
+            @($handler.Requested) | Should -HaveCount $Count
+        }
+    }
+
+    It 'returns an empty result set without touching the transport' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $results = Invoke-AvmCatalogRequestSet -Requests @()
+            @($results) | Should -HaveCount 0
+            @($handler.Requested) | Should -HaveCount 0
+        }
+    }
+
+    It 'batches across hosts and preserves per-request not-found handling' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $missing = 'https://mcr.microsoft.com/v2/bicep/avm/res/test/absent/tags/list'
+            $handler.StatusByUri[$missing] = 404
+            $requests = @(
+                New-AvmCatalogRequest -Uri 'https://api.github.com/users/owner-one'
+                New-AvmCatalogRequest -Uri $missing -AllowNotFound
+                New-AvmCatalogRequest -Uri 'https://registry.terraform.io/v1/modules/Azure/test/azurerm'
+            )
+            $results = Invoke-AvmCatalogRequestSet -Requests $requests
+            @($results) | Should -HaveCount 3
+            $results[0].StatusCode | Should -Be 200
+            $results[1].StatusCode | Should -Be 404
+            $results[2].StatusCode | Should -Be 200
+        }
+    }
+
+    It 'retries a transient failure inside the batch and still returns every result' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $flaky = 'https://mcr.microsoft.com/v2/bicep/avm/res/test/flaky/tags/list'
+            $handler.TransientByUri[$flaky] = 2
+            $requests = @(
+                New-AvmCatalogRequest -Uri 'https://mcr.microsoft.com/v2/bicep/avm/res/test/stable/tags/list'
+                New-AvmCatalogRequest -Uri $flaky
+            )
+            $results = Invoke-AvmCatalogRequestSet -Requests $requests
+            @($results) | Should -HaveCount 2
+            $results[0].StatusCode | Should -Be 200
+            $results[1].StatusCode | Should -Be 200
+            $handler.AttemptsByUri[$flaky] | Should -Be 3
+            $handler.AttemptsByUri['https://mcr.microsoft.com/v2/bicep/avm/res/test/stable/tags/list'] | Should -Be 1
+        }
+    }
+
+    It 'surfaces a persistent transport fault rather than returning a partial batch' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $broken = 'https://mcr.microsoft.com/v2/bicep/avm/res/test/broken/tags/list'
+            $null = $handler.FaultUris.Add($broken)
+            $requests = @(
+                New-AvmCatalogRequest -Uri 'https://mcr.microsoft.com/v2/bicep/avm/res/test/stable/tags/list'
+                New-AvmCatalogRequest -Uri $broken
+            )
+            { Invoke-AvmCatalogRequestSet -Requests $requests -MaxAttempt 2 } | Should -Throw '*stub transport failure*'
+        }
+    }
+
+    It 'routes a single request through the batch path and returns its response' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $result = Invoke-AvmCatalogRequest -Uri 'https://api.github.com/users/owner-one'
+            $result.StatusCode | Should -Be 200
+            ($result.Content | ConvertFrom-Json).uri | Should -BeExactly 'https://api.github.com/users/owner-one'
+        }
     }
 }
 

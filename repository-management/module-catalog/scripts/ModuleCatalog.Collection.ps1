@@ -157,7 +157,7 @@ function Invoke-AvmCatalogRequestSet {
     }
     $client = Get-AvmCatalogHttpClient
     $results = [object[]]::new($normalized.Count)
-    $pending = [System.Collections.Generic.List[int]]::new(0..($normalized.Count - 1))
+    $pending = [System.Collections.Generic.List[int]]::new([int[]](0..($normalized.Count - 1)))
     if ($Activity) {
         Write-AvmCatalogProgress ("{0}: issuing {1} request(s)." -f $Activity, $normalized.Count)
     }
