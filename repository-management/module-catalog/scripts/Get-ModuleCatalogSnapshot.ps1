@@ -40,8 +40,10 @@ try {
         $null = [System.IO.Directory]::CreateDirectory($directory)
     }
     $roots = @{ docs = $DocumentationRoot }
+    Write-AvmCatalogProgress 'Copying source catalog input files.'
     $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $staging -Confirm:$false
 
+    Write-AvmCatalogProgress 'Copying Bicep module sources.'
     $bicepSources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $terraform -Configuration $configuration
     Copy-AvmCatalogBicepSource -Sources $bicepSources -Destination $bicep -Confirm:$false
     $revisions = [System.Collections.Generic.List[object]]::new()
@@ -55,13 +57,18 @@ try {
         $revisions.Add([ordered]@{ repository = $inputRepository.Name; commit = $revision.StdOut.Trim(); status = 'collected' })
     }
     $repositories = Get-AvmCatalogTerraformRepositories -GitHubToken $token -LegacyPath $legacy -Configuration $configuration
-    foreach ($repository in $repositories) {
-        $directory = Join-Path $terraform $repository.Substring('Azure/'.Length)
-        $result = Save-AvmCatalogTerraformSource -Repository $repository -Destination $directory -GitHubToken $token -Confirm:$false
+    Write-AvmCatalogProgress ("Discovered {0} Terraform module repositories." -f $repositories.Count)
+    $sources = Save-AvmCatalogTerraformSourceSet -GitHubToken $token -Confirm:$false -Target @(foreach ($repository in $repositories) {
+            @{ Repository = $repository; Destination = (Join-Path $terraform $repository.Substring('Azure/'.Length)) }
+        })
+    foreach ($result in $sources) {
         $revisions.Add($result)
     }
+    Write-AvmCatalogProgress 'Building the local catalog inventory.'
     $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy -Configuration $configuration
+    Write-AvmCatalogProgress ("Inventory built: {0} item(s). Collecting registry and GitHub enrichment." -f $inventory.Items.Count)
     $enrichment = Get-AvmCatalogEnrichment -Inventory $inventory -GitHubToken $token
+    Write-AvmCatalogProgress 'Writing the snapshot files.'
     foreach ($file in @(
             @{ Name = 'github.json'; Value = $enrichment.GitHub },
             @{ Name = 'registry.json'; Value = $enrichment.Registry },
