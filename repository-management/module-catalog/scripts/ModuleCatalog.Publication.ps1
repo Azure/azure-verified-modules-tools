@@ -95,8 +95,45 @@ function Test-AvmCatalogPublicationBundle {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }
     $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $Path -Configuration $Configuration
-    Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath
+    Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath `
+        -HeldBackOutput (Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $Path -Configuration $Configuration)
     return $plan
+}
+
+function Get-AvmCatalogPublicationHeldBackSourceFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $BundlePath,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Configuration
+    )
+
+    $reportOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind migration-report
+    $report = Read-AvmCatalogJson -Path (Join-Path $BundlePath $reportOutput.bundlePath)
+    if ($report -isnot [System.Collections.IDictionary] -or -not $report.Contains('heldBackSourceFiles') -or
+        $report.heldBackSourceFiles -isnot [array]) {
+        return , @()
+    }
+    return , @($report.heldBackSourceFiles | ForEach-Object { [string]$_ })
+}
+
+function Get-AvmCatalogHeldBackOutput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Configuration,
+        [AllowEmptyCollection()][string[]] $SourceFile = @()
+    )
+
+    if ($SourceFile.Count -eq 0) {
+        return , @()
+    }
+    $held = [System.Collections.Generic.List[string]]::new()
+    foreach ($output in @($Configuration.outputs | Where-Object { $_.kind -ceq 'csv' })) {
+        if ([string]$output.sourceFile -cin $SourceFile) {
+            $held.Add([string]$output.bundlePath)
+        }
+    }
+    $held.Add([string](Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog).bundlePath)
+    return , $held.ToArray()
 }
 
 function Get-AvmCatalogPublicationRowRemovals {
@@ -139,11 +176,17 @@ function Get-AvmCatalogPublicationRowRemovals {
             $removals.Add($removal)
         }
     }
-    if ((ConvertTo-AvmCatalogJson -Value $removals.ToArray()) -cne (ConvertTo-AvmCatalogJson -Value $report.csvRowRemovals) -or
-        ($removals.Count -gt 0 -and -not $report.csvRowRemovalsForced)) {
+    $renames = @(if ($report.Contains('csvRowRenames') -and $report.csvRowRenames -is [array]) { $report.csvRowRenames })
+    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames
+    $heldBackFiles = @(if ($report.Contains('heldBackSourceFiles') -and $report.heldBackSourceFiles -is [array]) {
+            $report.heldBackSourceFiles | ForEach-Object { [string]$_ }
+        })
+    $blocked = @($retained | Where-Object { [string]$_.sourceFile -cnotin $heldBackFiles })
+    if ((ConvertTo-AvmCatalogJson -Value $retained) -cne (ConvertTo-AvmCatalogJson -Value $report.csvRowRemovals) -or
+        ($blocked.Count -gt 0 -and -not $report.csvRowRemovalsForced)) {
         throw [System.IO.InvalidDataException]::new('Catalog CSV row-removal report disagrees with its source evidence and generated outputs.')
     }
-    return ,$removals.ToArray()
+    return , $retained
 }
 
 function Assert-AvmCatalogPublicationBase {

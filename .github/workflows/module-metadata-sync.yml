@@ -178,3 +178,27 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
           & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish `
             -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) -Confirm:$false
+
+  report:
+    name: Report held-back catalog outputs
+    needs: [collect, publish]
+    if: always() && needs.collect.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted reporting code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+          persist-credentials: false
+
+      - name: Download source CSV row-removal diagnostics
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: catalog-csv-row-removals
+          path: ${{ runner.temp }}/catalog-diagnostics
+
+      - name: Fail when catalog outputs were held back
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Assert-ModuleCatalogPublication.ps1'
+          & $script -DiagnosticsPath (Join-Path $env:RUNNER_TEMP 'catalog-diagnostics')

@@ -49,3 +49,6 @@ if ($PSCmdlet.ShouldProcess($OutputPath, 'Write the validated metadata catalog a
     Write-AvmCatalogBundle -Bundle $bundle -OutputPath $OutputPath -Configuration $configuration -Confirm:$false
     Write-AvmCatalogProgress ("Catalog bundle written to {0}." -f $OutputPath)
 }
+if ($bundle.HeldBack.Count -gt 0) {
+    Write-AvmCatalogProgress ("{0} output(s) are held back from publication: {1}" -f $bundle.HeldBack.Count, ($bundle.HeldBack -join ', '))
+}
