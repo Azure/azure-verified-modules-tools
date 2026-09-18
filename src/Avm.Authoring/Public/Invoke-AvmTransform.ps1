@@ -12,7 +12,7 @@ function Invoke-AvmTransform {
         The Terraform engine is wired against the pinned mapotf binary and
         scoped config profiles under Resources/mapotf/{common,module,root,example}.
         Examples set enable_telemetry=var.enable_telemetry only when the called
-        module declares that input. The example's input defaults to false,
+        module declares that input. The example's input defaults to true,
         preserving an existing declaration's location and metadata or adding
         a missing declaration to variables.tf. Source-module defaults remain
         unchanged.
