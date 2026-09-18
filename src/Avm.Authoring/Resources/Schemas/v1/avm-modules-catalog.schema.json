@@ -160,19 +160,42 @@
           }
         },
         {
-          "if": { "properties": { "moduleType": { "const": "resource" } } },
+          "if": { "properties": { "canonicalType": { "const": "helper" } } },
           "then": {
             "properties": {
-              "canonicalType": { "pattern": "^(Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+$" },
-              "providerNamespace": { "type": "string" },
-              "resourceType": { "type": "string" }
+              "parentModule": { "type": "string", "minLength": 1 },
+              "providerNamespace": { "type": "null" },
+              "resourceType": { "type": "null" }
+            },
+            "if": { "properties": { "ecosystem": { "const": "bicep" } } },
+            "then": {
+              "properties": {
+                "modulePath": { "pattern": "^avm/(res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+(/[a-z0-9-]+)+$" }
+              }
+            },
+            "else": {
+              "properties": {
+                "modulePath": { "pattern": "^modules/[a-z0-9_-]+$" },
+                "parentModule": { "const": "." },
+                "familyModule": { "const": "." }
+              }
             }
           },
           "else": {
-            "properties": {
-              "canonicalType": { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)*$" },
-              "providerNamespace": { "type": "null" },
-              "resourceType": { "type": "null" }
+            "if": { "properties": { "moduleType": { "const": "resource" } } },
+            "then": {
+              "properties": {
+                "canonicalType": { "pattern": "^(Microsoft\\.[A-Z]\\w+|Oracle\\.Database)(/[a-zA-Z]\\w*)+$" },
+                "providerNamespace": { "type": "string" },
+                "resourceType": { "type": "string" }
+              }
+            },
+            "else": {
+              "properties": {
+                "canonicalType": { "pattern": "^[a-z0-9-]+(/[a-z0-9-]+)*$" },
+                "providerNamespace": { "type": "null" },
+                "resourceType": { "type": "null" }
+              }
             }
           }
         }

@@ -18,6 +18,7 @@ function Initialize-AvmModuleMetadata {
         Module kind derived from its path or repository name.
     .PARAMETER ChildModule
         Initialize the reduced child shape, inheriting root ownership.
+        This scope also permits canonicalType helper with optional telemetry.
     .PARAMETER UpdateSource
         Wire Bicep's scoped telemetry prefix load. Existing conflicting readers
         are not replaced. Terraform rejects this switch before any writes.

@@ -88,6 +88,157 @@ AfterAll {
     Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Component: child helper metadata' -Tag Component {
+    It 'initializes and preserves a <Ecosystem> <ModuleType> helper with telemetry=<Telemetry>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                foreach ($telemetry in @($false, $true)) {
+                    @{ Ecosystem = $ecosystem; ModuleType = $kind; Telemetry = $telemetry }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType, $Telemetry)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule
+        $fixture.Data.canonicalType = 'helper'
+        if ($Telemetry) {
+            $limit = if ($Ecosystem -eq 'bicep') { 50 } else { 59 }
+            $fixture.Data.telemetryIdPrefix = $fixture.Data.telemetryIdPrefix.PadRight($limit, '_')
+        }
+        else {
+            $fixture.Data.Remove('telemetryIdPrefix')
+        }
+        if ($Ecosystem -eq 'bicep') {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        }
+        $parameters = $fixture.Parameters
+        $sourceBefore = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $plan = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -WhatIf
+        $plan.PlannedFiles | Should -Be @('metadata.json')
+        $plan.Changed | Should -BeFalse
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data `
+            -UpdateSource:($Ecosystem -eq 'bicep' -and -not $Telemetry)
+        $result.Status | Should -Be 'pass'
+        $result.Changed | Should -BeTrue
+        $result.PlannedFiles | Should -Be @('metadata.json')
+        $result.Metadata.canonicalType | Should -BeExactly 'helper'
+        $result.Metadata.Contains('owners') | Should -BeFalse
+        $result.Metadata.Contains('telemetryIdPrefix') | Should -Be $Telemetry
+        if ($Telemetry) {
+            $result.Metadata.telemetryIdPrefix | Should -BeExactly $fixture.Data.telemetryIdPrefix
+        }
+        (Test-AvmModuleMetadata @parameters -CheckSource:($Ecosystem -eq 'bicep')).Status | Should -Be 'pass'
+        (Get-AvmModuleMetadata @parameters).Metadata.canonicalType | Should -BeExactly 'helper'
+        $metadataBefore = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        (Initialize-AvmModuleMetadata @parameters -InputObject @{}).Changed | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $metadataBefore
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $sourceBefore
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'main.metadata.tf') | Should -BeFalse
+    }
+
+    It 'rejects helper at a <Ecosystem> <ModuleType> root' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType
+        $fixture.Data.canonicalType = 'helper'
+        $parameters = $fixture.Parameters
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        Save-MetadataFixture -Fixture $fixture
+        (Get-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
+        $before = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        { Initialize-AvmModuleMetadata @parameters -InputObject @{} } | Should -Throw
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $before
+    }
+
+    It 'keeps the child shape strict for <Ecosystem> <ModuleType> helpers' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule
+        $fixture.Data.canonicalType = 'helper'
+        $fixture.Data.Remove('telemetryIdPrefix')
+        $parameters = $fixture.Parameters
+        foreach ($field in @('$schema', 'moduleDisplayName', 'moduleDescription', 'canonicalType')) {
+            $value = $fixture.Data[$field]
+            $fixture.Data.Remove($field)
+            (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+            $fixture.Data[$field] = ''
+            (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+            $fixture.Data[$field] = $value
+        }
+        foreach ($canonical in @('Helper', 'HELPER', ' helper', 'helper ')) {
+            $fixture.Data.canonicalType = $canonical
+            (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+        }
+        $fixture.Data.canonicalType = 'helper'
+        foreach ($field in @('owners', 'moduleType', 'parentModule')) {
+            $fixture.Data[$field] = 'helper'
+            (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+            $fixture.Data.Remove($field)
+        }
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+    }
+
+    It 'validates every supplied telemetry prefix for <Ecosystem> <ModuleType> helpers' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule
+        $fixture.Data.canonicalType = 'helper'
+        $prefix = $fixture.Data.telemetryIdPrefix
+        $otherMarker = if ($Ecosystem -eq 'bicep') { '46d3xtrf' } else { '46d3xbcp' }
+        $otherKind = if ($ModuleType -eq 'resource') { 'ptn' } else { 'res' }
+        $limit = if ($Ecosystem -eq 'bicep') { 50 } else { 59 }
+        $parameters = $fixture.Parameters
+        foreach ($invalid in @(
+                $null, '', 'malformed', '46d3xbcp.resourcegraph-query',
+                ($prefix -replace '^46d3x(?:bcp|trf)', $otherMarker),
+                ($prefix -replace '\.(res|ptn|utl)\.', ".$otherKind."),
+                "$prefix/child", "$prefix.UPPER", $prefix.PadRight($limit + 1, 'a')
+            )) {
+            $fixture.Data.telemetryIdPrefix = $invalid
+            $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+            $result.Status | Should -Be 'fail'
+            $result.Issues.Count | Should -BeGreaterThan 0
+            { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data } | Should -Throw
+            Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        }
+    }
+
+    It 'does not reserve other pattern or utility taxonomy names: <Canonical>' -TestCases @(
+        @{ Canonical = 'helpers' }
+        @{ Canonical = 'helper-tools' }
+        @{ Canonical = 'helper/setup' }
+    ) {
+        param($Canonical)
+        foreach ($kind in @('pattern', 'utility')) {
+            $fixture = New-MetadataFixture -ModuleType $kind
+            $fixture.Data.canonicalType = $Canonical
+            $parameters = $fixture.Parameters
+            (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+        }
+    }
+}
+
 Describe 'Component: Oracle metadata compatibility' -Tag Component {
     It 'initializes and preserves <Canonical> for <Ecosystem>, child=<Child>' -TestCases @(
         foreach ($ecosystem in @('bicep', 'terraform')) {

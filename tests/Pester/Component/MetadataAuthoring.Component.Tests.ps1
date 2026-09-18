@@ -97,6 +97,93 @@ AfterAll {
 }
 
 Describe 'Component: metadata in authoring checks' -Tag Component {
+    It 'validates telemetry-free <Ecosystem> <ModuleType> helpers in <Command> with scope=<Scope>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                foreach ($command in @('Invoke-AvmPreCommit', 'Invoke-AvmPrCheck')) {
+                    foreach ($scope in @($false, $true)) {
+                        @{ Ecosystem = $ecosystem; ModuleType = $kind; Command = $command; Scope = $scope }
+                    }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType, $Command, $Scope)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
+        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+        $fixture.Context.Scope = if ($Scope) { $kind } else { $null }
+        $fixture.Data.canonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'example/module' }
+        $fixture.Data.telemetryIdPrefix = $fixture.Data.telemetryIdPrefix.Replace('.res.', ".$kind.")
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $childFile = Join-Path $fixture.Paths[1] 'metadata.json'
+        $child = Get-Content -LiteralPath $childFile -Raw | ConvertFrom-Json -AsHashtable
+        $child.canonicalType = 'helper'
+        $child.Remove('telemetryIdPrefix')
+        [System.IO.File]::WriteAllText($childFile, ($child | ConvertTo-Json -Depth 20))
+        if ($Ecosystem -eq 'bicep') {
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Paths[1] 'version.json'), '{"version":"1.0.0"}')
+        }
+        $before = @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash)
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'pass'
+        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+        $probe.Warnings | Should -HaveCount 0
+        @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
+    }
+
+    It 'does not let a helper prefix redefine its <Ecosystem> <ModuleType> family in a renamed checkout' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
+        $fixture.Context.Scope = $null
+        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+        $otherKind = if ($ModuleType -eq 'resource') { 'ptn' } else { 'res' }
+        $fixture.Data.canonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'example/module' }
+        $fixture.Data.telemetryIdPrefix = $fixture.Data.telemetryIdPrefix.Replace('.res.', ".$kind.")
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $childFile = Join-Path $fixture.Paths[1] 'metadata.json'
+        $child = Get-Content -LiteralPath $childFile -Raw | ConvertFrom-Json -AsHashtable
+        $child.canonicalType = 'helper'
+        $child.telemetryIdPrefix = $child.telemetryIdPrefix.Replace(".$kind.", ".$otherKind.")
+        [System.IO.File]::WriteAllText($childFile, ($child | ConvertTo-Json -Depth 20))
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck
+        $probe.Result.Status | Should -Be 'fail'
+        $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+        $issues[0].File | Should -Match 'blob-service/metadata.json$'
+    }
+
+    It 'rejects helper metadata at a <Ecosystem> <ModuleType> root in <Command>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                foreach ($command in @('Invoke-AvmPreCommit', 'Invoke-AvmPrCheck')) {
+                    @{ Ecosystem = $ecosystem; ModuleType = $kind; Command = $command }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType, $Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem
+        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+        $fixture.Context.Scope = $kind
+        $fixture.Data.canonicalType = 'helper'
+        $fixture.Data.telemetryIdPrefix = $fixture.Data.telemetryIdPrefix.Replace('.res.', ".$kind.")
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'fail'
+        $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_SCHEMA'
+        $issues[0].File | Should -BeExactly 'metadata.json'
+        $probe.Warnings | Should -HaveCount 0
+    }
+
     It 'validates Oracle roots and children without changing files in <Command> for <Ecosystem>' -TestCases @(
         @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPreCommit' }
         @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPrCheck' }

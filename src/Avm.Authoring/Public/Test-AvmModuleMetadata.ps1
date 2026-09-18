@@ -15,6 +15,7 @@ function Test-AvmModuleMetadata {
         Module kind derived by the caller from its path or repository name.
     .PARAMETER ChildModule
         Require the reduced child shape, without owners.
+        This scope also permits canonicalType helper with optional telemetry.
     .PARAMETER InputObject
         Metadata values to validate instead of reading metadata.json.
     .PARAMETER CheckSource
@@ -110,7 +111,7 @@ function Test-AvmModuleMetadata {
                 $source = Get-Content -LiteralPath $sourcePath -Raw
                 $literals = Get-AvmBicepMetadataLiteral -Source $source
                 $code = Get-AvmBicepCommentFreeSource -Source $source
-                if (-not $metadata.Contains('telemetryIdPrefix') -and
+                if ($metadata.canonicalType -cne 'helper' -and -not $metadata.Contains('telemetryIdPrefix') -and
                     [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
                     $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                                 -Message 'This Bicep module emits telemetry and requires telemetryIdPrefix.'))

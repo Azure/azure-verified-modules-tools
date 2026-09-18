@@ -3,6 +3,8 @@
 **Status: core tools, Bicep metadata, the optional full-sync metadata hook, and
 single-segment canonical support are merged. Oracle.Database compatibility
 requires its tooling change and a compatible authoring release.
+Child helper adoption also requires compatible released/installed tooling;
+this tools change does not release it or add helper files to module repositories.
 The current one-off Terraform migration is agent-led and metadata-only.
 Production runs still require explicit operator approval.**
 This document is a plan, not approval to run production commands.
@@ -27,7 +29,9 @@ This document is a plan, not approval to run production commands.
   Only valid metadata produces rows; removals from source CSVs fail by default
   and require an explicit override.
   CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
-  remain unchanged. The new JSON catalog keeps `v1/modules.json`.
+  remain unchanged. The new JSON catalog keeps `v1/modules.json`, including
+  selected helper submodules under canonical key `helper`; every generated CSV
+  omits those helpers, including future canonical outputs.
 - Either engineering owners or module owners can satisfy metadata code-owner
   review. Optional full-sync apply retains the already-authorized standard AVM
   App merge process, not a separate human-review-only lane. No new bypass or
@@ -109,8 +113,8 @@ including metadata creation. The agent-led migration does not invoke those
 operations or bypass their safeguards.
 
 Consumers must have a compatible released Avm.Authoring package installed before
-adopting single-segment canonical values or `Oracle.Database` metadata. Merging
-tools, passing local checks, and green hosted CI do not publish a release or
+adopting single-segment canonical values, `Oracle.Database` metadata, or child
+helper markers. Merging tools, passing local checks, and green hosted CI do not publish a release or
 update installed modules. Validators use their packaged schemas, not a runtime
 download of the authored `$schema` URL.
 
@@ -158,9 +162,13 @@ Do not remove people or loosen review rules to make the run pass.
 
 ## Current one-off Terraform migration
 
-The canonical inventory is complete: 407 approved source-backed module paths
+The initial canonical review covered 407 approved source-backed module paths
 (225 roots and 182 children), with 20 explicit exclusions and no unresolved
-canonical choices. These are review counts, not a promise of 407 new files.
+canonical choices. These are historical review counts, not a promise of 407 new
+files or an updated count after including helpers.
+All selected helper submodules, including those previously omitted, now require
+valid metadata marked with exact lowercase `canonicalType: "helper"`.
+The excluded `test-repo5` root remains excluded.
 Preserve valid existing metadata, including naming metadata and owner lists.
 Archived repositories remain review-only; missing/proposed repositories and
 the private Fabric repository are separate work.
@@ -185,8 +193,16 @@ authoring commands. Invalid existing metadata is a stop, not a reason to
 overwrite it. Review the resulting metadata-only diffs and existing ownership
 protections before publication.
 
-Helper omissions are explicit inclusion/exclusion decisions for this backfill,
-not a rule that all submodules or all modules lacking metadata are ignored.
+The helper marker is child-only for both ecosystems and all resource, pattern,
+and utility families. It does not introduce a new module kind or a synthetic
+ARM type. Helpers keep the required schema/display/description fields and
+inherit root owners. Their telemetry prefix is optional; any supplied prefix is
+preserved and validated normally. Catalog JSON retains their stable
+repository/module-path identities and family `moduleType` with null
+`providerNamespace` and `resourceType`; no generated CSV includes helpers.
+Existing helper rows in source CSVs still require the explicit removal override.
+This supersedes only the helper omission policy, not repository access or
+archived/missing/private restrictions.
 The inventory and actual migration data stay outside the packaged module.
 Normal authoring checks still warn on missing metadata during rollout and fail
 on invalid existing metadata.

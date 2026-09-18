@@ -330,6 +330,7 @@ function New-AvmCatalogRecord {
     param([object] $Identity, [System.Collections.IDictionary] $Data)
 
     $canonical = $Data.canonicalType
+    $armResource = $Identity.ModuleType -eq 'resource' -and $canonical -cne 'helper'
     $split = $canonical.IndexOf('/')
     return [ordered]@{
         ecosystem               = $Identity.Ecosystem
@@ -343,8 +344,8 @@ function New-AvmCatalogRecord {
         familyModule            = $Identity.FamilyModule
         provider                = $Identity.Provider
         canonicalType           = $canonical
-        providerNamespace       = if ($Identity.ModuleType -eq 'resource') { $canonical.Substring(0, $split) } else { $null }
-        resourceType            = if ($Identity.ModuleType -eq 'resource') { $canonical.Substring($split + 1) } else { $null }
+        providerNamespace       = if ($armResource) { $canonical.Substring(0, $split) } else { $null }
+        resourceType            = if ($armResource) { $canonical.Substring($split + 1) } else { $null }
         metadataSource          = 'metadata'
         moduleDisplayName       = [string]$Data.moduleDisplayName
         moduleDescription       = [string]$Data.moduleDescription
@@ -421,7 +422,9 @@ function Get-AvmCatalogInventory {
                 }
                 $existingRows[$identity.Key] = [pscustomobject]@{ Row = $row; File = $output.sourceFile }
                 if ($null -ne $identity.Metadata) {
-                    $generatedTable.Rows.Add($row)
+                    if ($identity.Metadata.canonicalType -cne 'helper') {
+                        $generatedTable.Rows.Add($row)
+                    }
                     continue
                 }
                 $missing[$identity.Key] = [ordered]@{
@@ -466,7 +469,9 @@ function Get-AvmCatalogInventory {
             foreach ($header in $tables[$output.sourceFile].Headers) {
                 $row[$header] = ''
             }
-            $tables[$output.sourceFile].Rows.Add($row)
+            if ($metadata.canonicalType -cne 'helper') {
+                $tables[$output.sourceFile].Rows.Add($row)
+            }
             $file = $output.sourceFile
         }
         $itemsByKey[$source.Key] = [pscustomobject]@{

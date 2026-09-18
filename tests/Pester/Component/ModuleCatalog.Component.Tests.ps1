@@ -183,6 +183,226 @@ AfterAll {
     Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Component: module catalog helpers' -Tag Component {
+    It 'retains mixed helper inventories in JSON but not any <Destination> CSV' -TestCases @(
+        @{ Destination = 'preview' }
+        @{ Destination = 'canonical' }
+    ) {
+        param($Destination)
+        $fixture = New-CatalogFixture -AdoptAll
+        $helpers = [System.Collections.Generic.List[object]]::new()
+        foreach ($family in @($fixture.Modules)) {
+            $normalPath = if ($family.Ecosystem -eq 'bicep') { "$($family.ModulePath)/normal" } else { 'modules/normal' }
+            $null = Add-CatalogModule -Fixture $fixture -Ecosystem $family.Ecosystem -Repository $family.Repository `
+                -ModulePath $normalPath -Canonical $family.Canonical -Child -Adopt
+            $parent = $family.ModulePath
+            foreach ($name in @('helper-a', 'helper-b')) {
+                $path = if ($family.Ecosystem -eq 'bicep') { "$parent/$name" } else { "modules/$name" }
+                $helper = Add-CatalogModule -Fixture $fixture -Ecosystem $family.Ecosystem -Repository $family.Repository `
+                    -ModulePath $path -Canonical 'helper' -Child -Adopt
+                $metadataPath = Join-Path $helper.Directory 'metadata.json'
+                $metadata = Read-AvmCatalogJson -Path $metadataPath
+                if ($name -eq 'helper-a') {
+                    $metadata.Remove('telemetryIdPrefix')
+                    Save-CatalogJson -Path $metadataPath -Data $metadata
+                }
+                $helpers.Add(@{ Module = $helper; Family = $family; Parent = $parent; Metadata = $metadata })
+                if ($family.Ecosystem -eq 'bicep') { $parent = $path }
+            }
+        }
+        $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+        if ($Destination -eq 'canonical') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        }
+        $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
+        Save-CatalogJson -Path $configurationPath -Data $raw
+        $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
+        $inventory.Sources | Should -HaveCount 24
+        $inventory.Items | Should -HaveCount 24
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
+        $catalog = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
+        $catalog.modules.helper.bicep | Should -HaveCount 6
+        $catalog.modules.helper.terraform | Should -HaveCount 6
+        foreach ($helper in $helpers) {
+            $module = $helper.Module
+            $records = @($catalog.modules.helper[$module.Ecosystem] | Where-Object {
+                    $_.repository -ceq $module.Repository -and $_.modulePath -ceq $module.ModulePath
+                })
+            $records | Should -HaveCount 1
+            $record = $records[0]
+            $record.canonicalType | Should -BeExactly 'helper'
+            $record.moduleName | Should -BeExactly $module.Identity.ModuleName
+            $record.moduleType | Should -BeExactly $helper.Family.ModuleType
+            $record.parentModule | Should -BeExactly $helper.Parent
+            $record.familyModule | Should -BeExactly $helper.Family.ModulePath
+            $record.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+            $record.provider | Should -Be $module.Identity.Provider
+            $record.Contains('providerNamespace') | Should -BeTrue
+            $record.Contains('resourceType') | Should -BeTrue
+            ($null -eq $record.providerNamespace) | Should -BeTrue
+            ($null -eq $record.resourceType) | Should -BeTrue
+            $record.telemetryIdPrefix | Should -Be $helper.Metadata['telemetryIdPrefix']
+        }
+        foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
+            $rows = @($bundle.Files[$output.bundlePath] | ConvertFrom-Csv)
+            $rows | Should -HaveCount 2
+            $expected = @($inventory.Items | Where-Object {
+                    $_.Record.ecosystem -eq $output.ecosystem -and $_.Record.moduleType -eq $output.moduleType -and
+                    $_.Record.canonicalType -cne 'helper'
+                } | ForEach-Object { $_.Record.moduleName } | Sort-Object)
+            @($rows.ModuleName | Sort-Object) | Should -Be $expected
+            $rows.CanonicalType | Should -Not -Contain 'helper'
+        }
+        $bundle.Report.counts.catalogEntries | Should -Be 24
+        $bundle.Report.missingMetadata | Should -HaveCount 0
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        $again = Get-CatalogFixtureBundle -Fixture $fixture `
+            -Inventory (Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration)
+        foreach ($file in $bundle.Files.Keys) {
+            $again.Files[$file] | Should -BeExactly $bundle.Files[$file]
+        }
+    }
+
+    It 'rejects authored helpers at <Ecosystem> <ModuleType> family roots even with force' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-CatalogFixture -AdoptAll
+        $family = @($fixture.Modules | Where-Object { $_.Ecosystem -eq $Ecosystem -and $_.ModuleType -eq $ModuleType })[0]
+        $path = Join-Path $family.Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $path
+        $metadata.canonicalType = 'helper'
+        Save-CatalogJson -Path $path -Data $metadata
+        foreach ($force in @($false, $true)) {
+            { Get-CatalogFixtureBundle -Fixture $fixture -Force:$force } | Should -Throw '*Invalid present metadata*'
+        }
+    }
+
+    It 'rejects invalid helper catalog shapes for <Ecosystem> <ModuleType>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-CatalogFixture -AdoptAll
+        $family = @($fixture.Modules | Where-Object { $_.Ecosystem -eq $Ecosystem -and $_.ModuleType -eq $ModuleType })[0]
+        $path = if ($Ecosystem -eq 'bicep') { "$($family.ModulePath)/helper" } else { 'modules/helper' }
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem $Ecosystem -Repository $family.Repository `
+            -ModulePath $path -Canonical 'helper' -Child -Adopt
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $schema = Join-Path $repoRoot (Get-AvmCatalogOutput -Configuration $bundle.Configuration -Kind catalog).schema
+        $json = $bundle.Files['docs/v1/modules.json']
+        Test-Json -Json $json -SchemaFile $schema | Should -BeTrue
+        foreach ($mutation in @(
+                @{ Property = 'parentModule'; Value = $null },
+                @{ Property = 'parentModule'; Value = '' },
+                @{ Property = 'modulePath'; Value = $family.ModulePath },
+                @{ Property = 'providerNamespace'; Value = 'helper' },
+                @{ Property = 'resourceType'; Value = 'helper' },
+                @{ Property = 'canonicalType'; Value = 'Helper' },
+                @{ Property = 'moduleType'; Value = 'helper' }
+            )) {
+            $catalog = $json | ConvertFrom-Json -AsHashtable
+            $catalog.modules.helper[$Ecosystem][0][$mutation.Property] = $mutation.Value
+            Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
+                -ErrorAction SilentlyContinue | Should -BeFalse
+        }
+        foreach ($field in @('providerNamespace', 'resourceType')) {
+            $catalog = $json | ConvertFrom-Json -AsHashtable
+            $catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem][0][$field] = $null
+            Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
+                -ErrorAction SilentlyContinue | Should -BeFalse
+        }
+    }
+
+    It 'keeps helper source-row removal guards through <Destination> generation and publication' -TestCases @(
+        @{ Destination = 'preview' }
+        @{ Destination = 'canonical' }
+    ) {
+        param($Destination)
+        $fixture = New-CatalogFixture -AdoptAll
+        $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+        if ($Destination -eq 'canonical') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        }
+        $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
+        Save-CatalogJson -Path $configurationPath -Data $raw
+        $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
+        foreach ($family in @($fixture.Modules)) {
+            $path = if ($family.Ecosystem -eq 'bicep') { "$($family.ModulePath)/helper" } else { 'modules/helper' }
+            $helper = Add-CatalogModule -Fixture $fixture -Ecosystem $family.Ecosystem -Repository $family.Repository `
+                -ModulePath $path -Canonical 'helper' -Child -Adopt
+            $output = @($configuration.outputs | Where-Object {
+                    $_.kind -eq 'csv' -and $_.ecosystem -eq $family.Ecosystem -and $_.moduleType -eq $family.ModuleType
+                })[0]
+            $file = $output.sourceFile
+            $row = [ordered]@{}
+            foreach ($header in $fixture.Headers[$file]) { $row[$header] = $fixture.Original[$file][$header] }
+            $row.ModuleName = $helper.Identity.ModuleName
+            $row.RepoURL = $helper.Identity.RepoURL
+            $row.ModuleStatus = 'Deprecated'
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+                (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $row)))
+            [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy "test-$file"), 'Preview rows must not be read as source.')
+        }
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
+        { Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory } | Should -Throw '*6 row(s)*CSV row removals are blocked*'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force
+        $bundle.Report.counts.catalogEntries | Should -Be 12
+        $bundle.Report.csvRowRemovals | Should -HaveCount 6
+        $bundle.Report.csvRowRemovalsForced | Should -BeTrue
+        $bundle.Report.missingMetadata | Should -HaveCount 0
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $records = $bundle.Catalog.modules.helper[$ecosystem]
+            $records | Should -HaveCount 3
+            foreach ($record in $records) { $record.moduleStatus | Should -BeExactly 'Deprecated' }
+        }
+        $sourceRoot = Join-Path $fixture.Root 'publication-source'
+        foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
+            $rows = @($bundle.Files[$output.bundlePath] | ConvertFrom-Csv)
+            $rows | Should -HaveCount 1
+            $rows[0].ModuleName | Should -BeExactly $fixture.Original[$output.sourceFile].ModuleName
+            $bundle.Report.sourceCsvRows[$output.sourceFile] | Should -HaveCount 2
+            $removals = @($bundle.Report.csvRowRemovals | Where-Object sourceFile -eq $output.sourceFile)
+            $removals | Should -HaveCount 1
+            $removals[0].moduleName | Should -Match '/helper$'
+            $sourcePath = Join-Path $sourceRoot $output.sourcePath
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($sourcePath))
+            Copy-Item -LiteralPath (Join-Path $fixture.Legacy $output.sourceFile) -Destination $sourcePath
+        }
+        Write-AvmCatalogBundle -Bundle $bundle -OutputPath $fixture.Output -Configuration $configuration | Out-Null
+        $publicationRemovals = Get-AvmCatalogPublicationRowRemovals -BundlePath $fixture.Output `
+            -Configuration $configuration -SourceRoot $sourceRoot
+        $publicationRemovals | Should -HaveCount 6
+        $plan = [ordered]@{ schemaVersion = 1; manifestHash = $configuration.hash; outputHashes = [ordered]@{} }
+        $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
+        foreach ($role in $paths.Keys) {
+            $plan[$role] = [ordered]@{ repository = $paths[$role].repository; baseFiles = [ordered]@{} }
+            foreach ($relative in $paths[$role].basePaths) {
+                $sourcePath = Join-Path $sourceRoot $relative
+                $plan[$role].baseFiles[$relative] = if (Test-Path -LiteralPath $sourcePath) {
+                    (Get-FileHash -LiteralPath $sourcePath).Hash.ToLowerInvariant()
+                } else { $null }
+            }
+            foreach ($relative in $paths[$role].files.Keys) {
+                $plan.outputHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $fixture.Output $relative)).Hash.ToLowerInvariant()
+            }
+        }
+        Save-CatalogJson -Path (Join-Path $fixture.Output (Get-AvmCatalogOutput -Configuration $configuration -Kind publication-plan).bundlePath) -Data $plan
+        { Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration } |
+            Should -Throw '*CSV row removals are blocked*'
+        $publishedPlan = Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration -Force
+        $publishedPlan.outputHashes.Count | Should -Be 9
+    }
+}
+
 Describe 'Component: module catalog transformations' -Tag Component {
     It 'projects Oracle <ResourceType> into resource catalog records and CSV rows' -TestCases @(
         @{ ResourceType = 'cloudExadataInfrastructures' }

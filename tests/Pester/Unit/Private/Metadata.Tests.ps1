@@ -175,6 +175,7 @@ Describe 'Metadata ARM resource classification' {
         @{ Canonical = 'Microsoft.Storage/storageAccounts'; Expected = $true }
         @{ Canonical = 'Microsoft.Network/dnsZones/A'; Expected = $true }
         @{ Canonical = 'Microsoft.Example/a_b/c'; Expected = $true }
+        @{ Canonical = 'helper'; Expected = $false }
         @{ Canonical = 'naming'; Expected = $false }
         @{ Canonical = 'lz/sub-vending'; Expected = $false }
         @{ Canonical = ''; Expected = $false }
@@ -205,6 +206,59 @@ Describe 'Metadata ARM resource classification' {
 }
 
 Describe 'Metadata module identity' {
+    It 'uses root metadata rather than a helper prefix for a renamed <Ecosystem> <ModuleType> checkout' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        InModuleScope Avm.Authoring -Parameters @{ Ecosystem = $Ecosystem; ModuleType = $ModuleType } {
+            param($Ecosystem, $ModuleType)
+            $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+            $otherKind = if ($ModuleType -eq 'resource') { 'ptn' } else { 'res' }
+            $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
+            $context = [pscustomobject]@{ Root = Join-Path $TestDrive 'renamed'; Ecosystem = $Ecosystem }
+            $rootJson = @{
+                canonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'example/module' }
+                telemetryIdPrefix = "$marker.$kind.root"
+            } | ConvertTo-Json
+            Mock Test-Path { $LiteralPath -ceq (Join-Path $context.Root 'metadata.json') }
+            Mock Read-AvmMetadataJson { $rootJson }
+            Mock Invoke-AvmProcess { throw 'Family inference must not fetch anything.' }
+            Get-AvmMetadataModuleType -Context $context -Path (Join-Path $context.Root 'child') `
+                -Metadata @{ canonicalType = 'helper'; telemetryIdPrefix = "$marker.$otherKind.child" } |
+                Should -Be $ModuleType
+            Should -Invoke Read-AvmMetadataJson -Exactly 1 -ParameterFilter { $Path -ceq (Join-Path $context.Root 'metadata.json') }
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+    }
+
+    It 'derives a telemetry-free helper kind from its <Ecosystem> <ModuleType> family' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        InModuleScope Avm.Authoring -Parameters @{ Ecosystem = $Ecosystem; ModuleType = $ModuleType } {
+            param($Ecosystem, $ModuleType)
+            $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+            $root = if ($Ecosystem -eq 'bicep') {
+                Join-Path $TestDrive 'avm' $kind 'example' 'module'
+            }
+            else {
+                Join-Path $TestDrive "terraform-azurerm-avm-$kind-example-module"
+            }
+            $context = [pscustomobject]@{ Root = $root; Ecosystem = $Ecosystem }
+            $path = if ($Ecosystem -eq 'bicep') { Join-Path $root 'helper' } else { Join-Path $root 'modules' 'helper' }
+            Get-AvmMetadataModuleType -Context $context -Path $path -Metadata @{ canonicalType = 'helper' } |
+                Should -Be $ModuleType
+        }
+    }
+
     It 'recognizes Oracle metadata without path, scope, Git, or telemetry identity: <Ecosystem>, <Canonical>' -TestCases @(
         foreach ($ecosystem in @('bicep', 'terraform')) {
             foreach ($canonical in @(
@@ -234,6 +288,7 @@ Describe 'Metadata module identity' {
         @{ Canonical = 'Oracle.Other/cloudVmClusters' }
         @{ Canonical = 'Microsoft.Storage/storageAccounts/Microsoft.Insights/diagnosticSettings' }
         @{ Canonical = 'Oracle.Database/cloudVmClusters/Microsoft.Insights/diagnosticSettings' }
+        @{ Canonical = 'helper' }
     ) {
         param($Canonical)
         InModuleScope Avm.Authoring -Parameters @{ Canonical = $Canonical } {
