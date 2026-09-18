@@ -392,10 +392,24 @@ function Get-AvmCatalogInventory {
     foreach ($source in $sources) {
         $sourcesByKey[$source.Key] = $source
     }
+    $sourcesByAlias = @{}
+    foreach ($source in $sources) {
+        if ($source.Ecosystem -cne 'terraform' -or $null -eq $source.Metadata) {
+            continue
+        }
+        $alias = 'terraform|{0}|{1}' -f $source.RepositoryId, $source.ModulePath
+        if ($sourcesByAlias.ContainsKey($alias)) {
+            $sourcesByAlias[$alias] = $null
+            continue
+        }
+        $sourcesByAlias[$alias] = $source
+    }
     $tables = [ordered]@{}
     $existingRows = @{}
     $itemsByKey = @{}
     $missing = [ordered]@{}
+    $rowReasons = [ordered]@{}
+    $renames = [System.Collections.Generic.List[object]]::new()
     $unresolved = [System.Collections.Generic.List[object]]::new()
     foreach ($source in $sources) {
         if ($null -eq $source.Metadata) {
@@ -436,6 +450,19 @@ function Get-AvmCatalogInventory {
                 if ($sourcesByKey.ContainsKey($identity.Key)) {
                     $identity = $sourcesByKey[$identity.Key]
                 }
+                elseif ($identity.Ecosystem -ceq 'terraform') {
+                    $alias = 'terraform|{0}|{1}' -f $identity.RepositoryId, $identity.ModulePath
+                    if ($sourcesByAlias.ContainsKey($alias) -and $null -ne $sourcesByAlias[$alias]) {
+                        $moved = $sourcesByAlias[$alias]
+                        $renames.Add([ordered]@{
+                                sourceFile = $output.sourceFile
+                                moduleName = [string]$identity.ModuleName
+                                fromRepoURL = [string]$identity.RepoURL
+                                toRepoURL = [string]$moved.RepoURL
+                            })
+                        $identity = $moved
+                    }
+                }
                 if ($existingRows.ContainsKey($identity.Key)) {
                     throw [System.IO.InvalidDataException]::new("Duplicate legacy identity: $($identity.Key)")
                 }
@@ -444,13 +471,16 @@ function Get-AvmCatalogInventory {
                     $generatedTable.Rows.Add($row)
                     continue
                 }
+                $reason = if ($identity.Directory) { 'metadata-not-present' } else { 'module-source-not-found' }
+                $rowReasons['{0}|{1}' -f $output.sourceFile, [string]$row.ModuleName] = $reason
                 $missing[$identity.Key] = [ordered]@{
                     ecosystem = $identity.Ecosystem; repository = $identity.Repository
                     modulePath = $identity.ModulePath
-                    reason = if ($identity.Directory) { 'metadata-not-present' } else { 'module-source-not-found' }
+                    reason = $reason
                 }
             }
             catch [System.ArgumentException] {
+                $rowReasons['{0}|{1}' -f $output.sourceFile, [string]$row.ModuleName] = 'unresolved-identity'
                 $unresolved.Add([ordered]@{
                         file = $output.sourceFile; moduleName = [string]$row.ModuleName
                         ecosystem = $output.ecosystem; reason = $_.Exception.Message
@@ -511,6 +541,8 @@ function Get-AvmCatalogInventory {
         Items = @((Get-AvmCatalogOrdinal -Values @($itemsByKey.Keys)) | ForEach-Object { $itemsByKey[$_] })
         Tables = $tables
         Mar = Get-AvmCatalogOrdinal -Values $mar
+        RowRemovalReasons = $rowReasons
+        RowRenames = $renames.ToArray()
         Report = [ordered]@{
             schemaVersion = 1
             missingMetadata = @((Get-AvmCatalogOrdinal -Values @($missing.Keys)) | ForEach-Object { $missing[$_] })
@@ -675,10 +707,12 @@ function New-AvmCatalogBundle {
     $files = [ordered]@{}
     $sourceCsvRows = [ordered]@{}
     $removals = [System.Collections.Generic.List[object]]::new()
+    $bundlePathBySourceFile = @{}
     foreach ($output in $configuration.outputs | Where-Object { $_.kind -ceq 'csv' }) {
         $file = $output.sourceFile
         $table = $Inventory.Tables[$file]
         $sourceCsvRows[$file] = $table.SourceRows
+        $bundlePathBySourceFile[$file] = $output.bundlePath
         $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $table.Rows.ToArray()
         foreach ($removal in (Get-AvmCatalogCsvRowRemovals -SourceRows $table.SourceRows -OutputRows $outputRows `
                 -Output $output -Configuration $configuration)) {
@@ -688,14 +722,32 @@ function New-AvmCatalogBundle {
         $report.counts.legacyRows[$file] = $table.OriginalRowCount
         $report.counts.csvRows[$file] = $table.Rows.Count
     }
+    $renames = @(if ($Inventory.PSObject.Properties['RowRenames']) { $Inventory.RowRenames })
+    $reasons = if ($Inventory.PSObject.Properties['RowRemovalReasons']) { $Inventory.RowRemovalReasons } else { $null }
     $report['sourceCsvRows'] = $sourceCsvRows
-    $report['csvRowRemovals'] = $removals.ToArray()
+    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames
+    $report['csvRowRemovals'] = $retained
     $report['csvRowRemovalsForced'] = [bool]$Force
-    Assert-AvmCatalogCsvRowRetention -Removals $removals.ToArray() -Force:$Force -DiagnosticsPath $DiagnosticsPath
+    $report['csvRowRenames'] = $renames
+    $heldBackFiles = Resolve-AvmCatalogCsvRowRetention -Removals $retained -Renames $renames `
+        -Reasons $reasons -Force:$Force -DiagnosticsPath $DiagnosticsPath
+    $heldBack = [System.Collections.Generic.List[string]]::new()
+    foreach ($file in $heldBackFiles) {
+        $heldBack.Add([string]$bundlePathBySourceFile[$file])
+    }
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
     $files[$catalogOutput.bundlePath] = $json
+    if ($heldBack.Count -gt 0) {
+        $heldBack.Add([string]$catalogOutput.bundlePath)
+        Write-AvmCatalogProgress ("Holding back the module catalog JSON because source CSV rows would be lost.")
+    }
+    $report['heldBackOutputs'] = $heldBack.ToArray()
+    $report['heldBackSourceFiles'] = @($heldBackFiles)
     $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).bundlePath] = ConvertTo-AvmCatalogJson -Value $report
-    return [pscustomobject]@{ Configuration = $configuration; Files = $files; Catalog = $catalog; Report = $report }
+    return [pscustomobject]@{
+        Configuration = $configuration; Files = $files; Catalog = $catalog; Report = $report
+        HeldBack = $heldBack.ToArray(); HeldBackSourceFiles = @($heldBackFiles)
+    }
 }
 
 function Write-AvmCatalogBundle {

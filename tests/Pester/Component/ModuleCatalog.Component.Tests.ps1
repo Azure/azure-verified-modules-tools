@@ -141,7 +141,7 @@ BeforeAll {
     }
 
     function Get-CatalogFixtureBundle {
-        param([object] $Fixture, [object] $Inventory, [switch] $Force)
+        param([object] $Fixture, [object] $Inventory, [switch] $Force, [string] $DiagnosticsPath)
         if ($null -eq $Inventory) {
             $Inventory = Get-CatalogFixtureInventory -Fixture $Fixture
         }
@@ -180,7 +180,7 @@ BeforeAll {
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'registry.json') -Data $registry
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'github.json') -Data $github
         Save-CatalogJson -Path (Join-Path $Fixture.Root 'revisions.json') -Data $revisions
-        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions -Force:$Force
+        return New-AvmCatalogBundle -Inventory $Inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions -Force:$Force -DiagnosticsPath $DiagnosticsPath
     }
 }
 
@@ -338,7 +338,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
 
     It 'blocks source CSV row removal by default and emits no legacy records when forced' {
         $fixture = New-CatalogFixture
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*6 row(s)*source CSVs*'
+        $held = Get-CatalogFixtureBundle -Fixture $fixture
+        $held.Report.csvRowRemovals | Should -HaveCount 6
+        $held.HeldBack | Should -Contain 'docs/v1/modules.json'
+        $held.HeldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         foreach ($file in $fixture.Original.Keys) {
             $text = $bundle.Files["docs/test-$file"]
@@ -583,11 +586,11 @@ Describe 'Component: module catalog transformations' -Tag Component {
 
     It 'protects source rows across both ecosystems without mode options' {
         $fixture = New-CatalogFixture
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*source CSVs*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBack | Should -Contain 'docs/v1/modules.json'
         foreach ($module in @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'bicep' })) {
             Save-CatalogMetadata -Module $module
         }
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*TerraformResourceModules.csv*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'TerraformResourceModules.csv'
         foreach ($module in @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'terraform' })) {
             Save-CatalogMetadata -Module $module
         }
@@ -779,7 +782,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $row.ModuleOwnersGHTeam = ''
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*BicepResourceModules.csv*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep | Should -HaveCount 0
         @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv) | Should -HaveCount 0
@@ -884,7 +887,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
 }
 
 Describe 'Component: module catalog source CSV row retention' -Tag Component {
-    It 'requires force at the offline entry point and still honors WhatIf' {
+    It 'holds back outputs at the offline entry point and still honors WhatIf' {
         $fixture = New-CatalogFixture
         Save-CatalogMetadata -Module $fixture.Modules[0]
         $null = Get-CatalogFixtureBundle -Fixture $fixture -Force
@@ -892,14 +895,18 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         foreach ($force in @($null, $false)) {
             $arguments = @{ InputPath = $fixture.Root; OutputPath = $fixture.Output }
             if ($null -ne $force) { $arguments.Force = $force }
-            { & $scriptPath @arguments } | Should -Throw '*CSV row removals are blocked*'
-            Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+            & $scriptPath @arguments | Out-Null
+            $blocked = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'migration-report.json')
+            $blocked.heldBackOutputs | Should -Contain 'docs/v1/modules.json'
+            $blocked.csvRowRemovalsForced | Should -BeFalse
+            [System.IO.Directory]::Delete($fixture.Output, $true)
         }
         & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force -WhatIf
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
         & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force | Out-Null
         $report = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'migration-report.json')
         $report.csvRowRemovals | Should -HaveCount 5
+        $report.heldBackOutputs | Should -HaveCount 0
         $report.csvRowRemovalsForced | Should -BeTrue
         $report.sourceCsvRows['BicepResourceModules.csv'][0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
     }
@@ -909,7 +916,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
         $replacement = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
             -ModulePath 'avm/res/key-vault/vault' -Canonical 'Microsoft.KeyVault/vaults' -Adopt
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*avm/res/storage/storage-account*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Report.counts.legacyRows['BicepResourceModules.csv'] | Should -Be 1
         $bundle.Report.counts.csvRows['BicepResourceModules.csv'] | Should -Be 1
@@ -926,11 +933,46 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
             -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' -ModulePath '.' `
             -Canonical 'Microsoft.Storage/storageAccounts' -Adopt
         $replacement.Identity.ModuleName | Should -BeExactly $fixture.Modules[3].Identity.ModuleName
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*terraform-azurerm-avm-res-storage-storageaccount*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'TerraformResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
         $bundle.Report.csvRowRemovals[0].repoURL | Should -BeExactly $fixture.Modules[3].Identity.RepoURL
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0].provider | Should -BeExactly 'azure'
+    }
+
+    It 'adopts a Terraform row whose repository moved to another provider prefix' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $original = $fixture.Modules[3]
+        [System.IO.Directory]::Delete($original.Directory, $true)
+        $replacement = Add-CatalogModule -Fixture $fixture -Ecosystem terraform `
+            -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' -ModulePath '.' `
+            -Canonical 'Microsoft.Storage/storageAccounts' -Adopt
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $bundle.Report.csvRowRemovals | Should -HaveCount 0
+        $bundle.HeldBack | Should -HaveCount 0
+        $bundle.Report.csvRowRenames | Should -HaveCount 1
+        $bundle.Report.csvRowRenames[0].sourceFile | Should -BeExactly 'TerraformResourceModules.csv'
+        $bundle.Report.csvRowRenames[0].fromRepoURL | Should -BeExactly $original.Identity.RepoURL
+        $bundle.Report.csvRowRenames[0].toRepoURL | Should -BeExactly $replacement.Identity.RepoURL
+        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)[0].RepoURL |
+            Should -BeExactly $replacement.Identity.RepoURL
+    }
+
+    It 'records why each held-back row was removed in the diagnostics report' {
+        $fixture = New-CatalogFixture -AdoptAll
+        [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
+        [System.IO.Directory]::Delete($fixture.Modules[3].Directory, $true)
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -DiagnosticsPath $diagnostics
+        $bundle.HeldBack | Should -Contain 'docs/v1/modules.json'
+        $report = Read-AvmCatalogJson -Path (Join-Path $diagnostics 'csv-row-removals.json')
+        $report.heldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
+        $reasons = @{}
+        foreach ($removal in $report.removals) { $reasons[[string]$removal.moduleName] = [string]$removal.reason }
+        $reasons[$fixture.Modules[0].Identity.ModuleName] | Should -BeExactly 'metadata-not-present'
+        $reasons[$fixture.Modules[3].Identity.ModuleName] | Should -BeExactly 'module-source-not-found'
+        $csv = @([System.IO.File]::ReadAllText((Join-Path $diagnostics 'csv-row-removals.csv')) -split "`n")
+        $csv[0] | Should -BeExactly 'SourceFile,ModuleName,RepoURL,Reason,Published'
     }
 
     It 'protects a pre-source proposal with a <Identity> identity until force permits removal' -TestCases @(
@@ -946,7 +988,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         $proposal.RepoURL = $Url
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $proposal)))
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*TerraformPatternModules.csv: avm-ptn-future-proposal*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'TerraformPatternModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
         $bundle.Report.csvRowRemovals[0].moduleName | Should -BeExactly 'avm-ptn-future-proposal'
@@ -976,7 +1018,8 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         [System.IO.File]::ReadAllText((Join-Path $fixture.Legacy 'test-BicepResourceModules.csv')) | Should -BeExactly 'not a source CSV'
         [System.IO.File]::Delete((Join-Path $fixture.Modules[0].Directory 'metadata.json'))
         $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
-        { Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory } | Should -Throw '*BicepResourceModules.csv*'
+        (Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory).HeldBackSourceFiles |
+            Should -Contain 'BicepResourceModules.csv'
     }
 
     It 'does not treat a corrected repository URL or non-identity field as a removal' {
@@ -1154,7 +1197,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         else {
             $fixture.Archived['Azure/terraform-azurerm-avm-res-storage-storageaccount'] = $true
         }
-        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*source CSVs*'
+        (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain $File
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         @($bundle.Files["docs/test-$File"] | ConvertFrom-Csv) | Should -HaveCount 0
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem] | Should -HaveCount 0

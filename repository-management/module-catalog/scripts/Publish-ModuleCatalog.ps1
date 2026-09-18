@@ -62,19 +62,25 @@ $processEnvironment = @{
     GIT_CONFIG_KEY_6 = 'core.autocrlf'; GIT_CONFIG_VALUE_6 = 'false'
 }
 $prepared = [System.Collections.Generic.List[object]]::new()
+$heldBackSourceFiles = @(Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $BundlePath -Configuration $configuration)
+$heldBack = @(Get-AvmCatalogHeldBackOutput -Configuration $configuration -SourceFile $heldBackSourceFiles)
+if ($heldBack.Count -gt 0) {
+    Write-AvmCatalogProgress ("Skipping {0} held-back output(s): {1}" -f $heldBack.Count, ($heldBack -join ', '))
+}
 try {
     $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
     foreach ($role in $paths.Keys) {
         $repository = $paths[$role].repository
         Write-AvmCatalogProgress ("Preparing publication branch for {0}." -f $repository)
-        $allowed = @($paths[$role].files.Values)
+        $publishable = @($paths[$role].files.Keys | Where-Object { $_ -cnotin $heldBack })
+        $allowed = @($publishable | ForEach-Object { $paths[$role].files[$_] })
         $root = Join-Path $state $role
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('clone', '--filter=blob:none', '--no-checkout', '--branch', 'main', "https://github.com/$repository", $root) `
             -WorkingDirectory $state -EnvVars $processEnvironment
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', 'main') -WorkingDirectory $root -EnvVars $processEnvironment
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
         $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $BundlePath -Configuration $configuration -SourceRoot $root
-        Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath
+        Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath -HeldBackOutput $heldBackSourceFiles
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
             -ArgumentList @('api', '--method', 'GET', '--paginate', '--slurp', "repos/$repository/pulls?state=open&base=main&per_page=100") `
             -WorkingDirectory $root -EnvVars $processEnvironment
@@ -107,7 +113,7 @@ try {
             $branch = "automation/module-metadata-sync-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
             $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', '-b', $branch, 'origin/main') -WorkingDirectory $root -EnvVars $processEnvironment
         }
-        foreach ($relative in $paths[$role].files.Keys) {
+        foreach ($relative in $publishable) {
             $target = $paths[$role].files[$relative]
             Assert-AvmCatalogSafePath -Root $root -RelativePath $target
             $file = Join-Path $root $target

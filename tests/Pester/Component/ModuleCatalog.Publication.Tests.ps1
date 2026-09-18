@@ -382,7 +382,7 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
                 $blocks.Add($body -join "`n")
             }
         }
-        $blocks | Should -HaveCount 6
+        $blocks | Should -HaveCount 7
         foreach ($block in $blocks) {
             $block | Should -Not -Match '\$\{\{'
             $block | Should -Match "'tools' 'repository-management' 'module-catalog' 'scripts'"

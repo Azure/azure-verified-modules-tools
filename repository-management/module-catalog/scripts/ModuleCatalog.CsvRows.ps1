@@ -80,9 +80,45 @@ function Get-AvmCatalogCsvRowRemovals {
     return ,$removed.ToArray()
 }
 
+function Select-AvmCatalogCsvRowRemoval {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
+        [AllowEmptyCollection()][object[]] $Renames = @()
+    )
+
+    if ($Renames.Count -eq 0) {
+        return , $Removals
+    }
+    $renamed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($rename in $Renames) {
+        $null = $renamed.Add(('{0}|{1}|{2}' -f [string]$rename.sourceFile, [string]$rename.moduleName, [string]$rename.fromRepoURL))
+    }
+    return , @($Removals | Where-Object {
+            -not $renamed.Contains(('{0}|{1}|{2}' -f [string]$_.sourceFile, [string]$_.moduleName, [string]$_.repoURL))
+        })
+}
+
+function Get-AvmCatalogCsvRowRemovalReason {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Removal,
+        [System.Collections.IDictionary] $Reasons
+    )
+
+    $key = '{0}|{1}' -f [string]$Removal.sourceFile, [string]$Removal.moduleName
+    if ($null -ne $Reasons -and $Reasons.Contains($key)) {
+        return [string]$Reasons[$key]
+    }
+    return 'unknown'
+}
+
 function Format-AvmCatalogCsvRowRemoval {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals)
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
+        [System.Collections.IDictionary] $Reasons
+    )
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $files = @($Removals | ForEach-Object { [string]$_.sourceFile } | Sort-Object -Unique)
@@ -92,8 +128,10 @@ function Format-AvmCatalogCsvRowRemoval {
         $lines.Add("  $file  -  $($rows.Count) row(s)")
         $lines.Add('  ' + ('-' * ($file.Length + 18)))
         $width = (@($rows | ForEach-Object { ([string]$_.moduleName).Length }) | Measure-Object -Maximum).Maximum
+        $reasonWidth = (@($rows | ForEach-Object { (Get-AvmCatalogCsvRowRemovalReason -Removal $_ -Reasons $Reasons).Length }) | Measure-Object -Maximum).Maximum
         foreach ($row in ($rows | Sort-Object { [string]$_.moduleName })) {
-            $lines.Add(('    {0}  {1}' -f ([string]$row.moduleName).PadRight($width), [string]$row.repoURL))
+            $reason = Get-AvmCatalogCsvRowRemovalReason -Removal $row -Reasons $Reasons
+            $lines.Add(('    {0}  {1}  {2}' -f ([string]$row.moduleName).PadRight($width), $reason.PadRight($reasonWidth), [string]$row.repoURL))
         }
     }
     return ($lines -join "`n")
@@ -104,6 +142,9 @@ function Write-AvmCatalogCsvRowRemovalReport {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
         [Parameter(Mandatory)][string] $Path,
+        [System.Collections.IDictionary] $Reasons,
+        [AllowEmptyCollection()][object[]] $Renames = @(),
+        [AllowEmptyCollection()][string[]] $HeldBackOutput = @(),
         [switch] $Forced
     )
 
@@ -126,7 +167,16 @@ function Write-AvmCatalogCsvRowRemovalReport {
         removalCount = $Removals.Count
         removalsForced = [bool]$Forced
         removalsBySourceFile = $byFile
-        removals = @($Removals)
+        heldBackSourceFiles = @($HeldBackOutput)
+        renames = @($Renames)
+        removals = @(foreach ($removal in $Removals) {
+                [ordered]@{
+                    sourceFile = [string]$removal.sourceFile
+                    moduleName = [string]$removal.moduleName
+                    repoURL = [string]$removal.repoURL
+                    reason = Get-AvmCatalogCsvRowRemovalReason -Removal $removal -Reasons $Reasons
+                }
+            })
     }
     $encoding = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllText((Join-Path $destination 'csv-row-removals.json'),
@@ -138,12 +188,52 @@ function Write-AvmCatalogCsvRowRemovalReport {
                 SourceFile = [string]$removal.sourceFile
                 ModuleName = [string]$removal.moduleName
                 RepoURL = [string]$removal.repoURL
+                Reason = Get-AvmCatalogCsvRowRemovalReason -Removal $removal -Reasons $Reasons
+                Published = if ([string]$removal.sourceFile -in $HeldBackOutput -or -not $Forced) { 'no' } else { 'yes' }
             })
     }
     [System.IO.File]::WriteAllText((Join-Path $destination 'csv-row-removals.csv'),
-        (ConvertTo-AvmCatalogCsv -Headers @('SourceFile', 'ModuleName', 'RepoURL') -Rows $rows.ToArray()), $encoding)
+        (ConvertTo-AvmCatalogCsv -Headers @('SourceFile', 'ModuleName', 'RepoURL', 'Reason', 'Published') -Rows $rows.ToArray()), $encoding)
 
     return $destination
+}
+
+function Resolve-AvmCatalogCsvRowRetention {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
+        [AllowEmptyCollection()][object[]] $Renames = @(),
+        [System.Collections.IDictionary] $Reasons,
+        [switch] $Force,
+        [string] $DiagnosticsPath
+    )
+
+    $heldBack = @($Removals | ForEach-Object { [string]$_.sourceFile } | Sort-Object -Unique)
+    if ($Force) {
+        $heldBack = @()
+    }
+    if ($DiagnosticsPath) {
+        $written = Write-AvmCatalogCsvRowRemovalReport -Removals $Removals -Path $DiagnosticsPath -Reasons $Reasons `
+            -Renames $Renames -HeldBackOutput $heldBack -Forced:$Force -Confirm:$false
+        Write-AvmCatalogProgress ("CSV row-removal report written to {0} ({1} row(s))." -f $written, $Removals.Count)
+    }
+    if ($Renames.Count -gt 0) {
+        Write-AvmCatalogProgress ("{0} row(s) followed a repository move and were updated in place." -f $Renames.Count)
+        foreach ($rename in $Renames) {
+            Write-AvmCatalogProgress ("  {0}: {1} -> {2}" -f $rename.sourceFile, $rename.fromRepoURL, $rename.toRepoURL)
+        }
+    }
+    if ($Removals.Count -eq 0) {
+        return , @()
+    }
+    $table = Format-AvmCatalogCsvRowRemoval -Removals $Removals -Reasons $Reasons
+    Write-AvmCatalogProgress ("{0} row(s) have no matching module source:`n{1}`n" -f $Removals.Count, $table)
+    if ($Force) {
+        Write-Warning ("Force permits {0} source CSV row removal(s)." -f $Removals.Count)
+        return , @()
+    }
+    Write-AvmCatalogProgress ("Holding back {0} output(s) so no row is lost: {1}" -f $heldBack.Count, ($heldBack -join ', '))
+    return , $heldBack
 }
 
 function Assert-AvmCatalogCsvRowRetention {
@@ -151,22 +241,24 @@ function Assert-AvmCatalogCsvRowRetention {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
         [switch] $Force,
-        [string] $DiagnosticsPath
+        [string] $DiagnosticsPath,
+        [AllowEmptyCollection()][string[]] $HeldBackOutput = @()
     )
 
     if ($DiagnosticsPath) {
-        $written = Write-AvmCatalogCsvRowRemovalReport -Removals $Removals -Path $DiagnosticsPath -Forced:$Force -Confirm:$false
+        $written = Write-AvmCatalogCsvRowRemovalReport -Removals $Removals -Path $DiagnosticsPath -HeldBackOutput $HeldBackOutput -Forced:$Force -Confirm:$false
         Write-AvmCatalogProgress ("CSV row-removal report written to {0} ({1} row(s))." -f $written, $Removals.Count)
     }
-    if ($Removals.Count -eq 0) {
+    $blocked = @($Removals | Where-Object { [string]$_.sourceFile -cnotin $HeldBackOutput })
+    if ($blocked.Count -eq 0) {
         return
     }
-    $table = Format-AvmCatalogCsvRowRemoval -Removals $Removals
-    $details = @($Removals | ForEach-Object { "$($_.sourceFile): $($_.moduleName) [$($_.repoURL)]" }) -join "`n"
-    Write-AvmCatalogProgress ("{0} row(s) would be removed from source CSVs:`n{1}`n" -f $Removals.Count, $table)
+    $table = Format-AvmCatalogCsvRowRemoval -Removals $blocked
+    $details = @($blocked | ForEach-Object { "$($_.sourceFile): $($_.moduleName) [$($_.repoURL)]" }) -join "`n"
+    Write-AvmCatalogProgress ("{0} row(s) would be removed from source CSVs:`n{1}`n" -f $blocked.Count, $table)
     if (-not $Force) {
         throw [System.IO.InvalidDataException]::new(
-            "$($Removals.Count) row(s) would be removed from source CSVs:`n$details`nCSV row removals are blocked. Use -Force (workflow force=true) only to permit these removals.")
+            "$($blocked.Count) row(s) would be removed from source CSVs:`n$details`nCSV row removals are blocked. Use -Force (workflow force=true) only to permit these removals.")
     }
     Write-Warning "Force permits these source CSV row removals:`n$details"
 }
