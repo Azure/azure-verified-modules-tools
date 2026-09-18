@@ -423,7 +423,10 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
 - Module-owned `metadata.json` is the metadata source of truth. This repository
   owns schemas and catalog sync; CSV indexes remain compatible generated outputs.
   Catalog rows require valid metadata, without legacy-record fallback or ecosystem
-  mode options. Source CSV row removals fail by default; an explicit force option
+  mode options. Explicit child helpers retain their family kind and ownership
+  in catalog JSON under `helper`, with null ARM fields, but are omitted from
+  every generated CSV. Source CSV row removals, including helper rows, fail by
+  default; an explicit force option
   permits intentional removals without weakening validation or publication controls.
   Permanent authoring commands never read CSV inputs. Temporary backfill lives
   outside the module; ordinary checks validate local metadata and warn on

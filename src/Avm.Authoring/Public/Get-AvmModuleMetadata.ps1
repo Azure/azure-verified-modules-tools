@@ -14,6 +14,7 @@ function Get-AvmModuleMetadata {
         resource, pattern, or utility.
     .PARAMETER ChildModule
         Require the reduced child shape, without owners.
+        This scope also permits canonicalType helper with optional telemetry.
     .PARAMETER SkipModuleVersionCheck
         Skip the installed-module version check for offline reading.
     .EXAMPLE

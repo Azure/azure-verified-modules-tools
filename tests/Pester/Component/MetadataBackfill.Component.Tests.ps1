@@ -340,6 +340,166 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
     }
 }
 
+Describe 'Component: helper metadata backfill' -Tag Component {
+    It 'creates explicitly selected <Ecosystem> <ModuleType> helpers with telemetry=<Telemetry>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                foreach ($telemetry in @($false, $true)) {
+                    @{ Ecosystem = $ecosystem; ModuleType = $kind; Telemetry = $telemetry }
+                }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType, $Telemetry)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+        $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
+        $familyPath = if ($Ecosystem -eq 'bicep') { "avm/$kind/example/module" } else { '.' }
+        $childPath = if ($Ecosystem -eq 'bicep') { "$familyPath/helper" } else { 'modules/helper' }
+        $moduleId = if ($Ecosystem -eq 'bicep') { $familyPath } else { "avm-$kind-example-module" }
+        $repository = if ($Ecosystem -eq 'bicep') { 'Azure/bicep-registry-modules' } else { "Azure/terraform-azure-$moduleId" }
+        $family = if ($familyPath -eq '.') { $root } else { Join-Path $root $familyPath }
+        $child = Join-Path $root $childPath
+        $null = New-Item -ItemType Directory -Path $family, $child -Force
+        $file = if ($Ecosystem -eq 'bicep') { 'main.bicep' } else { 'main.tf' }
+        $source = if ($Ecosystem -eq 'bicep') {
+            "metadata name = 'Example module'`nmetadata description = 'Provides an example module.'`n"
+        }
+        else {
+            "locals { unrelated = true }`n"
+        }
+        foreach ($directory in @($family, $child)) {
+            [System.IO.File]::WriteAllText((Join-Path $directory $file), $source)
+        }
+        $rows = @(
+            @{
+                ModuleName = $moduleId
+                RepoURL = "https://github.com/$repository"
+                ModuleDisplayName = 'Example module'
+                Description = 'Provides an example module.'
+                CanonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Resources/resourceGroups' } else { 'example/module' }
+                TelemetryIdPrefix = "$marker.$kind.example-module"
+                PrimaryModuleOwnerGHHandle = 'root-owner'
+            },
+            @{
+                ModuleName = $childPath
+                ModulePath = $childPath
+                RepoURL = "https://github.com/$repository"
+                ModuleDisplayName = 'Example module'
+                Description = 'Provides an example module.'
+                CanonicalType = 'helper'
+                PrimaryModuleOwnerGHHandle = 'ignored-child-owner'
+            }
+        )
+        if ($Telemetry) { $rows[1].TelemetryIdPrefix = "$marker.$kind.example-helper" }
+        $parameters = @{ RepositoryRoot = $root; Repository = $repository; Ecosystem = $Ecosystem; LegacyRecord = $rows }
+        $preview = & $script:initialize @parameters -WhatIf
+        $preview.Status | Should -Be 'planned'
+        $preview.Modules | Should -HaveCount 2
+        @(Get-ChildItem -LiteralPath $root -Recurse -Filter 'metadata.json') | Should -HaveCount 0
+        $result = & $script:initialize @parameters
+        $result.Status | Should -Be 'pass'
+        $result.Modules | Should -HaveCount 2
+        foreach ($module in $result.Modules) { $module.PlannedFiles | Should -Be @('metadata.json') }
+        $metadata = Get-Content -LiteralPath (Join-Path $child 'metadata.json') -Raw | ConvertFrom-Json -AsHashtable
+        $metadata.canonicalType | Should -BeExactly 'helper'
+        $metadata.Contains('owners') | Should -BeFalse
+        $metadata.Contains('telemetryIdPrefix') | Should -Be $Telemetry
+        if ($Telemetry) { $metadata.telemetryIdPrefix | Should -BeExactly "$marker.$kind.example-helper" }
+        (Get-Content -LiteralPath (Join-Path $family 'metadata.json') -Raw | ConvertFrom-Json).owners | Should -Be @('root-owner')
+        $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Get-FileHash | ForEach-Object Hash)
+        $rows[0].PrimaryModuleOwnerGHHandle = 'changed-owner'
+        $rows[1].CanonicalType = 'not-a-resource'
+        (& $script:initialize @parameters).Changed | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
+        foreach ($directory in @($family, $child)) {
+            [System.IO.File]::ReadAllText((Join-Path $directory $file)) | Should -BeExactly $source
+            Test-Path -LiteralPath (Join-Path $directory 'main.metadata.tf') | Should -BeFalse
+        }
+    }
+
+    It 'accepts an explicit helper override without guessing a resource type for <Ecosystem>' -TestCases @(
+        @{ Ecosystem = 'bicep' }
+        @{ Ecosystem = 'terraform' }
+    ) {
+        param($Ecosystem)
+        $fixture = New-AutomaticMetadataFixture -Child
+        $path = Join-Path $fixture.Root 'modules' 'blob-service'
+        if ($Ecosystem -eq 'bicep') {
+            [System.IO.File]::WriteAllText((Join-Path $path 'main.bicep'), "metadata name = 'Helper'`nmetadata description = 'Provides a helper.'`n")
+        }
+        $parameters = @{
+            Path = $path; ModuleId = 'avm-res-storage-account'; Ecosystem = $Ecosystem
+            ModuleType = 'resource'; ChildModule = $true; SkipModuleVersionCheck = $true
+        }
+        $values = @{ moduleDisplayName = 'Helper'; moduleDescription = 'Provides a helper.' }
+        (Get-AvmMetadataBackfillCandidate @parameters -Override $values).Status | Should -Be 'fail'
+        $values.canonicalType = 'helper'
+        $result = Get-AvmMetadataBackfillCandidate @parameters -Override $values
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.canonicalType | Should -BeExactly 'helper'
+        $result.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
+        $values.telemetryIdPrefix = 'malformed'
+        (Get-AvmMetadataBackfillCandidate @parameters -Override $values).Status | Should -Be 'fail'
+        Test-Path -LiteralPath (Join-Path $path 'metadata.json') | Should -BeFalse
+    }
+
+    It 'does not require telemetry inference from existing <Ecosystem> <ModuleType> helper source' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($kind in @('resource', 'pattern', 'utility')) {
+                @{ Ecosystem = $ecosystem; ModuleType = $kind }
+            }
+        }
+    ) {
+        param($Ecosystem, $ModuleType)
+        $fixture = New-AutomaticMetadataFixture -Child
+        $path = Join-Path $fixture.Root 'modules' 'blob-service'
+        $file = if ($Ecosystem -eq 'bicep') { 'main.bicep' } else { 'main.tf' }
+        $source = if ($Ecosystem -eq 'bicep') {
+            @'
+metadata name = 'Helper'
+metadata description = 'Provides a helper.'
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '${existingPrefix}.suffix'
+}
+'@
+        }
+        else {
+            @'
+locals {
+  telemetry_id_prefix = "46d3xtrf.${var.family}.${var.name}"
+}
+'@
+        }
+        [System.IO.File]::WriteAllText((Join-Path $path $file), $source)
+        $parameters = @{
+            Path = $path; Ecosystem = $Ecosystem; ModuleType = $ModuleType
+            ChildModule = $true; SkipModuleVersionCheck = $true
+        }
+        $values = @{ canonicalType = 'helper'; moduleDisplayName = 'Helper'; moduleDescription = 'Provides a helper.' }
+        $result = Get-AvmMetadataBackfillCandidate @parameters -ModuleId 'example' -Override $values
+        $result.Status | Should -Be 'pass'
+        $result.Metadata.canonicalType | Should -BeExactly 'helper'
+        $result.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
+        $values.canonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'example/module' }
+        $normal = Get-AvmMetadataBackfillCandidate @parameters -ModuleId 'example' -Override $values
+        $normal.Status | Should -Be 'fail'
+        $normal.Issues.Code | Should -Contain 'AVM_METADATA_TELEMETRY'
+        $initialized = Initialize-AvmModuleMetadata @parameters -InputObject $result.Metadata -UpdateSource:($Ecosystem -eq 'bicep')
+        $initialized.PlannedFiles | Should -Be @('metadata.json')
+        [System.IO.File]::ReadAllText((Join-Path $path $file)) | Should -BeExactly $source
+    }
+
+    It 'stops before every write when a selected helper supplies invalid telemetry' {
+        $fixture = New-AutomaticMetadataFixture -Child
+        $fixture.Records[1].CanonicalType = 'helper'
+        $fixture.Records[1].TelemetryIdPrefix = '46d3xtrf.ptn.wrong-kind'
+        $parameters = $fixture.Parameters
+        { & $script:initialize @parameters } | Should -Throw '*telemetryIdPrefix*'
+        @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -Filter 'metadata.json') | Should -HaveCount 0
+    }
+}
+
 Describe 'Component: single-segment metadata backfill' -Tag Component {
     BeforeAll {
         . (Join-Path $script:adapterRoot '..' 'module-catalog' 'scripts' 'ModuleCatalog.ps1')
@@ -451,7 +611,8 @@ Describe 'Component: single-segment metadata backfill' -Tag Component {
         $catalog.modules['helper'].terraform[0].familyModule | Should -BeExactly '.'
         $catalog.modules['helper'].terraform[0].modulePath | Should -BeExactly 'modules/helper'
         $generatedRows = @($bundle.Files[$csvOutput.bundlePath] | ConvertFrom-Csv)
-        @($generatedRows.CanonicalType | Sort-Object) | Should -Be @(@($Canonical, 'helper') | Sort-Object)
+        $generatedRows | Should -HaveCount 1
+        $generatedRows[0].CanonicalType | Should -BeExactly $Canonical
         $bundle.Report.csvRowRemovals | Should -HaveCount 0
         foreach ($path in @($moduleRoot, $childPath)) {
             [System.IO.File]::ReadAllText((Join-Path $path 'main.tf')) | Should -BeExactly $source

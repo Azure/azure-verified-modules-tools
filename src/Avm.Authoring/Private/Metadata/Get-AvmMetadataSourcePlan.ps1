@@ -21,7 +21,8 @@ function Get-AvmMetadataSourcePlan {
         throw [System.ArgumentException]::new('The metadata values must match the existing main.bicep name and description.')
     }
     if (-not $Metadata.Contains('telemetryIdPrefix')) {
-        if ([regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
+        if ($Metadata.canonicalType -cne 'helper' -and
+            [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
             throw [System.ArgumentException]::new('This Bicep module emits telemetry and requires telemetryIdPrefix.')
         }
         return

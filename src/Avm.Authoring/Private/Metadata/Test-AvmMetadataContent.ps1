@@ -46,8 +46,9 @@ function Test-AvmMetadataContent {
         return [pscustomobject]@{ Metadata = $metadata; Issues = $issues.ToArray() }
     }
 
+    $helper = $ChildModule -and $metadata.canonicalType -ceq 'helper'
     $resourceType = Test-AvmMetadataResourceType -CanonicalType $metadata.canonicalType
-    if (($ModuleType -eq 'resource') -ne $resourceType) {
+    if (-not $helper -and (($ModuleType -eq 'resource') -ne $resourceType)) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_KIND' `
                     -Message "canonicalType '$($metadata.canonicalType)' does not identify a $ModuleType module."))
     }
@@ -63,7 +64,7 @@ function Test-AvmMetadataContent {
                         -Message "telemetryIdPrefix must start with '$marker.$kind.' for this module."))
         }
     }
-    elseif (($null -eq $TelemetryRequired -and $ModuleType -ne 'utility') -or $TelemetryRequired -eq $true) {
+    elseif (-not $helper -and (($null -eq $TelemetryRequired -and $ModuleType -ne 'utility') -or $TelemetryRequired -eq $true)) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                     -Message 'This module requires telemetryIdPrefix.'))
     }

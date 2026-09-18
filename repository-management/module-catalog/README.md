@@ -58,7 +58,7 @@ Local collection/generation can use `-ConfigurationPath` for a reviewed manifest
 variant. Publication always reads the trusted tools-checkout manifest, never a
 configuration supplied inside the generated bundle.
 
-Only valid module metadata creates catalog entries and CSV rows. There are no
+Only valid module metadata creates catalog entries and eligible CSV rows. There are no
 ecosystem mode options or full legacy-record fallback. Present metadata must pass
 the packaged validator, including Bicep literals. Reduced children require family-root
 metadata and inherit owners. The JSON catalog also includes the
@@ -80,6 +80,14 @@ and `resourceType` is `cloudVmClusters`; Terraform's `provider` remains separate
 Pattern and utility canonical keys may be single names such as `naming` or
 slash-separated paths. Their ARM-only `providerNamespace` and `resourceType`
 fields remain null; module paths and parent identities are unchanged.
+
+Exact lowercase `canonicalType: "helper"` is reserved for child modules in both
+ecosystems and all three family kinds. JSON retains every helper under the
+`helper` key, distinguished by repository and module path, with inherited owners,
+the derived family `moduleType`, and null `providerNamespace`/`resourceType`.
+Helpers are not ARM resource types. All six CSV outputs omit helpers, in both
+preview and canonical modes. A helper previously present in a source CSV still
+appears in the removal report and requires the normal explicit override below.
 
 ### Source CSV row-removal override
 

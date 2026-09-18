@@ -125,6 +125,13 @@ Resource `canonicalType` values use full, case-sensitive `Microsoft.*` or
 Pattern/utility taxonomy names such as `naming` and paths such as `lz/sub-vending`
 remain distinct. A resource type cannot embed a second dotted namespace.
 
+Exact lowercase `canonicalType: "helper"` marks a child/submodule, never a root,
+ARM type, or new module kind. Bicep and Terraform helpers keep their family's
+resource/pattern/utility kind, required child fields, and inherited owners.
+Telemetry is optional; supplied prefixes retain normal ecosystem, kind, format,
+and length validation. Catalog JSON includes helpers under `helper`, with null
+`providerNamespace` and `resourceType`; all generated CSVs exclude them.
+
 `Get-AvmModuleMetadata` reads existing files only and fails when a file is
 missing. `Test-AvmModuleMetadata -InputObject` validates supplied values without
 reading `metadata.json`. `Initialize-AvmModuleMetadata` requires explicit values,
@@ -132,7 +139,8 @@ preserves existing files, and supports `-WhatIf`. None of these commands reads
 CSV indexes or infers backfill values.
 
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
-telemetry prefix. Terraform rejects `-UpdateSource` before writes and never
+telemetry prefix; a helper without a prefix leaves source unchanged.
+Terraform rejects `-UpdateSource` before writes and never
 generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
 Existing authored source files are preserved. Metadata-only initialization
 does not rewrite source. Pre-commit and PR checks warn for missing metadata

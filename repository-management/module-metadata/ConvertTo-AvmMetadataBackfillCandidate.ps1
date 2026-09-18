@@ -131,7 +131,7 @@ function ConvertTo-AvmMetadataBackfillCandidate {
                 $ModuleType -ne 'utility' -and $ModuleId -cmatch "^avm-$kind-(?<logical>[a-z0-9-]+)$") {
                 $metadata.telemetryIdPrefix = "46d3xtrf.$kind.$($Matches.logical)"
             }
-            elseif ($source.TelemetryPresent) {
+            elseif ($source.TelemetryPresent -and -not ($ChildModule -and $metadata['canonicalType'] -ceq 'helper')) {
                 $issues.Add((New-AvmMetadataBackfillIssue -Code 'AVM_METADATA_TELEMETRY' -Message 'Existing telemetry cannot be read losslessly; supply a telemetryIdPrefix and leave source wiring disabled until reviewed.'))
             }
         }
