@@ -162,7 +162,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                         )
                     })
                 if ($ArgumentList[-1] -like '*pre.ps1') {
-                    Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_SUBSCRIPTION_ID=example-sub' -Encoding utf8
+                    # No real credential is configured in this test, so the
+                    # synthetic token must take over the ARM_* settings while
+                    # the example's own variables still pass through.
+                    Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value @(
+                        'ARM_SUBSCRIPTION_ID=example-sub'
+                        'TF_VAR_example=from-dot-env'
+                    ) -Encoding utf8
                 }
                 if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'show') {
                     return [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.2"}'; StdErr = '' }
@@ -207,7 +213,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
             $policyCall.Arguments | Should -Contain 'json'
             $policyCall.Arguments[-1] | Should -Be 'tfplan.json'
             $policyCall.PlanJsonExists | Should -BeTrue
-            $policyCall.EnvVars['ARM_SUBSCRIPTION_ID'] | Should -Be 'example-sub'
+            # The example's own .env still reaches the subprocess...
+            $policyCall.EnvVars['TF_VAR_example'] | Should -Be 'from-dot-env'
+            # ...but with no real credential configured the plan falls back to
+            # the synthetic loopback token rather than the example's value.
+            $policyCall.EnvVars['ARM_SUBSCRIPTION_ID'] | Should -Not -Be 'example-sub'
+            $policyCall.EnvVars['ARM_USE_MSI'] | Should -Be 'true'
+            $policyCall.EnvVars['ARM_MSI_ENDPOINT'] | Should -Match '^http://127\.0\.0\.1:\d+/'
             @($policyCall.Arguments | Where-Object { $_ -like '*default_exceptions*' }).Count | Should -Be 1
             @($policyCall.Arguments | Where-Object { $_ -like '*examples*default*exceptions' }).Count | Should -Be 1
         }
@@ -366,6 +378,107 @@ exception contains rules if {
         $result.Issues[0].Severity | Should -Be 'error'
         $result.Issues[0].File | Should -Be 'examples/default/tfplan.json'
         $result.Issues[0].Message | Should -Be 'zone redundancy required'
+    }
+
+    It 'skips and reports an example whose data sources need a real credential' {
+        # Terraform reads data sources during plan, so this example genuinely
+        # cannot be verified on the synthetic credential. The author must see
+        # that, rather than the run quietly reporting a pass.
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'data.tf') -Encoding utf8 -Value @'
+data "azurerm_resource_group" "existing" {
+  name = "rg-existing"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'post.ps1') -Value '$null = 1' -Encoding utf8
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context
+            Cache = $script:cacheDir
+            Aprl = $script:aprlDir
+            Avmsec = $script:avmsecDir
+        } {
+            param($C, $Cache, $Aprl, $Avmsec)
+            $calls = [System.Collections.Generic.List[object]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmPolicyBundle {
+                [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
+            }
+            Mock Get-AvmFolder { $Cache }
+            Mock Write-AvmLog
+            Mock Invoke-AvmProcess {
+                $calls.Add([pscustomobject]@{ FilePath = $FilePath; Arguments = @($ArgumentList) })
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformCheckPolicy -Context $C
+            [pscustomobject]@{ Result = $result; Calls = $calls.ToArray() }
+        }
+
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Evaluated | Should -Be 0
+        @($probe.Result.Issues).Count | Should -Be 1
+        $probe.Result.Issues[0].Code | Should -Be 'avm.tf.policy-needs-credential'
+        $probe.Result.Issues[0].Severity | Should -Be 'error'
+        $probe.Result.Issues[0].Message | Should -Match 'data\.azurerm_resource_group\.existing'
+        $probe.Result.Issues[0].Message | Should -Match 'credentialled pipeline'
+
+        # Neither terraform nor conftest should have run for this example...
+        @($probe.Calls | Where-Object FilePath -eq '/fake/terraform').Count | Should -Be 0
+        @($probe.Calls | Where-Object FilePath -eq '/fake/conftest').Count | Should -Be 0
+        # ...but the post hook must still run, because the pre hook already did.
+        @($probe.Calls | Where-Object { $_.Arguments[-1] -like '*post.ps1' }).Count | Should -Be 1
+    }
+
+    It 'still evaluates the example when a real credential is configured' {
+        Set-Content -LiteralPath (Join-Path $script:exampleDir 'data.tf') -Encoding utf8 -Value @'
+data "azurerm_resource_group" "existing" {
+  name = "rg-existing"
+}
+'@
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context
+            Cache = $script:cacheDir
+            Aprl = $script:aprlDir
+            Avmsec = $script:avmsecDir
+        } {
+            param($C, $Cache, $Aprl, $Avmsec)
+            $calls = [System.Collections.Generic.List[object]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmPolicyBundle {
+                [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
+            }
+            Mock Get-AvmFolder { $Cache }
+            # A trusted run: the data source can be read, so the example must
+            # be evaluated exactly as it is today.
+            Mock Test-AvmAzureCredentialAvailable { $true }
+            Mock Invoke-AvmProcess {
+                $calls.Add([pscustomobject]@{ FilePath = $FilePath; Arguments = @($ArgumentList) })
+                if ($FilePath -eq '/fake/terraform' -and $ArgumentList[0] -eq 'show') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.2"}'; StdErr = '' }
+                }
+                if ($FilePath -eq '/fake/conftest') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut   = '[{"filename":"tfplan.json","namespace":"policy","successes":7}]'
+                        StdErr   = ''
+                    }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+
+            $result = Invoke-AvmTerraformCheckPolicy -Context $C
+            [pscustomobject]@{ Result = $result; Calls = $calls.ToArray() }
+        }
+
+        $probe.Result.Status | Should -Be 'pass'
+        $probe.Result.Evaluated | Should -Be 14
+        @($probe.Calls | Where-Object { $_.Arguments[0] -eq 'plan' }).Count | Should -Be 1
+        @($probe.Calls | Where-Object FilePath -eq '/fake/conftest').Count | Should -Be 2
     }
 
     It 'preserves a Terraform plan failure when the post hook also fails' {
