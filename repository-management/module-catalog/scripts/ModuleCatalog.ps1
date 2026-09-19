@@ -89,7 +89,7 @@ function New-AvmCatalogIdentity {
         $repositoryId = $match.Groups['id'].Value
         $name = $repositoryId
         $repoUrl = "https://github.com/$Repository"
-        $reference = "https://registry.terraform.io/modules/Azure/$repositoryId/$provider/latest"
+        $reference = "https://registry.terraform.io/modules/Azure/$repositoryId"
         if ($ModulePath -ne '.') {
             $name += "//$ModulePath"
             $repoUrl += "/tree/HEAD/$ModulePath"
