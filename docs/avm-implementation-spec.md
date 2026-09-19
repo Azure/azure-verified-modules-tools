@@ -444,7 +444,10 @@ the Terraform repository's archived flag (covering all its modules). There is
 no authored metadata status field.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
-scope. `-CheckSource` also verifies Bicep literal name/description declarations.
+scope. `-CheckSource` also verifies the required Bicep literal name and
+description declarations, description consistency, and source telemetry
+requirements. The Bicep `metadata name` and JSON `moduleDisplayName` are
+independent and are not required to match.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
