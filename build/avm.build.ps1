@@ -12,13 +12,15 @@
       test        - Run Pester unit tests (excludes Component and Integration).
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
+                    By default this tier shards across up to 6 pwsh child
+                    processes. Set AVM_COMPONENT_SHARD_COUNT to override.
       integration - Run Pester tests under tests/Pester/Integration/ (real FS + REAL NETWORK + real binaries). Not part of ci/pre-commit; PR/on-demand only.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
                     Version stamping and release notes are applied by the ADO
                     release pipeline, not here; the in-repo manifest is never
                     modified.
       clean       - Remove ./out.
-      pre-commit  - Composite: layout + lint + test. The recommended local gate.
+      pre-commit  - Composite: layout + lint + test + component. The recommended local gate.
       ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
 
     The test, coverage, component, and integration tasks write an NUnit result
@@ -234,6 +236,8 @@ function script:Get-AvmTestResultPath {
     }
     Join-Path $dir ("{0}.xml" -f $Tier)
 }
+
+. (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
 
 # --- tasks ------------------------------------------------------------------
 
@@ -541,6 +545,12 @@ task component {
         return
     }
 
+    $componentFiles = @(Get-ChildItem -LiteralPath $componentPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
+    if ($componentFiles.Count -eq 0) {
+        Write-Build Yellow "  no component test files found at $componentPath"
+        return
+    }
+
     $config = New-PesterConfiguration
     $config.Run.Path                = $componentPath
     $config.Run.PassThru            = $true
@@ -551,7 +561,25 @@ task component {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
     $config.Filter.Tag              = @('Component')
 
-    $result = script:Invoke-AvmPester -Configuration $config
+    $shardCount = script:Get-AvmComponentShardCount
+    if ($script:testNameFilter.Count -gt 0 -or $shardCount -eq 1) {
+        if ($script:testNameFilter.Count -gt 0) {
+            Write-Build Gray '  component : using single-process runner because -TestName is active'
+        }
+        else {
+            Write-Build Gray '  component : using single-process runner because AVM_COMPONENT_SHARD_COUNT is 1'
+        }
+        $result = script:Invoke-AvmPester -Configuration $config
+    }
+    else {
+        $result = @(
+            script:Invoke-AvmPesterShardedTier `
+                -Tier 'component' `
+                -File $componentFiles `
+                -ShardCount $shardCount
+        )[-1]
+    }
+
     if ($result.TotalCount -eq 0) {
         throw "No Component-tagged tests ran from $componentPath. Tag your It / Describe with -Tag 'Component'."
     }
