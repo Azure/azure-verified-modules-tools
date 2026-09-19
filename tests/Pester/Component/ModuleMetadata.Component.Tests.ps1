@@ -729,11 +729,14 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
-    It 'compares Bicep source literals without compiling or writing files' {
+    It 'allows independent Bicep display names while validating the source description' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
         $before = (Get-FileHash -LiteralPath $fixture.SourcePath).Hash
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+        $fixture.Data.moduleDisplayName = 'Catalog display name'
+        Save-MetadataFixture -Fixture $fixture
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
         $fixture.Data.moduleDescription = 'A different description.'
         Save-MetadataFixture -Fixture $fixture
@@ -951,6 +954,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
 
     It 'wires only the scoped Bicep telemetry value and is idempotent' {
         $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.moduleDisplayName = 'Catalog display name'
         $parameters = $fixture.Parameters
         $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $result.Changed | Should -BeTrue

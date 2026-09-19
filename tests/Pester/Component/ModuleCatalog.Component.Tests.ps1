@@ -616,6 +616,20 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].metadataSource | Should -BeExactly 'metadata'
     }
 
+    It 'accepts a display name that differs from the Bicep source literal' {
+        $fixture = New-CatalogFixture
+        $module = $fixture.Modules[0]
+        Save-CatalogMetadata -Module $module
+        $path = Join-Path $module.Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $path
+        $metadata.moduleDisplayName = 'Catalog display name'
+        Save-CatalogJson -Path $path -Data $metadata
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row.ModuleDisplayName | Should -BeExactly 'Catalog display name'
+        $row.Description | Should -BeExactly 'Deploys reviewed module.'
+    }
+
     It 'does not fall back or write outputs for invalid present metadata: <Kind>' -TestCases @(
         @{ Kind = 'json' }, @{ Kind = 'schema' }, @{ Kind = 'source' }, @{ Kind = 'bom' }
     ) {
@@ -633,7 +647,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             }
             'source' {
                 $metadata = Read-AvmCatalogJson -Path $path
-                $metadata.moduleDisplayName = 'Mismatched literal'
+                $metadata.moduleDescription = 'Mismatched literal description.'
                 Save-CatalogJson -Path $path -Data $metadata
             }
             'bom' {

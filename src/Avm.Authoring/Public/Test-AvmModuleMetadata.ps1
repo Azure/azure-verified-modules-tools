@@ -19,7 +19,8 @@ function Test-AvmModuleMetadata {
     .PARAMETER InputObject
         Metadata values to validate instead of reading metadata.json.
     .PARAMETER CheckSource
-        Also compare Bicep metadata name and description literals to the JSON.
+        Also validate Bicep source metadata declarations and compare the
+        description literal to the JSON.
     .PARAMETER SkipModuleVersionCheck
         Skip the standard installed-module version check for offline validation.
     .EXAMPLE
@@ -116,14 +117,9 @@ function Test-AvmModuleMetadata {
                     $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                                 -Message 'This Bicep module emits telemetry and requires telemetryIdPrefix.'))
                 }
-                foreach ($field in @(
-                        @{ Source = 'name'; Metadata = 'moduleDisplayName' },
-                        @{ Source = 'description'; Metadata = 'moduleDescription' }
-                    )) {
-                    if ($literals[$field.Source] -cne $metadata[$field.Metadata]) {
-                        $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                                    -Message "metadata $($field.Source) must match metadata.json $($field.Metadata)."))
-                    }
+                if ($literals.description -cne $metadata.moduleDescription) {
+                    $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
+                                -Message 'metadata description must match metadata.json moduleDescription.'))
                 }
             }
             catch [System.ArgumentException] {

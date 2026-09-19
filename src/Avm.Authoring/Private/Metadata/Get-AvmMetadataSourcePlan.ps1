@@ -16,9 +16,8 @@ function Get-AvmMetadataSourcePlan {
     $source = Get-Content -LiteralPath $sourcePath -Raw
     $code = Get-AvmBicepCommentFreeSource -Source $source
     $literals = Get-AvmBicepMetadataLiteral -Source $source
-    if ($literals.name -cne $Metadata.moduleDisplayName -or
-        $literals.description -cne $Metadata.moduleDescription) {
-        throw [System.ArgumentException]::new('The metadata values must match the existing main.bicep name and description.')
+    if ($literals.description -cne $Metadata.moduleDescription) {
+        throw [System.ArgumentException]::new('The metadata description must match the existing main.bicep description.')
     }
     if (-not $Metadata.Contains('telemetryIdPrefix')) {
         if ($Metadata.canonicalType -cne 'helper' -and
