@@ -15,6 +15,96 @@ function Import-AvmRepositoryCreationModule {
     return $module
 }
 
+function Get-AvmRepositoryCatalogTelemetryPrefix {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [string] $CatalogUri = 'https://raw.githubusercontent.com/Azure/Azure-Verified-Modules/main/docs/static/module-indexes/v1/modules.json'
+    )
+
+    Set-StrictMode -Version 3.0
+    $catalog = $null
+    try {
+        $json = if ([uri]::IsWellFormedUriString($CatalogUri, [System.UriKind]::Absolute) -and
+            $CatalogUri -cmatch '^https?://') {
+            $response = Invoke-WebRequest -Uri $CatalogUri -UseBasicParsing -ErrorAction Stop
+            if ($response.Content -is [byte[]]) {
+                [System.Text.Encoding]::UTF8.GetString($response.Content)
+            }
+            else { [string]$response.Content }
+        }
+        else {
+            Get-Content -LiteralPath $CatalogUri -Raw -ErrorAction Stop
+        }
+        $catalog = $json | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+        Write-Warning ("Could not resolve the module catalog at {0}; a generated telemetryIdPrefix cannot be checked for uniqueness. {1}" -f $CatalogUri, $_.Exception.Message)
+        return @()
+    }
+    return Get-AvmRepositoryTelemetryPrefixFromCatalog -Catalog $catalog
+}
+
+function Get-AvmRepositoryTelemetryPrefixFromCatalog {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object] $Catalog
+    )
+
+    Set-StrictMode -Version 3.0
+    $prefixes = [System.Collections.Generic.List[string]]::new()
+    $pending = [System.Collections.Generic.Queue[object]]::new()
+    $pending.Enqueue($Catalog)
+    while ($pending.Count -gt 0) {
+        $node = $pending.Dequeue()
+        if ($node -is [System.Collections.IDictionary]) {
+            if ($node.Contains('telemetryIdPrefix') -and -not [string]::IsNullOrWhiteSpace([string]$node['telemetryIdPrefix'])) {
+                $prefixes.Add([string]$node['telemetryIdPrefix'])
+            }
+            foreach ($key in @($node.Keys)) {
+                $pending.Enqueue($node[$key])
+            }
+        }
+        elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
+            foreach ($item in $node) {
+                $pending.Enqueue($item)
+            }
+        }
+    }
+    return @($prefixes | Select-Object -Unique)
+}
+
+function New-AvmRepositoryTelemetryIdPrefix {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('res', 'ptn', 'utl')]
+        [string] $Kind,
+
+        [string[]] $KnownPrefix = @()
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $taken = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@($KnownPrefix), [System.StringComparer]::Ordinal)
+    $bytes = [byte[]]::new(4)
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+        $suffix = (($bytes | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 7)
+        $candidate = '46d3xtrf.{0}.{1}' -f $Kind, $suffix
+        if (-not $taken.Contains($candidate)) {
+            return $candidate
+        }
+    }
+    throw [System.InvalidOperationException]::new(
+        'Could not generate a telemetryIdPrefix that is unique against the catalog; supply -telemetryIdPrefix explicitly.')
+}
+
 function New-AvmRepositoryMetadataInput {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]

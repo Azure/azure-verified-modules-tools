@@ -39,13 +39,31 @@ $request = @{
 The values above are illustrative: supply the requested module's actual
 description, canonical type, telemetry identifier, and owners.
 
+## Telemetry identifiers
+
+Omit `telemetryIdPrefix` and creation mints one for a resource or pattern root as
+`46d3xtrf.<res|ptn>.<7 lowercase hex characters>`, matching the convention
+already used across the Terraform fleet. Utilities may be telemetry-free, so an
+omitted identifier stays omitted for `avm-utl-` modules. The suffix is random
+rather than derived from the module name, so it is checked against the published
+module catalog at
+`https://raw.githubusercontent.com/Azure/Azure-Verified-Modules/main/docs/static/module-indexes/v1/modules.json`
+before it is used. `-CatalogUri` on `Get-AvmRepositoryCatalogTelemetryPrefix`
+also accepts a local path, which is useful when reviewing a catalog artifact
+downloaded from a workflow run.
+
+If that catalog cannot be resolved, creation warns and continues with an
+unchecked identifier rather than failing. Supply `-telemetryIdPrefix` explicitly
+to keep an identifier a module already emits. Because the value is random, a
+`-PlanOnly` run and the subsequent apply show different generated identifiers.
+
 | Metadata field | Creation input |
 | --- | --- |
 | `$schema` | `$id` of the schema packaged in the checked-out module |
 | `moduleDisplayName` | `moduleDisplayName` |
 | `moduleDescription` | Required `moduleDescription`; never copied from a display name |
 | `canonicalType` | Required `canonicalType`; resource modules may instead supply both `resourceProviderNamespace` and `resourceType` |
-| `telemetryIdPrefix` | Explicit `telemetryIdPrefix`, required for resource and pattern roots |
+| `telemetryIdPrefix` | Explicit `telemetryIdPrefix`, or a generated unique identifier for resource and pattern roots when omitted |
 | `owners` | Flat array of primary/secondary handles, additional `ownerGitHubHandles`, and optional qualified `ownerTeam` |
 | `alternativeNames` | Comma-separated `moduleAlternativeNames`, trimmed with empty and duplicate entries removed |
 

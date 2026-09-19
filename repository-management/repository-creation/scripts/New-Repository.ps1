@@ -69,7 +69,12 @@ if (!$skipRepoCreation) {
     ModuleDisplayName = $moduleDisplayName
     ModuleDescription = $moduleDescription
     CanonicalType = $canonicalType
-    TelemetryIdPrefix = $telemetryIdPrefix
+    TelemetryIdPrefix = if (-not [string]::IsNullOrWhiteSpace($telemetryIdPrefix)) { $telemetryIdPrefix }
+    elseif ($moduleMatch.Groups[1].Value -ceq 'utl') { $telemetryIdPrefix }
+    else {
+        New-AvmRepositoryTelemetryIdPrefix -Kind $moduleMatch.Groups[1].Value `
+            -KnownPrefix (Get-AvmRepositoryCatalogTelemetryPrefix)
+    }
     OwnerGitHubHandles = @(
       if (-not [string]::IsNullOrEmpty($ownerPrimaryGitHubHandle)) { $ownerPrimaryGitHubHandle }
       if (-not [string]::IsNullOrEmpty($ownerSecondaryGitHubHandle)) { $ownerSecondaryGitHubHandle }
