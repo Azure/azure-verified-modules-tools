@@ -162,15 +162,69 @@ function Invoke-AvmRepositoryCreationProcess {
         [Parameter(Mandatory)]
         [string[]] $ArgumentList,
 
+        [switch] $UseGitHubCredential,
+
         [string] $WorkingDirectory = $PWD.Path
     )
 
     $executable = (Get-Command -Name $Tool -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $arguments = if ($UseGitHubCredential -and $Tool -eq 'git') {
+        @(Get-AvmRepositoryGitCredentialArgument) + $ArgumentList
+    }
+    else { $ArgumentList }
     & $AuthoringModule {
         param($Executable, $Arguments, $Directory)
         Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
             -EnvVars @{ GH_HOST = 'github.com'; GH_DEBUG = $null; GH_PROMPT_DISABLED = '1' }
-    } $executable $ArgumentList $WorkingDirectory
+    } $executable $arguments $WorkingDirectory
+}
+
+function Get-AvmRepositoryGitCredentialArgument {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+
+    # Git Credential Manager can surface a token without the workflow scope, which
+    # makes GitHub reject pushes that add .github/workflows files.
+    return @(
+        '-c', 'credential.helper=',
+        '-c', 'credential.https://github.com.helper=!gh auth git-credential'
+    )
+}
+
+function Join-AvmRepositorySeededHistory {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo] $AuthoringModule,
+
+        [Parameter(Mandatory)]
+        [string] $WorkingDirectory,
+
+        [Parameter(Mandatory)]
+        [string] $CommitMessage
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $process = @{ AuthoringModule = $AuthoringModule; WorkingDirectory = $WorkingDirectory }
+    $remote = Invoke-AvmRepositoryCreationProcess @process -Tool git -UseGitHubCredential `
+        -ArgumentList @('ls-remote', '--heads', 'origin', 'main')
+    if ([string]::IsNullOrWhiteSpace($remote.StdOut)) {
+        return [pscustomobject]@{ Status = 'skipped'; Reason = 'remote-empty' }
+    }
+    if (-not $PSCmdlet.ShouldProcess($WorkingDirectory, 'Reparent the initial commit onto the seeded remote branch')) {
+        return [pscustomobject]@{ Status = 'plan'; Reason = 'remote-seeded' }
+    }
+
+    # The open source portal seeds a placeholder README, so the initial commit has to
+    # build on that history instead of replacing it with a force push.
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -UseGitHubCredential `
+        -ArgumentList @('fetch', '--quiet', 'origin', 'main')
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('reset', '--soft', 'FETCH_HEAD')
+    $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('commit', '--quiet', '-m', $CommitMessage)
+    return [pscustomobject]@{ Status = 'reparented'; Reason = 'remote-seeded' }
 }
 
 function Get-AvmRepositoryDefaultRulesetProperty {
@@ -276,6 +330,8 @@ function New-AvmRepositoryContent {
 
         [string] $WorkPath = (Join-Path $PWD.Path 'out' 'repository-creation'),
 
+        [scriptblock] $OnRepositoryCreated,
+
         [switch] $PlanOnly
     )
 
@@ -334,6 +390,11 @@ function New-AvmRepositoryContent {
         $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('remote', 'add', 'origin', "$repositoryUrl.git")
         $null = Invoke-AvmRepositoryCreationProcess @process -Tool gh -ArgumentList @('repo', 'create', $repository, '--public')
         $repositoryCreated = $true
+        if ($null -ne $OnRepositoryCreated) {
+            # Azure locks new repositories down until open source portal setup completes,
+            # so the push and custom-property calls below fail without this pause.
+            $null = & $OnRepositoryCreated $repository $repositoryUrl
+        }
         $propertyParameters = @{
             AuthoringModule = $AuthoringModule
             Repository = $repository
@@ -356,7 +417,10 @@ function New-AvmRepositoryContent {
             if ($restoreProperty) {
                 Set-AvmRepositoryDefaultRulesetProperty @propertyParameters -Value 'false' -Confirm:$false
             }
-            $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -ArgumentList @('push', '--set-upstream', 'origin', 'HEAD:refs/heads/main')
+            $null = Join-AvmRepositorySeededHistory -AuthoringModule $AuthoringModule -WorkingDirectory $modulePath `
+                -CommitMessage 'chore: initialize module repository' -Confirm:$false
+            $null = Invoke-AvmRepositoryCreationProcess @process -Tool git -UseGitHubCredential `
+                -ArgumentList @('push', '--set-upstream', 'origin', 'HEAD:refs/heads/main')
             $initialPushCompleted = $true
         }
         catch {

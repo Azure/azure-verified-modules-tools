@@ -105,55 +105,81 @@ if ($planOnly -or -not $PSCmdlet.ShouldProcess($repositoryUrl, 'Run requested re
 & (Join-Path $PSScriptRoot 'Test-Tooling.ps1') -AuthoringModule $authoringModule
 
 if (!$skipRepoCreation) {
+  $portalSetup = {
+    param($repository, $repositoryUrl)
+
+    Write-Host ""
+    Write-Host "Created $repositoryUrl" -ForegroundColor Green
+    Write-Host "Azure locks new repositories down until open source portal setup completes." -ForegroundColor Yellow
+    Write-Host "Complete the portal setup and elevate with JIT before the initial push." -ForegroundColor Yellow
+    Write-Host ""
+
+    Write-Host "Open https://repos.opensource.microsoft.com/orgs/Azure/repos/$repositoryName" -ForegroundColor Yellow
+    if(!$env:CODESPACES) {
+      Write-Host "Hit Enter to open the open source portal in your browser now" -ForegroundColor Yellow
+      Read-Host
+      Start-Process "https://repos.opensource.microsoft.com/orgs/Azure/repos/$repositoryName"
+    }
+
+    $response = ""
+    while ($response -ne "yes" -and $response -ne "no") {
+      Write-Host "Do you see the 'Complete Setup' link? Type 'yes' or 'no' and hit Enter:" -ForegroundColor Yellow
+      $response = Read-Host
+    }
+
+    if($response -eq "yes") {
+      Write-Host "Click 'Complete Setup' to finish the repository configuration" -ForegroundColor Yellow
+      Write-Host "Uncheck 'Repository template' and 'Add .gitignore' so the module content is not overwritten" -ForegroundColor Yellow
+      Write-Host "Elevate your permissions with JIT and then come back here to continue" -ForegroundColor Yellow
+
+      Write-Host ""
+      Write-Host "You can copy and paste the following settings..." -ForegroundColor Yellow
+      Write-Host ""
+      Write-Host "Classification:" -ForegroundColor Cyan
+      Write-Host "Production"
+      Write-Host ""
+      Write-Host "Service tree:" -ForegroundColor Cyan
+      Write-Host "Azure Verified Modules (AVM)"
+      Write-Host ""
+      Write-Host "Type of open source project:" -ForegroundColor Cyan
+      Write-Host "Sample code"
+      Write-Host ""
+      Write-Host "License:" -ForegroundColor Cyan
+      Write-Host "MIT"
+      Write-Host ""
+      Write-Host "Project name:" -ForegroundColor Cyan
+      Write-Host "Azure Verified Module (Terraform) for '$moduleName'"
+      Write-Host ""
+      Write-Host "Project version:" -ForegroundColor Cyan
+      Write-Host "1"
+      Write-Host ""
+      Write-Host "Project description:" -ForegroundColor Cyan
+      Write-Host "Azure Verified Module (Terraform) for '$moduleName'. Part of AVM project - https://aka.ms/avm"
+      Write-Host ""
+      Write-Host "Business goals:" -ForegroundColor Cyan
+      Write-Host "Create IaC module accelerating Azure deployment using Microsoft best practice."
+      Write-Host ""
+      Write-Host "Will this be used in a Microsoft product or service?:" -ForegroundColor Cyan
+      Write-Host "Open source, can be leveraged in Microsoft services."
+      Write-Host ""
+    }
+
+    if($response -eq "no") {
+      Write-Host "Click the 'Compliance' tab and fill out the 3 sections." -ForegroundColor Yellow
+      Write-Host "Elevate your permissions with JIT and then come back here to continue" -ForegroundColor Yellow
+    }
+
+    $response = ""
+    while ($response -ne "yes") {
+      Write-Host "Once the form is complete and you have elevated with JIT, type 'yes' and hit Enter to continue:" -ForegroundColor Yellow
+      $response = Read-Host
+    }
+  }
+
   $creation = New-AvmRepositoryContent -AuthoringModule $authoringModule -RepositoryName $repositoryName `
-    -Metadata $metadata -ModuleType $moduleType -WorkPath $tempPath -Confirm:$false
+    -Metadata $metadata -ModuleType $moduleType -WorkPath $tempPath -OnRepositoryCreated $portalSetup -Confirm:$false
   Write-Host ""
   Write-Host "Initialized metadata.json and published repository $moduleName" -ForegroundColor Green
-
-  Write-Host "Open https://repos.opensource.microsoft.com/orgs/Azure/repos/$repositoryName" -ForegroundColor Yellow
-  if(!$env:CODESPACES) {
-    Write-Host "Hit Enter to open the open source portal in your browser now" -ForegroundColor Yellow
-    Read-Host
-    Start-Process "https://repos.opensource.microsoft.com/orgs/Azure/repos/$repositoryName"
-  }
-
-  $response = ""
-  while ($response -ne "yes" -and $response -ne "no") {
-    Write-Host "Do you see the 'Complete Setup' link? Type 'yes' or 'no' and hit Enter:" -ForegroundColor Yellow
-    $response = Read-Host
-  }
-
-  if($response -eq "yes") {
-    Write-Host "Click 'Complete Setup' to finish the repository configuration" -ForegroundColor Yellow
-    Write-Host "Elevate your permissions with JIT and then come back here to continue" -ForegroundColor Yellow
-
-    Write-Host ""
-    Write-Host "You can copy and paste the following settings..." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Project name:" -ForegroundColor Cyan
-    Write-Host "Azure Verified Module (Terraform) for '$moduleName'"
-    Write-Host ""
-    Write-Host "Project description:" -ForegroundColor Cyan
-    Write-Host "Azure Verified Module (Terraform) for '$moduleName'. Part of AVM project - https://aka.ms/avm"
-    Write-Host ""
-    Write-Host "Business goals:" -ForegroundColor Cyan
-    Write-Host "Create IaC module that will accelerate deployment on Azure using Microsoft best practice."
-    Write-Host ""
-    Write-Host "Will this be used in a Microsoft product or service?:" -ForegroundColor Cyan
-    Write-Host "This is open source project and can be leveraged in Microsoft service and product."
-    Write-Host ""
-  }
-
-  if($response -eq "no") {
-    Write-Host "Click the 'Compliance' tab and fill out the 3 sections." -ForegroundColor Yellow
-    Write-Host "Elevate your permissions with JIT and then come back here to continue" -ForegroundColor Yellow
-  }
-
-  $response = ""
-  while ($response -ne "yes") {
-    Write-Host "Once the form is complete and you have elevated with JIT, type 'yes' and hit Enter to continue:" -ForegroundColor Yellow
-    $response = Read-Host
-  }
 }
 Write-Host ""
 Write-Host "Repository URL:" -ForegroundColor Cyan
