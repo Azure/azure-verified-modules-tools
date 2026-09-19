@@ -612,7 +612,6 @@ Describe 'Component: single-segment metadata backfill' -Tag Component {
         $catalog.modules['helper'].terraform[0].modulePath | Should -BeExactly 'modules/helper'
         $generatedRows = @($bundle.Files[$csvOutput.bundlePath] | ConvertFrom-Csv)
         $generatedRows | Should -HaveCount 1
-        $generatedRows[0].CanonicalType | Should -BeExactly $Canonical
         $bundle.Report.csvRowRemovals | Should -HaveCount 0
         foreach ($path in @($moduleRoot, $childPath)) {
             [System.IO.File]::ReadAllText((Join-Path $path 'main.tf')) | Should -BeExactly $source

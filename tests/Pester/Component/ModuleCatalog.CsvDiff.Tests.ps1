@@ -43,6 +43,9 @@ Describe 'Component: module catalog CSV diff' -Tag Component {
         $result.ChangedFileCount | Should -Be 0
         $result.AddedLineCount | Should -Be 0
         $result.DeletedLineCount | Should -Be 0
+        $result.RowsChangedCount | Should -Be 0
+        $result.RowsAddedCount | Should -Be 0
+        $result.RowsRemovedCount | Should -Be 0
         [System.IO.File]::ReadAllText((Join-Path $fixture.Output 'all-csv.diff')) |
             Should -BeNullOrEmpty
         $summary = [System.IO.File]::ReadAllText($fixture.Summary)
@@ -69,11 +72,16 @@ Describe 'Component: module catalog CSV diff' -Tag Component {
         $result.ChangedFileCount | Should -Be 1
         $result.AddedLineCount | Should -Be 2
         $result.DeletedLineCount | Should -Be 1
+        $result.RowsChangedCount | Should -Be 1
+        $result.RowsAddedCount | Should -Be 1
+        $result.RowsRemovedCount | Should -Be 0
         $paths = @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse |
                 ForEach-Object { [System.IO.Path]::GetRelativePath($fixture.Output, $_.FullName).Replace('\', '/') })
         @($paths | Where-Object { $_ -like 'before/*.csv' }) | Should -HaveCount 6
         @($paths | Where-Object { $_ -like 'after/*.csv' }) | Should -HaveCount 6
         @($paths | Where-Object { $_ -like 'diff/*.diff' }) | Should -HaveCount 6
+        @($paths | Where-Object { $_ -like 'diff/*.fields.md' }) | Should -HaveCount 1
+        $paths | Should -Contain 'diff/BicepResourceModules.fields.md'
         $paths | Should -Contain 'all-csv.diff'
         $paths | Should -Contain 'summary.md'
 
@@ -87,12 +95,18 @@ Describe 'Component: module catalog CSV diff' -Tag Component {
             Should -Match 'Original description'
         [System.IO.File]::ReadAllText((Join-Path $fixture.Output 'after' 'BicepResourceModules.csv')) |
             Should -Match 'Generated description'
+        $fields = [System.IO.File]::ReadAllText((Join-Path $fixture.Output 'diff' 'BicepResourceModules.fields.md'))
+        $fields | Should -Match ([regex]::Escape('**1 new row(s):** `avm/res/new`'))
+        $fields | Should -Match '\| `avm/res/example` \| Description \| Original description \| Generated description \|'
 
         $artifactSummary = [System.IO.File]::ReadAllText((Join-Path $fixture.Output 'summary.md'))
         $jobSummary = [System.IO.File]::ReadAllText($fixture.Summary)
         $artifactSummary | Should -BeExactly $jobSummary
         $artifactSummary | Should -Match '1 of 6 CSV files changed'
         $artifactSummary | Should -Match '<details><summary><code>BicepResourceModules.csv</code>'
+        $artifactSummary | Should -Match ([regex]::Escape('**1 new row(s):** `avm/res/new`'))
+        $artifactSummary | Should -Match '\| `avm/res/example` \| Description \| Original description \| Generated description \|'
+        $artifactSummary | Should -Match '<summary>Raw line diff</summary>'
         $artifactSummary | Should -Match ([regex]::Escape('+avm/res/new,New module'))
     }
 
