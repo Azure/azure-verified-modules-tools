@@ -362,6 +362,11 @@ Download the `module-metadata-catalog` artifact. Check:
   unchanged main-branch base before writes. Force cannot bypass that check,
   invalid metadata, other validation, `WhatIf`, or approval requirements.
 
+For a manual `plan_only=true` run, review the CSV change table and unified
+diffs in the run summary. The `module-metadata-csv-diff` artifact always
+contains the complete `all-csv.diff`, one patch per CSV, and exact `before/`
+and `after/` copies even when the diff is too large to render inline.
+
 **Review the preview data before the later CSV cutover.** The review snapshot showed
 488 of 508 resource display names and all 508 resource descriptions changing,
 plus 45 of 48 pattern names and all 48 pattern descriptions. The new values come

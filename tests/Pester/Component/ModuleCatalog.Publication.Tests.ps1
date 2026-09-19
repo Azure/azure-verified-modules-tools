@@ -343,6 +343,15 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
     }
 
+    It 'publishes a complete CSV diff artifact and run summary only for manual plan-only runs' {
+        $condition = "github.event_name == 'workflow_dispatch' && inputs.plan_only == true"
+        [regex]::Matches($workflow, [regex]::Escape($condition)).Count | Should -Be 2
+        $workflow | Should -Match "name: module-metadata-csv-diff"
+        $workflow | Should -Match "path: \$\{\{ runner.temp \}\}/catalog-csv-diff"
+        $workflow | Should -Match "'New-ModuleCatalogCsvDiff.ps1'"
+        $workflow | Should -Match '-SummaryPath \$env:GITHUB_STEP_SUMMARY'
+    }
+
     It 'removes migration modes and permits source-row removal only through an explicit manual force input' {
         $workflow | Should -Not -Match 'bicep_mode|terraform_mode|BICEP_MODE|TERRAFORM_MODE|dual-source'
         $workflow | Should -Match "(?s)      force:\s+description:.*?type: boolean\s+default: false"
@@ -382,7 +391,7 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
                 $blocks.Add($body -join "`n")
             }
         }
-        $blocks | Should -HaveCount 7
+        $blocks | Should -HaveCount 8
         foreach ($block in $blocks) {
             $block | Should -Not -Match '\$\{\{'
             $block | Should -Match "'tools' 'repository-management' 'module-catalog' 'scripts'"
