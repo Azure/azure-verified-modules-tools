@@ -93,6 +93,24 @@ jobs:
             -DiagnosticsPath (Join-Path $env:RUNNER_TEMP 'catalog-diagnostics') `
             -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) -Confirm:$false
 
+      - name: Generate complete plan-only CSV diff
+        if: github.event_name == 'workflow_dispatch' && inputs.plan_only == true
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'New-ModuleCatalogCsvDiff.ps1'
+          & $script -SourceRoot (Join-Path $env:GITHUB_WORKSPACE 'input-docs') `
+            -GeneratedRoot (Join-Path $env:RUNNER_TEMP 'module-catalog') `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'catalog-csv-diff') `
+            -SummaryPath $env:GITHUB_STEP_SUMMARY -Confirm:$false | Out-Null
+
+      - name: Upload complete plan-only CSV diff
+        if: github.event_name == 'workflow_dispatch' && inputs.plan_only == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: module-metadata-csv-diff
+          path: ${{ runner.temp }}/catalog-csv-diff
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload source CSV row-removal diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

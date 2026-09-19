@@ -112,6 +112,11 @@ the generation flag in an artifact does not grant publication permission.
 The publisher rechecks the report against the actual source CSVs on the unchanged
 main-branch base before any file writes.
 
+Manual `plan_only=true` runs render a CSV change table and the complete unified
+diff in the run summary when it fits within the summary size limit. Download
+the `module-metadata-csv-diff` artifact for the authoritative `all-csv.diff`,
+individual patches, and exact `before/` and `after/` CSVs.
+
 Force does not bypass invalid metadata, incomplete snapshots, altered hashes,
 stale bases, output allow-lists, `WhatIf`, or publication approvals. It never
 enables a Git force-push.
