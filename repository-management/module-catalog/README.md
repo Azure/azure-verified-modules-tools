@@ -66,7 +66,7 @@ family's alternative names and comments; child CSV cells for those two fields
 stay unchanged, including blanks. Newly discovered child rows leave them blank.
 
 The six CSVs retain their existing column order and matched-row compatibility
-fields, then append `CanonicalType`. Missing metadata is reported but never
+fields; `CanonicalType` is not added. Missing metadata is reported but never
 reconstructed from a CSV. Existing source rows without metadata-backed replacements
 stop generation by default. Only existing columns are projected for metadata rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
@@ -112,10 +112,14 @@ the generation flag in an artifact does not grant publication permission.
 The publisher rechecks the report against the actual source CSVs on the unchanged
 main-branch base before any file writes.
 
-Manual `plan_only=true` runs render a CSV change table and the complete unified
-diff in the run summary when it fits within the summary size limit. Download
-the `module-metadata-csv-diff` artifact for the authoritative `all-csv.diff`,
-individual patches, and exact `before/` and `after/` CSVs.
+Manual `plan_only=true` runs render a per-CSV summary table and, for each
+changed file, a field-level breakdown of which columns actually changed
+(added/removed rows plus a `Field | Before | After` table), so reviewers are
+not shown the full rewritten row for a one-column change. The complete
+unified line diff is still available, nested in a collapsed "Raw line diff"
+section. Download the `module-metadata-csv-diff` artifact for the
+authoritative `all-csv.diff`, individual patches (including per-file
+`.fields.md` field breakdowns), and exact `before/` and `after/` CSVs.
 
 Force does not bypass invalid metadata, incomplete snapshots, altered hashes,
 stale bases, output allow-lists, `WhatIf`, or publication approvals. It never

@@ -377,7 +377,8 @@ Recovered owners can move formerly Orphaned modules to Available. Genuinely
 unowned metadata-backed modules stay Orphaned and prior Deprecated status is
 preserved for matching metadata-backed entries. Rows without metadata are
 subject to the removal guard, not silently retained. The six
-CSVs gain `CanonicalType`, not a tier column. Compare fresh output against its
+CSVs keep their existing columns unchanged; no new column (such as a
+`CanonicalType` or tier column) is added. Compare fresh output against its
 recorded inputs; these review counts are not permanent expected totals.
 The JSON catalog retains family-level aliases/comments for children, while
 their existing CSV cells remain separate.

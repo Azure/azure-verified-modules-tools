@@ -264,7 +264,6 @@ Describe 'Component: module catalog helpers' -Tag Component {
                     $_.Record.canonicalType -cne 'helper'
                 } | ForEach-Object { $_.Record.moduleName } | Sort-Object)
             @($rows.ModuleName | Sort-Object) | Should -Be $expected
-            $rows.CanonicalType | Should -Not -Contain 'helper'
         }
         $bundle.Report.counts.catalogEntries | Should -Be 24
         $bundle.Report.missingMetadata | Should -HaveCount 0
@@ -462,7 +461,9 @@ Describe 'Component: module catalog transformations' -Tag Component {
             }
             if ($ecosystem -eq 'bicep') { $child.telemetryIdPrefix | Should -BeNullOrEmpty }
             $file = if ($ecosystem -eq 'bicep') { 'BicepResourceModules.csv' } else { 'TerraformResourceModules.csv' }
-            $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.CanonicalType -ceq $canonical })
+            $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object {
+                    $_.ProviderNamespace -ceq 'Oracle.Database' -and $_.ResourceType -ceq $ResourceType
+                })
             $rows | Should -HaveCount 2
             foreach ($row in $rows) {
                 $row.ProviderNamespace | Should -BeExactly 'Oracle.Database'
@@ -574,7 +575,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         foreach ($file in $fixture.Original.Keys) {
             $text = $bundle.Files["docs/test-$file"]
-            ($text -split "`n")[0] | Should -BeExactly (($fixture.Headers[$file] + @('CanonicalType')) -join ',')
+            ($text -split "`n")[0] | Should -BeExactly ($fixture.Headers[$file] -join ',')
             @($text | ConvertFrom-Csv) | Should -HaveCount 0
             $source = Read-AvmCatalogCsv -Path (Join-Path $fixture.Legacy $file)
             foreach ($column in $fixture.Headers[$file]) {
@@ -807,7 +808,6 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Report.parity.bicepOnly | Should -Contain 'lz/sub-vending'
         $bundle.Report.parity.bicepOnly | Should -Contain 'types/common'
         $bundle.Report.unresolvedLegacy | Should -HaveCount 0
-        @($bundle.Files['docs/test-TerraformPatternModules.csv'] | ConvertFrom-Csv)[0].CanonicalType | Should -BeExactly 'terraform/pattern'
         $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azapi-avm-res-compute-disk' `
             -ModulePath '.' -Canonical 'Microsoft.Compute/disks' -Adopt
         (Get-CatalogFixtureBundle -Fixture $fixture).Report.parity.terraformOnly | Should -Contain 'Microsoft.Compute/disks'
@@ -1296,7 +1296,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         foreach ($row in $rows) {
             $expected = if ($Scope -eq 'root' -or $row.ModuleName -like '*blob-service*') { 'Deprecated' } else { 'Available' }
             $row.ModuleStatus | Should -Be $expected
-            $bundle.Catalog.modules[$row.CanonicalType].bicep[0].moduleStatus | Should -Be $expected
+            $bundle.Catalog.modules["$($row.ProviderNamespace)/$($row.ResourceType)"].bicep[0].moduleStatus | Should -Be $expected
         }
         $bundle.Catalog.modules['lz/sub-vending'].bicep[0].moduleStatus | Should -Be 'Available'
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0].moduleStatus | Should -Be 'Available'
@@ -1353,7 +1353,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $rows | Should -HaveCount 2
         foreach ($row in $rows) {
             $row.ModuleStatus | Should -Be 'Deprecated'
-            $bundle.Catalog.modules[$row.CanonicalType].terraform[0].moduleStatus | Should -Be 'Deprecated'
+            $bundle.Catalog.modules["$($row.ProviderNamespace)/$($row.ResourceType)"].terraform[0].moduleStatus | Should -Be 'Deprecated'
         }
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Available'
     }

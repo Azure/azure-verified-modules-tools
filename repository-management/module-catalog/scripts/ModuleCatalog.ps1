@@ -423,17 +423,6 @@ function Get-AvmCatalogInventory {
 
     foreach ($output in $csvOutputs) {
         $table = Read-AvmCatalogCsv -Path (Join-Path $LegacyPath $output.sourceFile)
-        foreach ($column in @('CanonicalType')) {
-            if ($table.Headers -contains $column -and $table.Headers -cnotcontains $column) {
-                throw [System.IO.InvalidDataException]::new("Reserved catalog column must use exact casing: $column in $($output.sourceFile)")
-            }
-            if ($table.Headers -cnotcontains $column) {
-                $table.Headers += $column
-                foreach ($row in $table.Rows) {
-                    $row[$column] = ''
-                }
-            }
-        }
         $generatedTable = [pscustomobject]@{
             Headers = $table.Headers
             Rows = [System.Collections.Generic.List[object]]::new()
@@ -708,7 +697,6 @@ function New-AvmCatalogBundle {
                 FirstPublishedIn = [string]$record.registry.firstPublishedIn
                 ProviderNamespace = [string]$record.providerNamespace
                 ResourceType = [string]$record.resourceType
-                CanonicalType = $record.canonicalType
             }
             if ($null -eq $record.parentModule) {
                 $values['AlternativeNames'] = $record.alternativeNames -join ', '
