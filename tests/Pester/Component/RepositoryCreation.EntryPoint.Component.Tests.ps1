@@ -44,10 +44,14 @@ Describe 'Component: repository creation entry point' -Tag Component {
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
             param($FilePath, $ArgumentList, $WorkingDirectory)
             $tool = $FilePath -replace '^fixture-', ''
-            $operation = "$tool $($ArgumentList[0])"
-            if ($tool -eq 'gh' -and $ArgumentList[0] -eq 'repo') { $operation += " $($ArgumentList[1])" }
+            $arguments = @($ArgumentList)
+            while ($tool -eq 'git' -and $arguments.Count -gt 1 -and $arguments[0] -eq '-c') {
+                $arguments = @($arguments | Select-Object -Skip 2)
+            }
+            $operation = "$tool $($arguments[0])"
+            if ($tool -eq 'gh' -and $arguments[0] -eq 'repo') { $operation += " $($arguments[1])" }
             $fixture.Calls.Add($operation)
-            if ($operation -notin @('gh auth', 'git clone', 'git init-db', 'git add', 'git commit', 'git remote', 'gh repo create', 'gh api', 'git push')) {
+            if ($operation -notin @('gh auth', 'git clone', 'git init-db', 'git add', 'git commit', 'git remote', 'gh repo create', 'gh api', 'git push', 'git ls-remote', 'git fetch', 'git reset')) {
                 throw "Unexpected creation command: $operation"
             }
             if ($operation -eq 'git clone') {
