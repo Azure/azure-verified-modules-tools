@@ -129,7 +129,7 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish reviewable catalog updates
+    name: Publish and merge catalog updates
     needs: collect
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
@@ -187,7 +187,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Create or update review branches only
+      - name: Create or update and merge catalog changes
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           AVM_APP_SLUG: ${{ steps.writer.outputs.app-slug }}

@@ -53,25 +53,26 @@ function Test-AvmCatalogPublicationBundle {
                 throw [System.IO.InvalidDataException]::new("Publication plan has no valid base hash for $target.")
             }
         }
-        foreach ($relative in $paths[$role].files.Keys) {
-            $null = $expected.Add($relative)
-            Assert-AvmCatalogSafePath -Root $Path -RelativePath $relative
-            $file = Join-Path $Path $relative
-            if (-not $plan.outputHashes.Contains($relative) -or
-                (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $plan.outputHashes[$relative]) {
-                throw [System.Security.SecurityException]::new("Catalog output hash mismatch: $relative")
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($file)
-            $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes)
-            if ($text.Contains("`r") -or $text.StartsWith([string][char]0xFEFF, [StringComparison]::Ordinal)) {
-                throw [System.IO.InvalidDataException]::new("Catalog publication requires LF UTF-8 without BOM: $relative")
-            }
-            if ($relative.EndsWith('.csv', [StringComparison]::Ordinal)) {
-                $null = Read-AvmCatalogCsv -Path $file
-            }
-            else {
-                $null = Read-AvmCatalogJson -Path $file
-            }
+    }
+    foreach ($output in $Configuration.outputs | Where-Object { $_.kind -cne 'publication-plan' }) {
+        $relative = $output.bundlePath
+        $null = $expected.Add($relative)
+        Assert-AvmCatalogSafePath -Root $Path -RelativePath $relative
+        $file = Join-Path $Path $relative
+        if (-not $plan.outputHashes.Contains($relative) -or
+            (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $plan.outputHashes[$relative]) {
+            throw [System.Security.SecurityException]::new("Catalog output hash mismatch: $relative")
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($file)
+        $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+        if ($text.Contains("`r") -or $text.StartsWith([string][char]0xFEFF, [StringComparison]::Ordinal)) {
+            throw [System.IO.InvalidDataException]::new("Catalog publication requires LF UTF-8 without BOM: $relative")
+        }
+        if ($relative.EndsWith('.csv', [StringComparison]::Ordinal)) {
+            $null = Read-AvmCatalogCsv -Path $file
+        }
+        else {
+            $null = Read-AvmCatalogJson -Path $file
         }
     }
     if ($plan.outputHashes.Count -ne $expected.Count) {

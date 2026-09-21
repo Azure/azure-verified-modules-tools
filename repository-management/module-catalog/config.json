@@ -22,7 +22,7 @@
       "destination": "docs",
       "schema": "src/Avm.Authoring/Resources/Schemas/v1/avm-modules-catalog.schema.json"
     },
-    { "kind": "migration-report", "file": "v1/migration-report.json", "destination": "docs" },
+    { "kind": "migration-report", "file": "v1/migration-report.json", "destination": null },
     { "kind": "publication-plan", "file": "plan.json", "destination": null }
   ]
 }

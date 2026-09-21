@@ -24,7 +24,9 @@ This document is a plan, not approval to run production commands.
   publication/merge on apply. It is not used for the current migration and is
   not a metadata-only workflow switch or runner.
 - The catalog workflow reads module metadata and registry information, then
-  proposes updated CSV/JSON indexes for review. It does not change tier lists
+  publishes and merges updated CSV/JSON indexes through the existing AVM App.
+  Migration diagnostics stay in the workflow artifact, not the repository.
+  It does not change tier lists
   or repository configuration.
   Only valid metadata produces rows; removals from source CSVs fail by default
   and require an explicit override.
@@ -86,7 +88,7 @@ full sync or perform repository/Azure management.
 - Wait for active writers to finish and ensure queued writers cannot run during
   the pause. Do not cancel an active state writer or break its lease.
 - The catalog workflow has no enable variable. Once merged and enabled, its
-  daily schedule can publish review changes for preview CSVs and JSON.
+  daily schedule can publish and merge changes for preview CSVs and JSON.
   Disable it until ready if an operator-controlled first run is required.
 - Check the protected `avm` environment, the existing App installation, and
   target permissions. Both review teams need the access GitHub requires for
@@ -350,7 +352,7 @@ Download the `module-metadata-catalog` artifact. Check:
   cells. They must not be replaced with the parent's values.
 - `v1/modules.json` includes every owner, distinct implementations, and children
   with inherited ownership. Check representative deprecated/unowned modules.
-- The migration report explains every missing/unresolved module and parity gap.
+- The artifact-only migration report explains every missing/unresolved module and parity gap.
   Its `sourceCsvRows` contains the source identity snapshots, `csvRowRemovals`
   lists each removed `sourceFile`, `moduleName`, and `repoURL`, and
   `csvRowRemovalsForced` records whether generation used the override.

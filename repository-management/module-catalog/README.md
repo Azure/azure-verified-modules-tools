@@ -14,9 +14,11 @@ selects the docs, Bicep source, and tools repositories; `destinations` supplies
 the repository-relative output directories. Each `outputs` entry declares its
 kind, relative filename, and destination. CSV entries also declare `sourceFile`,
 the canonical input name; `file` is the preview output name. This includes all six CSVs,
-`BicepMARModules.json`, `v1/modules.json`, and `v1/migration-report.json`.
-The `publication-plan` entry has a null destination: it is
-bundle-only and is emitted when publication-base information is available.
+`BicepMARModules.json`, and `v1/modules.json`.
+The `migration-report` and `publication-plan` entries have null destinations:
+they remain in the `module-metadata-catalog` workflow artifact and are never
+published to the repository. The plan is emitted when publication-base
+information is available.
 
 Collection, generation, workflow checkouts/token targets, and publication use
 the same validated manifest. Unsafe paths,
@@ -72,7 +74,7 @@ reconstructed from a CSV. Existing source rows without metadata-backed replaceme
 stop generation by default. Only existing columns are projected for metadata rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
-provider variants. `v1/migration-report.json` records missing metadata, unresolved
+provider variants. The artifact's `v1/migration-report.json` records missing metadata, unresolved
 source identities, source-row snapshots, removals, and cross-ecosystem parity.
 Canonical types come from metadata, not inferred CSV taxonomy.
 Resources use case-sensitive `Microsoft.*` or `Oracle.Database` ARM types.
@@ -159,11 +161,13 @@ reads these signals; it does not archive repositories or perform retirement step
 Publication checks output hashes, exact allowed paths, schema, unchanged input
 and output-base hashes on current `main`.
 Canonical CSV hashes remain required even though only preview CSVs are written.
-Existing app-owned review branches are updated
-without force; human commits or unrelated branch changes stop publication.
-An interrupted publication may leave a reviewable update and must be retried
-after inspection. No automatic
-merge, direct `main` push, permission edit, or obsolete-source deletion is used.
+Existing app-owned branches are updated without force; human commits or unrelated
+branch changes stop publication. Publication squash-merges through the existing
+AVM App (`--admin --match-head-commit`) and verifies the merged head. Merge failures
+fail the job; a retry also merges an unchanged pending candidate.
+Report changes left by earlier catalog runs are restored to the current main
+version (or removed from the candidate if absent on main) before merging.
+No direct `main` push, permission edit, or obsolete-source deletion is used.
 
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,
 refreshing the private-source MAR mirror, and approval of any source-row removals
