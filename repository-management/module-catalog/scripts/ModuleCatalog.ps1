@@ -647,7 +647,7 @@ function New-AvmCatalogBundle {
         $record.moduleStatus = if ($deprecated -or [string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
             'Deprecated'
         }
-        elseif ($item.Identity.SourcePending) {
+        elseif ($record.registry.status -eq 'not-published') {
             'Proposed'
         }
         elseif ($record.owners.Count -eq 0) {
