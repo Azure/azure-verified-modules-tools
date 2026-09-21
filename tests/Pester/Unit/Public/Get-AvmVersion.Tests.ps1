@@ -129,59 +129,36 @@ Describe 'avm version (dispatcher)' {
         $via.Version | Should -Be $direct.Version
     }
 
-    It 'queries and warns only once when the dispatcher Gallery lookup fails' {
+    It 'does not query the Gallery or warn before dispatching' {
         InModuleScope 'Avm.Authoring' {
-            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
-            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
-            try {
-                $script:AvmLatestModuleVersion = $null
-                $script:AvmModuleVersionCheckCompleted = $false
-                $script:AvmModuleVersionSkipWarningWritten = $false
-                Mock Find-PSResource {
-                    throw [System.Net.Http.HttpRequestException]::new('offline')
-                }
+            Mock Find-PSResource
 
-                $records = @(Invoke-Avm version 3>&1)
-                $warnings = @($records | Where-Object {
-                        $_ -is [System.Management.Automation.WarningRecord]
-                    })
-                $result = @($records | Where-Object {
-                        $_ -isnot [System.Management.Automation.WarningRecord]
-                    })
+            $records = @(Invoke-Avm version 3>&1)
+            $warnings = @($records | Where-Object {
+                    $_ -is [System.Management.Automation.WarningRecord]
+                })
+            $result = @($records | Where-Object {
+                    $_ -isnot [System.Management.Automation.WarningRecord]
+                })
 
-                $warnings.Count | Should -Be 1
-                [string]$warnings[0] | Should -Match 'The Gallery request failed'
-                [string]$warnings[0] | Should -Not -Match 'Cannot index into a null array'
-                $result.Count | Should -Be 1
-                $result[0].Module | Should -BeExactly 'Avm.Authoring'
-                Should -Invoke Find-PSResource -Times 1 -Exactly
-            }
-            finally {
-                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
-            }
+            $warnings.Count | Should -Be 0
+            $result.Count | Should -Be 1
+            $result[0].Module | Should -BeExactly 'Avm.Authoring'
+            Should -Invoke Find-PSResource -Times 0 -Exactly
         }
     }
 
-    It 'emits only the explicit skip warning through the dispatcher' {
+    It 'accepts the legacy version-check opt-out without warning' {
         InModuleScope 'Avm.Authoring' {
-            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
-            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
-            try {
-                $script:AvmModuleVersionSkipWarningWritten = $false
-                Mock Find-PSResource
+            Mock Find-PSResource
 
-                $records = @(Invoke-Avm -SkipModuleVersionCheck version 3>&1)
-                $warnings = @($records | Where-Object {
-                        $_ -is [System.Management.Automation.WarningRecord]
-                    })
+            $records = @(Invoke-Avm -SkipModuleVersionCheck version 3>&1)
+            $warnings = @($records | Where-Object {
+                    $_ -is [System.Management.Automation.WarningRecord]
+                })
 
-                $warnings.Count | Should -Be 1
-                [string]$warnings[0] | Should -Match 'version check was skipped'
-                Should -Invoke Find-PSResource -Times 0 -Exactly
-            }
-            finally {
-                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
-            }
+            $warnings.Count | Should -Be 0
+            Should -Invoke Find-PSResource -Times 0 -Exactly
         }
     }
 

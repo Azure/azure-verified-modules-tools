@@ -150,7 +150,7 @@ The original Terraform contract is covered directly:
 | Contract | Preserved behavior |
 | --- | --- |
 | Return value | Exactly `IssueLog` and `HasChanges`, with the caller's issue array retained |
-| Preparation | Legacy `.avm` file handling, managed-file upgrade decision, and one `AVM1050` module-update retry |
+| Preparation | Legacy `.avm` file handling and managed-file upgrade decision |
 | No change / plan | No candidate or remote writes; ordinary plans return before staging |
 | Publication | Five transient clone retries, timestamped branch, original bot author, commit/title/body and `[skip ci]` |
 | Merge | Squash/app bypass, original subject/empty body, branch deletion, and existing merge retry policy |

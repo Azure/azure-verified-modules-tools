@@ -92,7 +92,6 @@ BeforeAll {
             [Parameter(Mandatory)][string] $Body,
             [ValidateSet('File', 'Command')][string] $Mode = 'File',
             [switch] $CaptureTypedError,
-            [switch] $RejectOutdatedModule,
             [switch] $RunnerDebug,
             [string] $Invocation
         )
@@ -115,23 +114,6 @@ try {
             $invoke = 'avm spec-verb | Out-Null'
         }
 
-        $versionOverride = if ($RejectOutdatedModule) {
-            @'
-$module = Get-Module Avm.Authoring
-& $module {
-    function script:Test-AvmModuleVersion {
-        throw [AvmModuleVersionException]::new(
-            [version]'0.2.3',
-            [version]'0.3.0',
-            'Avm.Authoring 0.2.3 is outdated.')
-    }
-}
-'@
-        }
-        else {
-            ''
-        }
-
         $scriptText = @"
 `$ErrorActionPreference = 'Stop'
 `$PSStyle.OutputRendering = 'PlainText'
@@ -143,7 +125,6 @@ Import-Module '$manifest' -Force
     }
     function script:Invoke-AvmSpecVerb { $Body }
 }
-$versionOverride
 $invoke
 "@
 
@@ -166,88 +147,6 @@ $invoke
         }
     }
 
-    function script:Invoke-AvmStdinVersionFailure {
-        param(
-            [Parameter(Mandatory)]
-            [string] $Invocation
-        )
-
-        $manifest = $script:manifestPath
-        $scriptText = @(
-            "`$ErrorActionPreference = 'Stop'"
-            "`$PSStyle.OutputRendering = 'PlainText'"
-            "Import-Module '$manifest' -Force"
-            "`$module = Get-Module Avm.Authoring"
-            "& `$module { function script:Get-AvmVerbRegistry { [pscustomobject]@{ Path = [string[]]@('spec-verb'); Cmdlet = 'Invoke-AvmSpecVerb'; Summary = 'test verb' } }; function script:Invoke-AvmSpecVerb { [pscustomobject]@{ Status = 'pass' } }; function script:Test-AvmModuleVersion { throw [AvmModuleVersionException]::new([version]'0.2.3', [version]'0.3.0', 'Avm.Authoring 0.2.3 is outdated.') } }"
-            $Invocation
-        ) -join '; '
-
-        $startInfo = New-AvmChildProcessStartInfo `
-            -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', '-') `
-            -RedirectStandardInput
-        Invoke-AvmChildProcess `
-            -StartInfo $startInfo `
-            -StandardInput $scriptText `
-            -StripStdinHostControlSequences
-    }
-
-    function script:Invoke-AvmSequentialVersionRefresh {
-        param(
-            [switch] $Uncaught
-        )
-
-        $manifest = $script:manifestPath
-        $secondInvocation = if ($Uncaught) {
-            'avm spec-verb | Out-Null'
-        }
-        else {
-            @'
-try {
-    avm spec-verb | Out-Null
-    Write-Output 'SECOND=RETURNED'
-}
-catch {
-    Write-Output ('SECOND={0}|{1}|{2}|{3}' -f $_.Exception.GetType().Name, $_.FullyQualifiedErrorId, $_.Exception.CurrentVersion, $_.Exception.LatestVersion)
-    Write-Output 'GUIDANCE-BEGIN'
-    Write-Output $_.Exception.Message
-    Write-Output 'GUIDANCE-END'
-}
-& $module { Write-Output ('LOOKUPS={0}' -f $script:SequentialGalleryLookupCount) }
-'@
-        }
-        $scriptText = @"
-`$ErrorActionPreference = 'Stop'
-`$PSStyle.OutputRendering = 'PlainText'
-Import-Module '$manifest' -Force
-`$module = Get-Module Avm.Authoring
-& `$module {
-    `$script:SequentialGalleryLookupCount = 0
-    function script:Find-PSResource {
-        `$script:SequentialGalleryLookupCount++
-        `$version = if (`$script:SequentialGalleryLookupCount -eq 1) {
-            (Get-Module Avm.Authoring).Version.ToString()
-        }
-        else {
-            '99.0.0'
-        }
-        [pscustomobject]@{ Name = 'Avm.Authoring'; Version = `$version }
-    }
-    function script:Get-AvmVerbRegistry {
-        [pscustomobject]@{ Path = [string[]]@('spec-verb'); Cmdlet = 'Invoke-AvmSpecVerb'; Summary = 'test verb' }
-    }
-    function script:Invoke-AvmSpecVerb {}
-}
-avm spec-verb | Out-Null
-Write-Output 'FIRST=PASS'
-$secondInvocation
-"@
-
-        $startInfo = New-AvmChildProcessStartInfo `
-            -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $scriptText)
-        [void] $startInfo.Environment.Remove('AVM_TEST_RUN_ID')
-        [void] $startInfo.Environment.Remove('AVM_TEST_SKIP_MODULE_VERSION_CHECK')
-        Invoke-AvmChildProcess -StartInfo $startInfo
-    }
 }
 
 AfterAll {
@@ -281,20 +180,6 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
     It 'exits non-zero when a verb reports error' {
         (Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'error' }").ExitCode |
             Should -Not -Be 0
-    }
-
-    It 'exits non-zero when the dispatcher rejects an outdated module' {
-        $result = Invoke-AvmChildVerb `
-            -Mode File `
-            -Body "[pscustomobject]@{ Status = 'pass' }" `
-            -RejectOutdatedModule
-
-        $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -Match '(?m)^NotInstalled: AVM upgrade required\.$'
-        $result.Output | Should -Match '(?m)^Avm\.Authoring 0\.2\.3 is outdated\.$'
-        $result.Output | Should -Not -Match 'InvalidOperation'
-        $result.Output | Should -Not -Match '~~~~'
-        $result.Output | Should -Not -Match '\.ps1:\d+'
     }
 
     It 'exits zero when a verb reports pass' {
@@ -334,142 +219,6 @@ Describe 'Invoke-Avm typed failure (F02)' {
 "@
         $result = Invoke-AvmChildVerb -Mode File -CaptureTypedError -Body $body
         $result.Output | Should -Match 'diagnostic detail'
-    }
-}
-
-Describe 'Invoke-Avm stale module failure semantics (F89)' {
-    It 'lets an interactive caller catch the typed version exception without writing an uncaught error' {
-        $invocation = @'
-try {
-    avm spec-verb | Out-Null
-    'NO-THROW'
-}
-catch {
-    '{0}|{1}|{2}|{3}' -f $_.Exception.GetType().Name, $_.FullyQualifiedErrorId, $_.Exception.CurrentVersion, $_.Exception.LatestVersion
-}
-'@
-        $savedActions = $env:GITHUB_ACTIONS
-        $savedSummary = $env:GITHUB_STEP_SUMMARY
-        try {
-            $env:GITHUB_ACTIONS = 'true'
-            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'summary.md'
-            $result = Invoke-AvmChildVerb `
-                -Mode File `
-                -Body "[pscustomobject]@{ Status = 'pass' }" `
-                -RejectOutdatedModule `
-                -Invocation $invocation
-        }
-        finally {
-            $env:GITHUB_ACTIONS = $savedActions
-            $env:GITHUB_STEP_SUMMARY = $savedSummary
-        }
-
-        $result.ExitCode | Should -Be 0
-        $result.Output | Should -BeExactly 'AvmModuleVersionException|AVM1050|0.2.3|0.3.0'
-    }
-
-    It 'sets command status false and records the typed AVM error when execution continues through a trap' {
-        $invocation = @'
-trap {
-    $script:versionFailure = $_
-    continue
-}
-avm spec-verb | Out-Null
-'{0}|{1}|{2}' -f $?, $script:versionFailure.Exception.GetType().Name, $script:versionFailure.FullyQualifiedErrorId
-'@
-        $result = Invoke-AvmChildVerb `
-            -Mode File `
-            -Body "[pscustomobject]@{ Status = 'pass' }" `
-            -RejectOutdatedModule `
-            -Invocation $invocation
-
-        $result.ExitCode | Should -Be 0
-        $result.Output | Should -BeExactly 'False|AvmModuleVersionException|AVM1050'
-    }
-
-    It 'exits non-zero with one source-free error via pwsh -<Mode>' -TestCases @(
-        @{ Mode = 'File' }
-        @{ Mode = 'Command' }
-    ) {
-        $result = Invoke-AvmChildVerb `
-            -Mode $Mode `
-            -Body "[pscustomobject]@{ Status = 'pass' }" `
-            -RejectOutdatedModule
-
-        $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -BeExactly (
-            "NotInstalled: AVM upgrade required.`nAvm.Authoring 0.2.3 is outdated.")
-        $result.Output | Should -Not -Match 'InvalidOperation'
-        $result.Output | Should -Not -Match '~~~~'
-        $result.Output | Should -Not -Match '\.ps1:\d+'
-    }
-
-    It 'reaches the catch and following statement when invoked through pwsh -Command - stdin' {
-        $invocation = "try { avm spec-verb | Out-Null; Write-Output 'RETURNED' } catch { Write-Output ('CAUGHT=' + `$_.Exception.GetType().Name + '|ID=' + `$_.FullyQualifiedErrorId) }; Write-Output 'AFTER'"
-        $result = Invoke-AvmStdinVersionFailure -Invocation $invocation
-
-        $result.ExitCode | Should -Be 0
-        $result.Output | Should -BeExactly "CAUGHT=AvmModuleVersionException|ID=AVM1050`nAFTER"
-    }
-
-    It 'exits non-zero with one source-free error when uncaught through pwsh -Command - stdin' {
-        $result = Invoke-AvmStdinVersionFailure -Invocation 'avm spec-verb | Out-Null'
-
-        $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -BeExactly (
-            "NotInstalled: AVM upgrade required.`nAvm.Authoring 0.2.3 is outdated.")
-        $result.Output | Should -Not -Match 'InvalidOperation'
-    }
-}
-
-Describe 'Invoke-Avm sequential version refresh (F92)' {
-    It 'queries again and terminates the second command when a newer version appears' {
-        $result = Invoke-AvmSequentialVersionRefresh
-        $currentVersion = (Test-ModuleManifest -Path $script:manifestPath).Version
-
-        $result.ExitCode | Should -Be 0
-        $result.Output | Should -Match '(?m)^FIRST=PASS$'
-        $result.Output | Should -Match (
-            '(?m)^SECOND=AvmModuleVersionException\|AVM1050\|{0}\|99\.0\.0$' -f
-            [regex]::Escape($currentVersion.ToString()))
-        $result.Output | Should -Match (
-            '(?ms)^GUIDANCE-BEGIN$\n' +
-            'A newer version of Avm\.Authoring is required\.\n' +
-            'Installed version: .+\n' +
-            'Latest version: 99\.0\.0\n\n' +
-            'Upgrade and reload the module:\n' +
-            '  Update-PSResource -Name Avm\.Authoring -Scope CurrentUser\n' +
-            '  Import-Module Avm\.Authoring -Force\n\n' +
-            'You can restart PowerShell instead of reloading it\.\n' +
-            'GUIDANCE-END$')
-        $result.Output | Should -Match '(?m)^LOOKUPS=2$'
-        $result.Output | Should -Not -Match 'SECOND=RETURNED'
-    }
-
-    It 'renders the real second-command failure as readable upgrade guidance' {
-        $result = Invoke-AvmSequentialVersionRefresh -Uncaught
-        $currentVersion = (Test-ModuleManifest -Path $script:manifestPath).Version
-        $expected = @"
-Starting avm spec-verb
-FIRST=PASS
-NotInstalled: AVM upgrade required.
-A newer version of Avm.Authoring is required.
-Installed version: $currentVersion
-Latest version: 99.0.0
-
-Upgrade and reload the module:
-  Update-PSResource -Name Avm.Authoring -Scope CurrentUser
-  Import-Module Avm.Authoring -Force
-
-You can restart PowerShell instead of reloading it.
-"@
-
-        $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -BeExactly $expected
-        $result.Output | Should -Not -Match 'InvalidOperation'
-        $result.Output | Should -Not -Match '~~~~'
-        $result.Output | Should -Not -Match '\.ps1:\d+'
-        ([regex]::Matches($result.Output, 'AVM upgrade required\.')).Count | Should -Be 1
     }
 }
 
