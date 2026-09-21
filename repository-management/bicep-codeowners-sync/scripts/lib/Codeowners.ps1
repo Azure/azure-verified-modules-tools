@@ -93,7 +93,7 @@ function Assert-AvmCodeownersContent {
     }
     if ($AllowLegacyDefault -and $paths.Count -eq 0 -and ($staticLines -join "`n") -ceq ($required -join "`n")) {
         $automationHeader = @(
-            '# This file is generated automatically from each root Bicep module''s metadata.json. Do not edit manually.'
+            '# This file is generated automatically from the AVM module indexes. Do not edit manually.'
             '# Template: https://github.com/Azure/azure-verified-modules-tools/blob/main/repository-management/bicep-codeowners-sync/CODEOWNERS.template'
         )
         $staticLines.InsertRange(0, [string[]]$automationHeader)

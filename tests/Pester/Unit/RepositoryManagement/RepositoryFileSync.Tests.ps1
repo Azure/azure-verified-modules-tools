@@ -292,6 +292,59 @@ Describe 'Shared immutable repository file reads' {
     }
 }
 
+Describe 'Bulk repository file reads at a pinned commit' {
+    BeforeEach {
+        $script:gitCalls = [System.Collections.Generic.List[object]]::new()
+        $script:root = $null
+        Mock Invoke-RepositoryGit {
+            $script:gitCalls.Add($Arguments)
+            if ($Arguments[0] -ceq 'clone') {
+                $script:root = $Arguments[-1]
+                $null = New-Item -ItemType Directory -Path $script:root -Force
+            }
+            if ($Arguments[0] -ceq 'checkout') {
+                $resFile = Join-Path $script:root (Join-Path 'avm' (Join-Path 'res' (Join-Path 'test' (Join-Path 'module' 'metadata.json'))))
+                $ptnFile = Join-Path $script:root (Join-Path 'avm' (Join-Path 'ptn' (Join-Path 'test' (Join-Path 'module' 'metadata.json'))))
+                $null = New-Item -ItemType Directory -Path (Split-Path -Parent $resFile) -Force
+                [System.IO.File]::WriteAllText($resFile, 'content-a')
+                $null = New-Item -ItemType Directory -Path (Split-Path -Parent $ptnFile) -Force
+                [System.IO.File]::WriteAllText($ptnFile, 'content-b')
+            }
+            ''
+        }
+    }
+
+    It 'clones once with a blob-filtered sparse checkout pinned to the exact commit sha' {
+        $sha = 'a' * 40
+        $files = Get-RepositoryFilesAtCommit -Repository 'Azure/example' -Sha $sha `
+            -Paths @('avm/res/test/module/metadata.json', 'avm/ptn/test/module/metadata.json')
+        @($script:gitCalls | Where-Object { $_[0] -eq 'clone' }).Count | Should -Be 1
+        $clone = @($script:gitCalls | Where-Object { $_[0] -eq 'clone' })[0]
+        $clone | Should -Contain '--filter=blob:none'
+        $clone | Should -Contain '--no-checkout'
+        $fetch = @($script:gitCalls | Where-Object { $_[0] -eq 'fetch' })[0]
+        $fetch | Should -Contain $sha
+        $sparse = @($script:gitCalls | Where-Object { $_[0] -eq 'sparse-checkout' })[0]
+        $sparse | Should -Contain 'avm/res/test/module/metadata.json'
+        $sparse | Should -Contain 'avm/ptn/test/module/metadata.json'
+        $files['avm/res/test/module/metadata.json'].Content | Should -BeExactly 'content-a'
+        $files['avm/res/test/module/metadata.json'].Sha |
+            Should -BeExactly (Get-RepositoryGitBlobSha -Bytes ([System.Text.Encoding]::UTF8.GetBytes('content-a')))
+        $files['avm/ptn/test/module/metadata.json'].Content | Should -BeExactly 'content-b'
+    }
+
+    It 'rejects path traversal before any git command runs' {
+        { Get-RepositoryFilesAtCommit -Repository 'Azure/example' -Sha ('a' * 40) -Paths @('../secret') } | Should -Throw
+        $script:gitCalls.Count | Should -Be 0
+    }
+
+    It 'fails when the sparse checkout does not produce an expected file' {
+        Mock Invoke-RepositoryGit { '' }
+        { Get-RepositoryFilesAtCommit -Repository 'Azure/example' -Sha ('a' * 40) -Paths @('avm/res/test/module/metadata.json') } |
+            Should -Throw
+    }
+}
+
 Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
     BeforeEach {
         $script:context = New-SyncTestContext
@@ -367,45 +420,49 @@ Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
                 sha = $script:sourceSha
                 truncated = $false
                 tree = @(
-                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/metadata.json' }
-                    [pscustomobject]@{ type = 'blob'; path = 'avm/ptn/test/module/metadata.json' }
-                    [pscustomobject]@{ type = 'blob'; path = 'avm/utl/test/module/metadata.json' }
-                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/main.bicep' }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/metadata.json'; sha = 'a' * 40 }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/ptn/test/module/metadata.json'; sha = 'a' * 40 }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/utl/test/module/metadata.json'; sha = 'a' * 40 }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/main.bicep'; sha = 'a' * 40 }
                 )
             }
         }
-        Mock Get-RepositoryFileAtCommit {
-            $kind = switch -Wildcard ($Path) { 'avm/res/*' { 'res' } 'avm/ptn/*' { 'ptn' } 'avm/utl/*' { 'utl' } }
-            $metadata = [ordered]@{
-                '$schema' = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
-                moduleDisplayName = 'Test module'
-                moduleDescription = 'A test module.'
-                owners = @('alice')
-            }
-            switch ($kind) {
-                'res' {
-                    $metadata.canonicalType = 'Microsoft.Storage/storageAccounts'
-                    $metadata.telemetryIdPrefix = '46d3xbcp.res.testmodule'
+        Mock Get-RepositoryFilesAtCommit {
+            $files = @{}
+            foreach ($path in $Paths) {
+                $kind = switch -Wildcard ($path) { 'avm/res/*' { 'res' } 'avm/ptn/*' { 'ptn' } 'avm/utl/*' { 'utl' } }
+                $metadata = [ordered]@{
+                    '$schema' = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+                    moduleDisplayName = 'Test module'
+                    moduleDescription = 'A test module.'
+                    owners = @('alice')
                 }
-                'ptn' {
-                    $metadata.canonicalType = 'pattern/testmodule'
-                    $metadata.telemetryIdPrefix = '46d3xbcp.ptn.testmodule'
+                switch ($kind) {
+                    'res' {
+                        $metadata.canonicalType = 'Microsoft.Storage/storageAccounts'
+                        $metadata.telemetryIdPrefix = '46d3xbcp.res.testmodule'
+                    }
+                    'ptn' {
+                        $metadata.canonicalType = 'pattern/testmodule'
+                        $metadata.telemetryIdPrefix = '46d3xbcp.ptn.testmodule'
+                    }
+                    'utl' {
+                        $metadata.canonicalType = 'utility/testmodule'
+                    }
                 }
-                'utl' {
-                    $metadata.canonicalType = 'utility/testmodule'
+                $files[$path] = [pscustomobject]@{
+                    Sha = 'a' * 40
+                    Content = ($metadata | ConvertTo-Json -Depth 10)
                 }
             }
-            [pscustomobject]@{
-                Sha = 'a' * 40
-                Content = ($metadata | ConvertTo-Json -Depth 10)
-            }
+            $files
         }
         $snapshot = Get-AvmBicepCodeownersSnapshot -Template $script:template
         $snapshot.ModuleCount | Should -Be 3
         $snapshot.SourceSha | Should -Be $script:sourceSha
         Should -Invoke Invoke-RepositoryGitHubApi -Exactly 2
-        Should -Invoke Get-RepositoryFileAtCommit -Exactly 3 -ParameterFilter {
-            $Repository -ceq 'Azure/bicep-registry-modules' -and $Sha -ceq $script:sourceSha
+        Should -Invoke Get-RepositoryFilesAtCommit -Exactly 1 -ParameterFilter {
+            $Repository -ceq 'Azure/bicep-registry-modules' -and $Sha -ceq $script:sourceSha -and @($Paths).Count -eq 3
         }
     }
 }
