@@ -30,9 +30,9 @@ Describe 'Integration: MAPOTF module sources' -Tag 'Integration' -Skip:($env:AVM
         $script:processEnvironment.TF_CLI_ARGS_get = $null
         $script:config = Join-Path $TestDrive 'config'
         $null = New-Item -ItemType Directory -Path $script:config
-        foreach ($name in @('order_module_attrs.mptf.hcl', 'remove_avm_headers_for_azapi.mptf.hcl')) {
-            Copy-Item -LiteralPath (Join-Path $moduleRoot 'Resources' 'mapotf' 'common' $name) -Destination $script:config
-        }
+        Copy-Item `
+            -LiteralPath (Join-Path $moduleRoot 'Resources' 'mapotf' 'common' 'order_module_attrs.mptf.hcl') `
+            -Destination $script:config
 
         function Invoke-ModuleSourceProcess {
             param([string] $FilePath, [string[]] $ArgumentList, [string] $WorkingDirectory)
