@@ -44,7 +44,6 @@ section when cutting a release.
 - `avm update` safely upgrades Avm.Authoring in the CurrentUser scope. It reuses
   the cached PowerShell Gallery version lookup, reports when already current,
   supports `-WhatIf`, and remains available when the running module is stale.
-- Enforce the latest PowerShell Gallery release at every public command entry point. Confirmed stale versions fail with exit code 10 and an upgrade command; `-SkipModuleVersionCheck` warns and continues, as do Gallery lookup failures.
 - `avm check policy` for Terraform now evaluates each runnable `examples/*`
   directory against real `terraform show -json` output. The lifecycle honours
   `.e2eignore`, `pre.ps1`, `.env`, `post.ps1`, pinned
@@ -66,6 +65,11 @@ section when cutting a release.
 
 ### Changed
 
+- Commands no longer query PowerShell Gallery or require the latest
+  `Avm.Authoring` version before running. Use `avm update` to explicitly check
+  for and install an update. Source builds identify themselves with the
+  non-release manifest version `0.0.0`; release packaging stamps the tag
+  version into the distributed manifest.
 - Retired the completed AzAPI request-header cleanup from the Mapotf common
   profile, reducing work performed for every root, local-module, and example
   transform.
