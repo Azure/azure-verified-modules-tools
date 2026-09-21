@@ -1,68 +1,3 @@
-function ConvertFrom-AvmBicepOwnershipCsv {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content,
-        [Parameter(Mandatory)] [ValidateSet('res', 'ptn', 'utl')] [string] $Kind
-    )
-
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-
-    if ([string]::IsNullOrWhiteSpace($Content)) {
-        throw [System.IO.InvalidDataException]::new("The $Kind ownership index is empty.")
-    }
-
-    $reader = [System.IO.StringReader]::new($Content.TrimStart([char]0xFEFF))
-    $parser = [Microsoft.VisualBasic.FileIO.TextFieldParser]::new($reader)
-    try {
-        $parser.TextFieldType = [Microsoft.VisualBasic.FileIO.FieldType]::Delimited
-        $parser.SetDelimiters(',')
-        $parser.HasFieldsEnclosedInQuotes = $true
-        $parser.TrimWhiteSpace = $false
-        $headers = $parser.ReadFields()
-        $columns = @{}
-        for ($index = 0; $index -lt $headers.Count; $index++) {
-            $header = $headers[$index].Trim()
-            if (-not $header -or $columns.ContainsKey($header)) {
-                throw [System.IO.InvalidDataException]::new("The $Kind index has empty or duplicate column names.")
-            }
-            $columns[$header] = $index
-        }
-
-        $required = @('ModuleName', 'ModuleStatus', 'PrimaryModuleOwnerGHHandle', 'SecondaryModuleOwnerGHHandle')
-        foreach ($name in $required) {
-            if (-not $columns.ContainsKey($name)) {
-                throw [System.IO.InvalidDataException]::new("The $Kind index is missing column '$name'.")
-            }
-        }
-        $lastRequired = ($required | ForEach-Object { $columns[$_] } | Measure-Object -Maximum).Maximum
-        $rows = [System.Collections.Generic.List[object]]::new()
-        while (-not $parser.EndOfData) {
-            $fields = $parser.ReadFields()
-            if ($fields.Count -le $lastRequired -or $fields.Count -gt $headers.Count) {
-                throw [System.IO.InvalidDataException]::new("The $Kind index has an incomplete or oversized row near line $($parser.LineNumber).")
-            }
-            $rows.Add([pscustomobject]@{
-                ModuleName = $fields[$columns.ModuleName]
-                ModuleStatus = $fields[$columns.ModuleStatus]
-                PrimaryModuleOwnerGHHandle = $fields[$columns.PrimaryModuleOwnerGHHandle]
-                SecondaryModuleOwnerGHHandle = $fields[$columns.SecondaryModuleOwnerGHHandle]
-            })
-        }
-        if ($rows.Count -eq 0) {
-            throw [System.IO.InvalidDataException]::new("The $Kind ownership index has no module rows.")
-        }
-        return $rows.ToArray()
-    }
-    catch [Microsoft.VisualBasic.FileIO.MalformedLineException] {
-        throw [System.IO.InvalidDataException]::new("The $Kind ownership index is malformed CSV.", $_.Exception)
-    }
-    finally {
-        $parser.Dispose()
-        $reader.Dispose()
-    }
-}
-
 function ConvertTo-AvmCodeownerHandle {
     [CmdletBinding()]
     param([AllowNull()] [AllowEmptyString()] [string] $Value)
@@ -74,8 +9,11 @@ function ConvertTo-AvmCodeownerHandle {
     if ($handle.StartsWith('@', [System.StringComparison]::Ordinal)) {
         $handle = $handle.Substring(1)
     }
+    if ($handle -cmatch '^(?<org>[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)/(?<team>[a-z0-9]+(?:-[a-z0-9]+)*)$') {
+        return "@$($Matches.org)/$($Matches.team)"
+    }
     if ($handle -cnotmatch '^(?=.{1,39}$)[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*$') {
-        throw [System.IO.InvalidDataException]::new("Invalid individual GitHub handle in the ownership index: '$Value'.")
+        throw [System.IO.InvalidDataException]::new("Invalid GitHub owner handle in module metadata: '$Value'.")
     }
     return '@' + $handle.ToLowerInvariant()
 }
@@ -133,7 +71,7 @@ function Assert-AvmCodeownersContent {
             $owners = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             for ($index = 1; $index -lt $tokens.Count - 1; $index++) {
                 $normalized = ConvertTo-AvmCodeownerHandle -Value $tokens[$index]
-                if (-not $tokens[$index].StartsWith('@') -or -not $owners.Add($normalized)) {
+                if (-not $tokens[$index].StartsWith('@') -or $tokens[$index] -ceq $fallback -or -not $owners.Add($normalized)) {
                     throw [System.IO.InvalidDataException]::new("Duplicate or invalid owners for '$path'.")
                 }
             }
@@ -155,7 +93,7 @@ function Assert-AvmCodeownersContent {
     }
     if ($AllowLegacyDefault -and $paths.Count -eq 0 -and ($staticLines -join "`n") -ceq ($required -join "`n")) {
         $automationHeader = @(
-            '# This file is generated automatically from the AVM module indexes. Do not edit manually.'
+            '# This file is generated automatically from each root Bicep module''s metadata.json. Do not edit manually.'
             '# Template: https://github.com/Azure/azure-verified-modules-tools/blob/main/repository-management/bicep-codeowners-sync/CODEOWNERS.template'
         )
         $staticLines.InsertRange(0, [string[]]$automationHeader)
@@ -169,59 +107,57 @@ function Assert-AvmCodeownersContent {
 }
 
 function ConvertTo-AvmBicepCodeowners {
+    <#
+    .SYNOPSIS
+        Render the Bicep CODEOWNERS module rows from discovered root-module metadata.
+    .DESCRIPTION
+        Each top-level avm/{res,ptn,utl}/{provider}/{module} directory becomes one
+        rooted, trailing-slash rule listing every owner from that module's
+        metadata.json `owners` array, in file order and deduplicated case-insensitively,
+        followed by the shared fallback team. There is no owner-count limit and no
+        module-status filtering: an empty `owners` array simply yields the fallback
+        team alone.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)] [hashtable] $Indexes,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Modules,
         [Parameter(Mandatory)] [string] $Template
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if ($Indexes.Count -ne 3 -or -not $Indexes.ContainsKey('res') -or
-        -not $Indexes.ContainsKey('ptn') -or -not $Indexes.ContainsKey('utl')) {
-        throw [System.IO.InvalidDataException]::new('All three Bicep ownership indexes are required.')
+    if ($Modules.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new('At least one Bicep root module is required to generate CODEOWNERS.')
     }
 
-    $modules = @{}
+    $moduleOwnersByName = @{}
+    $kindCounts = @{ res = 0; ptn = 0; utl = 0 }
+    foreach ($entry in $Modules) {
+        $name = $entry.Name.Trim().Trim('/')
+        if ($name -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$' -or
+            $moduleOwnersByName.ContainsKey($name)) {
+            throw [System.IO.InvalidDataException]::new("Invalid or duplicate module path: '$name'.")
+        }
+        $kindCounts[$name.Split('/')[1]]++
+        $moduleOwnersByName[$name] = @($entry.Owners)
+    }
     foreach ($kind in @('res', 'ptn', 'utl')) {
-        $topLevelCount = 0
-        foreach ($row in @(ConvertFrom-AvmBicepOwnershipCsv -Content $Indexes[$kind] -Kind $kind)) {
-            $name = $row.ModuleName.Trim().Trim('/')
-            if ($name -cnotmatch "^avm/$kind/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)+$" -or
-                $modules.ContainsKey($name)) {
-                throw [System.IO.InvalidDataException]::new("Invalid or duplicate module path in the $kind index: '$name'.")
-            }
-            if ($name.Split('/').Count -ne 4) {
-                continue
-            }
-            $status = $row.ModuleStatus.Trim()
-            if ($status -notin @('Available', 'Orphaned', 'Proposed', 'Deprecated')) {
-                throw [System.IO.InvalidDataException]::new("Unknown module status for '$name': '$status'.")
-            }
-            $modules[$name] = @{
-                Row = $row
-                Status = $status
-            }
-            $topLevelCount++
-        }
-        if ($topLevelCount -eq 0) {
-            throw [System.IO.InvalidDataException]::new("The $kind ownership index has no top-level modules.")
+        if ($kindCounts[$kind] -eq 0) {
+            throw [System.IO.InvalidDataException]::new("No top-level Bicep $kind modules were discovered.")
         }
     }
 
-    [string[]] $names = @($modules.Keys)
+    [string[]] $names = @($moduleOwnersByName.Keys)
     [System.Array]::Sort($names, [System.StringComparer]::Ordinal)
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $names) {
-        $module = $modules[$name]
         $owners = [System.Collections.Generic.List[string]]::new()
-        if ($module.Status -ine 'Orphaned') {
-            foreach ($value in @($module.Row.PrimaryModuleOwnerGHHandle, $module.Row.SecondaryModuleOwnerGHHandle)) {
-                $handle = ConvertTo-AvmCodeownerHandle -Value $value
-                if ($handle -and -not $owners.Contains($handle)) {
-                    $owners.Add($handle)
-                }
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($value in $moduleOwnersByName[$name]) {
+            $handle = ConvertTo-AvmCodeownerHandle -Value $value
+            if ($handle -and $seen.Add($handle)) {
+                $owners.Add($handle)
             }
         }
         $owners.Add('@Azure/azure-verified-modules-module-owners')

@@ -31,7 +31,7 @@ if ($PSCmdlet.ShouldProcess($destination, 'Write locally generated CODEOWNERS; n
 [pscustomobject]@{
     Path = $destination
     SourceSha = $snapshot.SourceSha
-    IndexShas = $snapshot.IndexShas
+    MetadataShas = $snapshot.MetadataShas
     BlobSha = $snapshot.BlobSha
     ModuleCount = $snapshot.ModuleCount
     TemplateSha256 = (Get-FileHash -LiteralPath $templatePath -Algorithm SHA256).Hash.ToLowerInvariant()

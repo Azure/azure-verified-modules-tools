@@ -2,8 +2,8 @@
 
 The [Repository Management - Bicep Sync workflow](../.github/workflows/repository-management-bicep-sync.yml)
 renders the [source template](../repository-management/bicep-codeowners-sync/CODEOWNERS.template)
-from the official Bicep resource, pattern, and utility CSV indexes. Its CODEOWNERS
-job targets only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
+from every root module's `metadata.json` in `Azure/bicep-registry-modules`. Its
+CODEOWNERS job targets only `Azure/bicep-registry-modules/.github/CODEOWNERS`.
 Bicep metadata files are added directly through a repository change, not this
 workflow.
 The separate BAMI test-tenant job publishes nonsecret execution variables only
@@ -13,14 +13,15 @@ activation variable is required.
 
 ## Ownership and template
 
-Each indexed top-level `avm/{res,ptn,utl}/{provider}/{module}` gets one rooted,
-trailing-slash rule. Its primary and secondary GitHub handles are trimmed,
-lowercased, validated, and deduplicated in that order, followed by
-`@Azure/azure-verified-modules-module-owners`. Ownerless and orphaned modules use
-only that group; orphaned modules ignore stale individual handles. Available,
-proposed, and deprecated modules are included. Child modules have no separate
-rows: their parent's directory rule applies recursively, regardless of child
-index metadata. Retired `ModuleOwnersGHTeam` values are never used.
+Each discovered top-level `avm/{res,ptn,utl}/{provider}/{module}` gets one
+rooted, trailing-slash rule. Its owners come from that module's own
+`metadata.json` `owners` array, in file order, validated and deduplicated
+case-insensitively, followed by `@Azure/azure-verified-modules-module-owners`.
+There is no limit on the number of owners; both individual GitHub handles and
+`@org/team-slug` handles are supported, exactly as the metadata schema allows.
+Ownerless modules (an empty `owners` array) use only that group. Child modules
+have no separate rows: their parent's directory rule applies recursively.
+Module status is not consulted; every discovered root module is included.
 
 The template preserves the tooling catch-all, shared `/avm/` default, automation
 header, and governance-test and `.e2eignore` overrides. Its final rule is
@@ -36,18 +37,18 @@ file without automation-header comments, and the old module-contributors
 default. Generated content, new candidates, and merged output must use the
 current template with the exact final metadata rule.
 
-All three CSVs are read from `docs/static/module-indexes/Bicep*Modules.csv` at
-one resolved commit in `Azure/Azure-Verified-Modules`. These are the files behind
-the official `https://aka.ms/avm/index/bicep/{res,ptn,utl}/csv` links. Downloads
-must have valid UTF-8, matching byte counts and Git blob hashes, required columns,
-well-formed CSV, and at least one top-level module per index. CSV content is
-never executed.
+Every `metadata.json` is read from the recursive Git tree of one resolved
+commit in `Azure/bicep-registry-modules`, matching `avm/(res|ptn|utl)/{provider}/{module}/metadata.json`
+exactly two levels deep. Each file is fetched and validated against the packaged
+`Avm.Authoring` metadata schema (`Test-AvmModuleMetadata`); an invalid or
+unreadable file, or a truncated tree listing, fails the whole run rather than
+silently dropping a module. Metadata content is never executed.
 
 ## Local export
 
 PowerShell 7.4+ and GitHub CLI are required. This command reads only the public
-index repository and writes the specified local file; it never writes a remote
-branch, opens a pull request, or merges:
+`Azure/bicep-registry-modules` repository and writes the specified local file;
+it never writes a remote branch, opens a pull request, or merges:
 
 ```powershell
 .\repository-management\bicep-codeowners-sync\scripts\Export-BicepCodeowners.ps1 `
@@ -55,8 +56,8 @@ branch, opens a pull request, or merges:
 ```
 
 The output directory must exist. Pass `-SourceSha <40-character-commit>` to
-reproduce an earlier snapshot. The result includes the source commit, CSV blob
-hashes, generated blob hash, module count, and template SHA-256.
+reproduce an earlier snapshot. The result includes the source commit, per-module
+metadata.json blob hashes, generated blob hash, module count, and template SHA-256.
 
 ## Workflow modes and schedule
 
@@ -120,8 +121,8 @@ this documentation does neither. See the [rollout plan](metadata-rollout.md).
   before automatic merging can succeed; runtime enforces this prerequisite.
 - Ensure every named owner and the shared team have the repository write access
   GitHub requires for CODEOWNERS. Invalid-owner diagnostics must be resolved by
-  authorized operators or corrected in the source CSVs. The sync never drops
-  rejected individuals or changes access to make a merge succeed.
+  authorized operators or corrected in the source module's `metadata.json`. The
+  sync never drops rejected individuals or changes access to make a merge succeed.
 
 A production workflow invocation or configuration change requires operator
 approval. Development and local regression tests do not dispatch this workflow,
