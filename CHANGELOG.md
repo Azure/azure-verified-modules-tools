@@ -69,6 +69,12 @@ section when cutting a release.
 - Retired the completed AzAPI request-header cleanup from the Mapotf common
   profile, reducing work performed for every root, local-module, and example
   transform.
+- Bumped pinned `mapotf` to 0.2.2 (was 0.2.1), which adds a persistent
+  provider-schema cache shared across mapotf processes. Warm runs of the full
+  transform stage against the `terraform-azure-avm-res-mock` fixture dropped
+  from a 44.79s mean to a 5.65s mean — about 87% faster — with byte-identical
+  output verified against 0.2.1. See
+  [Azure/mapotf#131](https://github.com/Azure/mapotf/pull/131).
 - Terraform repository sync reads each repository's root `metadata.json` instead
   of the tools-local inventory CSV, including every owner and qualified owning
   team. GitHub archive state is authoritative. New repositories publish metadata
