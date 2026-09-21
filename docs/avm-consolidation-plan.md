@@ -425,8 +425,11 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   Catalog rows require valid metadata, without legacy-record fallback or ecosystem
   mode options. Explicit child helpers retain their family kind and ownership
   in catalog JSON under `helper`, with null ARM fields, but are omitted from
-  every generated CSV. Source CSV row removals, including helper rows, fail by
-  default; an explicit force option
+  every generated CSV. Validated deprecated, unpublished modules are excluded
+  from CSV and JSON with actionable deletion warnings, without deleting source
+  or changing the approved MAR mirror. Only their exact implementation identities
+  bypass the source-row removal guard. Other removals, including helper rows,
+  hold back affected outputs by default; an explicit force option
   permits intentional removals without weakening validation or publication controls.
   Permanent authoring commands never read CSV inputs. Temporary backfill lives
   outside the module; ordinary checks validate local metadata and warn on

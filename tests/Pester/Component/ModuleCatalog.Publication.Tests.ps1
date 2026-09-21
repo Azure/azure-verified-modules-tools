@@ -72,10 +72,12 @@ BeforeAll {
             [string] $Root,
             [AllowEmptyCollection()][object[]] $SourceRows,
             [AllowEmptyCollection()][object[]] $OutputRows,
+            [object[]] $ExcludedModules = @(),
+            [string] $SourceFile = 'BicepResourceModules.csv',
             [switch] $Force,
             [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
         )
-        $output = @($Configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
+        $output = @($Configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq $SourceFile })[0]
         $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description')
         Save-CatalogPublicationFixtureFile -Root $Root -RelativePath $output.bundlePath `
             -Text (ConvertTo-AvmCatalogCsv -Headers $headers -Rows $OutputRows) -Configuration $Configuration
@@ -84,9 +86,30 @@ BeforeAll {
         $report.sourceCsvRows[$output.sourceFile] = Get-AvmCatalogCsvRowSnapshot -Rows $SourceRows
         $report.csvRowRemovals = Get-AvmCatalogCsvRowRemovals -SourceRows $report.sourceCsvRows[$output.sourceFile] `
             -OutputRows (Get-AvmCatalogCsvRowSnapshot -Rows $OutputRows) -Output $output -Configuration $Configuration
+        $report['excludedModules'] = $ExcludedModules
+        $excludedKeys = Get-AvmCatalogExcludedModuleKey -Modules $ExcludedModules -Configuration $Configuration
+        $report.csvRowRemovals = Select-AvmCatalogCsvRowRemoval -Removals $report.csvRowRemovals `
+            -ExcludedModuleKeys $excludedKeys -Configuration $Configuration
         $report.csvRowRemovalsForced = [bool]$Force
         Save-CatalogPublicationFixtureFile -Root $Root -RelativePath $reportOutput.bundlePath `
             -Text (ConvertTo-AvmCatalogJson -Value $report) -Configuration $Configuration
+    }
+
+    function New-CatalogPublicationExclusion {
+        param([string] $Ecosystem = 'bicep')
+
+        $repository = if ($Ecosystem -eq 'bicep') { 'Azure/bicep-registry-modules' } else { 'Azure/terraform-azurerm-avm-res-storage-storageaccount' }
+        $path = if ($Ecosystem -eq 'bicep') { 'avm/res/storage/storage-account' } else { '.' }
+        $identity = New-AvmCatalogIdentity -Ecosystem $Ecosystem -Repository $repository -ModulePath $path
+        $record = New-AvmCatalogRecord -Identity $identity -Data @{
+            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Storage account'
+            moduleDescription = 'Storage account module.'
+            alternativeNames = @(); comments = ''; owners = @(); telemetryIdPrefix = $null
+        }
+        $record.moduleStatus = 'Deprecated'
+        $record.registry = New-AvmCatalogRegistryResult -MarRegistered $(if ($Ecosystem -eq 'bicep') { $true } else { $null })
+        return $record
     }
 
     function New-CatalogPublicationSourceFixture {
@@ -235,6 +258,105 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
 }
 
 Describe 'Component: module catalog publication row retention' -Tag Component {
+    It 'permits only the verified <Ecosystem> exclusion without a publication override' -TestCases @(
+        @{ Ecosystem = 'bicep'; File = 'BicepResourceModules.csv' }
+        @{ Ecosystem = 'terraform'; File = 'TerraformResourceModules.csv' }
+    ) {
+        param($Ecosystem, $File)
+        $configuration = Read-AvmCatalogConfiguration
+        $root = New-CatalogPublicationFixture
+        $excluded = New-CatalogPublicationExclusion -Ecosystem $Ecosystem
+        $row = [ordered]@{}
+        foreach ($key in $sourceRow.Keys) { $row[$key] = $sourceRow[$key] }
+        $row.ModuleName = $excluded.moduleName
+        $row.RepoURL = $excluded.repoURL
+        Set-CatalogPublicationFixtureRows -Root $root -SourceFile $File -SourceRows @($row) -OutputRows @() -ExcludedModules @($excluded)
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Not -Throw
+        $source = New-CatalogPublicationSourceFixture
+        $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq $File })[0]
+        [System.IO.File]::WriteAllText((Join-Path $source $output.sourcePath),
+            (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows @($row)))
+        (Get-AvmCatalogPublicationRowRemovals -BundlePath $root -Configuration $configuration -SourceRoot $source) |
+            Should -HaveCount 0
+        $row.ModuleName += '-changed'
+        [System.IO.File]::WriteAllText((Join-Path $source $output.sourcePath),
+            (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows @($row)))
+        { Get-AvmCatalogPublicationRowRemovals -BundlePath $root -Configuration $configuration -SourceRoot $source } |
+            Should -Throw '*source CSV row evidence does not match*'
+    }
+
+    It 'rejects exclusion evidence with <Case> even when force is supplied' -TestCases @(
+        @{ Case = 'non-array exclusions'; Change = { param($report) $report.excludedModules = @{} } }
+        @{ Case = 'missing exclusions'; Change = { param($report) $report.Remove('excludedModules') } }
+        @{ Case = 'duplicate exclusion'; Change = { param($report) $report.excludedModules += $report.excludedModules[0] } }
+        @{ Case = 'missing metadata source'; Change = { param($report) $report.excludedModules[0].Remove('metadataSource') } }
+        @{ Case = 'legacy metadata source'; Change = { param($report) $report.excludedModules[0].metadataSource = 'legacy' } }
+        @{ Case = 'active unpublished module'; Change = { param($report) $report.excludedModules[0].moduleStatus = 'Proposed' } }
+        @{ Case = 'published deprecated module'; Change = { param($report) $report.excludedModules[0].registry = New-AvmCatalogRegistryResult -Version '1.0.0' -FirstPublished ([datetime]'2024-02-01') -MarRegistered $true } }
+        @{ Case = 'inconsistent registry version'; Change = { param($report) $report.excludedModules[0].registry.currentVersion = '1.0.0' } }
+        @{ Case = 'inconsistent downloads'; Change = { param($report) $report.excludedModules[0].registry.downloads = 1 } }
+        @{ Case = 'missing MAR evidence'; Change = { param($report) $report.excludedModules[0].registry.marRegistered = $null } }
+        @{ Case = 'invalid canonical type'; Change = { param($report) $report.excludedModules[0].canonicalType = 'invalid' } }
+        @{ Case = 'mismatched module name'; Change = { param($report) $report.excludedModules[0].moduleName = 'avm/res/key-vault/vault' } }
+        @{ Case = 'mismatched module path'; Change = { param($report) $report.excludedModules[0].modulePath = 'avm/res/key-vault/vault' } }
+        @{ Case = 'unsupported repository'; Change = { param($report) $report.excludedModules[0].repository = 'Azure/unrelated-repository' } }
+        @{ Case = 'mismatched URL'; Change = { param($report) $report.excludedModules[0].repoURL += '/unrelated' } }
+        @{ Case = 'mismatched provider'; Change = { param($report) $report.excludedModules[0].provider = 'azurerm' } }
+        @{ Case = 'unrelated valid identity'; Change = {
+                param($report)
+                $record = $report.excludedModules[0]
+                $record.moduleName = 'avm/res/key-vault/vault'
+                $record.modulePath = $record.moduleName
+                $record.familyModule = $record.modulePath
+                $record.repoURL = "https://github.com/Azure/bicep-registry-modules/tree/main/$($record.modulePath)"
+            } }
+    ) {
+        param($Change)
+        $root = New-CatalogPublicationFixture
+        Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() `
+            -ExcludedModules @((New-CatalogPublicationExclusion))
+        $relative = 'v1/migration-report.json'
+        $report = Read-AvmCatalogJson -Path (Join-Path $root $relative)
+        & $Change $report
+        Save-CatalogPublicationFixtureFile -Root $root -RelativePath $relative -Text (ConvertTo-AvmCatalogJson -Value $report)
+        foreach ($force in @($false, $true)) {
+            { Test-AvmCatalogPublicationBundle -Path $root -Force:$force } | Should -Throw
+        }
+    }
+
+    It 'rejects exclusions still present in the generated <Output>' -TestCases @(
+        @{ Output = 'CSV' }
+        @{ Output = 'JSON' }
+    ) {
+        param($Output)
+        $root = New-CatalogPublicationFixture
+        $excluded = New-CatalogPublicationExclusion
+        Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() -ExcludedModules @($excluded)
+        if ($Output -eq 'CSV') {
+            Save-CatalogPublicationFixtureFile -Root $root -RelativePath 'docs/BicepResourceModules.csv' `
+                -Text (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows @($sourceRow))
+        }
+        else {
+            $catalog = [ordered]@{
+                '$schema' = $catalogSchemaId; schemaVersion = 1
+                modules = @{ 'Microsoft.Storage/storageAccounts' = @{ bicep = @($excluded); terraform = @() } }
+            }
+            Save-CatalogPublicationFixtureFile -Root $root -RelativePath 'docs/v1/modules.json' -Text (ConvertTo-AvmCatalogJson -Value $catalog)
+        }
+        { Test-AvmCatalogPublicationBundle -Path $root -Force } | Should -Throw '*Excluded module remains*'
+    }
+
+    It 'hash-protects excluded records before accepting any row-removal permission' {
+        $root = New-CatalogPublicationFixture
+        Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() `
+            -ExcludedModules @((New-CatalogPublicationExclusion))
+        $path = Join-Path $root 'v1' 'migration-report.json'
+        $report = Read-AvmCatalogJson -Path $path
+        $report.excludedModules[0].moduleStatus = 'Available'
+        [System.IO.File]::WriteAllText($path, (ConvertTo-AvmCatalogJson -Value $report))
+        { Test-AvmCatalogPublicationBundle -Path $root -Force } | Should -Throw '*hash mismatch*v1/migration-report.json*'
+    }
+
     It 'requires an explicit publication override even for a bundle generated with force' {
         $root = New-CatalogPublicationFixture
         Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() -Force
@@ -369,8 +491,10 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         @{ Case = 'no changes without a pending candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; NoChange = $true }
         @{ Case = 'human edits remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'human' }
         @{ Case = 'unrelated files remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'unrelated' }
+        @{ Case = 'verified deprecated exclusion'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true }
+        @{ Case = 'exclusion with unrelated held-back output'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true; HoldUnrelated = $true }
     ) {
-        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false)
+        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false, $Exclude = $false, $HoldUnrelated = $false)
 
         $configuration = Read-AvmCatalogConfiguration
         $bundle = New-CatalogPublicationFixture
@@ -378,6 +502,35 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         $source = New-CatalogPublicationSourceFixture
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         $reportTarget = 'docs/static/module-indexes/v1/migration-report.json'
+        if ($Exclude) {
+            $excluded = New-CatalogPublicationExclusion
+            Set-CatalogPublicationFixtureRows -Root $bundle -SourceRows @($sourceRow) -OutputRows @() -ExcludedModules @($excluded)
+            [System.IO.File]::WriteAllText((Join-Path $source 'docs/static/module-indexes/BicepResourceModules.csv'),
+                (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows @($sourceRow)))
+        }
+        if ($HoldUnrelated) {
+            $record = New-CatalogPublicationExclusion -Ecosystem terraform
+            $row = [ordered]@{}
+            foreach ($key in $sourceRow.Keys) { $row[$key] = $sourceRow[$key] }
+            $row.ModuleName = $record.moduleName
+            $row.RepoURL = $record.repoURL
+            $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'TerraformResourceModules.csv' })[0]
+            [System.IO.File]::WriteAllText((Join-Path $source $output.sourcePath),
+                (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows @($row)))
+            $reportPath = 'v1/migration-report.json'
+            $report = Read-AvmCatalogJson -Path (Join-Path $bundle $reportPath)
+            $report.sourceCsvRows[$output.sourceFile] = Get-AvmCatalogCsvRowSnapshot -Rows @($row)
+            $report.csvRowRemovals = Get-AvmCatalogCsvRowRemovals -SourceRows $report.sourceCsvRows[$output.sourceFile] `
+                -OutputRows @() -Output $output -Configuration $configuration
+            $report['heldBackSourceFiles'] = @($output.sourceFile)
+            Save-CatalogPublicationFixtureFile -Root $bundle -RelativePath $reportPath -Text (ConvertTo-AvmCatalogJson -Value $report)
+            $baseCatalog = Join-Path $source 'docs/static/module-indexes/v1/modules.json'
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($baseCatalog))
+            [System.IO.File]::WriteAllText($baseCatalog, (ConvertTo-AvmCatalogJson -Value @{
+                        '$schema' = $catalogSchemaId; schemaVersion = 1
+                        modules = @{ 'Microsoft.Storage/storageAccounts' = @{ bicep = @($excluded); terraform = @() } }
+                    }))
+        }
         if ($BaseReport) {
             $file = Join-Path $source $reportTarget
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
@@ -502,10 +655,20 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         $changes | Should -Not -Match 'migration-report'
         $changes | Should -Match '(?m)^docs/static/module-indexes/BicepResourceModules\.csv$'
         $changes | Should -Not -Match 'test-.*Modules\.csv'
-        $changes | Should -Match 'v1/modules.json'
+        if ($HoldUnrelated) {
+            $changes | Should -Not -Match 'TerraformResourceModules\.csv|v1/modules\.json'
+            (Invoke-CatalogFixtureGit $remote @('show', "${branch}:docs/static/module-indexes/v1/modules.json")).TrimEnd() |
+                Should -BeExactly ([System.IO.File]::ReadAllText($baseCatalog).TrimEnd())
+        }
+        else {
+            $changes | Should -Match 'v1/modules.json'
+        }
         foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
             $published = Invoke-CatalogFixtureGit $remote @('show', "${branch}:$($output.targetPath)")
-            $published.TrimEnd() | Should -BeExactly ([System.IO.File]::ReadAllText((Join-Path $bundle $output.bundlePath)).TrimEnd())
+            $expectedPath = if ($HoldUnrelated -and $output.sourceFile -eq 'TerraformResourceModules.csv') {
+                Join-Path $source $output.sourcePath
+            } else { Join-Path $bundle $output.bundlePath }
+            $published.TrimEnd() | Should -BeExactly ([System.IO.File]::ReadAllText($expectedPath).TrimEnd())
         }
         $state.Calls | Should -Contain $(if ($Existing) { 'PATCH' } else { 'POST' })
     }

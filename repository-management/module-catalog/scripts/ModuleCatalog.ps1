@@ -635,7 +635,8 @@ function New-AvmCatalogBundle {
             throw [System.IO.InvalidDataException]::new(
                 "Module $($item.Identity.Key) has metadata but no source, yet the registry reports it as $($record.registry.status). Only proposed modules may be registered ahead of their source.")
         }
-        if ($record.ecosystem -eq 'terraform' -and -not $archivedRepositories.ContainsKey($record.repository)) {
+        if ($record.ecosystem -eq 'terraform' -and
+            (-not $archivedRepositories.ContainsKey($record.repository) -or $archivedRepositories[$record.repository] -isnot [bool])) {
             throw [System.IO.InvalidDataException]::new("Repository archive snapshot is incomplete: $($record.repository). Collect a new snapshot.")
         }
         $deprecated = if ($record.ecosystem -eq 'bicep') {
@@ -675,7 +676,8 @@ function New-AvmCatalogBundle {
         if ($record.metadataSource -eq 'metadata') {
             $missingOwners = [System.Collections.Generic.List[string]]::new()
             $names = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub -Missing $missingOwners
-            if ($missingOwners.Count -gt 0) {
+            if ($missingOwners.Count -gt 0 -and
+                -not ($record.moduleStatus -ceq 'Deprecated' -and $record.registry.status -ceq 'not-published')) {
                 $ownerDefects.Add([ordered]@{
                         sourceFile = [string]$item.File
                         moduleName = [string]$record.moduleName
@@ -720,12 +722,46 @@ function New-AvmCatalogBundle {
     if (-not (Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction Stop)) {
         throw [System.IO.InvalidDataException]::new('Generated module catalog failed its packaged output schema.')
     }
+    $excludedItems = @($Inventory.Items | Where-Object {
+            $_.Record.moduleStatus -ceq 'Deprecated' -and $_.Record.registry.status -ceq 'not-published'
+        })
+    $excludedModules = @($excludedItems | ForEach-Object { $_.Record })
+    $excludedKeys = Get-AvmCatalogExcludedModuleKey -Modules $excludedModules -Configuration $configuration -SchemaPath $SchemaPath
+    $excludedRows = [System.Collections.Generic.HashSet[object]]::new()
+    foreach ($item in $excludedItems) {
+        $null = $excludedRows.Add($item.Row)
+        $record = $item.Record
+        $recommendation = if ($record.ecosystem -ceq 'terraform' -and $record.modulePath -ceq '.') {
+            'Consider deleting the unused repository if it contains no published modules; otherwise delete only this module''s unused source.'
+        }
+        else {
+            'Consider deleting this unused module''s source, preserving any published descendants.'
+        }
+        Write-Warning ("Omitted deprecated, unpublished module {0} (module path '{1}') from the generated CSV/JSON indexes. {2}" -f
+            $record.repository, $record.modulePath, $recommendation)
+    }
+    foreach ($canonical in @($modules.Keys)) {
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            $modules[$canonical][$ecosystem] = @($modules[$canonical][$ecosystem] | Where-Object {
+                    -not $excludedKeys.Contains((Get-AvmCatalogKey -Ecosystem $_.ecosystem -Repository $_.repository -ModulePath $_.modulePath))
+                })
+        }
+        if ($modules[$canonical].bicep.Count -eq 0 -and $modules[$canonical].terraform.Count -eq 0) {
+            $modules.Remove($canonical)
+        }
+    }
+    $json = ConvertTo-AvmCatalogJson -Value $catalog
+    if (-not (Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction Stop)) {
+        throw [System.IO.InvalidDataException]::new('Filtered module catalog failed its packaged output schema.')
+    }
     $report = $Inventory.Report
+    $report['excludedModules'] = $excludedModules
     $report.parity.bicepOnly = @($modules.Keys | Where-Object { $modules[$_].terraform.Count -eq 0 })
     $report.parity.terraformOnly = @($modules.Keys | Where-Object { $modules[$_].bicep.Count -eq 0 })
     $report['counts'] = [ordered]@{
-        catalogEntries = $Inventory.Items.Count
+        catalogEntries = $Inventory.Items.Count - $excludedModules.Count
         adoptedEntries = $Inventory.Items.Count
+        excludedEntries = $excludedModules.Count
         legacyRows = [ordered]@{}
         csvRows = [ordered]@{}
     }
@@ -738,24 +774,26 @@ function New-AvmCatalogBundle {
         $table = $Inventory.Tables[$file]
         $sourceCsvRows[$file] = $table.SourceRows
         $bundlePathBySourceFile[$file] = $output.bundlePath
-        $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $table.Rows.ToArray()
+        $rows = @($table.Rows | Where-Object { -not $excludedRows.Contains($_) })
+        $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $rows
         foreach ($removal in (Get-AvmCatalogCsvRowRemovals -SourceRows $table.SourceRows -OutputRows $outputRows `
                 -Output $output -Configuration $configuration)) {
             $removals.Add($removal)
         }
-        $sortedRows = $table.Rows.ToArray()
+        $sortedRows = $rows
         [Array]::Sort($sortedRows, [Comparison[object]] {
                 param($left, $right)
                 [string]::Compare([string]$left['ModuleName'], [string]$right['ModuleName'], [StringComparison]::Ordinal)
             })
         $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $sortedRows
         $report.counts.legacyRows[$file] = $table.OriginalRowCount
-        $report.counts.csvRows[$file] = $table.Rows.Count
+        $report.counts.csvRows[$file] = $rows.Count
     }
     $renames = @(if ($Inventory.PSObject.Properties['RowRenames']) { $Inventory.RowRenames })
     $reasons = if ($Inventory.PSObject.Properties['RowRemovalReasons']) { $Inventory.RowRemovalReasons } else { $null }
     $report['sourceCsvRows'] = $sourceCsvRows
-    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames
+    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames `
+        -ExcludedModuleKeys $excludedKeys -Configuration $configuration
     $report['csvRowRemovals'] = $retained
     $report['csvRowRemovalsForced'] = [bool]$Force
     $report['csvRowRenames'] = $renames

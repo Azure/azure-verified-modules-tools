@@ -46,3 +46,49 @@ function Test-AvmCatalogDeprecationMarker {
     }
     return $true
 }
+
+function Get-AvmCatalogExcludedModuleKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Modules,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Configuration,
+        [string] $SchemaPath
+    )
+
+    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    if ($Modules.Count -eq 0) {
+        return ,$keys
+    }
+    if (-not $SchemaPath) {
+        $output = Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog
+        $SchemaPath = Join-Path $PSScriptRoot '..' '..' '..' $output.schema
+    }
+    $schema = Read-AvmCatalogJson -Path $SchemaPath
+    $exclusionSchema = [ordered]@{
+        '$schema' = $schema['$schema']
+        type = 'array'
+        items = @{ '$ref' = '#/definitions/module' }
+        definitions = $schema.definitions
+    }
+    if (-not (Test-Json -Json (ConvertTo-AvmCatalogJson -Value $Modules) `
+                -Schema (ConvertTo-AvmCatalogJson -Value $exclusionSchema) -ErrorAction Stop)) {
+        throw [System.IO.InvalidDataException]::new('Excluded modules must conform to the packaged catalog record schema.')
+    }
+    foreach ($module in $Modules) {
+        if ($module.moduleStatus -cne 'Deprecated' -or $module.registry.status -cne 'not-published' -or
+            ($module.ecosystem -ceq 'bicep' -and $module.registry.marRegistered -isnot [bool]) -or
+            ($module.ecosystem -ceq 'terraform' -and $null -ne $module.registry.marRegistered)) {
+            throw [System.IO.InvalidDataException]::new('Only validated deprecated, unpublished modules may be excluded from the catalog.')
+        }
+        $identity = New-AvmCatalogIdentity -Ecosystem $module.ecosystem -Repository $module.repository `
+            -ModulePath $module.modulePath -Configuration $Configuration
+        if ($module.moduleName -cne $identity.ModuleName -or $module.moduleType -cne $identity.ModuleType -or
+            $module.repoURL -cne $identity.RepoURL -or $module.provider -cne $identity.Provider) {
+            throw [System.IO.InvalidDataException]::new("Excluded module identity disagrees with its repository and path: $($identity.Key)")
+        }
+        if (-not $keys.Add($identity.Key)) {
+            throw [System.IO.InvalidDataException]::new("Duplicate excluded module identity: $($identity.Key)")
+        }
+    }
+    return ,$keys
+}

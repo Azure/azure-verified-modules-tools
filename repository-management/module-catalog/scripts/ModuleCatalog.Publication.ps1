@@ -153,6 +153,21 @@ function Get-AvmCatalogPublicationRowRemovals {
         $report.csvRowRemovalsForced -isnot [bool]) {
         throw [System.IO.InvalidDataException]::new('Catalog publication requires source CSV row evidence. Collect and generate again.')
     }
+    if ($report.Contains('excludedModules') -and $report.excludedModules -isnot [array]) {
+        throw [System.IO.InvalidDataException]::new('Excluded module evidence must be an array.')
+    }
+    $excludedModules = @(if ($report.Contains('excludedModules')) { $report.excludedModules })
+    $excludedKeys = Get-AvmCatalogExcludedModuleKey -Modules $excludedModules -Configuration $Configuration
+    $catalogOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog
+    $catalog = Read-AvmCatalogJson -Path (Join-Path $BundlePath $catalogOutput.bundlePath)
+    foreach ($group in $catalog.modules.Values) {
+        foreach ($record in @($group.bicep) + @($group.terraform)) {
+            $key = Get-AvmCatalogKey -Ecosystem $record.ecosystem -Repository $record.repository -ModulePath $record.modulePath
+            if ($excludedKeys.Contains($key)) {
+                throw [System.IO.InvalidDataException]::new("Excluded module remains in the generated catalog: $key")
+            }
+        }
+    }
     $outputs = @($Configuration.outputs | Where-Object kind -eq 'csv')
     Assert-AvmCatalogManifestKeys -Value $report.sourceCsvRows -Keys @($outputs.sourceFile)
     $removals = [System.Collections.Generic.List[object]]::new()
@@ -172,13 +187,20 @@ function Get-AvmCatalogPublicationRowRemovals {
         }
         $generated = Read-AvmCatalogCsv -Path (Join-Path $BundlePath $output.bundlePath)
         $outputRows = Get-AvmCatalogCsvRowSnapshot -Rows $generated.Rows.ToArray()
+        foreach ($row in $outputRows) {
+            $key = Get-AvmCatalogCsvRowKey -Row $row -Output $output -Configuration $Configuration -RequireResolved
+            if ($excludedKeys.Contains($key)) {
+                throw [System.IO.InvalidDataException]::new("Excluded module remains in a generated CSV: $key")
+            }
+        }
         foreach ($removal in (Get-AvmCatalogCsvRowRemovals -SourceRows $sourceRows -OutputRows $outputRows `
                 -Output $output -Configuration $Configuration)) {
             $removals.Add($removal)
         }
     }
     $renames = @(if ($report.Contains('csvRowRenames') -and $report.csvRowRenames -is [array]) { $report.csvRowRenames })
-    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames
+    $retained = Select-AvmCatalogCsvRowRemoval -Removals $removals.ToArray() -Renames $renames `
+        -ExcludedModuleKeys $excludedKeys -Configuration $Configuration
     $heldBackFiles = @(if ($report.Contains('heldBackSourceFiles') -and $report.heldBackSourceFiles -is [array]) {
             $report.heldBackSourceFiles | ForEach-Object { [string]$_ }
         })
