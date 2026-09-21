@@ -6,6 +6,21 @@ BeforeAll {
     $creationRoot = Join-Path $repoRoot 'repository-management' 'repository-creation' 'scripts'
     $creationScript = Join-Path $creationRoot 'New-Repository.ps1'
     . (Join-Path $creationRoot 'RepositoryCreation.ps1')
+
+    if (-not (Get-Command -Name Install-Module -ErrorAction SilentlyContinue)) {
+        # PowerShellGet is not guaranteed to be available in a fresh pwsh session (for example a
+        # sharded component-test worker on Linux/macOS CI runners). Define a local stub so Pester
+        # can still mock and assert against Install-Module without installing anything.
+        function Install-Module {
+            [CmdletBinding()]
+            param(
+                [string] $Name,
+                [string] $Scope,
+                [switch] $Force,
+                [switch] $AllowClobber
+            )
+        }
+    }
 }
 
 AfterAll {
