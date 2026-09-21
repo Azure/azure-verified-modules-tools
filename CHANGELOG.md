@@ -66,6 +66,9 @@ section when cutting a release.
 
 ### Changed
 
+- Retired the completed AzAPI request-header cleanup from the Mapotf common
+  profile, reducing work performed for every root, local-module, and example
+  transform.
 - Terraform repository sync reads each repository's root `metadata.json` instead
   of the tools-local inventory CSV, including every owner and qualified owning
   team. GitHub archive state is authoritative. New repositories publish metadata

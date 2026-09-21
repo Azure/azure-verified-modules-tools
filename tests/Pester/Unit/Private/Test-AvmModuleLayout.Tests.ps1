@@ -174,7 +174,6 @@ Describe 'Module Resources packaging' {
                 'order_resource_meta.mptf.hcl'
                 'order_terraform.mptf.hcl'
                 'order_variable_attrs.mptf.hcl'
-                'remove_avm_headers_for_azapi.mptf.hcl'
             )
             module = @(
                 'move_misplaced_blocks.mptf.hcl'
