@@ -7,26 +7,52 @@ function Get-AvmBicepCodeownersSnapshot {
 
     Set-StrictMode -Version 3.0
     if (-not $SourceSha) {
-        $source = Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/Azure-Verified-Modules/commits/main'
+        $source = Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/bicep-registry-modules/commits/main'
         $SourceSha = $source.sha
     }
     if ($SourceSha -cnotmatch '^[0-9a-f]{40}$') {
-        throw [System.IO.InvalidDataException]::new('The official index commit is missing or invalid.')
+        throw [System.IO.InvalidDataException]::new('The Bicep source commit is missing or invalid.')
     }
-    $names = @{ res = 'BicepResourceModules.csv'; ptn = 'BicepPatternModules.csv'; utl = 'BicepUtilityModules.csv' }
-    $indexes = @{}
-    $indexShas = @{}
-    foreach ($kind in @('res', 'ptn', 'utl')) {
-        $file = Get-RepositoryFileAtCommit -Repository 'Azure/Azure-Verified-Modules' `
-            -Path "docs/static/module-indexes/$($names[$kind])" -Sha $SourceSha
-        $indexes[$kind] = $file.Content
-        $indexShas[$kind] = $file.Sha
+    $tree = Invoke-RepositoryGitHubApi -Endpoint "repos/Azure/bicep-registry-modules/git/trees/${SourceSha}?recursive=1"
+    if ($tree.sha -cne $SourceSha) {
+        throw [System.IO.InvalidDataException]::new('GitHub did not return the requested Bicep source tree.')
     }
-    $content = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $Template
+    if ($tree.truncated) {
+        throw [System.IO.InvalidDataException]::new('The Bicep source tree was truncated; cannot enumerate every module metadata.json.')
+    }
+    $metadataEntries = @(
+        $tree.tree | Where-Object { $_.type -ceq 'blob' -and $_.path -cmatch '^avm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*/metadata\.json$' }
+    )
+    if ($metadataEntries.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new('No top-level Bicep module metadata.json files were discovered.')
+    }
+    $moduleTypes = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }
+    $modules = [System.Collections.Generic.List[object]]::new()
+    $metadataShas = @{}
+    foreach ($entry in ($metadataEntries | Sort-Object -Property path)) {
+        $segments = $entry.path.Split('/')
+        $kind = $segments[1]
+        $name = "avm/$kind/$($segments[2])/$($segments[3])"
+        $file = Get-RepositoryFileAtCommit -Repository 'Azure/bicep-registry-modules' -Path $entry.path -Sha $SourceSha
+        $metadataShas[$name] = $file.Sha
+        try {
+            $metadata = ConvertFrom-Json -InputObject $file.Content -AsHashtable -Depth 30
+        }
+        catch {
+            throw [System.IO.InvalidDataException]::new("The metadata.json for '$name' is not valid JSON.", $_.Exception)
+        }
+        $validation = Test-AvmModuleMetadata -InputObject $metadata -Ecosystem bicep -ModuleType $moduleTypes[$kind]
+        if ($validation.Status -cne 'pass') {
+            $detail = ($validation.Issues | ForEach-Object { $_.Message }) -join ' '
+            throw [System.IO.InvalidDataException]::new("The metadata.json for '$name' is invalid: $detail")
+        }
+        $modules.Add([pscustomobject]@{ Name = $name; Owners = @($validation.Metadata.owners) })
+    }
+    $content = ConvertTo-AvmBicepCodeowners -Modules $modules.ToArray() -Template $Template
     return [pscustomobject]@{
         Content = $content
         SourceSha = $SourceSha
-        IndexShas = $indexShas
+        MetadataShas = $metadataShas
         BlobSha = Get-RepositoryGitBlobSha -Bytes ([System.Text.Encoding]::UTF8.GetBytes($content))
         ModuleCount = @($content.Split("`n") | Where-Object { $_ -cmatch '^/avm/(res|ptn|utl)/' }).Count
     }
@@ -75,8 +101,8 @@ function Invoke-AvmBicepCodeownersSync {
         -ExpectedActor ([pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }) `
         -State @{ Template = $Template; Snapshot = $snapshot } -ValidateChange ${function:Test-BicepCodeownersSyncChange} `
         -Title 'chore: sync Bicep module CODEOWNERS' `
-        -CommitMessage "chore: sync Bicep module CODEOWNERS`n`nOfficial AVM index snapshot: $($snapshot.SourceSha)" `
-        -Body 'Generated from the official AVM Bicep indexes and the tools repository CODEOWNERS.template. The commit records the source snapshot. Only .github/CODEOWNERS changes; plan-only runs never publish.'
+        -CommitMessage "chore: sync Bicep module CODEOWNERS`n`nModule metadata.json snapshot: $($snapshot.SourceSha)" `
+        -Body 'Generated from each root module''s metadata.json owners and the tools repository CODEOWNERS.template. The commit records the source snapshot. Only .github/CODEOWNERS changes; plan-only runs never publish.'
     $result['SourceSha'] = $snapshot.SourceSha
     $result['ModuleCount'] = $snapshot.ModuleCount
     return [pscustomobject]$result

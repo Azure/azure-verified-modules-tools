@@ -357,20 +357,55 @@ Describe 'CODEOWNERS-specific validation hooks and immutable source data' {
         { Test-BicepCodeownersSyncChange -Context $script:context } | Should -Not -Throw
     }
 
-    It 'loads all official indexes through the shared transport at one source commit' {
-        Mock Invoke-RepositoryGitHubApi { [pscustomobject]@{ sha = 'f' * 40 } }
+    It 'loads every root module metadata.json through the shared transport at one source commit' {
+        $script:sourceSha = 'f' * 40
+        Mock Invoke-RepositoryGitHubApi {
+            if ($Endpoint -ceq 'repos/Azure/bicep-registry-modules/commits/main') {
+                return [pscustomobject]@{ sha = $script:sourceSha }
+            }
+            [pscustomobject]@{
+                sha = $script:sourceSha
+                truncated = $false
+                tree = @(
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/metadata.json' }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/ptn/test/module/metadata.json' }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/utl/test/module/metadata.json' }
+                    [pscustomobject]@{ type = 'blob'; path = 'avm/res/test/module/main.bicep' }
+                )
+            }
+        }
         Mock Get-RepositoryFileAtCommit {
-            $kind = switch -Wildcard ($Path) { '*Resource*' { 'res' } '*Pattern*' { 'ptn' } '*Utility*' { 'utl' } }
+            $kind = switch -Wildcard ($Path) { 'avm/res/*' { 'res' } 'avm/ptn/*' { 'ptn' } 'avm/utl/*' { 'utl' } }
+            $metadata = [ordered]@{
+                '$schema' = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+                moduleDisplayName = 'Test module'
+                moduleDescription = 'A test module.'
+                owners = @('alice')
+            }
+            switch ($kind) {
+                'res' {
+                    $metadata.canonicalType = 'Microsoft.Storage/storageAccounts'
+                    $metadata.telemetryIdPrefix = '46d3xbcp.res.testmodule'
+                }
+                'ptn' {
+                    $metadata.canonicalType = 'pattern/testmodule'
+                    $metadata.telemetryIdPrefix = '46d3xbcp.ptn.testmodule'
+                }
+                'utl' {
+                    $metadata.canonicalType = 'utility/testmodule'
+                }
+            }
             [pscustomobject]@{
                 Sha = 'a' * 40
-                Content = "ModuleName,ModuleStatus,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm/$kind/test/module,Available,alice,`n"
+                Content = ($metadata | ConvertTo-Json -Depth 10)
             }
         }
         $snapshot = Get-AvmBicepCodeownersSnapshot -Template $script:template
         $snapshot.ModuleCount | Should -Be 3
-        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 1
+        $snapshot.SourceSha | Should -Be $script:sourceSha
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 2
         Should -Invoke Get-RepositoryFileAtCommit -Exactly 3 -ParameterFilter {
-            $Repository -ceq 'Azure/Azure-Verified-Modules' -and $Sha -ceq ('f' * 40)
+            $Repository -ceq 'Azure/bicep-registry-modules' -and $Sha -ceq $script:sourceSha
         }
     }
 }
