@@ -71,6 +71,148 @@ function Get-AvmCatalogMarkdownFence {
     return '`' * [Math]::Max(3, $longest + 1)
 }
 
+function Read-AvmCatalogCsvDiffFile {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Path)
+
+    $reader = [System.IO.StringReader]::new([System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false, $true)))
+    $parser = [Microsoft.VisualBasic.FileIO.TextFieldParser]::new($reader)
+    try {
+        $parser.SetDelimiters(',')
+        $parser.HasFieldsEnclosedInQuotes = $true
+        $parser.TrimWhiteSpace = $false
+        $headers = $parser.ReadFields()
+        if ($null -eq $headers -or $headers.Count -eq 0) {
+            throw [System.IO.InvalidDataException]::new("CSV has no header: $Path")
+        }
+        $rows = [System.Collections.Generic.List[object]]::new()
+        while (-not $parser.EndOfData) {
+            $fields = $parser.ReadFields()
+            if ($fields.Count -ne $headers.Count) {
+                throw [System.IO.InvalidDataException]::new("CSV row has $($fields.Count) fields, expected $($headers.Count): $Path")
+            }
+            $row = [ordered]@{}
+            for ($index = 0; $index -lt $headers.Count; $index++) {
+                $row[$headers[$index]] = $fields[$index]
+            }
+            $rows.Add($row)
+        }
+        return [pscustomobject]@{ Headers = $headers; Rows = $rows.ToArray() }
+    }
+    finally {
+        $parser.Close()
+        $reader.Dispose()
+    }
+}
+
+function Get-AvmCatalogCsvRowDiffKey {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Collections.IDictionary] $Row)
+
+    $key = [string]$Row['ModuleName']
+    if ([string]::IsNullOrWhiteSpace($key)) {
+        $key = [string]$Row['RepoURL']
+    }
+    return $key
+}
+
+function Get-AvmCatalogCsvFieldDiff {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $BeforePath,
+        [Parameter(Mandatory)][string] $AfterPath
+    )
+
+    $before = Read-AvmCatalogCsvDiffFile -Path $BeforePath
+    $after = Read-AvmCatalogCsvDiffFile -Path $AfterPath
+    $beforeByKey = [ordered]@{}
+    foreach ($row in $before.Rows) {
+        $key = Get-AvmCatalogCsvRowDiffKey -Row $row
+        if ($beforeByKey.Contains($key)) {
+            $key = $key + '|' + [string]$row['RepoURL']
+        }
+        $beforeByKey[$key] = $row
+    }
+    $afterByKey = [ordered]@{}
+    foreach ($row in $after.Rows) {
+        $key = Get-AvmCatalogCsvRowDiffKey -Row $row
+        if ($afterByKey.Contains($key)) {
+            $key = $key + '|' + [string]$row['RepoURL']
+        }
+        $afterByKey[$key] = $row
+    }
+
+    $changed = [System.Collections.Generic.List[object]]::new()
+    $added = [System.Collections.Generic.List[string]]::new()
+    $removed = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $beforeByKey.Keys) {
+        if (-not $afterByKey.Contains($key)) {
+            $removed.Add($key)
+        }
+    }
+    foreach ($key in $afterByKey.Keys) {
+        if (-not $beforeByKey.Contains($key)) {
+            $added.Add($key)
+            continue
+        }
+        $beforeRow = $beforeByKey[$key]
+        $afterRow = $afterByKey[$key]
+        $fields = [System.Collections.Generic.List[object]]::new()
+        foreach ($column in $after.Headers) {
+            $beforeValue = if ($before.Headers -contains $column) { [string]$beforeRow[$column] } else { $null }
+            $afterValue = [string]$afterRow[$column]
+            if ($beforeValue -cne $afterValue) {
+                $fields.Add([pscustomobject]@{ Column = $column; Before = $beforeValue; After = $afterValue })
+            }
+        }
+        if ($fields.Count -gt 0) {
+            $changed.Add([pscustomobject]@{ Key = $key; Fields = $fields.ToArray() })
+        }
+    }
+
+    return [pscustomobject]@{
+        Changed = $changed.ToArray()
+        Added   = $added.ToArray()
+        Removed = $removed.ToArray()
+    }
+}
+
+function ConvertTo-AvmCatalogCsvFieldDiffMarkdown {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][pscustomobject] $FieldDiff)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($FieldDiff.Added.Count -gt 0) {
+        $names = ($FieldDiff.Added | ForEach-Object { "``$_``" }) -join ', '
+        $null = $lines.Add(('**{0} new row(s):** {1}' -f $FieldDiff.Added.Count, $names))
+        $null = $lines.Add('')
+    }
+    if ($FieldDiff.Removed.Count -gt 0) {
+        $names = ($FieldDiff.Removed | ForEach-Object { "``$_``" }) -join ', '
+        $null = $lines.Add(('**{0} removed row(s):** {1}' -f $FieldDiff.Removed.Count, $names))
+        $null = $lines.Add('')
+    }
+    if ($FieldDiff.Changed.Count -gt 0) {
+        $fieldCount = (@($FieldDiff.Changed | ForEach-Object { $_.Fields.Count }) | Measure-Object -Sum).Sum
+        $null = $lines.Add(('**{0} row(s) with {1} changed field(s):**' -f $FieldDiff.Changed.Count, $fieldCount))
+        $null = $lines.Add('')
+        $null = $lines.Add('| Module | Field | Before | After |')
+        $null = $lines.Add('|---|---|---|---|')
+        foreach ($row in $FieldDiff.Changed) {
+            foreach ($field in $row.Fields) {
+                $beforeText = ([string]$field.Before).Replace('|', '\|').Replace("`n", '<br>')
+                $afterText = ([string]$field.After).Replace('|', '\|').Replace("`n", '<br>')
+                $null = $lines.Add(('| `{0}` | {1} | {2} | {3} |' -f $row.Key, $field.Column, $beforeText, $afterText))
+            }
+        }
+        $null = $lines.Add('')
+    }
+    if ($lines.Count -eq 0) {
+        $null = $lines.Add('_No field-level changes; rows differ only by row identity._')
+    }
+    return ($lines -join "`n")
+}
+
 $source = [System.IO.Path]::GetFullPath($SourceRoot)
 $generated = [System.IO.Path]::GetFullPath($GeneratedRoot)
 $destination = [System.IO.Path]::GetFullPath($OutputPath)
@@ -153,12 +295,26 @@ try {
             }
             $null = $combined.Append($diff.Output)
         }
+
+        $fieldDiff = $null
+        $fieldMarkdown = ''
+        if ($diff.ExitCode -eq 1) {
+            $fieldDiff = Get-AvmCatalogCsvFieldDiff -BeforePath $beforePath -AfterPath $afterPath
+            $fieldMarkdown = ConvertTo-AvmCatalogCsvFieldDiffMarkdown -FieldDiff $fieldDiff
+            $fieldsPath = Join-Path $diffRoot ([System.IO.Path]::ChangeExtension($fileName, '.fields.md'))
+            [System.IO.File]::WriteAllText($fieldsPath, $fieldMarkdown, [System.Text.UTF8Encoding]::new($false))
+        }
+
         $results.Add([pscustomobject]@{
-                File    = $fileName
-                Changed = $diff.ExitCode -eq 1
-                Added   = $added
-                Deleted = $deleted
-                Diff    = $diff.Output
+                File           = $fileName
+                Changed        = $diff.ExitCode -eq 1
+                Added          = $added
+                Deleted        = $deleted
+                Diff           = $diff.Output
+                FieldMarkdown  = $fieldMarkdown
+                RowsChanged    = if ($fieldDiff) { $fieldDiff.Changed.Count } else { 0 }
+                RowsAdded      = if ($fieldDiff) { $fieldDiff.Added.Count } else { 0 }
+                RowsRemoved    = if ($fieldDiff) { $fieldDiff.Removed.Count } else { 0 }
             })
     }
 
@@ -175,30 +331,44 @@ try {
     $null = $summary.AppendLine()
     $null = $summary.AppendLine(('{0} of {1} CSV files changed. The `module-metadata-csv-diff` artifact contains the complete diff and before/after files.' -f $changed.Count, $results.Count))
     $null = $summary.AppendLine()
-    $null = $summary.AppendLine('| CSV | Changed | Added | Deleted |')
-    $null = $summary.AppendLine('|---|---:|---:|---:|')
+    $null = $summary.AppendLine('| CSV | Changed | Rows changed | Rows added | Rows removed | Lines +/- |')
+    $null = $summary.AppendLine('|---|---:|---:|---:|---:|---:|')
     foreach ($result in $results) {
         $changedText = if ($result.Changed) { 'Yes' } else { 'No' }
-        $null = $summary.AppendLine(('| `{0}` | {1} | {2} | {3} |' -f $result.File, $changedText, $result.Added, $result.Deleted))
+        $null = $summary.AppendLine(('| `{0}` | {1} | {2} | {3} | {4} | +{5}/-{6} |' -f
+                $result.File, $changedText, $result.RowsChanged, $result.RowsAdded, $result.RowsRemoved, $result.Added, $result.Deleted))
     }
 
     if ($changed.Count -gt 0) {
-        $inlineBytes = [System.Text.Encoding]::UTF8.GetByteCount($combinedText)
+        $blocks = [System.Collections.Generic.List[string]]::new()
+        foreach ($result in $changed) {
+            $block = [System.Text.StringBuilder]::new()
+            $null = $block.AppendLine("<details><summary><code>$($result.File)</code> ($($result.RowsChanged) row(s) changed, $($result.RowsAdded) added, $($result.RowsRemoved) removed)</summary>")
+            $null = $block.AppendLine()
+            $null = $block.AppendLine($result.FieldMarkdown)
+            $null = $block.AppendLine()
+            $null = $block.AppendLine('<details><summary>Raw line diff</summary>')
+            $null = $block.AppendLine()
+            $fence = Get-AvmCatalogMarkdownFence -Text $result.Diff
+            $null = $block.AppendLine("${fence}diff")
+            $null = $block.Append($result.Diff)
+            if (-not $result.Diff.EndsWith("`n", [StringComparison]::Ordinal)) {
+                $null = $block.AppendLine()
+            }
+            $null = $block.AppendLine($fence)
+            $null = $block.AppendLine()
+            $null = $block.AppendLine('</details>')
+            $null = $block.AppendLine()
+            $null = $block.AppendLine('</details>')
+            $null = $block.AppendLine()
+            $blocks.Add($block.ToString())
+        }
+        $renderText = $blocks -join ''
+        $inlineBytes = [System.Text.Encoding]::UTF8.GetByteCount($renderText)
         $null = $summary.AppendLine()
         if ($inlineBytes -le $MaxInlineDiffBytes) {
-            foreach ($result in $changed) {
-                $fence = Get-AvmCatalogMarkdownFence -Text $result.Diff
-                $null = $summary.AppendLine("<details><summary><code>$($result.File)</code> (+$($result.Added) / -$($result.Deleted))</summary>")
-                $null = $summary.AppendLine()
-                $null = $summary.AppendLine("${fence}diff")
-                $null = $summary.Append($result.Diff)
-                if (-not $result.Diff.EndsWith("`n", [StringComparison]::Ordinal)) {
-                    $null = $summary.AppendLine()
-                }
-                $null = $summary.AppendLine($fence)
-                $null = $summary.AppendLine()
-                $null = $summary.AppendLine('</details>')
-                $null = $summary.AppendLine()
+            foreach ($block in $blocks) {
+                $null = $summary.Append($block)
             }
         }
         else {
@@ -226,6 +396,9 @@ try {
         ChangedFileCount = $changed.Count
         AddedLineCount   = ($results | Measure-Object -Property Added -Sum).Sum
         DeletedLineCount = ($results | Measure-Object -Property Deleted -Sum).Sum
+        RowsChangedCount = ($results | Measure-Object -Property RowsChanged -Sum).Sum
+        RowsAddedCount   = ($results | Measure-Object -Property RowsAdded -Sum).Sum
+        RowsRemovedCount = ($results | Measure-Object -Property RowsRemoved -Sum).Sum
         DiffBytes        = [System.Text.Encoding]::UTF8.GetByteCount($combinedText)
     }
 }

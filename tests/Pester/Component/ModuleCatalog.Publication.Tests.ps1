@@ -30,7 +30,7 @@ BeforeAll {
                 $file = Join-Path $root $relative
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
                 $text = if ($relative.EndsWith('.csv')) {
-                    "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,CanonicalType`n"
+                    "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n"
                 }
                 elseif ($relative -eq (Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog).bundlePath) {
                     ConvertTo-AvmCatalogJson -Value ([ordered]@{ '$schema' = $catalogSchemaId; schemaVersion = 1; modules = [ordered]@{} })
@@ -75,7 +75,7 @@ BeforeAll {
             [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
         )
         $output = @($Configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
-        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description', 'CanonicalType')
+        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description')
         Save-CatalogPublicationFixtureFile -Root $Root -RelativePath $output.bundlePath `
             -Text (ConvertTo-AvmCatalogCsv -Headers $headers -Rows $OutputRows) -Configuration $Configuration
         $reportOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind migration-report
@@ -94,7 +94,7 @@ BeforeAll {
         foreach ($output in $Configuration.outputs | Where-Object kind -eq 'csv') {
             $path = Join-Path $root $output.sourcePath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-            [System.IO.File]::WriteAllText($path, "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description,CanonicalType`n")
+            [System.IO.File]::WriteAllText($path, "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n")
         }
         return $root
     }
@@ -105,7 +105,6 @@ BeforeAll {
         RepoURL = 'https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/storage/storage-account'
         ModuleStatus = 'Available'
         Description = 'Storage account module.'
-        CanonicalType = 'Microsoft.Storage/storageAccounts'
     }
 }
 
@@ -273,7 +272,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         $root = New-CatalogPublicationFixture
         $source = New-CatalogPublicationSourceFixture
         $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
-        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description', 'CanonicalType')
+        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description')
         [System.IO.File]::WriteAllText((Join-Path $source $output.targetPath),
             (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($sourceRow)))
         $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $root -Configuration $configuration -SourceRoot $source
@@ -302,7 +301,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         $source = New-CatalogPublicationSourceFixture -Configuration $configuration
         $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
         $output.targetPath | Should -BeExactly $output.sourcePath
-        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description', 'CanonicalType')
+        $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description')
         $sourcePath = Join-Path $source $output.sourcePath
         [System.IO.File]::WriteAllText($sourcePath, (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($sourceRow)))
         $sourceHash = (Get-FileHash -LiteralPath $sourcePath).Hash
