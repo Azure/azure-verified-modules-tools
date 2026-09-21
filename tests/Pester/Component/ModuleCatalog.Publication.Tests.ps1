@@ -120,7 +120,7 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
 
     It 'rejects altered output bytes before preparing any remote update' {
         $root = New-CatalogPublicationFixture
-        [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'test-BicepResourceModules.csv'), 'tampered')
+        [System.IO.File]::AppendAllText((Join-Path $root 'docs' 'BicepResourceModules.csv'), 'tampered')
         foreach ($force in @($false, $true)) {
             { Test-AvmCatalogPublicationBundle -Path $root -Force:$force } | Should -Throw '*hash mismatch*'
         }
@@ -151,14 +151,14 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         { Assert-AvmCatalogSafePath -Root $root -RelativePath '../outside.json' } | Should -Throw '*fixed relative file paths*'
     }
 
-    It 'rejects a canonical CSV included as an output during preview publication' {
+    It 'rejects a preview CSV included as an output during canonical publication' {
         $root = New-CatalogPublicationFixture
-        Copy-Item -LiteralPath (Join-Path $root 'docs' 'test-BicepResourceModules.csv') `
-            -Destination (Join-Path $root 'docs' 'BicepResourceModules.csv')
+        Copy-Item -LiteralPath (Join-Path $root 'docs' 'BicepResourceModules.csv') `
+            -Destination (Join-Path $root 'docs' 'test-BicepResourceModules.csv')
         { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*Unexpected file*'
     }
 
-    It 'requires a base hash for canonical inputs as well as preview outputs' {
+    It 'requires a base hash for each canonical input and output' {
         $root = New-CatalogPublicationFixture
         $planPath = Join-Path $root 'plan.json'
         $plan = Read-AvmCatalogJson -Path $planPath
@@ -284,7 +284,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         $source = New-CatalogPublicationSourceFixture
         $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
         $headers = @('ModuleName', 'ModuleDisplayName', 'RepoURL', 'ModuleStatus', 'Description')
-        [System.IO.File]::WriteAllText((Join-Path $source $output.targetPath),
+        [System.IO.File]::WriteAllText((Join-Path $source "docs/static/module-indexes/test-$($output.file)"),
             (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($sourceRow)))
         $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $root -Configuration $configuration -SourceRoot $source
         $removals | Should -HaveCount 0
@@ -299,12 +299,8 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         { Assert-AvmCatalogCsvRowRetention -Removals $removals -Force } | Should -Not -Throw
     }
 
-    It 'keeps the source guard when a future manifest overwrites the canonical CSV' {
-        $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
-        foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
-        $path = Join-Path $TestDrive 'canonical-manifest.json'
-        [System.IO.File]::WriteAllText($path, (ConvertTo-AvmCatalogJson -Value $raw))
-        $configuration = Read-AvmCatalogConfiguration -Path $path
+    It 'keeps the source guard when the default manifest overwrites the canonical CSV' {
+        $configuration = Read-AvmCatalogConfiguration
         $root = New-CatalogPublicationFixture -Configuration $configuration
         Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() -Force -Configuration $configuration
         { Test-AvmCatalogPublicationBundle -Path $root -Configuration $configuration } | Should -Throw '*CSV row removals are blocked*'
@@ -378,6 +374,7 @@ Describe 'Component: module catalog publication merging' -Tag Component {
 
         $configuration = Read-AvmCatalogConfiguration
         $bundle = New-CatalogPublicationFixture
+        Set-CatalogPublicationFixtureRows -Root $bundle -SourceRows @() -OutputRows @($sourceRow)
         $source = New-CatalogPublicationSourceFixture
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         $reportTarget = 'docs/static/module-indexes/v1/migration-report.json'
@@ -390,8 +387,9 @@ Describe 'Component: module catalog publication merging' -Tag Component {
             foreach ($relative in $paths.docs.files.Keys) {
                 $file = Join-Path $source $paths.docs.files[$relative]
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
-                [System.IO.File]::Copy((Join-Path $bundle $relative), $file)
+                [System.IO.File]::Copy((Join-Path $bundle $relative), $file, $true)
             }
+            Set-CatalogPublicationFixtureRows -Root $bundle -SourceRows @($sourceRow) -OutputRows @($sourceRow)
         }
         $null = Invoke-CatalogFixtureGit $source @('init', '-b', 'main')
         $null = Invoke-CatalogFixtureGit $source @('add', '.')
@@ -411,7 +409,7 @@ Describe 'Component: module catalog publication merging' -Tag Component {
             foreach ($relative in $paths.docs.files.Keys) {
                 $file = Join-Path $source $paths.docs.files[$relative]
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
-                [System.IO.File]::Copy((Join-Path $bundle $relative), $file)
+                [System.IO.File]::Copy((Join-Path $bundle $relative), $file, $true)
             }
             if ($LegacyReport) { [System.IO.File]::WriteAllText((Join-Path $source $reportTarget), '{"unwanted":true}') }
             $null = Invoke-CatalogFixtureGit $source @('add', '.')
@@ -502,8 +500,13 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         $state.Calls | Should -Contain 'merge'
         $changes = Invoke-CatalogFixtureGit $remote @('diff', '--name-only', 'main', $branch)
         $changes | Should -Not -Match 'migration-report'
-        $changes | Should -Match 'test-BicepResourceModules.csv'
+        $changes | Should -Match '(?m)^docs/static/module-indexes/BicepResourceModules\.csv$'
+        $changes | Should -Not -Match 'test-.*Modules\.csv'
         $changes | Should -Match 'v1/modules.json'
+        foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
+            $published = Invoke-CatalogFixtureGit $remote @('show', "${branch}:$($output.targetPath)")
+            $published.TrimEnd() | Should -BeExactly ([System.IO.File]::ReadAllText((Join-Path $bundle $output.bundlePath)).TrimEnd())
+        }
         $state.Calls | Should -Contain $(if ($Existing) { 'PATCH' } else { 'POST' })
     }
 }
@@ -526,7 +529,7 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
 
     It 'defaults manual runs to plan-only and publishes from main without an enable variable' {
         $workflow | Should -Match "(?s)plan_only:.*?type: boolean\s+default: true"
-        $workflow | Should -Match "cron: '0 1 \* \* \*'"
+        $workflow | Should -Match "cron: '33 1-23/4 \* \* \*'"
         $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
         $workflow | Should -Not -Match 'AVM_METADATA_SYNC_ENABLED'
         $publication | Should -Match "github.ref == 'refs/heads/main'"
@@ -535,6 +538,31 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $workflow | Should -Not -Match 'pull_request_target|repository_dispatch|workflow_run'
         $publication | Should -Match '(?s)repositories: \$\{\{ steps.manifest.outputs.publication-repositories \}\}\s+permission-contents: write\s+permission-pull-requests: write'
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
+    }
+
+    It 'keeps four-hour catalog starts between the repository sync schedules without cancelling active runs' {
+        $workflow | Should -Match "(?m)^    - cron: '33 1-23/4 \* \* \*'$"
+        $workflow | Should -Match "(?m)^concurrency:\n  group: module-metadata-sync\n  cancel-in-progress: false$"
+        $terraform = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml'))
+        $bicep = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-bicep-sync.yml'))
+        $terraform | Should -Match "(?m)^    - cron: '33 \*/4 \* \* 1-5'$"
+        $bicep | Should -Match "(?m)^    - cron: '33 2-23/4 \* \* \*'$"
+    }
+
+    It 'routes scheduled events directly to publication and merging independently of manual plan-only defaults' {
+        $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
+        $condition = [regex]::Match($publication, '(?s)\n    if: >-\n(.*?)\n    runs-on:').Groups[1].Value
+        ($condition.Trim() -replace '\s+', ' ') | Should -BeExactly (
+            "github.repository == 'Azure/azure-verified-modules-tools' && " +
+            "github.ref == 'refs/heads/main' && " +
+            "(github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.plan_only == false))")
+        $step = [regex]::Match($publication,
+            '(?s)      - name: Create or update and merge catalog changes\n(.*?)(?=\n  report:)').Groups[1].Value
+        $step | Should -Not -BeNullOrEmpty
+        $step | Should -Not -Match '(?m)^\s+if:|plan_only|WhatIf'
+        $step | Should -Match "'Publish-ModuleCatalog.ps1'"
+        $step | Should -Match "-BundlePath \(Join-Path .* 'module-catalog'\) -Publish"
+        $step | Should -Match '-Confirm:\$false'
     }
 
     It 'publishes a complete CSV diff artifact and run summary only for manual plan-only runs' {

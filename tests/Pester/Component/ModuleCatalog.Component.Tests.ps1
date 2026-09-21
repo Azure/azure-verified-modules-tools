@@ -223,8 +223,8 @@ Describe 'Component: module catalog helpers' -Tag Component {
             }
         }
         $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
-        if ($Destination -eq 'canonical') {
-            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        if ($Destination -eq 'preview') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = "test-$($csv.sourceFile)" }
         }
         $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
         Save-CatalogJson -Path $configurationPath -Data $raw
@@ -342,8 +342,8 @@ Describe 'Component: module catalog helpers' -Tag Component {
         param($Destination)
         $fixture = New-CatalogFixture -AdoptAll
         $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
-        if ($Destination -eq 'canonical') {
-            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        if ($Destination -eq 'preview') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = "test-$($csv.sourceFile)" }
         }
         $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
         Save-CatalogJson -Path $configurationPath -Data $raw
@@ -480,7 +480,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             }
             if ($ecosystem -eq 'bicep') { $child.telemetryIdPrefix | Should -BeNullOrEmpty }
             $file = if ($ecosystem -eq 'bicep') { 'BicepResourceModules.csv' } else { 'TerraformResourceModules.csv' }
-            $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object {
+            $rows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object {
                     $_.ProviderNamespace -ceq 'Oracle.Database' -and $_.ResourceType -ceq $ResourceType
                 })
             # Terraform submodule rows are excluded from the CSV, so only the root row is expected.
@@ -594,7 +594,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $held.HeldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         foreach ($file in $fixture.Original.Keys) {
-            $text = $bundle.Files["docs/test-$file"]
+            $text = $bundle.Files["docs/$file"]
             ($text -split "`n")[0] | Should -BeExactly ($fixture.Headers[$file] -join ',')
             @($text | ConvertFrom-Csv) | Should -HaveCount 0
             $source = Read-AvmCatalogCsv -Path (Join-Path $fixture.Legacy $file)
@@ -615,7 +615,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $fixture = New-CatalogFixture
         Save-CatalogMetadata -Module $fixture.Modules[0]
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
-        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.ModuleDisplayName | Should -BeExactly 'Authoritative module'
         $row.Description | Should -BeExactly 'Deploys reviewed module.'
         $row.AlternativeNames | Should -BeExactly 'Alias one, Alias two'
@@ -630,7 +630,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         $publishedOwners = @($published.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners)
         ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
-        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 0
+        @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 0
         $bundle.Report.csvRowRemovals | Should -HaveCount 5
         $bundle.Report.csvRowRemovals.moduleName | Should -Not -Contain $fixture.Modules[0].Identity.ModuleName
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].metadataSource | Should -BeExactly 'metadata'
@@ -645,7 +645,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $metadata.moduleDisplayName = 'Catalog display name'
         Save-CatalogJson -Path $path -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
-        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.ModuleDisplayName | Should -BeExactly 'Catalog display name'
         $row.Description | Should -BeExactly 'Deploys reviewed module.'
     }
@@ -702,11 +702,11 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $entry.bicep[0].comments | Should -BeExactly 'Reviewed comment.'
         $entry.terraform[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
         $entry.terraform[0].comments | Should -BeExactly 'Reviewed comment.'
-        $terraformSubmoduleRows = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -like '*//modules/*' })
+        $terraformSubmoduleRows = @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -like '*//modules/*' })
         $terraformSubmoduleRows | Should -BeNullOrEmpty
-        $bicepRow = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -eq $entry.bicep[0].moduleName })[0]
+        $bicepRow = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -eq $entry.bicep[0].moduleName })[0]
         $bicepRow.ParentModule | Should -BeExactly 'avm/res/storage/storage-account'
-        $childRows = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
+        $childRows = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
         $childRows | Should -Not -BeNullOrEmpty
         foreach ($childRow in $childRows) {
             $childRow.AlternativeNames | Should -BeExactly ''
@@ -733,7 +733,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             -ModulePath '.' -Canonical 'Microsoft.Storage/alphaAccounts' -Adopt
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         foreach ($file in @('BicepResourceModules.csv', 'TerraformResourceModules.csv')) {
-            $names = @(($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleName)
+            $names = @(($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleName)
             $sorted = [string[]]$names.Clone()
             [Array]::Sort($sorted, [System.StringComparer]::Ordinal)
             $names | Should -Be $sorted
@@ -757,7 +757,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $legacyRow)))
 
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
-        $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+        $rows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
         $rows | Should -BeNullOrEmpty
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices'].terraform[0].moduleName |
             Should -BeExactly $child.Identity.ModuleName
@@ -797,7 +797,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
                 # child row is always treated as removed: held back without -Force, dropped with it.
                 # The JSON catalog entry still inherits family alternativeNames/comments/owners.
                 if ($force) {
-                    $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+                    $childRows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
                     $childRows | Should -BeNullOrEmpty
                 }
                 else {
@@ -809,7 +809,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
                 $entry.comments | Should -BeExactly 'Reviewed comment.'
                 continue
             }
-            $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+            $childRows = @($bundle.Files["docs/$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
             $childRows | Should -HaveCount 1
             $childRows[0].AlternativeNames | Should -BeExactly $legacyRow.AlternativeNames
             $childRows[0].Comments | Should -BeExactly $legacyRow.Comments
@@ -840,7 +840,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $record = $bundle.Catalog.modules['types/common'].bicep[0]
         $record.owners | Should -Be @('@Azure/avm-core-modules')
         $record.telemetryIdPrefix | Should -BeNullOrEmpty
-        $row = @($bundle.Files['docs/test-BicepUtilityModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepUtilityModules.csv'] | ConvertFrom-Csv)[0]
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly ''
         $row.PrimaryModuleOwnerDisplayName | Should -BeExactly ''
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly ''
@@ -879,7 +879,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $implementations | Should -HaveCount 2
         $implementations.provider | Should -Contain 'azure'
         $implementations.provider | Should -Contain 'azurerm'
-        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 2
+        @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 2
     }
 
     It 'derives canonical types and parity from metadata without using legacy taxonomy' {
@@ -945,7 +945,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $row['CanonicalType'] = ''
         $headers = $fixture.Headers[$file] + @('FutureColumn', 'CanonicalType')
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file), (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($row)))
-        $text = (Get-CatalogFixtureBundle -Fixture $fixture).Files["docs/test-$file"]
+        $text = (Get-CatalogFixtureBundle -Fixture $fixture).Files["docs/$file"]
         ($text -split "`n")[0] | Should -BeExactly ($headers -join ',')
         @($text | ConvertFrom-Csv)[0].FutureColumn | Should -BeExactly 'retain future data'
     }
@@ -991,7 +991,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Catalog.modules.Count | Should -Be 0
         $bundle.Report.missingMetadata | Should -HaveCount 6
         foreach ($file in $fixture.Headers.Keys) {
-            @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv) | Should -HaveCount 0
+            @($bundle.Files["docs/$file"] | ConvertFrom-Csv) | Should -HaveCount 0
         }
     }
 
@@ -1100,7 +1100,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain 'BicepResourceModules.csv'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep | Should -HaveCount 0
-        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv) | Should -HaveCount 0
+        @($bundle.Files["docs/$file"] | ConvertFrom-Csv) | Should -HaveCount 0
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
     }
 
@@ -1121,7 +1121,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Save-CatalogJson -Path $path -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly $Expected
-        ($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly $Expected
+        ($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly $Expected
     }
 
     It 'excludes Bicep examples and nested Terraform helper scopes from module discovery' {
@@ -1237,7 +1237,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         $bundle.Report.counts.csvRows['BicepResourceModules.csv'] | Should -Be 1
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
         $bundle.Report.csvRowRemovals[0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
-        @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0].ModuleName |
+        @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0].ModuleName |
             Should -BeExactly $replacement.Identity.ModuleName
     }
 
@@ -1269,7 +1269,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         $bundle.Report.csvRowRenames[0].sourceFile | Should -BeExactly 'TerraformResourceModules.csv'
         $bundle.Report.csvRowRenames[0].fromRepoURL | Should -BeExactly $original.Identity.RepoURL
         $bundle.Report.csvRowRenames[0].toRepoURL | Should -BeExactly $replacement.Identity.RepoURL
-        @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)[0].RepoURL |
+        @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv)[0].RepoURL |
             Should -BeExactly $replacement.Identity.RepoURL
     }
 
@@ -1307,7 +1307,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
         $bundle.Report.csvRowRemovals[0].moduleName | Should -BeExactly 'avm-ptn-future-proposal'
-        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleName | Should -Not -Contain 'avm-ptn-future-proposal'
+        @($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleName | Should -Not -Contain 'avm-ptn-future-proposal'
         if ($Identity -eq 'unresolved') {
             $bundle.Report.unresolvedLegacy | Should -HaveCount 1
         }
@@ -1321,8 +1321,8 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         $fixture = New-CatalogFixture -AdoptAll
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy 'test-BicepResourceModules.csv'), 'not a source CSV')
         $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
-        if ($Destination -eq 'canonical') {
-            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = $csv.sourceFile }
+        if ($Destination -eq 'preview') {
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = "test-$($csv.sourceFile)" }
         }
         $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
         Save-CatalogJson -Path $configurationPath -Data $raw
@@ -1347,7 +1347,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $bundle.Report.csvRowRemovals | Should -HaveCount 0
-        @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv)[0].RepoURL | Should -BeExactly $fixture.Modules[3].Identity.RepoURL
+        @($bundle.Files["docs/$file"] | ConvertFrom-Csv)[0].RepoURL | Should -BeExactly $fixture.Modules[3].Identity.RepoURL
     }
 
     It 'does not allow force to bypass duplicate source identities or legacy catalog records' {
@@ -1378,7 +1378,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $markerRoot = if ($Scope -eq 'root') { $fixture.Modules[0].Directory } else { $child.Directory }
         [System.IO.File]::WriteAllText((Join-Path $markerRoot 'DEPRECATED.md'), 'Use the replacement module.')
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $rows = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)
+        $rows = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)
         foreach ($row in $rows) {
             $expected = if ($Scope -eq 'root' -or $row.ModuleName -like '*blob-service*') { 'Deprecated' } else { 'Available' }
             $row.ModuleStatus | Should -Be $expected
@@ -1436,7 +1436,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $fixture.Archived[$repository] = $true
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         # Terraform submodule rows are excluded from the CSV, so only the root row is expected.
-        $rows = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)
+        $rows = @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv)
         $rows | Should -HaveCount 1
         foreach ($row in $rows) {
             $row.ModuleStatus | Should -Be 'Deprecated'
@@ -1486,7 +1486,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         )
         $bundle = New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub $github -RepositoryRevisions $revisions
         $rows = @{}
-        foreach ($row in @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)) {
+        foreach ($row in @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)) {
             $rows[$row.ModuleName] = $row
         }
         foreach ($path in @('avm/res/storage/storage-account', 'avm/res/storage/storage-account/blob-service',
@@ -1516,7 +1516,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         }
         (Get-CatalogFixtureBundle -Fixture $fixture).HeldBackSourceFiles | Should -Contain $File
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
-        @($bundle.Files["docs/test-$File"] | ConvertFrom-Csv) | Should -HaveCount 0
+        @($bundle.Files["docs/$File"] | ConvertFrom-Csv) | Should -HaveCount 0
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem] | Should -HaveCount 0
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
         $bundle.Report.csvRowRemovals[0].sourceFile | Should -BeExactly $File
@@ -1538,7 +1538,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $metadata.owners = @('@Azure/avm-core-modules', 'owner-three', '@Azure/second-team', 'owner-one', 'owner-two')
         Save-CatalogJson -Path $metadataPath -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-three'
         $row.PrimaryModuleOwnerDisplayName | Should -BeExactly ''
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
@@ -1557,11 +1557,11 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -MissingOwner 'owner-gone' -DiagnosticsPath $diagnostics
         $bundle.HeldBackSourceFiles | Should -Be @('BicepResourceModules.csv')
         $bundle.HeldBack | Should -Contain 'docs/v1/modules.json'
-        $bundle.HeldBack | Should -Not -Contain 'docs/test-BicepPatternModules.csv'
+        $bundle.HeldBack | Should -Not -Contain 'docs/BicepPatternModules.csv'
         $bundle.Report.missingOwners | Should -HaveCount 1
         $bundle.Report.missingOwners[0].moduleName | Should -BeExactly $fixture.Modules[0].Identity.ModuleName
         $bundle.Report.missingOwners[0].owners | Should -Be @('owner-gone')
-        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-gone'
         $row.PrimaryModuleOwnerDisplayName | Should -BeExactly ''
         $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile Two'
@@ -1582,7 +1582,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $bundle.HeldBack | Should -HaveCount 0
         $bundle.Report.missingOwners | Should -HaveCount 1
         $bundle.Report.missingOwners[0].owners | Should -Be @('owner-gone', '@Azure/team-gone')
-        $row = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
+        $row = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)[0]
         $row.ModuleOwnersGHTeam | Should -BeExactly '@Azure/team-gone'
     }
 

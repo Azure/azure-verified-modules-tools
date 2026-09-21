@@ -36,33 +36,36 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
         $paths.docs.files['docs/v1/modules.json'] | Should -BeExactly 'docs/static/module-indexes/v1/modules.json'
     }
 
-    It 'publishes preview CSVs beside their canonical inputs without allowing writes to those inputs' {
+    It 'publishes exactly the six canonical CSVs with shared source and destination base hashes' {
         $configuration = Read-AvmCatalogConfiguration
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         $csvs = @($configuration.outputs | Where-Object kind -eq 'csv')
-        $csvs | Should -HaveCount 6
+        $expected = @(
+            'BicepResourceModules.csv', 'BicepPatternModules.csv', 'BicepUtilityModules.csv',
+            'TerraformResourceModules.csv', 'TerraformPatternModules.csv', 'TerraformUtilityModules.csv'
+        )
+        @($csvs.file | Sort-Object) | Should -Be @($expected | Sort-Object)
         foreach ($csv in $csvs) {
-            $csv.sourceFile | Should -Not -Match '^test-'
-            $csv.file | Should -BeExactly "test-$($csv.sourceFile)"
+            $csv.file | Should -BeExactly $csv.sourceFile
             $csv.sourcePath | Should -BeExactly "docs/static/module-indexes/$($csv.sourceFile)"
-            $csv.targetPath | Should -BeExactly "docs/static/module-indexes/test-$($csv.sourceFile)"
+            $csv.targetPath | Should -BeExactly $csv.sourcePath
+            $csv.bundlePath | Should -BeExactly "docs/$($csv.file)"
             $paths.docs.files[$csv.bundlePath] | Should -BeExactly $csv.targetPath
-            @($paths.docs.files.Values) | Should -Not -Contain $csv.sourcePath
             $paths.docs.basePaths | Should -Contain $csv.sourcePath
-            $paths.docs.basePaths | Should -Contain $csv.targetPath
+            @($paths.docs.files.Values) | Should -Not -Contain "docs/static/module-indexes/test-$($csv.file)"
         }
-        $paths.docs.basePaths | Should -HaveCount 14
+        $paths.docs.basePaths | Should -HaveCount 8
     }
 
-    It 'can switch a reviewed manifest to canonical CSV names later without duplicate base paths' {
+    It 'supports separate preview filenames in a custom manifest while retaining canonical source hashes' {
         $path = New-ManifestFixture -Change {
             param($c)
             foreach ($csv in $c.outputs | Where-Object kind -eq 'csv') {
-                $csv.file = $csv.sourceFile
+                $csv.file = "test-$($csv.sourceFile)"
             }
         }
         $configuration = Read-AvmCatalogConfiguration -Path $path
-        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 8
+        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 14
     }
 
     It 'rejects incomplete, ambiguous, unsafe, or unused configuration: <Case>' -TestCases @(
