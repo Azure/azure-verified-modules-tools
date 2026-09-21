@@ -1,11 +1,14 @@
 name: CI
 
-# Pull-request gate for the Avm.Authoring module. Runs two test tiers on every
+# Pull-request gate for the Avm.Authoring module. Runs three test tiers on every
 # PR to `main` (and on demand via workflow_dispatch); neither tier runs on
 # merge / push to `main`:
 #
-#   * build       -- the fast offline gate (`./build.ps1 ci`: layout, lint,
-#                    coverage, component) across three OSes.
+#   * build       -- the fast Avm.Authoring offline gate (`./build.ps1 ci`:
+#                    layout, lint, coverage, component) across three OSes.
+#   * workflows   -- workflow-definition unit tests (`./build.ps1
+#                    test-workflows`) on Ubuntu, matching the workflow runner
+#                    OS they validate.
 #   * integration -- real-binary Terraform integration tests (`./build.ps1
 #                    integration`) that run the wired `avm pre-commit` and
 #                    `avm pr-check` chains end to end against the on-disk fixture
@@ -16,8 +19,8 @@ name: CI
 #                    and Azure OIDC, so it is slower than the build gate and runs
 #                    as its own 3 OS x 2 fixture job matrix here.
 #
-# A single `report` job aggregates every leg of both tiers into one pull-request
-# test-results report. Keeping both tiers in one workflow (one check suite) means
+# A single `report` job aggregates every leg of all tiers into one pull-request
+# test-results report. Keeping every tier in one workflow (one check suite) means
 # that report renders as a single "Test results" check, instead of the two tiers
 # fighting over check-suite attribution when they ran as separate workflows on
 # the same commit.
@@ -89,6 +92,34 @@ jobs:
         with:
           name: coverage-report-powershell
           path: out/coverage/coverage.cobertura.xml
+          retention-days: 7
+
+  workflows:
+    name: workflow tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Run workflow tests
+        shell: pwsh
+        run: ./build.ps1 test-workflows
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-workflows-ubuntu-latest
+          path: out/test-results/*.xml
+          if-no-files-found: warn
           retention-days: 7
 
   integration:
@@ -198,11 +229,11 @@ jobs:
 
   report:
     name: Publish test results
-    needs: [build, integration]
-    # Run even when a build or integration leg fails (so red tests still get
-    # reported), but not when the run was cancelled. Aggregates every leg of both
-    # tiers into one report. Runs outside the `avm` environment with no id-token
-    # -- it only reads the result artifacts, never Azure.
+    needs: [build, workflows, integration]
+    # Run even when a build, workflow, or integration leg fails (so red tests
+    # still get reported), but not when the run was cancelled. Aggregates every
+    # leg into one report. Runs outside the `avm` environment with no id-token --
+    # it only reads the result artifacts, never Azure.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

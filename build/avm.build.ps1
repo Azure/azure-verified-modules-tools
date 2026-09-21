@@ -11,6 +11,7 @@
       lint        - Run PSScriptAnalyzer with repo settings.
       test        - Run Pester unit tests (excludes Component and Integration).
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
+      test-workflows - Run workflow-definition unit tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_COMPONENT_SHARD_COUNT to override.
@@ -22,6 +23,7 @@
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test + component. The recommended local gate.
       ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
+                    Workflow-definition tests are split into their own CI job.
 
     The test, coverage, component, and integration tasks write an NUnit result
     file per tier under out/test-results/. The CI workflows upload it as an
@@ -49,6 +51,7 @@ $script:repoRoot     = Split-Path -Parent $PSScriptRoot
 $script:moduleRoot   = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
 $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
+$script:workflowUnitTestsRoot = Join-Path $script:testsRoot 'Unit' 'Workflows'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
 $script:testNameFilter = $TestName
@@ -441,6 +444,9 @@ task coverage {
 
     $config = New-PesterConfiguration
     $config.Run.Path                           = $unitPath
+    if (Test-Path -LiteralPath $script:workflowUnitTestsRoot) {
+        $config.Run.ExcludePath                = @($script:workflowUnitTestsRoot)
+    }
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = 'Detailed'
@@ -490,6 +496,30 @@ task coverage {
         $detail = if ($missed) { "`n" + ($missed -join "`n") } else { '' }
         throw ("Coverage gate failed: $covered% < $($script:coverageFloor)% floor. " +
                "Add tests for the files below or raise coverage on existing ones.$detail")
+    }
+}
+
+task 'test-workflows' {
+    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+
+    if (-not (Test-Path -LiteralPath $script:workflowUnitTestsRoot)) {
+        Write-Build Yellow "  no workflow unit tests found at $script:workflowUnitTestsRoot"
+        return
+    }
+
+    $config = New-PesterConfiguration
+    $config.Run.Path                = $script:workflowUnitTestsRoot
+    $config.Run.PassThru            = $true
+    $config.Run.Exit                = $false
+    $config.Output.Verbosity        = 'Detailed'
+    $config.TestResult.Enabled      = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'workflow-unit'
+    $config.Filter.ExcludeTag       = @('Integration', 'Component')
+
+    $result = script:Invoke-AvmPester -Configuration $config
+    if ($result.FailedCount -gt 0) {
+        throw "$($result.FailedCount) workflow Pester test(s) failed."
     }
 }
 
@@ -626,13 +656,15 @@ task integration {
 
 task 'pre-commit' layout, lint, test, component
 
-# CI runs layout + lint + coverage + component. Coverage runs the Unit tier
-# with CodeCoverage enabled (so we get the spec section 18 70% floor) and
-# `component` runs the real-subprocess (stub-binary) tier separately. The real
-# `integration` tier (REAL NETWORK + real binaries) is NOT part of the ci task --
-# it runs as a separate `integration` job in the ci workflow on PR / on-demand.
-# `pre-commit` (the local gate) skips coverage and integration to stay fast, but
-# runs `component` so a green local gate predicts a green CI run.
+# CI runs layout + lint + coverage + component. Coverage runs the Avm.Authoring
+# Unit tier with CodeCoverage enabled (so we get the spec section 18 70% floor)
+# and `component` runs the real-subprocess (stub-binary) tier separately.
+# Workflow-definition tests are split into a dedicated Ubuntu-only job because
+# the checked workflows only run on Ubuntu. The real `integration` tier (REAL
+# NETWORK + real binaries) is NOT part of the ci task -- it runs as a separate
+# `integration` job in the ci workflow on PR / on-demand. `pre-commit` (the local
+# gate) skips coverage and integration to stay fast, but runs `component` so a
+# green local gate predicts a green CI run.
 task ci layout, lint, coverage, component
 
 task . layout
