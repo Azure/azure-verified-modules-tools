@@ -45,6 +45,51 @@ function Get-RepositoryFileAtCommit {
     }
 }
 
+function Get-RepositoryFilesAtCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [ValidatePattern('^[0-9a-f]{40}$')] [string] $Sha,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Paths
+    )
+
+    Set-StrictMode -Version 3.0
+    $files = @{}
+    if ($Paths.Count -eq 0) { return $files }
+    foreach ($path in $Paths) {
+        if ($path -cmatch '(^/|\\|(^|/)\.\.?(/|$)|(^|/)\.git(/|$)|[\r\n])') {
+            throw [System.ArgumentException]::new('Repository file paths must be repository-relative without traversal.')
+        }
+    }
+    # One sparse, blob-filtered clone pinned to $Sha replaces N per-file Contents
+    # API calls: git allows fetching an arbitrary reachable commit SHA directly,
+    # so this stays pinned to the exact commit the caller resolved up front.
+    $parent = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-repo-files-' + [guid]::NewGuid().ToString('n'))
+    $root = Join-Path $parent 'repository'
+    $null = New-Item -ItemType Directory -Path $parent
+    try {
+        $null = Invoke-RepositoryGit -Arguments @('clone', '--quiet', '--filter=blob:none', '--no-checkout', "https://github.com/$Repository.git", $root) -WorkingDirectory $parent -MaxRetries 5
+        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('fetch', '--quiet', '--depth', '1', 'origin', $Sha) -MaxRetries 5
+        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments (@('sparse-checkout', 'set', '--no-cone', '--') + $Paths)
+        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', $Sha)
+        foreach ($path in $Paths) {
+            $full = Join-Path $root ($path.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+                throw [System.IO.FileNotFoundException]::new("Repository checkout at $Sha is missing expected file '$Repository/$path'.")
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($full)
+            $files[$path] = [pscustomobject]@{
+                Content = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+                Sha = Get-RepositoryGitBlobSha -Bytes $bytes
+            }
+        }
+        return $files
+    }
+    finally {
+        Remove-Item -LiteralPath $parent -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-RepositoryBranchHead {
     [CmdletBinding()]
     param(

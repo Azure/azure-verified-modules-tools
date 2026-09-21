@@ -1,4 +1,4 @@
-# This file is generated automatically from each root Bicep module's metadata.json. Do not edit manually.
+# This file is generated automatically from the AVM module indexes. Do not edit manually.
 # Template: https://github.com/Azure/azure-verified-modules-tools/blob/main/repository-management/bicep-codeowners-sync/CODEOWNERS.template
 
 * @Azure/azure-verified-modules-tooling-contributors

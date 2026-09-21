@@ -29,11 +29,16 @@ function Get-AvmBicepCodeownersSnapshot {
     $moduleTypes = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }
     $modules = [System.Collections.Generic.List[object]]::new()
     $metadataShas = @{}
-    foreach ($entry in ($metadataEntries | Sort-Object -Property path)) {
+    $sortedEntries = @($metadataEntries | Sort-Object -Property path)
+    $files = Get-RepositoryFilesAtCommit -Repository 'Azure/bicep-registry-modules' -Sha $SourceSha -Paths @($sortedEntries | ForEach-Object { $_.path })
+    foreach ($entry in $sortedEntries) {
         $segments = $entry.path.Split('/')
         $kind = $segments[1]
         $name = "avm/$kind/$($segments[2])/$($segments[3])"
-        $file = Get-RepositoryFileAtCommit -Repository 'Azure/bicep-registry-modules' -Path $entry.path -Sha $SourceSha
+        $file = $files[$entry.path]
+        if (-not $file -or $file.Sha -cne $entry.sha) {
+            throw [System.IO.InvalidDataException]::new("The checked-out blob SHA for '$name' metadata.json does not match the resolved tree.")
+        }
         $metadataShas[$name] = $file.Sha
         try {
             $metadata = ConvertFrom-Json -InputObject $file.Content -AsHashtable -Depth 30
