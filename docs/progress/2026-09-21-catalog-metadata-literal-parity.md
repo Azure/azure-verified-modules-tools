@@ -25,5 +25,7 @@ and source-literal comparison is not a catalog validation requirement.
 
 - `./build.ps1 component -TestName '*uses Bicep metadata descriptions*'` passed
   (1 test).
+- `./build.ps1 component -TestName '*module catalog transformations*'` passed
+  (56 tests).
 - `./build.ps1 pre-commit` passed layout but was stopped during the repository's
   repeated transient PSScriptAnalyzer retries at the requester's direction.

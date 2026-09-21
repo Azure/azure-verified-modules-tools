@@ -648,7 +648,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
     }
 
     It 'does not fall back or write outputs for invalid present metadata: <Kind>' -TestCases @(
-        @{ Kind = 'json' }, @{ Kind = 'schema' }, @{ Kind = 'source' }, @{ Kind = 'bom' }
+        @{ Kind = 'json' }, @{ Kind = 'schema' }, @{ Kind = 'bom' }
     ) {
         param($Kind)
         $fixture = New-CatalogFixture
@@ -660,11 +660,6 @@ Describe 'Component: module catalog transformations' -Tag Component {
             'schema' {
                 $metadata = Read-AvmCatalogJson -Path $path
                 $metadata['moduleType'] = 'resource'
-                Save-CatalogJson -Path $path -Data $metadata
-            }
-            'source' {
-                $metadata = Read-AvmCatalogJson -Path $path
-                $metadata.moduleDescription = 'Mismatched literal description.'
                 Save-CatalogJson -Path $path -Data $metadata
             }
             'bom' {
