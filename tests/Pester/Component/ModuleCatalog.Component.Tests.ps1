@@ -417,6 +417,23 @@ Describe 'Component: module catalog helpers' -Tag Component {
 }
 
 Describe 'Component: module catalog transformations' -Tag Component {
+    It 'uses Bicep metadata descriptions without enforcing main.bicep literal parity' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $module = @($fixture.Modules | Where-Object {
+                $_.Ecosystem -eq 'bicep' -and $_.ModuleType -eq 'resource'
+            })[0]
+        [System.IO.File]::WriteAllText(
+            (Join-Path $module.Directory 'main.bicep'),
+            "metadata name = 'Authoritative module'`nmetadata description = 'Bicep source description.'`n",
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $item = @($inventory.Items | Where-Object { $_.Identity.Key -eq $module.Identity.Key })[0]
+
+        $item.Record.moduleDescription | Should -BeExactly 'Deploys reviewed module.'
+    }
+
     It 'projects Oracle <ResourceType> into resource catalog records and CSV rows' -TestCases @(
         @{ ResourceType = 'cloudExadataInfrastructures' }
         @{ ResourceType = 'cloudVmClusters' }

@@ -60,7 +60,8 @@ configuration supplied inside the generated bundle.
 
 Only valid module metadata creates catalog entries and eligible CSV rows. There are no
 ecosystem mode options or full legacy-record fallback. Present metadata must pass
-the packaged validator, including Bicep literals. Reduced children require family-root
+the packaged validator; catalog collection does not enforce parity with Bicep source
+literals. Reduced children require family-root
 metadata and inherit owners. The JSON catalog also includes the
 family's alternative names and comments; child CSV cells for those two fields
 stay unchanged, including blanks. Newly discovered child rows leave them blank.

@@ -231,7 +231,7 @@ function Get-AvmCatalogSources {
         if ($metadataFiles.Count -gt 0) {
             $result = Test-AvmModuleMetadata -Path $source.Directory -Ecosystem $source.Ecosystem `
                 -ModuleType $source.ModuleType -ChildModule:($null -ne $source.ParentModule) `
-                -CheckSource:($source.Ecosystem -eq 'bicep' -and -not $source.SourcePending) -SkipModuleVersionCheck
+                -SkipModuleVersionCheck
             if ($result.Status -cne 'pass') {
                 $messages = @($result.Issues | ForEach-Object { $_.Message }) -join '; '
                 throw [System.IO.InvalidDataException]::new("Invalid present metadata for $($source.Key): $messages")
