@@ -22,7 +22,7 @@ if ($PSCmdlet.ShouldProcess('Azure/bicep-registry-modules', $action)) {
         $summary = @(
             "CODEOWNERS sync: **$($result.Status)**"
             ''
-            "Source index commit: ``$($result.SourceSha)``"
+            "Module metadata.json snapshot commit: ``$($result.SourceSha)``"
             "Module rows: $($result.ModuleCount)"
         )
         if ($result.PullRequestUrl) {

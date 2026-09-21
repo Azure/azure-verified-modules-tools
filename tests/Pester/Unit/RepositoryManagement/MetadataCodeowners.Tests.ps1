@@ -9,14 +9,15 @@ BeforeAll {
         Terraform = Get-Content -LiteralPath (Join-Path $terraformRoot 'CODEOWNERS.template') -Raw
         Bicep = Get-Content -LiteralPath (Join-Path $bicepRoot 'CODEOWNERS.template') -Raw
     }
-    $indexes = @{}
-    foreach ($kind in @('res', 'ptn', 'utl')) {
-        $indexes[$kind] = "ModuleName,ModuleStatus,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm/$kind/test/parent,Available,alice,`n"
-    }
+    $modules = @(
+        [pscustomobject]@{ Name = 'avm/res/test/parent'; Owners = @('alice') }
+        [pscustomobject]@{ Name = 'avm/ptn/test/parent'; Owners = @() }
+        [pscustomobject]@{ Name = 'avm/utl/test/parent'; Owners = @() }
+    )
     $script:contents = @{
         Terraform = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @('module-reviewers') `
             -FileProtectionTeams @('file-reviewers') -Template $script:templates.Terraform
-        Bicep = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:templates.Bicep
+        Bicep = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:templates.Bicep
     }
 
     function Get-TestCodeownersForPath {

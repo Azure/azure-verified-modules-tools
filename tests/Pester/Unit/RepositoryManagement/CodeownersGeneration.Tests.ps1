@@ -6,36 +6,20 @@ BeforeAll {
     $script:group = '@Azure/azure-verified-modules-module-owners'
     $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
 
-    function New-OwnershipRow {
+    function New-CodeownersModule {
         param(
             [string] $Name = 'avm/res/test/parent',
-            [string] $Primary = 'Alice',
-            [string] $Secondary = '',
-            [string] $Parent = 'n/a',
-            [string] $Status = 'Available'
+            [string[]] $Owners = @('Alice')
         )
-        [pscustomobject][ordered]@{
-            ModuleName = $Name
-            ParentModule = $Parent
-            ModuleStatus = $Status
-            PrimaryModuleOwnerGHHandle = $Primary
-            SecondaryModuleOwnerGHHandle = $Secondary
-            ModuleOwnersGHTeam = '@Azure/retired-team'
-        }
+        [pscustomobject]@{ Name = $Name; Owners = $Owners }
     }
 
-    function ConvertTo-OwnershipCsv {
-        param([object[]] $Rows)
-        ($Rows | ConvertTo-Csv -NoTypeInformation) -join "`n"
-    }
-
-    function New-OwnershipIndexes {
-        param([object[]] $ResourceRows = @((New-OwnershipRow)))
-        @{
-            res = ConvertTo-OwnershipCsv -Rows $ResourceRows
-            ptn = ConvertTo-OwnershipCsv -Rows @((New-OwnershipRow -Name 'avm/ptn/test/pattern' -Primary 'Bob' -Secondary 'Carol'))
-            utl = ConvertTo-OwnershipCsv -Rows @((New-OwnershipRow -Name 'avm/utl/test/utility' -Primary ''))
-        }
+    function Get-DefaultModules {
+        @(
+            (New-CodeownersModule)
+            (New-CodeownersModule -Name 'avm/ptn/test/pattern' -Owners @('Bob', 'Carol'))
+            (New-CodeownersModule -Name 'avm/utl/test/utility' -Owners @())
+        )
     }
 
     function Get-ModuleRules {
@@ -45,179 +29,92 @@ BeforeAll {
 }
 
 Describe 'Bicep CODEOWNERS ownership generation' {
-    It 'includes all three indexes with primary then secondary and the shared group last' {
-        $content = ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $script:template
+    It 'includes all three kinds with owners in file order and the shared group last' {
+        $content = ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $script:template
         Get-ModuleRules $content | Should -Be @(
             "/avm/ptn/test/pattern/ @bob @carol $script:group"
             "/avm/res/test/parent/ @alice $script:group"
             "/avm/utl/test/utility/ $script:group"
         )
-        $content | Should -Not -Match 'retired-team'
+    }
+
+    It 'supports an unlimited number of owners on one module' {
+        $owners = 1..10 | ForEach-Object { "owner$_" }
+        $modules = @((New-CodeownersModule -Owners $owners), (New-CodeownersModule -Name 'avm/ptn/test/pattern'), (New-CodeownersModule -Name 'avm/utl/test/utility'))
+        $content = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
+        $expected = "/avm/res/test/parent/ $(($owners | ForEach-Object { "@$_" }) -join ' ') $script:group"
+        Get-ModuleRules $content | Should -Contain $expected
+    }
+
+    It 'accepts both individual and @org/team-slug owner handles on the same module' {
+        $modules = @((New-CodeownersModule -Owners @('Alice', '@Azure/some-team')), (New-CodeownersModule -Name 'avm/ptn/test/pattern'), (New-CodeownersModule -Name 'avm/utl/test/utility'))
+        $content = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
+        Get-ModuleRules $content | Should -Contain "/avm/res/test/parent/ @alice @Azure/some-team $script:group"
     }
 
     It 'normalizes whitespace, case, and one leading at sign before deduplicating' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary ' @ALIce ' -Secondary 'alice'))
-        $content = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template
+        $modules = @((New-CodeownersModule -Owners @(' @ALIce ', 'alice')), (New-CodeownersModule -Name 'avm/ptn/test/pattern'), (New-CodeownersModule -Name 'avm/utl/test/utility'))
+        $content = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
         Get-ModuleRules $content | Should -Contain "/avm/res/test/parent/ @alice $script:group"
         $content | Should -Not -Match '@alice @alice'
     }
 
-    It 'keeps a secondary owner when the primary owner is empty' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary '' -Secondary '@CAROL'))
-        Get-ModuleRules (ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template) |
-            Should -Contain "/avm/res/test/parent/ @carol $script:group"
-    }
-
-    It 'uses the group alone for ownerless available and orphaned modules' -ForEach @('Available', 'Orphaned') {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary '' -Status $_))
-        Get-ModuleRules (ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template) |
-            Should -Contain "/avm/res/test/parent/ $script:group"
-    }
-
-    It 'discards stale individual ownership for orphaned modules' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary 'FormerOwner' -Secondary 'FormerBackup' -Status 'Orphaned'))
-        $content = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template
+    It 'uses the group alone for a module with no owners' {
+        $modules = @((New-CodeownersModule -Owners @()), (New-CodeownersModule -Name 'avm/ptn/test/pattern'), (New-CodeownersModule -Name 'avm/utl/test/utility'))
+        $content = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
         Get-ModuleRules $content | Should -Contain "/avm/res/test/parent/ $script:group"
-        $content | Should -Not -Match 'former'
     }
 
-    It 'includes proposed and deprecated modules for new and retained contributions' -ForEach @('Proposed', 'Deprecated') {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Status $_))
-        Get-ModuleRules (ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template) |
-            Should -Contain "/avm/res/test/parent/ @alice $script:group"
-    }
-
-    It 'emits only top-level directory rules even when children declare different owners' {
-        $indexes = New-OwnershipIndexes -ResourceRows @(
-            (New-OwnershipRow -Name 'avm/res/test/parent/child/leaf' -Primary '' -Parent 'avm/res/test/parent')
-            (New-OwnershipRow -Name 'avm/res/test/parent/child' -Primary 'ChildOwner' -Parent 'avm/res/test/parent')
-            (New-OwnershipRow -Primary 'ParentOwner' -Secondary 'Backup')
+    It 'is byte-identical after module reordering' {
+        $modules = @(
+            (New-CodeownersModule -Name 'avm/res/test/parent-sibling')
+            (New-CodeownersModule)
+            (New-CodeownersModule -Name 'avm/ptn/test/pattern')
+            (New-CodeownersModule -Name 'avm/utl/test/utility')
         )
-        $rules = Get-ModuleRules (ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template)
-        $rules[1] | Should -Be "/avm/res/test/parent/ @parentowner @backup $script:group"
-        $rules | Should -HaveCount 3
-        ($rules -join "`n") | Should -Not -Match '/child/|@childowner'
-        foreach ($rule in $rules) {
-            ($rule -split ' ')[0] | Should -Match '^/avm/(res|ptn|utl)/[^/]+/[^/]+/$'
-        }
-    }
-
-    It 'does not resolve or execute child-specific ownership metadata' {
-        $indexes = New-OwnershipIndexes -ResourceRows @(
-            (New-OwnershipRow)
-            (New-OwnershipRow -Name 'avm/res/test/parent/child' -Primary '$(throw "not code")' -Parent 'missing')
-            (New-OwnershipRow -Name 'avm/res/test/parent/child/leaf' -Primary '' -Parent '')
-        )
-        $content = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template
-        Get-ModuleRules $content | Should -Contain "/avm/res/test/parent/ @alice $script:group"
-        $content | Should -Not -Match '/child/|not code'
-    }
-
-    It 'ignores retired per-module teams instead of using them as an ownerless fallback' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary ''))
-        $content = ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template
-        Get-ModuleRules $content | Should -Contain "/avm/res/test/parent/ $script:group"
-        $content | Should -Not -Match 'retired-team'
-    }
-
-    It 'is byte-identical after index reordering and omits all child paths' {
-        $rows = @(
-            (New-OwnershipRow -Name 'avm/res/test/parent/child' -Primary '' -Parent 'avm/res/test/parent')
-            (New-OwnershipRow -Name 'avm/res/test/parent-sibling')
-            (New-OwnershipRow)
-        )
-        $first = ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes $rows) -Template $script:template
-        [array]::Reverse($rows)
-        $second = ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes $rows) -Template $script:template
+        $first = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
+        [array]::Reverse($modules)
+        $second = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template
         $first | Should -BeExactly $second
         $first.Contains("`r") | Should -BeFalse
         $first.EndsWith("`n") | Should -BeTrue
         $first[0] | Should -Not -Be ([char]0xFEFF)
-        $first | Should -Not -Match '/parent/child/'
     }
 
-    It 'rejects an incomplete index that contains no top-level modules' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Name 'avm/res/test/parent/child'))
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*no top-level modules*'
+    It 'rejects an empty modules array' {
+        { ConvertTo-AvmBicepCodeowners -Modules @() -Template $script:template } | Should -Throw '*At least one Bicep root module*'
+    }
+
+    It 'rejects a missing kind that has no top-level modules' {
+        $modules = @((New-CodeownersModule), (New-CodeownersModule -Name 'avm/utl/test/utility' -Owners @()))
+        { ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template } | Should -Throw '*No top-level Bicep ptn modules*'
     }
 
     It 'rejects duplicate normalized module paths' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow), (New-OwnershipRow -Name '/avm/res/test/parent/'))
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*duplicate module path*'
+        $modules = @((New-CodeownersModule), (New-CodeownersModule -Name '/avm/res/test/parent/'))
+        { ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template } | Should -Throw '*duplicate module path*'
     }
 
-    It 'rejects wildcard, traversal, wrong-kind, case, and whitespace paths' -ForEach @(
+    It 'rejects wildcard, traversal, case, and whitespace paths' -ForEach @(
         'avm/res/test/*', 'avm/res/test/../escape', 'avm/res/test/white space',
-        'avm/ptn/test/parent', 'avm/res/Test/parent', 'avm/res/test//parent',
+        'avm/res/Test/parent', 'avm/res/test//parent',
         'avm\res\test\parent', "avm/res/test/parent`n*"
     ) {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Name $_))
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*module path*'
+        { ConvertTo-AvmBicepCodeowners -Modules @((New-CodeownersModule -Name $_)) -Template $script:template } | Should -Throw '*module path*'
     }
 
     It 'rejects malformed or executable-looking handles rather than widening fallback' -ForEach @(
-        '@@alice', '@Azure/a-team', 'alice,bob', 'alice;bob', 'alice bob', 'a--b', '-alice', 'alice-',
+        '@@alice', 'alice,bob', 'alice;bob', 'alice bob', 'a--b', '-alice', 'alice-',
         'alice@example.com', ('a' * 40), '$(throw "executed")', "alice`n* @attacker"
     ) {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Primary $_))
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*Invalid individual GitHub handle*'
-    }
-
-    It 'rejects unknown module statuses rather than skipping rows' {
-        $indexes = New-OwnershipIndexes -ResourceRows @((New-OwnershipRow -Status 'unexpected'))
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*Unknown module status*'
-    }
-}
-
-Describe 'Ownership CSV failure boundaries' {
-    It 'requires all three nonempty indexes' -ForEach @('res', 'ptn', 'utl') {
-        $indexes = New-OwnershipIndexes
-        $indexes[$_] = ''
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*empty*'
-        $indexes.Remove($_)
-        { ConvertTo-AvmBicepCodeowners -Indexes $indexes -Template $script:template } | Should -Throw '*All three*'
-    }
-
-    It 'rejects header-only, HTML, malformed quoting, duplicated headers, extra or missing cells' -ForEach @(
-        @{ Csv = 'ModuleName,ModuleStatus,ParentModule,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle' }
-        @{ Csv = '<html>Temporarily unavailable</html>' }
-        @{ Csv = "ModuleName,ModuleStatus,ParentModule,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm/res/test/parent,Available,n/a,`"unterminated," }
-        @{ Csv = "ModuleName,modulename,ParentModule,ModuleStatus,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`na,b,n/a,Available,x,y" }
-        @{ Csv = "ModuleName,ModuleStatus,ParentModule,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm/res/test/parent,Available,n/a,alice,bob,extra" }
-        @{ Csv = "ModuleName,ModuleStatus,ParentModule,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle`navm/res/test/parent,Available,n/a,alice" }
-    ) {
-        { ConvertFrom-AvmBicepOwnershipCsv -Content $Csv -Kind res } | Should -Throw
-    }
-
-    It 'requires the primary, secondary, path, and status columns' -ForEach @(
-        'PrimaryModuleOwnerGHHandle', 'SecondaryModuleOwnerGHHandle', 'ModuleName', 'ModuleStatus'
-    ) {
-        $row = New-OwnershipRow
-        $row.PSObject.Properties.Remove($_)
-        { ConvertFrom-AvmBicepOwnershipCsv -Content (ConvertTo-OwnershipCsv @($row)) -Kind res } | Should -Throw '*missing column*'
-    }
-
-    It 'accepts quoted CSV and absent optional trailing publication cells in the official indexes' {
-        $csv = "ModuleName,ModuleStatus,ParentModule,PrimaryModuleOwnerGHHandle,SecondaryModuleOwnerGHHandle,Description,FirstPublishedIn`r`n" +
-            "avm/res/test/parent,Available,n/a,Alice,,`"A quoted, description`"`r`n"
-        $rows = @(ConvertFrom-AvmBicepOwnershipCsv -Content $csv -Kind res)
-        $rows.Count | Should -Be 1
-        $rows[0].PrimaryModuleOwnerGHHandle | Should -Be 'Alice'
-        $rows[0].SecondaryModuleOwnerGHHandle | Should -Be ''
-    }
-
-    It 'does not require or consume ParentModule in any index' -ForEach @('res', 'ptn', 'utl') {
-        $row = New-OwnershipRow -Name "avm/$_/test/module"
-        $row.PSObject.Properties.Remove('ParentModule')
-        $rows = @(ConvertFrom-AvmBicepOwnershipCsv -Content (ConvertTo-OwnershipCsv @($row)) -Kind $_)
-        $rows[0].ModuleName | Should -Be "avm/$_/test/module"
-        $rows[0].PrimaryModuleOwnerGHHandle | Should -Be 'Alice'
+        $modules = @((New-CodeownersModule -Owners @($_)), (New-CodeownersModule -Name 'avm/ptn/test/pattern'), (New-CodeownersModule -Name 'avm/utl/test/utility'))
+        { ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:template } | Should -Throw '*Invalid GitHub owner handle*'
     }
 }
 
 Describe 'Template-backed static ownership preservation' {
     BeforeEach {
-        $script:rendered = ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $script:template
+        $script:rendered = ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $script:template
     }
 
     It 'retains the automation header, actual template URL, and all critical static rules in order' {
@@ -261,7 +158,7 @@ Describe 'Template-backed static ownership preservation' {
         @{ Mutation = 'missing engineering owners'; Replacement = 'metadata.json @Azure/azure-verified-modules-module-owners' }
     ) {
         $template = $script:template.Replace($script:metadataRule, $Replacement)
-        { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*static ownership contract*'
+        { ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $template } | Should -Throw '*static ownership contract*'
         { Assert-AvmCodeownersContent -Content $script:rendered -Template $template -AllowLegacyDefault } |
             Should -Throw '*static ownership contract*'
     }
@@ -290,19 +187,19 @@ Describe 'Template-backed static ownership preservation' {
 
     It 'preserves additional reviewed template comments byte-for-byte and does not evaluate them' {
         $template = $script:template.Replace("__AVM_MODULE_OWNERS__", '# $(throw "do not execute")' + "`n__AVM_MODULE_OWNERS__")
-        $content = ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template
+        $content = ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $template
         $content | Should -Match ([regex]::Escape('# $(throw "do not execute")'))
         { Assert-AvmCodeownersContent -Content $content -Template $template } | Should -Not -Throw
     }
 
     It 'refuses missing, duplicate, or inline placeholders' -ForEach @('', "__AVM_MODULE_OWNERS__`n__AVM_MODULE_OWNERS__", '# __AVM_MODULE_OWNERS__') {
         $template = $script:template.Replace('__AVM_MODULE_OWNERS__', $_)
-        { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*placeholder*'
+        { ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $template } | Should -Throw '*placeholder*'
     }
 
     It 'refuses a placeholder after the final tooling override' {
         $template = $script:template.Replace("__AVM_MODULE_OWNERS__`n", '') + "__AVM_MODULE_OWNERS__`n"
-        { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*final tooling overrides*'
+        { ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $template } | Should -Throw '*final tooling overrides*'
     }
 
     It 'refuses unfamiliar static rules, comments, and lost tooling overrides' -ForEach @(
@@ -332,6 +229,6 @@ Describe 'Template-backed static ownership preservation' {
     It 'rejects files at the exact GitHub size limit' {
         $padding = '# ' + ('x' * 3MB) + "`n"
         $template = $padding + $script:template
-        { ConvertTo-AvmBicepCodeowners -Indexes (New-OwnershipIndexes) -Template $template } | Should -Throw '*3 MB*'
+        { ConvertTo-AvmBicepCodeowners -Modules (Get-DefaultModules) -Template $template } | Should -Throw '*3 MB*'
     }
 }
