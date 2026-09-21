@@ -75,7 +75,7 @@ stay unchanged, including blanks. Newly discovered child rows leave them blank.
 The six CSVs retain their existing column order and matched-row compatibility
 fields; `CanonicalType` is not added. Missing metadata is reported but never
 reconstructed from a CSV. Existing source rows without metadata-backed replacements
-stop generation by default. Only existing columns are projected for metadata rows; full
+hold back affected outputs by default. Only existing columns are projected for metadata rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. The artifact's `v1/migration-report.json` records missing metadata, unresolved
@@ -93,8 +93,23 @@ ecosystems and all three family kinds. JSON retains every helper under the
 `helper` key, distinguished by repository and module path, with inherited owners,
 the derived family `moduleType`, and null `providerNamespace`/`resourceType`.
 Helpers are not ARM resource types. All six CSV outputs omit helpers, in both
-preview and canonical modes. A helper previously present in a source CSV still
-appears in the removal report and requires the normal explicit override below.
+preview and canonical modes. A helper previously present in a source CSV still requires the normal removal
+override unless it qualifies for the deprecated/unpublished exclusion below.
+
+### Deprecated, unpublished modules
+
+Metadata-backed modules that are both deprecated and registry `not-published`
+are omitted from CSV indexes and `v1/modules.json`. Each warning names the
+repository and module path and recommends deleting unused source, or an unused
+Terraform repository if it contains no published modules. No source is deleted.
+Published deprecated modules and published descendants remain indexed.
+The separate approved MAR registration mirror is unchanged.
+
+The hashed migration report retains validated records in `excludedModules`
+and an `excludedEntries` count. Only these exact repository/module identities
+are exempt from removal holds, at both generation and publication; they do not
+require `Force`. Invalid metadata, incomplete registry/archive evidence, and
+unrelated removals retain their safeguards.
 
 ### Source CSV row-removal override
 
@@ -104,8 +119,8 @@ and Terraform repositories for different providers remain distinct even when
 their module names match. The baseline is `sourceFile`, which also names the
 publication destination. Existing preview files do not affect this check.
 
-Use `-Force` on `Invoke-ModuleCatalog.ps1` only when the listed source-row
-removals are intentional. The error identifies each source file, module name,
+Use `-Force` on `Invoke-ModuleCatalog.ps1` only when the other listed source-row
+removals are intentional. The diagnostics identify each source file, module name,
 and repository URL. A forced result records `sourceCsvRows`, `csvRowRemovals`
 (`sourceFile`, `moduleName`, `repoURL`), and `csvRowRemovalsForced` in
 `v1/migration-report.json`. It does not recreate missing metadata or legacy rows.
@@ -113,7 +128,7 @@ and repository URL. A forced result records `sourceCsvRows`, `csvRowRemovals`
 The manual workflow input `force` defaults to `false`; schedules cannot select
 the override. `plan_only=true` with `force=true` can produce a review artifact
 without publication. For local bundle validation or publication,
-`Publish-ModuleCatalog.ps1` also requires explicit `-Force` when removals exist;
+`Publish-ModuleCatalog.ps1` also requires explicit `-Force` for these other removals;
 the generation flag in an artifact does not grant publication permission.
 The publisher rechecks the report against the actual source CSVs on the unchanged
 main-branch base before any file writes.
@@ -156,11 +171,12 @@ source files exist and `owners` is empty. Published modules without owners are
 Orphaned; published modules with owners are Available. Both CSV and JSON outputs
 use this rule rather than preserving prior Proposed or Orphaned status.
 
-Deprecation takes precedence over ownership and registry availability. A Bicep
+Deprecation takes precedence over ownership. A Bicep
 `DEPRECATED.md` marks that module and its descendants; a child's marker does not
 deprecate its parent or siblings. An archived Terraform repository marks every
-module in it Deprecated. Prior CSV Deprecated state is retained for matching
-metadata-backed entries. A row without metadata is subject to the removal guard,
+module in it deprecated. Prior CSV Deprecated state also marks matching
+metadata-backed entries as deprecated; only published entries remain indexed.
+A row without metadata is subject to the removal guard,
 not retained as a legacy record. Missing or malformed archive
 evidence fails generation rather than being treated as an active repository.
 Old snapshots without that evidence must be collected again. The workflow only
@@ -180,7 +196,8 @@ No direct `main` push, permission edit, or obsolete-source deletion is used.
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,
 refreshing the private-source MAR mirror, and approval of any source-row removals
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
-team how-to when enabling the workflow; generated catalogs do not belong there.
+team catalog how-to with the exclusion warnings and deletion recommendation;
+generated catalogs do not belong there.
 Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
 order, required workflow pauses, and the first module/catalog runs.
 

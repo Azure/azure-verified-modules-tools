@@ -28,8 +28,10 @@ This document is a plan, not approval to run production commands.
   Migration diagnostics stay in the workflow artifact, not the repository.
   It does not change tier lists
   or repository configuration.
-  Only valid metadata produces rows; removals from source CSVs fail by default
-  and require an explicit override.
+  Only valid metadata produces rows. Deprecated, unpublished modules are excluded
+  with a warning recommending deletion of unused source; nothing is deleted.
+  Other source-row removals hold back affected outputs and require an explicit
+  override.
   CSV outputs replace the six canonical files in the existing index folder.
   The JSON catalog keeps `v1/modules.json`, including
   selected helper submodules under canonical key `helper`; every generated CSV
@@ -137,7 +139,8 @@ the old branches again.
 Confirm that all 572 intended files are present, including complete owner lists.
 Keep empty owners genuinely empty. Nondeprecated, published modules without
 owners are Orphaned; unpublished modules remain Proposed regardless of ownership.
-Deprecated modules retain their prior status. The 14 uninstrumented,
+Published deprecated modules retain their status; deprecated unpublished modules
+are omitted from the generated indexes. The 14 uninstrumented,
 unpublished children legitimately omit telemetry under BCPFR4.
 
 The change must not alter `main.bicep`, compiled templates, or version files.
@@ -332,8 +335,9 @@ gh workflow run module-metadata-sync.yml --repo $tools --ref main `
     -f plan_only=true
 ```
 
-Generation and publication fail by default if a row from a source CSV would be
-removed. The comparison uses module implementation identities, not just row counts:
+Generation holds back affected outputs, and publication enforces those holds,
+if a source CSV row would be removed without verified deprecated/unpublished
+evidence. The comparison uses module implementation identities, not just row counts:
 adding another row does not hide a removal, and Terraform provider repositories
 with the same module name are distinct. Existing preview-only rows are not protected
 by this guard. Missing metadata for an unindexed module is reported and does not
@@ -355,10 +359,15 @@ Download the `module-metadata-catalog` artifact. Check:
   with inherited ownership. Check representative deprecated/unowned modules.
 - The artifact-only migration report explains every missing/unresolved module and parity gap.
   Its `sourceCsvRows` contains the source identity snapshots, `csvRowRemovals`
-  lists each removed `sourceFile`, `moduleName`, and `repoURL`, and
+  lists other removed `sourceFile`, `moduleName`, and `repoURL` values, and
   `csvRowRemovalsForced` records whether generation used the override.
+  `excludedModules` retains validated deprecated/unpublished records; only those
+  exact identities can be removed without force. Review their repository/module
+  warnings and deletion recommendations separately; no source deletion is automated.
 - Deprecation reflects Bicep `DEPRECATED.md` and descendants, or the Terraform
-  repository archived flag. Existing Deprecated values are preserved during transition.
+  repository archived flag. Existing Deprecated values remain deprecation signals;
+  published modules remain indexed and unpublished ones are excluded. The approved
+  MAR registration mirror is preserved independently.
 - Output files and destinations match the central configuration, and publication
   hashes/bases are complete. Errors or partial API results are not publishable.
   Publication rechecks source-row evidence against actual source CSVs on the
@@ -377,9 +386,10 @@ from current Bicep source literals, not the older index wording. These are large
 text changes even though metadata-only edits do not publish modules.
 
 Recovered owners can move published, formerly Orphaned modules to Available.
-Unpublished metadata-backed modules remain Proposed even without owners.
+Nondeprecated unpublished metadata-backed modules remain Proposed even without owners.
 Published unowned modules stay Orphaned and prior Deprecated status is preserved
-for matching metadata-backed entries. Rows without metadata are
+for matching published metadata-backed entries. Deprecated unpublished entries
+are excluded with actionable warnings. Rows without metadata are
 subject to the removal guard, not silently retained. The six
 CSVs keep their existing columns unchanged; no new column (such as a
 `CanonicalType` or tier column) is added. Compare fresh output against its

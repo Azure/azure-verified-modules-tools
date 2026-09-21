@@ -84,18 +84,32 @@ function Select-AvmCatalogCsvRowRemoval {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Removals,
-        [AllowEmptyCollection()][object[]] $Renames = @()
+        [AllowEmptyCollection()][object[]] $Renames = @(),
+        [System.Collections.Generic.HashSet[string]] $ExcludedModuleKeys,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
-    if ($Renames.Count -eq 0) {
+    if ($Renames.Count -eq 0 -and ($null -eq $ExcludedModuleKeys -or $ExcludedModuleKeys.Count -eq 0)) {
         return , $Removals
     }
     $renamed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($rename in $Renames) {
         $null = $renamed.Add(('{0}|{1}|{2}' -f [string]$rename.sourceFile, [string]$rename.moduleName, [string]$rename.fromRepoURL))
     }
+    $outputs = @{}
+    foreach ($output in $Configuration.outputs | Where-Object kind -eq 'csv') {
+        $outputs[$output.sourceFile] = $output
+    }
     return , @($Removals | Where-Object {
-            -not $renamed.Contains(('{0}|{1}|{2}' -f [string]$_.sourceFile, [string]$_.moduleName, [string]$_.repoURL))
+            if ($renamed.Contains(('{0}|{1}|{2}' -f [string]$_.sourceFile, [string]$_.moduleName, [string]$_.repoURL))) {
+                return $false
+            }
+            if ($null -ne $ExcludedModuleKeys -and $ExcludedModuleKeys.Count -gt 0) {
+                $key = Get-AvmCatalogCsvRowKey -Row @{ moduleName = $_.moduleName; repoURL = $_.repoURL } `
+                    -Output $outputs[$_.sourceFile] -Configuration $Configuration
+                return -not $ExcludedModuleKeys.Contains($key)
+            }
+            return $true
         })
 }
 

@@ -437,14 +437,18 @@ BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 charac
 prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
 Existing underscore identifiers and the exact historical Resource Graph
 identifier are preserved; file creation does not repair deployed telemetry.
-Empty owner lists are allowed. Deprecated takes precedence over publication and
-ownership. Otherwise, unpublished modules are Proposed regardless of owners or
-source files; published modules without owners are Orphaned, and published modules
-with owners are Available. Existing Deprecated status is retained during
-transition. New deprecations are derived from Bicep `DEPRECATED.md` (covering that
+Empty owner lists are allowed. Deprecated, unpublished modules are excluded from
+generated CSV indexes and catalog JSON after full validation; published deprecated
+modules remain Deprecated. Otherwise, unpublished modules are Proposed regardless
+of owners or source files; published modules without owners are Orphaned, and
+published modules with owners are Available. Existing Deprecated state is retained
+as a deprecation signal during transition. New deprecations are derived from Bicep `DEPRECATED.md` (covering that
 module and descendants), or
 the Terraform repository's archived flag (covering all its modules). There is
-no authored metadata status field.
+no authored metadata status field. Each excluded module produces a warning naming
+its repository/module path and recommending deletion of unused source, without
+deleting anything or removing published descendants. The approved MAR
+registration mirror remains unchanged.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies the required Bicep literal name and
@@ -475,14 +479,18 @@ stable repository/module-path identities, inherited owners, the derived family
 `moduleType`, and null ARM `providerNamespace`/`resourceType`. Every generated
 CSV omits them, including previews and canonical outputs. Invalid present
 metadata is an error; missing metadata never causes a full legacy CSV record
-to be retained. Generation and
-publication fail by default when source CSV module identities would disappear.
-Explicit `Force` permits those removals only, not other validation failures.
-Helper source rows are subject to this same removal report and guard.
+to be retained. Generation holds back affected outputs when source CSV module
+identities would disappear; publication independently enforces those holds.
+Validated deprecated/unpublished records are retained as `excludedModules` in
+the hash-protected migration report. Only their exact resolved implementation
+identities are exempt from this removal guard, without `Force`; malformed,
+inconsistent, or mismatched exclusion evidence fails publication.
+Explicit `Force` permits other removals only, not other validation failures.
+Other helper source rows remain subject to the removal report and guard.
 Source CSVs, not existing preview outputs, are the comparison baseline; this
 remains true after canonical CSV replacement. Hash-protected source-row evidence
 is checked again against the unchanged publication base before writes.
-Matched-row compatibility fields and prior Deprecated status remain preserved.
+Matched-row compatibility fields and published Deprecated status remain preserved.
 Fleet backfill and canonical CSV replacement remain explicit operator actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
