@@ -258,11 +258,13 @@ Describe 'Component: module catalog helpers' -Tag Component {
         }
         foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
             $rows = @($bundle.Files[$output.bundlePath] | ConvertFrom-Csv)
-            $rows | Should -HaveCount 2
+            # Terraform submodule rows are excluded from the CSV, so only root modules are expected there.
             $expected = @($inventory.Items | Where-Object {
                     $_.Record.ecosystem -eq $output.ecosystem -and $_.Record.moduleType -eq $output.moduleType -and
-                    $_.Record.canonicalType -cne 'helper'
+                    $_.Record.canonicalType -cne 'helper' -and
+                    -not ($_.Record.ecosystem -eq 'terraform' -and $_.Record.modulePath -cne '.')
                 } | ForEach-Object { $_.Record.moduleName } | Sort-Object)
+            $rows | Should -HaveCount $expected.Count
             @($rows.ModuleName | Sort-Object) | Should -Be $expected
         }
         $bundle.Report.counts.catalogEntries | Should -Be 24
@@ -481,7 +483,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
             $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object {
                     $_.ProviderNamespace -ceq 'Oracle.Database' -and $_.ResourceType -ceq $ResourceType
                 })
-            $rows | Should -HaveCount 2
+            # Terraform submodule rows are excluded from the CSV, so only the root row is expected.
+            $rows | Should -HaveCount $(if ($ecosystem -eq 'bicep') { 2 } else { 1 })
             foreach ($row in $rows) {
                 $row.ProviderNamespace | Should -BeExactly 'Oracle.Database'
                 $row.ResourceType | Should -BeExactly $ResourceType
@@ -699,19 +702,15 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $entry.bicep[0].comments | Should -BeExactly 'Reviewed comment.'
         $entry.terraform[0].alternativeNames | Should -Be @('Alias one', 'Alias two')
         $entry.terraform[0].comments | Should -BeExactly 'Reviewed comment.'
-        $row = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -like '*//modules/*' })[0]
-        $row.ParentModule | Should -BeExactly 'avm-res-storage-storageaccount'
-        $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
-        $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
+        $terraformSubmoduleRows = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -like '*//modules/*' })
+        $terraformSubmoduleRows | Should -BeNullOrEmpty
         $bicepRow = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -eq $entry.bicep[0].moduleName })[0]
         $bicepRow.ParentModule | Should -BeExactly 'avm/res/storage/storage-account'
-        foreach ($file in @('BicepResourceModules.csv', 'TerraformResourceModules.csv')) {
-            $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
-            $childRows | Should -Not -BeNullOrEmpty
-            foreach ($childRow in $childRows) {
-                $childRow.AlternativeNames | Should -BeExactly ''
-                $childRow.Comments | Should -BeExactly ''
-            }
+        $childRows = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
+        $childRows | Should -Not -BeNullOrEmpty
+        foreach ($childRow in $childRows) {
+            $childRow.AlternativeNames | Should -BeExactly ''
+            $childRow.Comments | Should -BeExactly ''
         }
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         foreach ($canonical in @('Microsoft.Storage/storageAccounts', 'Microsoft.Storage/storageAccounts/blobServices/containers')) {
@@ -720,6 +719,48 @@ Describe 'Component: module catalog transformations' -Tag Component {
                 ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
             }
         }
+    }
+
+    It 'orders every CSV output alphabetically by module name regardless of discovery order' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/zeta-account' -Canonical 'Microsoft.Storage/zetaAccounts' -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/alpha-account' -Canonical 'Microsoft.Storage/alphaAccounts' -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azurerm-avm-res-storage-zetaaccount' `
+            -ModulePath '.' -Canonical 'Microsoft.Storage/zetaAccounts' -Adopt
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azurerm-avm-res-storage-alphaaccount' `
+            -ModulePath '.' -Canonical 'Microsoft.Storage/alphaAccounts' -Adopt
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        foreach ($file in @('BicepResourceModules.csv', 'TerraformResourceModules.csv')) {
+            $names = @(($bundle.Files["docs/test-$file"] | ConvertFrom-Csv).ModuleName)
+            $sorted = [string[]]$names.Clone()
+            [Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+            $names | Should -Be $sorted
+        }
+    }
+
+    It 'excludes Terraform submodule rows from the CSV even when a legacy row exists' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azurerm-avm-res-storage-storageaccount' `
+            -ModulePath 'modules/blob-service' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
+        $file = 'TerraformResourceModules.csv'
+        $legacyRow = [ordered]@{}
+        foreach ($header in $fixture.Headers[$file]) {
+            $legacyRow[$header] = $fixture.Original[$file][$header]
+        }
+        $legacyRow.ModuleName = $child.Identity.ModuleName
+        $legacyRow.RepoURL = $child.Identity.RepoURL
+        $legacyRow.ParentModule = 'avm-res-storage-storageaccount'
+        $legacyRow.ResourceType = 'storageAccounts/blobServices'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($fixture.Original[$file], $legacyRow)))
+
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Force
+        $rows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+        $rows | Should -BeNullOrEmpty
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices'].terraform[0].moduleName |
+            Should -BeExactly $child.Identity.ModuleName
     }
 
     It 'preserves <Ecosystem> child CSV aliases and comments when existing cells are <CellContent>' -TestCases @(
@@ -751,6 +792,23 @@ Describe 'Component: module catalog transformations' -Tag Component {
         foreach ($force in @($false, $true)) {
             $inventory = Get-CatalogFixtureInventory -Fixture $fixture
             $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force:$force
+            if ($Ecosystem -eq 'terraform') {
+                # Terraform submodule rows are intentionally excluded from the CSV, so the legacy
+                # child row is always treated as removed: held back without -Force, dropped with it.
+                # The JSON catalog entry still inherits family alternativeNames/comments/owners.
+                if ($force) {
+                    $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
+                    $childRows | Should -BeNullOrEmpty
+                }
+                else {
+                    $bundle.HeldBackSourceFiles | Should -Contain $file
+                }
+                $entry = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices'][$Ecosystem][0]
+                $entry.owners | Should -HaveCount 4
+                $entry.alternativeNames | Should -Be @('Alias one', 'Alias two')
+                $entry.comments | Should -BeExactly 'Reviewed comment.'
+                continue
+            }
             $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ModuleName -ceq $child.Identity.ModuleName })
             $childRows | Should -HaveCount 1
             $childRows[0].AlternativeNames | Should -BeExactly $legacyRow.AlternativeNames
@@ -1377,12 +1435,14 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         Save-CatalogJson -Path $metadataPath -Data $metadata
         $fixture.Archived[$repository] = $true
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        # Terraform submodule rows are excluded from the CSV, so only the root row is expected.
         $rows = @($bundle.Files['docs/test-TerraformResourceModules.csv'] | ConvertFrom-Csv)
-        $rows | Should -HaveCount 2
+        $rows | Should -HaveCount 1
         foreach ($row in $rows) {
             $row.ModuleStatus | Should -Be 'Deprecated'
             $bundle.Catalog.modules["$($row.ProviderNamespace)/$($row.ResourceType)"].terraform[0].moduleStatus | Should -Be 'Deprecated'
         }
+        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts/blobServices/containers'].terraform[0].moduleStatus | Should -Be 'Deprecated'
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -Be 'Available'
     }
 

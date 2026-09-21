@@ -458,7 +458,8 @@ function Get-AvmCatalogInventory {
                 }
                 $existingRows[$identity.Key] = [pscustomobject]@{ Row = $row; File = $output.sourceFile }
                 if ($null -ne $identity.Metadata) {
-                    if ($identity.Metadata.canonicalType -cne 'helper') {
+                    $isTerraformSubmodule = $identity.Ecosystem -ceq 'terraform' -and $identity.ModulePath -cne '.'
+                    if ($identity.Metadata.canonicalType -cne 'helper' -and -not $isTerraformSubmodule) {
                         $generatedTable.Rows.Add($row)
                     }
                     continue
@@ -508,7 +509,8 @@ function Get-AvmCatalogInventory {
             foreach ($header in $tables[$output.sourceFile].Headers) {
                 $row[$header] = ''
             }
-            if ($metadata.canonicalType -cne 'helper') {
+            $isTerraformSubmodule = $source.Ecosystem -ceq 'terraform' -and $source.ModulePath -cne '.'
+            if ($metadata.canonicalType -cne 'helper' -and -not $isTerraformSubmodule) {
                 $tables[$output.sourceFile].Rows.Add($row)
             }
             $file = $output.sourceFile
@@ -741,7 +743,12 @@ function New-AvmCatalogBundle {
                 -Output $output -Configuration $configuration)) {
             $removals.Add($removal)
         }
-        $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $table.Rows.ToArray()
+        $sortedRows = $table.Rows.ToArray()
+        [Array]::Sort($sortedRows, [Comparison[object]] {
+                param($left, $right)
+                [string]::Compare([string]$left['ModuleName'], [string]$right['ModuleName'], [StringComparison]::Ordinal)
+            })
+        $files[$output.bundlePath] = ConvertTo-AvmCatalogCsv -Headers $table.Headers -Rows $sortedRows
         $report.counts.legacyRows[$file] = $table.OriginalRowCount
         $report.counts.csvRows[$file] = $table.Rows.Count
     }
