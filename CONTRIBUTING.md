@@ -191,7 +191,10 @@ Release signing and GitHub publication run from the **Azure DevOps** pipeline `r
 
 Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. ADO builds and signs the module, packages `Avm.Authoring-X.Y.Z.zip` with `SHA256SUMS`, uploads both assets, then promotes the release. Promotion triggers GitHub Actions to validate and publish that exact signed archive without rebuilding or stamping it.
 
-Releases are driven by the git tag, not by the manifest. You do **not** need to bump `ModuleVersion` in `src/Avm.Authoring/Avm.Authoring.psd1` before tagging: the pipeline stamps the tag version into the staged manifest at build time.
+Releases are driven by the git tag, not by the manifest. The committed
+`ModuleVersion` is always `0.0.0` to identify source builds. You do **not** need
+to bump it before tagging: the pipeline stamps the tag version into the staged
+manifest at build time.
 
 1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes the PSGallery release notes stamped into the manifest.
 2. Create a GitHub Release in this repo against the tag `vX.Y.Z`, with the title and release notes you want. Tick *Set as a pre-release* and **publish** it. Attach nothing — the pipeline uploads the assets.

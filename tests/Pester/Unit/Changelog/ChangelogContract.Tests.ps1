@@ -80,6 +80,11 @@ Describe 'CHANGELOG contract' {
 
     It 'has a section for the current manifest version that fits the gallery limit' {
         $version = [string] (Import-PowerShellDataFile -LiteralPath $script:manifestPath).ModuleVersion
+        if ($version -eq '0.0.0') {
+            Set-ItResult -Skipped -Because '0.0.0 identifies an unreleased source build; release packaging stamps the tag version.'
+            return
+        }
+
         $index = -1
         for ($i = 0; $i -lt $script:headings.Count; $i++) {
             if ($script:headings[$i].Version -eq $version) { $index = $i; break }

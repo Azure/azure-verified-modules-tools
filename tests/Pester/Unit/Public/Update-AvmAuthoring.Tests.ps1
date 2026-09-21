@@ -14,14 +14,8 @@ AfterAll {
 }
 
 Describe 'Update-AvmAuthoring' {
-    It 'is routed as avm update and bypasses the dispatcher stale-version gate' {
+    It 'is routed as avm update without a prior Gallery version check' {
         InModuleScope 'Avm.Authoring' {
-            Mock Test-AvmModuleVersion {
-                throw [AvmModuleVersionException]::new(
-                    [version]'1.0.0',
-                    [version]'2.0.0',
-                    'stale')
-            }
             Mock Update-AvmAuthoring {
                 [pscustomobject]@{
                     Name   = 'Avm.Authoring'
@@ -34,7 +28,6 @@ Describe 'Update-AvmAuthoring' {
 
             $result.Marker | Should -Be 'routed'
             Should -Invoke Update-AvmAuthoring -Times 1 -Exactly
-            Should -Invoke Test-AvmModuleVersion -Times 0 -Exactly
         }
     }
 
