@@ -354,6 +354,8 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         }
         Mock Import-Module {}
         Mock Get-Command { [pscustomobject]@{ Source = 'fixture-gh' } } -ParameterFilter { $Name -eq 'gh' }
+        $mockedGit = $gitPath
+        Mock Get-Command ({ [pscustomobject]@{ Source = $mockedGit } }.GetNewClosure()) -ParameterFilter { $Name -eq 'git' }
     }
 
     AfterEach {

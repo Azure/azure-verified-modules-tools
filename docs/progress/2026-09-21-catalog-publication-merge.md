@@ -31,6 +31,11 @@ content, rejected human/unrelated edits, merge errors, unmerged responses and
 head mismatches. Artifact-only report hashes and row-retention checks remain
 covered. Git cleanup handles Windows read-only object files.
 
+The first CI run on the pull request failed on every operating system because
+the merge fixtures mocked `Get-Command` for `gh` but not for `git`, so the
+publisher's `git` lookup had no matching mock. The fixtures now mock both, and
+`.\build.ps1 pre-commit` is green again with the same counts.
+
 Fixed nested held-back arrays at the publisher call site so the final merge
 allow-list uses actual file paths rather than a stringified array.
 
