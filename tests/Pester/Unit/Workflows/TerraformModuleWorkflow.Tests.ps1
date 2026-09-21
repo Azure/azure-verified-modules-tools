@@ -105,17 +105,31 @@ Describe 'CI workflow' {
             Should -Match "(?m)^  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'\r?$"
         ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
         $script:ci | Should -Match 'run: \./build\.ps1 ci'
+        $script:ci | Should -Match 'run: \./build\.ps1 test-workflows'
         $script:ci | Should -Match 'run: \./build\.ps1 integration'
+    }
+
+    It 'keeps workflow-definition tests in a dedicated Ubuntu-only job' {
+        $jobMatch = [regex]::Match($script:ci, '(?ms)^  workflows:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $jobMatch.Success | Should -BeTrue
+        $jobBlock = $jobMatch.Value
+
+        $jobBlock | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
+        $jobBlock | Should -Not -Match 'matrix:'
+        $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
+        $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
+
+        $script:ci | Should -Match 'needs: \[build, workflows, integration\]'
     }
 
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
         $script:ci | Should -Match 'GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}'
     }
 
-    It 'uses the retrying prerequisite installer in both CI job types' {
+    It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 2
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 3
         $script:ci | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
     }
 }
