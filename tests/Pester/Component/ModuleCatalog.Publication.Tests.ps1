@@ -26,7 +26,8 @@ BeforeAll {
             foreach ($target in $paths[$role].basePaths) {
                 $plan[$role].baseFiles[$target] = '1' * 64
             }
-            foreach ($relative in $paths[$role].files.Keys) {
+            foreach ($output in $Configuration.outputs | Where-Object { $_.kind -ne 'publication-plan' }) {
+                $relative = $output.bundlePath
                 $file = Join-Path $root $relative
                 $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
                 $text = if ($relative.EndsWith('.csv')) {
@@ -123,6 +124,16 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
         foreach ($force in @($false, $true)) {
             { Test-AvmCatalogPublicationBundle -Path $root -Force:$force } | Should -Throw '*hash mismatch*'
         }
+    }
+
+    It 'hash-validates the artifact-only migration report and refuses a published copy' {
+        $root = New-CatalogPublicationFixture
+        $reportPath = Join-Path $root 'v1' 'migration-report.json'
+        Copy-Item -LiteralPath $reportPath -Destination (Join-Path $root 'docs' 'v1' 'migration-report.json')
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*Unexpected file*'
+        $root = New-CatalogPublicationFixture
+        [System.IO.File]::AppendAllText((Join-Path $root 'v1' 'migration-report.json'), ' ')
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*hash mismatch*v1/migration-report.json*'
     }
 
     It 'rejects a bundle collected under a different artifact manifest' {
@@ -233,7 +244,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
             { Test-AvmCatalogPublicationBundle @arguments } | Should -Throw '*CSV row removals are blocked*'
         }
         { Test-AvmCatalogPublicationBundle -Path $root -Force } | Should -Not -Throw
-        $report = Read-AvmCatalogJson -Path (Join-Path $root 'docs' 'v1' 'migration-report.json')
+        $report = Read-AvmCatalogJson -Path (Join-Path $root 'v1' 'migration-report.json')
         $report.csvRowRemovals | Should -HaveCount 1
         $report.csvRowRemovals[0].sourceFile | Should -BeExactly 'BicepResourceModules.csv'
         $report.csvRowRemovals[0].moduleName | Should -BeExactly $sourceRow.ModuleName
@@ -260,7 +271,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         param($Change)
         $root = New-CatalogPublicationFixture
         Set-CatalogPublicationFixtureRows -Root $root -SourceRows @($sourceRow) -OutputRows @() -Force
-        $relative = 'docs/v1/migration-report.json'
+        $relative = 'v1/migration-report.json'
         $report = Read-AvmCatalogJson -Path (Join-Path $root $relative)
         & $Change $report
         Save-CatalogPublicationFixtureFile -Root $root -RelativePath $relative -Text (ConvertTo-AvmCatalogJson -Value $report)
@@ -310,6 +321,190 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         { Assert-AvmCatalogCsvRowRetention -Removals $removals } | Should -Throw '*CSV row removals are blocked*'
         { Assert-AvmCatalogCsvRowRetention -Removals $removals -Force } | Should -Not -Throw
         (Get-FileHash -LiteralPath $sourcePath).Hash | Should -BeExactly $sourceHash
+    }
+}
+
+Describe 'Component: module catalog publication merging' -Tag Component {
+    BeforeAll {
+        Import-Module (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+        $processCommand = & (Get-Module Avm.Authoring) { Get-Command Invoke-AvmProcess }
+        $gitPath = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+
+        function Invoke-CatalogFixtureGit {
+            param([string] $Root, [string[]] $Arguments)
+            $output = & $gitPath -c core.autocrlf=false -c commit.gpgsign=false `
+                -c safe.bareRepository=all `
+                -c user.name=fixture -c user.email=41898282+github-actions[bot]@users.noreply.github.com `
+                -C $Root @Arguments 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Fixture git failed: $output" }
+            return ($output -join "`n")
+        }
+    }
+
+    BeforeEach {
+        $environment = @{
+            GITHUB_ACTIONS = 'true'; GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+            GITHUB_REF = 'refs/heads/main'; GITHUB_RUN_ID = '123'; GITHUB_RUN_ATTEMPT = '1'
+            AVM_APP_SLUG = 'azure-verified-modules'; GH_TOKEN = 'offline-test-token'
+        }
+        $saved = @{}
+        foreach ($name in $environment.Keys) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $environment[$name])
+        }
+        Mock Import-Module {}
+        Mock Get-Command { [pscustomobject]@{ Source = 'fixture-gh' } } -ParameterFilter { $Name -eq 'gh' }
+        $mockedGit = $gitPath
+        Mock Get-Command ({ [pscustomobject]@{ Source = $mockedGit } }.GetNewClosure()) -ParameterFilter { $Name -eq 'git' }
+    }
+
+    AfterEach {
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+    }
+
+    It 'publishes the intended tree and verifies the merge: <Case>' -TestCases @(
+        @{ Case = 'new candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = '' }
+        @{ Case = 'unchanged pending candidate'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = '' }
+        @{ Case = 'removes previously added report'; Existing = $true; LegacyReport = $true; BaseReport = $false; Failure = '' }
+        @{ Case = 'preserves report already on main'; Existing = $true; LegacyReport = $true; BaseReport = $true; Failure = '' }
+        @{ Case = 'merge command fails'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = 'denied' }
+        @{ Case = 'merge remains pending'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'pending' }
+        @{ Case = 'merged head differs'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'head' }
+        @{ Case = 'no changes without a pending candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; NoChange = $true }
+        @{ Case = 'human edits remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'human' }
+        @{ Case = 'unrelated files remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'unrelated' }
+    ) {
+        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false)
+
+        $configuration = Read-AvmCatalogConfiguration
+        $bundle = New-CatalogPublicationFixture
+        $source = New-CatalogPublicationSourceFixture
+        $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
+        $reportTarget = 'docs/static/module-indexes/v1/migration-report.json'
+        if ($BaseReport) {
+            $file = Join-Path $source $reportTarget
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
+            [System.IO.File]::WriteAllText($file, '{"original":true}')
+        }
+        if ($NoChange) {
+            foreach ($relative in $paths.docs.files.Keys) {
+                $file = Join-Path $source $paths.docs.files[$relative]
+                $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
+                [System.IO.File]::Copy((Join-Path $bundle $relative), $file)
+            }
+        }
+        $null = Invoke-CatalogFixtureGit $source @('init', '-b', 'main')
+        $null = Invoke-CatalogFixtureGit $source @('add', '.')
+        $null = Invoke-CatalogFixtureGit $source @('commit', '-m', 'base')
+        $planPath = Join-Path $bundle 'plan.json'
+        $plan = Read-AvmCatalogJson -Path $planPath
+        foreach ($path in $paths.docs.basePaths) {
+            $file = Join-Path $source $path
+            $plan.docs.baseFiles[$path] = if (Test-Path -LiteralPath $file) {
+                (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
+            } else { $null }
+        }
+        [System.IO.File]::WriteAllText($planPath, (ConvertTo-AvmCatalogJson -Value $plan))
+        $branch = if ($Existing) { 'automation/module-metadata-sync-existing' } else { 'automation/module-metadata-sync-123-1' }
+        if ($Existing) {
+            $null = Invoke-CatalogFixtureGit $source @('checkout', '-b', $branch)
+            foreach ($relative in $paths.docs.files.Keys) {
+                $file = Join-Path $source $paths.docs.files[$relative]
+                $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
+                [System.IO.File]::Copy((Join-Path $bundle $relative), $file)
+            }
+            if ($LegacyReport) { [System.IO.File]::WriteAllText((Join-Path $source $reportTarget), '{"unwanted":true}') }
+            $null = Invoke-CatalogFixtureGit $source @('add', '.')
+            $null = Invoke-CatalogFixtureGit $source @('commit', '-m', 'pending catalog')
+            if ($Failure -in @('human', 'unrelated')) {
+                [System.IO.File]::WriteAllText((Join-Path $source 'unrelated.txt'), 'not generated')
+                $null = Invoke-CatalogFixtureGit $source @('add', '.')
+                $arguments = @('commit', '-m', 'unexpected edit')
+                if ($Failure -eq 'human') { $arguments += @('--author', 'Human <human@example.invalid>') }
+                $null = Invoke-CatalogFixtureGit $source $arguments
+            }
+        }
+        $remote = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.git')
+        $null = Invoke-CatalogFixtureGit $source @('clone', '--bare', $source, $remote)
+        $state = @{
+            Remote = $remote; Branch = $branch; Failure = $Failure; Existing = $Existing
+            ProcessCommand = $processCommand
+            Head = ''; Calls = [System.Collections.Generic.List[string]]::new()
+            PullRequest = @{
+                number = 42; html_url = 'https://github.com/Azure/Azure-Verified-Modules/pull/42'
+                user = @{ login = 'azure-verified-modules[bot]' }
+                head = @{ ref = $branch; repo = @{ full_name = 'Azure/Azure-Verified-Modules' } }
+                base = @{ ref = 'main' }
+            }
+        }
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
+            param($FilePath, $ArgumentList, $WorkingDirectory, $EnvVars, $IgnoreExitCode)
+            if ($FilePath -ne 'fixture-gh') {
+                $arguments = @($ArgumentList)
+                if ($arguments[0] -eq 'clone') { $arguments[-2] = $state.Remote }
+                if ($arguments[0] -eq 'push') { $state.Calls.Add('push') }
+                $result = & $state.ProcessCommand -FilePath $FilePath -ArgumentList $arguments -WorkingDirectory $WorkingDirectory `
+                    -EnvVars $EnvVars -IgnoreExitCode:$IgnoreExitCode
+                if ($arguments[0] -eq 'rev-parse') { $state.Head = $result.StdOut.Trim() }
+                return $result
+            }
+            $response = ''
+            if ($ArgumentList[0] -eq 'pr' -and $ArgumentList[1] -eq 'merge') {
+                $ArgumentList | Should -Contain '--squash'
+                $ArgumentList | Should -Contain '--admin'
+                $ArgumentList[[array]::IndexOf($ArgumentList, '--match-head-commit') + 1] | Should -BeExactly $state.Head
+                $state.Calls[-1] | Should -BeIn @('POST', 'PATCH')
+                $state.Calls.Add('merge')
+                if ($state.Failure -eq 'denied') { throw 'fixture merge denied' }
+            }
+            elseif ($ArgumentList[0] -eq 'api' -and $ArgumentList -contains '--paginate') {
+                $response = if ($state.Existing) { '[[' + ($state.PullRequest | ConvertTo-Json -Depth 10 -Compress) + ']]' } else { '[[]]' }
+            }
+            elseif ($ArgumentList[0] -eq 'api' -and $ArgumentList[2] -in @('POST', 'PATCH')) {
+                $state.Calls[-1] | Should -BeExactly 'push'
+                $state.Calls.Add($ArgumentList[2])
+                $response = $state.PullRequest | ConvertTo-Json -Depth 10 -Compress
+            }
+            elseif ($ArgumentList[0] -eq 'api' -and $ArgumentList[2] -eq 'GET') {
+                $state.Calls.Add('verify')
+                $response = @{
+                    merged = $state.Failure -ne 'pending'
+                    head = @{ sha = if ($state.Failure -eq 'head') { '0' * 40 } else { $state.Head } }
+                } | ConvertTo-Json -Depth 10 -Compress
+            }
+            else { throw "Unexpected GitHub call: $ArgumentList" }
+            return [pscustomobject]@{ ExitCode = 0; StdOut = $response; StdErr = '' }
+        }.GetNewClosure())
+
+        $invoke = { & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $bundle -Publish -Confirm:$false }
+        if ($Failure -in @('human', 'unrelated')) {
+            $expectedError = if ($Failure -eq 'human') { '*contains human commits*' } else { '*outside the publication allow-list*' }
+            $invoke | Should -Throw $expectedError
+            $state.Calls | Should -Not -Contain 'push'
+            $state.Calls | Should -Not -Contain 'merge'
+            return
+        }
+        if ($NoChange) {
+            & $invoke
+            $state.Calls | Should -HaveCount 0
+            return
+        }
+        if ($Failure -eq 'denied') {
+            $invoke | Should -Throw '*fixture merge denied*'
+        }
+        elseif ($Failure) {
+            $invoke | Should -Throw '*not merged at the expected head*'
+        }
+        else {
+            & $invoke
+            $state.Calls[-1] | Should -BeExactly 'verify'
+        }
+        $state.Calls | Should -Contain 'merge'
+        $changes = Invoke-CatalogFixtureGit $remote @('diff', '--name-only', 'main', $branch)
+        $changes | Should -Not -Match 'migration-report'
+        $changes | Should -Match 'test-BicepResourceModules.csv'
+        $changes | Should -Match 'v1/modules.json'
+        $state.Calls | Should -Contain $(if ($Existing) { 'PATCH' } else { 'POST' })
     }
 }
 
@@ -396,7 +591,9 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
             $block | Should -Match "'tools' 'repository-management' 'module-catalog' 'scripts'"
         }
         $publisher = [System.IO.File]::ReadAllText((Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1'))
-        $publisher | Should -Not -Match "'--force'|--force-with-lease|pr merge|--auto|HEAD:refs/heads/main|git config --global"
+        $publisher | Should -Not -Match "'--force'|--force-with-lease|--auto|HEAD:refs/heads/main|git config --global"
+        $publisher | Should -Match "'pr', 'merge'"
+        $publisher | Should -Match '''--match-head-commit'', \$target.HeadSha'
         $publisher | Should -Match 'HEAD:refs/heads/\$\(\$target.Branch\)'
         $publisher | Should -Match 'GIT_CONFIG_VALUE_3'
         $publisher | Should -Match 'contains human commits'

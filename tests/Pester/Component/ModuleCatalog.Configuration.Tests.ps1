@@ -18,15 +18,20 @@ BeforeAll {
 }
 
 Describe 'Component: module catalog artifact manifest' -Tag Component {
-    It 'declares every published artifact and the internal publication plan' {
+    It 'keeps the migration report and publication plan in the artifact only' {
         $configuration = Read-AvmCatalogConfiguration
         $configuration.outputs | Should -HaveCount 10
-        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 9
+        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 8
         (Get-AvmCatalogOutput -Configuration $configuration -Kind catalog).file | Should -BeExactly 'v1/modules.json'
         (Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).file | Should -BeExactly 'v1/migration-report.json'
         (Get-AvmCatalogOutput -Configuration $configuration -Kind mar).file | Should -BeExactly 'BicepMARModules.json'
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
-        $paths.docs.files.Count | Should -Be 9
+        $paths.docs.files.Count | Should -Be 8
+        $report = Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report
+        $report.destination | Should -BeNullOrEmpty
+        $report.targetPath | Should -BeNullOrEmpty
+        $report.bundlePath | Should -BeExactly 'v1/migration-report.json'
+        $paths.docs.files.Contains($report.bundlePath) | Should -BeFalse
         $paths.Contains('tools') | Should -BeFalse
         $paths.docs.files['docs/v1/modules.json'] | Should -BeExactly 'docs/static/module-indexes/v1/modules.json'
     }
@@ -46,7 +51,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             $paths.docs.basePaths | Should -Contain $csv.sourcePath
             $paths.docs.basePaths | Should -Contain $csv.targetPath
         }
-        $paths.docs.basePaths | Should -HaveCount 15
+        $paths.docs.basePaths | Should -HaveCount 14
     }
 
     It 'can switch a reviewed manifest to canonical CSV names later without duplicate base paths' {
@@ -57,7 +62,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             }
         }
         $configuration = Read-AvmCatalogConfiguration -Path $path
-        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 9
+        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 8
     }
 
     It 'rejects incomplete, ambiguous, unsafe, or unused configuration: <Case>' -TestCases @(
@@ -77,6 +82,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
         @{ Case = 'wrong destination'; Change = { param($c) $c.outputs[0].destination = 'tools' } }
         @{ Case = 'retired tier output'; Change = { param($c) $c.outputs += @{ kind = 'tier-configuration'; file = 'config.json'; destination = 'tools' } } }
         @{ Case = 'published control plan'; Change = { param($c) $c.outputs[-1].destination = 'docs' } }
+        @{ Case = 'published migration report'; Change = { param($c) $c.outputs[-2].destination = 'docs' } }
         @{ Case = 'foreign owner'; Change = { param($c) $c.repositories.docs = 'Other/catalog' } }
         @{ Case = 'duplicate repository roles'; Change = { param($c) $c.repositories.docs = $c.repositories.tools } }
         @{ Case = 'unsafe publication root'; Change = { param($c) $c.destinations.docs.path = '.github/workflows' } }

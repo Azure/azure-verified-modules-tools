@@ -88,7 +88,7 @@ function Read-AvmCatalogConfiguration {
                 throw [System.IO.InvalidDataException]::new('Duplicate or invalid catalog CSV ecosystem/module-type mapping.')
             }
         }
-        $expectedDestination = if ($kind -eq 'publication-plan') { $null } else { 'docs' }
+        $expectedDestination = if ($kind -in @('publication-plan', 'migration-report')) { $null } else { 'docs' }
         if (-not $output.Contains('destination') -or $output.destination -cne $expectedDestination) {
             throw [System.IO.InvalidDataException]::new("Catalog output '$kind' has an invalid destination.")
         }

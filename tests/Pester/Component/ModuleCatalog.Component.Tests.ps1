@@ -406,9 +406,9 @@ Describe 'Component: module catalog helpers' -Tag Component {
                     (Get-FileHash -LiteralPath $sourcePath).Hash.ToLowerInvariant()
                 } else { $null }
             }
-            foreach ($relative in $paths[$role].files.Keys) {
-                $plan.outputHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $fixture.Output $relative)).Hash.ToLowerInvariant()
-            }
+        }
+        foreach ($relative in $bundle.Files.Keys) {
+            $plan.outputHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $fixture.Output $relative)).Hash.ToLowerInvariant()
         }
         Save-CatalogJson -Path (Join-Path $fixture.Output (Get-AvmCatalogOutput -Configuration $configuration -Kind publication-plan).bundlePath) -Data $plan
         { Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration } |
@@ -924,7 +924,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         [System.IO.File]::WriteAllText($configurationPath, 'not a catalog input')
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $bundle.Files.Count | Should -Be 9
-        @($bundle.Files.Keys | Where-Object { $_ -notlike 'docs/*' }) | Should -HaveCount 0
+        @($bundle.Files.Keys | Where-Object { $_ -notlike 'docs/*' }) | Should -Be @('v1/migration-report.json')
         $published = Read-AvmCatalogJson -Path (Join-Path $fixture.Modules[0].Directory 'metadata.json')
         $published.Contains('tier') | Should -BeFalse
         foreach ($implementations in $bundle.Catalog.modules.Values) {
@@ -1211,7 +1211,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
             $arguments = @{ InputPath = $fixture.Root; OutputPath = $fixture.Output }
             if ($null -ne $force) { $arguments.Force = $force }
             & $scriptPath @arguments | Out-Null
-            $blocked = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'migration-report.json')
+            $blocked = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'v1' 'migration-report.json')
             $blocked.heldBackOutputs | Should -Contain 'docs/v1/modules.json'
             $blocked.csvRowRemovalsForced | Should -BeFalse
             [System.IO.Directory]::Delete($fixture.Output, $true)
@@ -1219,7 +1219,7 @@ Describe 'Component: module catalog source CSV row retention' -Tag Component {
         & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force -WhatIf
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
         & $scriptPath -InputPath $fixture.Root -OutputPath $fixture.Output -Force | Out-Null
-        $report = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'migration-report.json')
+        $report = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'v1' 'migration-report.json')
         $report.csvRowRemovals | Should -HaveCount 5
         $report.heldBackOutputs | Should -HaveCount 0
         $report.csvRowRemovalsForced | Should -BeTrue

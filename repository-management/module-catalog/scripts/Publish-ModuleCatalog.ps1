@@ -30,7 +30,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REPOSITORY -cne $configuratio
     $env:AVM_APP_SLUG -notmatch '^[a-z0-9-]+$' -or -not $env:GH_TOKEN) {
     throw [System.InvalidOperationException]::new('Publication requires the main-branch tools workflow and its scoped app token.')
 }
-if (-not $PSCmdlet.ShouldProcess($configuration.repositories.docs, 'Publish reviewable catalog branches and pull requests')) {
+if (-not $PSCmdlet.ShouldProcess($configuration.repositories.docs, 'Publish and merge catalog updates')) {
     return
 }
 
@@ -62,8 +62,8 @@ $processEnvironment = @{
     GIT_CONFIG_KEY_6 = 'core.autocrlf'; GIT_CONFIG_VALUE_6 = 'false'
 }
 $prepared = [System.Collections.Generic.List[object]]::new()
-$heldBackSourceFiles = @(Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $BundlePath -Configuration $configuration)
-$heldBack = @(Get-AvmCatalogHeldBackOutput -Configuration $configuration -SourceFile $heldBackSourceFiles)
+$heldBackSourceFiles = Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $BundlePath -Configuration $configuration
+$heldBack = Get-AvmCatalogHeldBackOutput -Configuration $configuration -SourceFile $heldBackSourceFiles
 if ($heldBack.Count -gt 0) {
     Write-AvmCatalogProgress ("Skipping {0} held-back output(s): {1}" -f $heldBack.Count, ($heldBack -join ', '))
 }
@@ -74,6 +74,7 @@ try {
         Write-AvmCatalogProgress ("Preparing publication branch for {0}." -f $repository)
         $publishable = @($paths[$role].files.Keys | Where-Object { $_ -cnotin $heldBack })
         $allowed = @($publishable | ForEach-Object { $paths[$role].files[$_] })
+        $legacyReport = "$($configuration.destinations[$role].path)/v1/migration-report.json"
         $root = Join-Path $state $role
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('clone', '--filter=blob:none', '--no-checkout', '--branch', 'main', "https://github.com/$repository", $root) `
             -WorkingDirectory $state -EnvVars $processEnvironment
@@ -104,10 +105,21 @@ try {
                 throw [System.InvalidOperationException]::new("Catalog branch $branch contains human commits; refusing to overwrite review edits.")
             }
             $diff = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('diff', '--name-only', 'origin/main...HEAD') -WorkingDirectory $root -EnvVars $processEnvironment
-            if (@($diff.StdOut -split '\r?\n' | Where-Object { $_ -and $_ -cnotin $allowed }).Count -gt 0) {
+            if (@($diff.StdOut -split '\r?\n' | Where-Object { $_ -and $_ -cnotin ($allowed + $legacyReport) }).Count -gt 0) {
                 throw [System.Security.SecurityException]::new("Catalog branch $branch contains changes outside the publication allow-list.")
             }
             $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('merge', '--no-edit', 'origin/main') -WorkingDirectory $root -EnvVars $processEnvironment
+            Assert-AvmCatalogSafePath -Root $root -RelativePath $legacyReport
+            $baseReport = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('ls-tree', '--name-only', 'origin/main', '--', $legacyReport) `
+                -WorkingDirectory $root -EnvVars $processEnvironment
+            if ($baseReport.StdOut.Trim() -ceq $legacyReport) {
+                $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('restore', '--source=origin/main', '--staged', '--worktree', '--', $legacyReport) `
+                    -WorkingDirectory $root -EnvVars $processEnvironment
+            }
+            else {
+                $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('rm', '--ignore-unmatch', '--', $legacyReport) `
+                    -WorkingDirectory $root -EnvVars $processEnvironment
+            }
         }
         else {
             $branch = "automation/module-metadata-sync-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
@@ -127,33 +139,63 @@ try {
         }
         if ($diff.ExitCode -eq 1) {
             $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('commit', '-m', 'chore: synchronize AVM module catalogs') -WorkingDirectory $root -EnvVars $processEnvironment
-            $prepared.Add([pscustomobject]@{ Repository = $repository; Root = $root; Branch = $branch; Existing = $existing })
+        }
+        if ($diff.ExitCode -eq 1 -or $null -ne $existing) {
+            $head = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('rev-parse', 'HEAD') -WorkingDirectory $root -EnvVars $processEnvironment
+            $headSha = $head.StdOut.Trim()
+            if ($headSha -cnotmatch '^[0-9a-f]{40}$') {
+                throw [System.InvalidDataException]::new('Git did not return a valid catalog commit.')
+            }
+            $candidate = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('diff', '--name-only', 'origin/main', 'HEAD') `
+                -WorkingDirectory $root -EnvVars $processEnvironment
+            if (@($candidate.StdOut -split '\r?\n' | Where-Object { $_ -and $_ -cnotin $allowed }).Count -gt 0) {
+                throw [System.Security.SecurityException]::new('Catalog merge candidate contains changes outside the publication allow-list.')
+            }
+            $prepared.Add([pscustomobject]@{ Repository = $repository; Root = $root; Branch = $branch; Existing = $existing; HeadSha = $headSha })
         }
     }
     foreach ($target in $prepared) {
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('push', 'origin', "HEAD:refs/heads/$($target.Branch)") `
             -WorkingDirectory $target.Root -EnvVars $processEnvironment
-        if ($null -ne $target.Existing) {
-            Write-Output $target.Existing.html_url
-            continue
-        }
         $bodyPath = Join-Path $state 'pull-request.json'
         $body = [ordered]@{
             title = 'chore: synchronize AVM module catalogs'
-            head = $target.Branch; base = 'main'
-            body = "Generated AVM catalog update from module metadata. Review deprecation, source CSV row removals in the migration report, and parity before merging. CSV row-removal override: $([bool]$Force).`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
+            body = "Generated AVM catalog update from module metadata. Migration diagnostics are retained in the module-metadata-catalog workflow artifact, not committed. CSV row-removal override: $([bool]$Force).`n`nSource run: https://github.com/$($configuration.repositories.tools)/actions/runs/$($env:GITHUB_RUN_ID)"
+        }
+        $endpoint = "repos/$($target.Repository)/pulls"
+        $method = 'POST'
+        if ($null -ne $target.Existing) {
+            $endpoint += "/$($target.Existing.number)"
+            $method = 'PATCH'
+        }
+        else {
+            $body['head'] = $target.Branch
+            $body['base'] = 'main'
         }
         [System.IO.File]::WriteAllText($bodyPath, (ConvertTo-AvmCatalogJson -Value $body), [System.Text.UTF8Encoding]::new($false))
         $response = Invoke-AvmCatalogProcess -FilePath $gh `
-            -ArgumentList @('api', '--method', 'POST', "repos/$($target.Repository)/pulls", '--input', $bodyPath) `
+            -ArgumentList @('api', '--method', $method, $endpoint, '--input', $bodyPath) `
             -WorkingDirectory $target.Root -EnvVars $processEnvironment
-        Write-Output (ConvertFrom-Json -InputObject $response.StdOut).html_url
+        $pullRequest = ConvertFrom-Json -InputObject $response.StdOut
+        Write-Output $pullRequest.html_url
+        $null = Invoke-AvmCatalogProcess -FilePath $gh `
+            -ArgumentList @('pr', 'merge', [string]$pullRequest.number, "--repo=$($target.Repository)", '--squash', '--admin',
+                '--match-head-commit', $target.HeadSha, '--subject', $body.title, '--body=') `
+            -WorkingDirectory $target.Root -EnvVars $processEnvironment
+        $response = Invoke-AvmCatalogProcess -FilePath $gh `
+            -ArgumentList @('api', '--method', 'GET', "repos/$($target.Repository)/pulls/$($pullRequest.number)") `
+            -WorkingDirectory $target.Root -EnvVars $processEnvironment
+        $merged = ConvertFrom-Json -InputObject $response.StdOut
+        if ($merged.merged -ne $true -or $merged.head.sha -cne $target.HeadSha) {
+            throw [System.InvalidOperationException]::new("Catalog update was not merged at the expected head: $($pullRequest.html_url)")
+        }
+        Write-AvmCatalogProgress ("Merged catalog update: {0}" -f $pullRequest.html_url)
     }
 }
 finally {
     $processEnvironment.Clear()
     $authorization = $null
     if ([System.IO.Directory]::Exists($state)) {
-        [System.IO.Directory]::Delete($state, $true)
+        Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction Stop
     }
 }
