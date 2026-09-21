@@ -3,7 +3,7 @@ name: Module Metadata Catalog Sync
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '33 1-23/4 * * *'
   workflow_dispatch:
     inputs:
       plan_only:

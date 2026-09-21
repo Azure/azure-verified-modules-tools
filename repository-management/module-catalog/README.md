@@ -1,19 +1,19 @@
 # Module catalog sync
 
-The tools repository owns both v1 schemas and the daily workflow. Public outputs
+The tools repository owns both v1 schemas and the four-hourly workflow. Public outputs
 belong in `Azure/Azure-Verified-Modules/docs/static/module-indexes`, not the
 internal team documentation repository.
 
-For this rollout, the six generated CSVs use `test-` filenames beside the
-canonical files, for example `test-BicepResourceModules.csv`. The originals are
-read-only inputs and are not publication targets. The new JSON catalog still
-uses `v1/modules.json`.
+The six generated CSVs replace the canonical files, for example
+`BicepResourceModules.csv`. These files are both source inputs and publication
+targets. The JSON catalog uses `v1/modules.json`; existing `test-` files are
+neither updated nor deleted by this workflow.
 
 [`config.json`](config.json) is the complete artifact manifest. `repositories`
 selects the docs, Bicep source, and tools repositories; `destinations` supplies
 the repository-relative output directories. Each `outputs` entry declares its
 kind, relative filename, and destination. CSV entries also declare `sourceFile`,
-the canonical input name; `file` is the preview output name. This includes all six CSVs,
+the canonical input name; `file` is the matching output name. This includes all six CSVs,
 `BicepMARModules.json`, and `v1/modules.json`.
 The `migration-report` and `publication-plan` entries have null destinations:
 they remain in the `module-metadata-catalog` workflow artifact and are never
@@ -27,11 +27,15 @@ fail before output is written. Publication binds the bundle to the manifest
 hash, so changing the manifest requires a fresh collection. The workflow's own
 trusted-repository/main guard remains a separate security boundary.
 
-`module-metadata-sync.yml` runs daily without a repository-variable enable gate.
+`module-metadata-sync.yml` runs at `33 1-23/4 * * *`: 01:33, 05:33, 09:33,
+13:33, 17:33, and 21:33 UTC daily. These starts are one hour after Terraform
+sync and one hour before Bicep sync on their scheduled days. Runtime overlaps
+remain possible; the existing concurrency group prevents simultaneous catalog runs.
 Manual runs default to artifacts only. Publication requires `main`, the protected
-`avm` environment, and an explicit non-plan run or the daily schedule.
+`avm` environment, and an explicit non-plan run or the four-hour schedule.
+Scheduled runs publish and merge; the manual `plan_only` default does not apply.
 Disable the workflow when its scheduled publication must stop; enabling it also
-allows daily publication, not just manual previews. The existing app needs
+allows scheduled publication, not just manual previews. The existing app needs
 read access for collection, organization members read for owner-team validation,
 and contents/pull-requests write restricted to the public docs repository
 for publication. Nothing applies repository settings or cloud state.
@@ -97,9 +101,8 @@ appears in the removal report and requires the normal explicit override below.
 Every source CSV row is checked against the generated module implementation
 identities. New rows cannot hide removed rows by keeping the total count unchanged,
 and Terraform repositories for different providers remain distinct even when
-their module names match. The baseline is `sourceFile`, not an existing preview
-destination. This still applies when a later manifest makes `file` equal
-`sourceFile`.
+their module names match. The baseline is `sourceFile`, which also names the
+publication destination. Existing preview files do not affect this check.
 
 Use `-Force` on `Invoke-ModuleCatalog.ps1` only when the listed source-row
 removals are intentional. The error identifies each source file, module name,
@@ -160,7 +163,7 @@ reads these signals; it does not archive repositories or perform retirement step
 
 Publication checks output hashes, exact allowed paths, schema, unchanged input
 and output-base hashes on current `main`.
-Canonical CSV hashes remain required even though only preview CSVs are written.
+Canonical CSV hashes protect both the source inputs and publication destinations.
 Existing app-owned branches are updated without force; human commits or unrelated
 branch changes stop publication. Publication squash-merges through the existing
 AVM App (`--admin --match-head-commit`) and verifies the merged head. Merge failures
@@ -176,9 +179,7 @@ team how-to when enabling the workflow; generated catalogs do not belong there.
 Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
 order, required workflow pauses, and the first module/catalog runs.
 
-Replacing canonical CSVs is a separate later change. After reviewing the preview
-data and completing outstanding preview publication reviews, change each CSV
-`file` to its canonical `sourceFile` and collect a fresh snapshot. This change
-does not rename, delete, or overwrite the canonical CSVs.
+The canonical CSV cutover requires a fresh snapshot because the manifest changed;
+bundles collected for `test-` destinations cannot be published with this manifest.
 Source CSV collection and row-retention checks remain permanent after the
 temporary metadata backfill tooling is removed.

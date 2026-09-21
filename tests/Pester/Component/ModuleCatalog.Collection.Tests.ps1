@@ -622,9 +622,20 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
     }
 }
 
-Describe 'Component: module catalog preview inputs' -Tag Component {
-    It 'reads canonical CSVs rather than preview files and captures both sets of publication bases' {
+Describe 'Component: module catalog publication inputs' -Tag Component {
+    It 'reads canonical CSVs and captures publication bases for <Destination> outputs' -TestCases @(
+        @{ Destination = 'canonical' }
+        @{ Destination = 'preview' }
+    ) {
+        param($Destination)
         $configuration = Read-AvmCatalogConfiguration
+        if ($Destination -eq 'preview') {
+            $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = "test-$($csv.sourceFile)" }
+            $configurationPath = Join-Path $TestDrive 'preview-manifest.json'
+            [System.IO.File]::WriteAllText($configurationPath, (ConvertTo-AvmCatalogJson -Value $raw))
+            $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
+        }
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $roots = @{ docs = Join-Path $root 'docs'; tools = Join-Path $root 'tools' }
         $snapshot = Join-Path $root 'snapshot'
@@ -643,7 +654,8 @@ Describe 'Component: module catalog preview inputs' -Tag Component {
             $originals[$sourcePath] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         }
         $csvs = @($configuration.outputs | Where-Object kind -eq 'csv')
-        $oldPreview = Join-Path $roots.docs $csvs[0].targetPath
+        $previewPath = "$($configuration.destinations.docs.path)/test-$($csvs[0].sourceFile)"
+        $oldPreview = Join-Path $roots.docs $previewPath
         [System.IO.File]::WriteAllText($oldPreview, 'Not a CSV input.')
         $previewHash = (Get-FileHash -LiteralPath $oldPreview -Algorithm SHA256).Hash.ToLowerInvariant()
         $plan = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $snapshot
@@ -651,12 +663,19 @@ Describe 'Component: module catalog preview inputs' -Tag Component {
             $copied = Join-Path $snapshot 'legacy' $csv.sourceFile
             (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $originals[$csv.sourcePath]
             $plan.docs.baseFiles[$csv.sourcePath] | Should -BeExactly $originals[$csv.sourcePath]
-            Test-Path -LiteralPath (Join-Path $snapshot 'legacy' $csv.file) | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $snapshot 'legacy' "test-$($csv.sourceFile)") | Should -BeFalse
             (Get-FileHash -LiteralPath (Join-Path $roots.docs $csv.sourcePath) -Algorithm SHA256).Hash.ToLowerInvariant() |
                 Should -BeExactly $originals[$csv.sourcePath]
         }
-        $plan.docs.baseFiles[$csvs[0].targetPath] | Should -BeExactly $previewHash
-        $plan.docs.baseFiles[$csvs[1].targetPath] | Should -BeNullOrEmpty
+        if ($Destination -eq 'preview') {
+            $plan.docs.baseFiles[$csvs[0].targetPath] | Should -BeExactly $previewHash
+            $plan.docs.baseFiles[$csvs[1].targetPath] | Should -BeNullOrEmpty
+            $plan.docs.baseFiles.Count | Should -Be 14
+        }
+        else {
+            $plan.docs.baseFiles.Contains($previewPath) | Should -BeFalse
+            $plan.docs.baseFiles.Count | Should -Be 8
+        }
         { Assert-AvmCatalogPublicationBase -Root $roots.docs -BaseFiles $plan.docs.baseFiles } | Should -Not -Throw
         [System.IO.File]::AppendAllText((Join-Path $roots.docs $csvs[0].sourcePath), 'new canonical input')
         { Assert-AvmCatalogPublicationBase -Root $roots.docs -BaseFiles $plan.docs.baseFiles } | Should -Throw '*base changed*'

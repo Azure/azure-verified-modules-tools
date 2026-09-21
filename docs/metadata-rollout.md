@@ -30,10 +30,10 @@ This document is a plan, not approval to run production commands.
   or repository configuration.
   Only valid metadata produces rows; removals from source CSVs fail by default
   and require an explicit override.
-  CSV outputs use `test-` filenames in the existing index folder; canonical CSVs
-  remain unchanged. The new JSON catalog keeps `v1/modules.json`, including
+  CSV outputs replace the six canonical files in the existing index folder.
+  The JSON catalog keeps `v1/modules.json`, including
   selected helper submodules under canonical key `helper`; every generated CSV
-  omits those helpers, including future canonical outputs.
+  omits those helpers.
 - Either engineering owners or module owners can satisfy metadata code-owner
   review. Optional full-sync apply retains the already-authorized standard AVM
   App merge process, not a separate human-review-only lane. No new bypass or
@@ -88,7 +88,7 @@ full sync or perform repository/Azure management.
 - Wait for active writers to finish and ensure queued writers cannot run during
   the pause. Do not cancel an active state writer or break its lease.
 - The catalog workflow has no enable variable. Once merged and enabled, its
-  daily schedule can publish and merge changes for preview CSVs and JSON.
+  four-hour schedule publishes and merges changes for canonical CSVs and JSON.
   Disable it until ready if an operator-controlled first run is required.
 - Check the protected `avm` environment, the existing App installation, and
   target permissions. Both review teams need the access GitHub requires for
@@ -321,8 +321,8 @@ Re-enable it only with approval covering normal automatic applies.
 ## Preview and publish the catalog
 
 Catalog entries and CSV rows come only from valid module metadata. There are no
-ecosystem mode options or full legacy-row fallback. Publication writes
-the six `test-*.csv` previews beside the originals, not over them.
+ecosystem mode options or full legacy-row fallback. Publication replaces
+the six canonical CSV files; it no longer writes `test-*.csv` previews.
 The catalog workflow does not trigger metadata backfill.
 
 ```powershell
@@ -346,8 +346,8 @@ listed removals for that run. A subsequent publication also needs explicit
 
 Download the `module-metadata-catalog` artifact. Check:
 
-- All six `test-` CSVs retain their required columns and expected rows, and no
-  canonical CSV is included in the publication write list.
+- All six canonical CSVs retain their required columns and expected rows, and no
+  `test-` CSV is included in the publication write list.
 - Child CSV `AlternativeNames` and `Comments` are unchanged, including blank
   cells. They must not be replaced with the parent's values.
 - `v1/modules.json` includes every owner, distinct implementations, and children
@@ -369,7 +369,7 @@ diffs in the run summary. The `module-metadata-csv-diff` artifact always
 contains the complete `all-csv.diff`, one patch per CSV, and exact `before/`
 and `after/` copies even when the diff is too large to render inline.
 
-**Review the preview data before the later CSV cutover.** The review snapshot showed
+**Review fresh data before publication.** The earlier preview snapshot showed
 488 of 508 resource display names and all 508 resource descriptions changing,
 plus 45 of 48 pattern names and all 48 pattern descriptions. The new values come
 from current Bicep source literals, not the older index wording. These are large
@@ -394,20 +394,26 @@ parent. Confirm consumers accept that relationship; the JSON `familyModule`
 still identifies the root. Include both changes in the first-index sign-off.
 
 After approving a manual publication, run the same workflow with
-`plan_only=false`. The daily schedule can also publish while the workflow is
-enabled; no repository variable is required.
+`plan_only=false`. Scheduled runs publish and merge while the workflow is
+enabled; the manual plan-only default does not apply to scheduled events.
+The cron `33 1-23/4 * * *` starts at 01:33, 05:33, 09:33, 13:33, 17:33, and
+21:33 UTC, between the tools repository's Terraform and Bicep sync starts.
+Different start times do not guarantee non-overlapping runtimes.
 
-Catalog publication opens updates only in the public docs repository, without
-automatic merging. It does not publish tools repository settings or tier changes.
+Catalog publication opens and squash-merges updates only in the public docs
+repository through the existing AVM App and verifies the merged head. It does
+not publish tools repository settings or tier changes.
 
-## Replace the live CSVs later
+## Canonical CSV cutover
 
-A separate reviewed change will remove the `test-` output prefixes and replace
-the canonical CSVs after the previews are accepted. Keep existing consumers on
-the original files until then. Complete outstanding preview publication reviews
-and collect a fresh snapshot after changing the manifest; old bundles are invalid.
+The manifest now uses matching `file` and `sourceFile` names for the six CSVs.
+Existing consumers keep using those original paths. Collect a fresh snapshot
+after changing the manifest; old preview bundles are invalid.
 The same source-row guard applies after replacement, when source and destination
 are the same file. Changing filenames does not enable force or change the baseline.
+Removal of the old preview files is separate:
+[Azure/Azure-Verified-Modules#2952](https://github.com/Azure/Azure-Verified-Modules/pull/2952)
+must follow the tools filename cutover.
 
 ## Finish the transition
 
