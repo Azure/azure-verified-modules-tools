@@ -703,6 +703,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $row.ParentModule | Should -BeExactly 'avm-res-storage-storageaccount'
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-two'
+        $bicepRow = @($bundle.Files['docs/test-BicepResourceModules.csv'] | ConvertFrom-Csv | Where-Object { $_.ModuleName -eq $entry.bicep[0].moduleName })[0]
+        $bicepRow.ParentModule | Should -BeExactly 'avm/res/storage/storage-account'
         foreach ($file in @('BicepResourceModules.csv', 'TerraformResourceModules.csv')) {
             $childRows = @($bundle.Files["docs/test-$file"] | ConvertFrom-Csv | Where-Object { $_.ParentModule -ne 'n/a' })
             $childRows | Should -Not -BeNullOrEmpty

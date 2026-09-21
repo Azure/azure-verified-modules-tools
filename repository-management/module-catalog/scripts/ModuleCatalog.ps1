@@ -645,6 +645,9 @@ function New-AvmCatalogBundle {
         $record.moduleStatus = if ($deprecated -or [string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
             'Deprecated'
         }
+        elseif ($item.Identity.SourcePending) {
+            'Proposed'
+        }
         elseif ($record.owners.Count -eq 0) {
             'Orphaned'
         }
@@ -683,7 +686,7 @@ function New-AvmCatalogBundle {
             $values = @{
                 ModuleDisplayName = $record.moduleDisplayName
                 ModuleName = $record.moduleName
-                ParentModule = if ($null -eq $record.parentModule) { 'n/a' } elseif ($record.ecosystem -eq 'terraform') { $item.Identity.RepositoryId } else { $record.parentModule }
+                ParentModule = if ($null -eq $record.parentModule) { 'n/a' } elseif ($record.ecosystem -eq 'terraform') { $item.Identity.RepositoryId } else { $record.familyModule }
                 ModuleStatus = $record.moduleStatus
                 RepoURL = $record.repoURL
                 PublicRegistryReference = $record.publicRegistryReference
