@@ -59,6 +59,8 @@ function New-AvmCatalogRequest {
     param(
         [Parameter(Mandatory)][uri] $Uri,
         [string] $Accept = 'application/json',
+        [ValidateSet('GET', 'POST')][string] $Method = 'GET',
+        [string] $Body,
         [switch] $AllowNotFound,
         [switch] $AllowEmptyRepository
     )
@@ -66,6 +68,8 @@ function New-AvmCatalogRequest {
     return @{
         Uri = $Uri
         Accept = $Accept
+        Method = $Method
+        Body = $Body
         AllowNotFound = [bool]$AllowNotFound
         AllowEmptyRepository = [bool]$AllowEmptyRepository
     }
@@ -93,10 +97,13 @@ function New-AvmCatalogRequestMessage {
     param(
         [Parameter(Mandatory)][uri] $Uri,
         [string] $Accept = 'application/json',
+        [ValidateSet('GET', 'POST')][string] $Method = 'GET',
+        [string] $Body,
         [securestring] $GitHubToken
     )
 
-    $message = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $Uri)
+    $httpMethod = if ($Method -ceq 'POST') { [System.Net.Http.HttpMethod]::Post } else { [System.Net.Http.HttpMethod]::Get }
+    $message = [System.Net.Http.HttpRequestMessage]::new($httpMethod, $Uri)
     $null = $message.Headers.TryAddWithoutValidation('Accept', $Accept)
     $null = $message.Headers.TryAddWithoutValidation('User-Agent', 'AVM-Module-Catalog/1')
     if ($Uri.Host -ceq 'api.github.com') {
@@ -104,6 +111,9 @@ function New-AvmCatalogRequestMessage {
         if ($null -ne $GitHubToken) {
             $null = $message.Headers.TryAddWithoutValidation('Authorization', 'Bearer ' + [System.Net.NetworkCredential]::new('', $GitHubToken).Password)
         }
+    }
+    if ($Body) {
+        $message.Content = [System.Net.Http.StringContent]::new($Body, [System.Text.Encoding]::UTF8, 'application/json')
     }
     return $message
 }
@@ -148,6 +158,8 @@ function Invoke-AvmCatalogRequestSet {
         $normalized.Add(@{
                 Uri = $uri
                 Accept = if ($request.Contains('Accept') -and $request['Accept']) { [string]$request['Accept'] } else { 'application/json' }
+                Method = if ($request.Contains('Method') -and $request['Method']) { [string]$request['Method'] } else { 'GET' }
+                Body = if ($request.Contains('Body')) { $request['Body'] } else { $null }
                 AllowNotFound = [bool]$request['AllowNotFound']
                 AllowEmptyRepository = [bool]$request['AllowEmptyRepository']
             })
@@ -177,7 +189,7 @@ function Invoke-AvmCatalogRequestSet {
                 $messages = @{}
                 foreach ($index in $chunk) {
                     $entry = $normalized[$index]
-                    $messages[$index] = New-AvmCatalogRequestMessage -Uri $entry.Uri -Accept $entry.Accept -GitHubToken $GitHubToken
+                    $messages[$index] = New-AvmCatalogRequestMessage -Uri $entry.Uri -Accept $entry.Accept -Method $entry.Method -Body $entry.Body -GitHubToken $GitHubToken
                     $tasks[$index] = $client.SendAsync($messages[$index], [System.Net.Http.HttpCompletionOption]::ResponseContentRead)
                 }
                 try {
@@ -266,6 +278,68 @@ function Invoke-AvmCatalogRequest {
 
     $request = New-AvmCatalogRequest -Uri $Uri -Accept $Accept -AllowNotFound:$AllowNotFound -AllowEmptyRepository:$AllowEmptyRepository
     return (Invoke-AvmCatalogRequestSet -Requests @($request) -GitHubToken $GitHubToken -MaxAttempt $MaxAttempt)[0]
+}
+
+function ConvertTo-AvmCatalogGraphQlString {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
+
+    return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
+}
+
+function Invoke-AvmCatalogGraphQlBatch {
+    <#
+        Resolves many independent GraphQL field selections (one per caller-supplied entry) using
+        aliased queries, so that a large fan-out of single-resource lookups (for example one REST
+        call per repository or per user) collapses into a handful of batched GraphQL requests.
+        Returns one element per input selection, in the same order, holding the resolved data node
+        (or $null when GitHub reported the aliased field as not found).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Selections,
+        [securestring] $GitHubToken,
+        [string] $Activity,
+        [int] $BatchSize = 50
+    )
+
+    if ($Selections.Count -eq 0) {
+        return , @()
+    }
+    $chunks = [System.Collections.Generic.List[hashtable]]::new()
+    for ($offset = 0; $offset -lt $Selections.Count; $offset += $BatchSize) {
+        $count = [Math]::Min($BatchSize, $Selections.Count - $offset)
+        $fields = [System.Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $count; $index++) {
+            $fields.Add("g$($index): $($Selections[$offset + $index])")
+        }
+        $query = 'query { ' + ($fields -join ' ') + ' }'
+        $chunks.Add(@{
+                Offset = $offset
+                Count = $count
+                Request = New-AvmCatalogRequest -Uri 'https://api.github.com/graphql' -Method 'POST' -Body (ConvertTo-AvmCatalogJson -Value @{ query = $query })
+            })
+    }
+    $responses = Invoke-AvmCatalogRequestSet -Activity $Activity -GitHubToken $GitHubToken -Requests @($chunks | ForEach-Object { $_.Request })
+    $results = [object[]]::new($Selections.Count)
+    for ($chunkIndex = 0; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
+        $chunk = $chunks[$chunkIndex]
+        $document = Get-AvmCatalogResponseJson -Response $responses[$chunkIndex]
+        foreach ($graphQlError in @($document['errors'])) {
+            if ($null -eq $graphQlError) {
+                continue
+            }
+            $path = @($graphQlError['path'])
+            if ($path.Count -eq 0 -or [string]$graphQlError['type'] -cne 'NOT_FOUND') {
+                throw [System.IO.InvalidDataException]::new("GitHub GraphQL request failed: $($graphQlError['message'])")
+            }
+        }
+        $data = $document['data']
+        for ($index = 0; $index -lt $chunk.Count; $index++) {
+            $results[$chunk.Offset + $index] = if ($data -is [System.Collections.IDictionary]) { $data["g$index"] } else { $null }
+        }
+    }
+    return , $results
 }
 
 function Copy-AvmCatalogInputFile {
@@ -607,29 +681,31 @@ function Get-AvmCatalogEnrichment {
             $teams.Add($owner)
         }
     }
-    $profiles = Invoke-AvmCatalogRequestSet -Activity 'GitHub owner profiles' -GitHubToken $GitHubToken -Requests @(foreach ($handle in $handles) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/users/$handle" -AllowNotFound
+    $userSelections = @(foreach ($handle in $handles) {
+            "user(login: $(ConvertTo-AvmCatalogGraphQlString $handle)) { login name __typename }"
         })
+    $teamSelections = @(foreach ($team in $teams) {
+            "organization(login: `"Azure`") { team(slug: $(ConvertTo-AvmCatalogGraphQlString $team.Substring('@Azure/'.Length))) { slug organization { login } } }"
+        })
+    $resolved = Invoke-AvmCatalogGraphQlBatch -Activity 'GitHub owner and team profiles' -GitHubToken $GitHubToken -Selections @($userSelections + $teamSelections)
     for ($index = 0; $index -lt $handles.Count; $index++) {
-        if ($profiles[$index].StatusCode -eq 404) {
+        $body = $resolved[$index]
+        if ($null -eq $body) {
             $github.users[$handles[$index]] = $null
             Write-AvmCatalogProgress ("GitHub owner {0} no longer exists; the modules that name them cannot be published." -f $handles[$index])
             continue
         }
-        $body = Get-AvmCatalogResponseJson -Response $profiles[$index]
-        $github.users[$handles[$index]] = [ordered]@{ login = $body.login; name = $body.name; type = $body.type }
+        $github.users[$handles[$index]] = [ordered]@{ login = $body.login; name = $body.name; type = $body.__typename }
     }
-    $memberships = Invoke-AvmCatalogRequestSet -Activity 'GitHub team memberships' -GitHubToken $GitHubToken -Requests @(foreach ($team in $teams) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/orgs/Azure/teams/$($team.Substring('@Azure/'.Length))" -AllowNotFound
-        })
     for ($index = 0; $index -lt $teams.Count; $index++) {
-        if ($memberships[$index].StatusCode -eq 404) {
+        $organization = $resolved[$handles.Count + $index]
+        $team = if ($null -ne $organization) { $organization['team'] } else { $null }
+        if ($null -eq $team) {
             $github.teams[$teams[$index]] = $null
             Write-AvmCatalogProgress ("GitHub owner team {0} no longer exists; the modules that name it cannot be published." -f $teams[$index])
             continue
         }
-        $body = Get-AvmCatalogResponseJson -Response $memberships[$index]
-        $github.teams[$teams[$index]] = [ordered]@{ slug = $body.slug; organization = $body.organization.login }
+        $github.teams[$teams[$index]] = [ordered]@{ slug = $team.slug; organization = $team.organization.login }
     }
     foreach ($item in $Inventory.Items) {
         if ($item.Record.metadataSource -eq 'metadata') {
@@ -742,53 +818,47 @@ function Save-AvmCatalogTerraformSourceSet {
 
     $repositories = @($Target | ForEach-Object { [string]$_.Repository })
     $revisions = [ordered]@{}
-    $active = [System.Collections.Generic.List[hashtable]]::new()
-    $repoResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform repository metadata' -GitHubToken $GitHubToken -Requests @(foreach ($repository in $repositories) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/repos/$repository" -AllowNotFound
+    $trees = [System.Collections.Generic.List[hashtable]]::new()
+    $repositoryInfos = Invoke-AvmCatalogGraphQlBatch -Activity 'Terraform repository metadata and commits' -GitHubToken $GitHubToken -Selections @(foreach ($repository in $repositories) {
+            $separator = $repository.IndexOf('/')
+            $owner = $repository.Substring(0, $separator)
+            $name = $repository.Substring($separator + 1)
+            "repository(owner: $(ConvertTo-AvmCatalogGraphQlString $owner), name: $(ConvertTo-AvmCatalogGraphQlString $name)) " +
+            '{ nameWithOwner isPrivate isArchived defaultBranchRef { target { oid ... on Commit { tree { oid } } } } }'
         })
     for ($index = 0; $index -lt $repositories.Count; $index++) {
         $repository = $repositories[$index]
-        $response = $repoResponses[$index]
-        if ($response.StatusCode -eq 404) {
+        $repositoryInfo = $repositoryInfos[$index]
+        if ($null -eq $repositoryInfo) {
             $revisions[$repository] = [ordered]@{ repository = $repository; commit = $null; status = 'not-found'; archived = $null }
             continue
         }
-        $repositoryInfo = Get-AvmCatalogResponseJson -Response $response
-        if ($repositoryInfo.full_name -cne $repository -or $repositoryInfo.private) {
+        if ([string]$repositoryInfo['nameWithOwner'] -cne $repository -or $repositoryInfo['isPrivate']) {
             throw [System.IO.InvalidDataException]::new("Expected a public, unrenamed repository: $repository")
         }
-        if ($repositoryInfo['archived'] -isnot [bool]) {
+        if ($repositoryInfo['isArchived'] -isnot [bool]) {
             throw [System.IO.InvalidDataException]::new("GitHub did not return a valid archived flag for $repository. Collect a new snapshot.")
         }
-        $active.Add(@{
-                Repository = $repository
-                Destination = [string]$Target[$index].Destination
-                Archived = $repositoryInfo.archived
-                Branch = [uri]::EscapeDataString($repositoryInfo.default_branch)
-            })
-    }
-    $commitResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform repository commits' -GitHubToken $GitHubToken -Requests @(foreach ($entry in $active) {
-            New-AvmCatalogRequest -Uri "https://api.github.com/repos/$($entry.Repository)/commits/$($entry.Branch)" -AllowEmptyRepository
-        })
-    $trees = [System.Collections.Generic.List[hashtable]]::new()
-    for ($index = 0; $index -lt $active.Count; $index++) {
-        $entry = $active[$index]
-        $response = $commitResponses[$index]
-        if ($response.StatusCode -eq 409) {
-            $errorBody = ConvertFrom-Json -InputObject $response.Content -AsHashtable
-            if ($errorBody.message -cne 'Git Repository is empty.') {
-                throw [System.IO.InvalidDataException]::new("GitHub commit lookup failed with HTTP 409 for $($entry.Repository); it is not a confirmed empty repository.")
-            }
-            $revisions[$entry.Repository] = [ordered]@{ repository = $entry.Repository; commit = $null; status = 'empty'; archived = $entry.Archived }
+        $archived = $repositoryInfo['isArchived']
+        $defaultBranchRef = $repositoryInfo['defaultBranchRef']
+        $headTarget = if ($null -ne $defaultBranchRef) { $defaultBranchRef['target'] } else { $null }
+        if ($null -eq $headTarget) {
+            $revisions[$repository] = [ordered]@{ repository = $repository; commit = $null; status = 'empty'; archived = $archived }
             continue
         }
-        $commit = Get-AvmCatalogResponseJson -Response $response
-        if ($commit.sha -cnotmatch '^[0-9a-f]{40}$') {
-            throw [System.IO.InvalidDataException]::new("Cannot resolve an immutable source commit for $($entry.Repository).")
+        $commitSha = [string]$headTarget['oid']
+        $treeInfo = $headTarget['tree']
+        $treeSha = if ($null -ne $treeInfo) { [string]$treeInfo['oid'] } else { $null }
+        if ($commitSha -cnotmatch '^[0-9a-f]{40}$' -or $treeSha -cnotmatch '^[0-9a-f]{40}$') {
+            throw [System.IO.InvalidDataException]::new("Cannot resolve an immutable source commit for $repository.")
         }
-        $entry.Commit = $commit.sha
-        $entry.TreeSha = $commit.commit.tree.sha
-        $trees.Add($entry)
+        $trees.Add(@{
+                Repository = $repository
+                Destination = [string]$Target[$index].Destination
+                Archived = $archived
+                Commit = $commitSha
+                TreeSha = $treeSha
+            })
     }
     $treeResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform repository trees' -GitHubToken $GitHubToken -Requests @(foreach ($entry in $trees) {
             New-AvmCatalogRequest -Uri "https://api.github.com/repos/$($entry.Repository)/git/trees/$($entry.TreeSha)?recursive=1"
