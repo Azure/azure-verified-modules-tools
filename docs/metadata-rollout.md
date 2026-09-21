@@ -135,7 +135,8 @@ are already merged. Verify their current state rather than attempting to merge
 the old branches again.
 
 Confirm that all 572 intended files are present, including complete owner lists.
-Keep empty owners genuinely empty. Nondeprecated unowned modules are Orphaned;
+Keep empty owners genuinely empty. Nondeprecated, published modules without
+owners are Orphaned; unpublished modules remain Proposed regardless of ownership.
 Deprecated modules retain their prior status. The 14 uninstrumented,
 unpublished children legitimately omit telemetry under BCPFR4.
 
@@ -375,9 +376,10 @@ plus 45 of 48 pattern names and all 48 pattern descriptions. The new values come
 from current Bicep source literals, not the older index wording. These are large
 text changes even though metadata-only edits do not publish modules.
 
-Recovered owners can move formerly Orphaned modules to Available. Genuinely
-unowned metadata-backed modules stay Orphaned and prior Deprecated status is
-preserved for matching metadata-backed entries. Rows without metadata are
+Recovered owners can move published, formerly Orphaned modules to Available.
+Unpublished metadata-backed modules remain Proposed even without owners.
+Published unowned modules stay Orphaned and prior Deprecated status is preserved
+for matching metadata-backed entries. Rows without metadata are
 subject to the removal guard, not silently retained. The six
 CSVs keep their existing columns unchanged; no new column (such as a
 `CanonicalType` or tier column) is added. Compare fresh output against its

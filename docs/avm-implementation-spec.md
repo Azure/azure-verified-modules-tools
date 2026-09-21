@@ -437,9 +437,12 @@ BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 charac
 prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
 Existing underscore identifiers and the exact historical Resource Graph
 identifier are preserved; file creation does not repair deployed telemetry.
-Empty owner lists are allowed. Unowned modules are reported as Orphaned, while
-existing Deprecated status is retained during transition. New deprecations are
-derived from Bicep `DEPRECATED.md` (covering that module and descendants), or
+Empty owner lists are allowed. Deprecated takes precedence over publication and
+ownership. Otherwise, unpublished modules are Proposed regardless of owners or
+source files; published modules without owners are Orphaned, and published modules
+with owners are Available. Existing Deprecated status is retained during
+transition. New deprecations are derived from Bicep `DEPRECATED.md` (covering that
+module and descendants), or
 the Terraform repository's archived flag (covering all its modules). There is
 no authored metadata status field.
 

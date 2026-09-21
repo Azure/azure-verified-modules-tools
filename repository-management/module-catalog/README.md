@@ -151,6 +151,11 @@ project the first two usernames, and the existing team column projects the
 first team; JSON retains all entries. Teams are never placed in user columns.
 Tier metadata and repository-configuration publication are not implemented.
 
+For nondeprecated modules, registry `not-published` means Proposed, even when
+source files exist and `owners` is empty. Published modules without owners are
+Orphaned; published modules with owners are Available. Both CSV and JSON outputs
+use this rule rather than preserving prior Proposed or Orphaned status.
+
 Deprecation takes precedence over ownership and registry availability. A Bicep
 `DEPRECATED.md` marks that module and its descendants; a child's marker does not
 deprecate its parent or siblings. An archived Terraform repository marks every

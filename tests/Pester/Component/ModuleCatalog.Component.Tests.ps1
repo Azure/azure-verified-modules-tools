@@ -1104,24 +1104,49 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Report.csvRowRemovals | Should -HaveCount 1
     }
 
-    It 'reports unowned metadata as Orphaned but preserves existing Deprecated status in CSV and JSON' -TestCases @(
-        @{ Previous = 'Available'; Expected = 'Orphaned' }
-        @{ Previous = 'Deprecated'; Expected = 'Deprecated' }
+    It 'derives <Ecosystem> status <Expected> from published=<Published>, owned=<Owned> and prior <Previous> in CSV and JSON' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($case in @(
+                    @{ Published = $false; Owned = $false; Previous = 'Proposed'; Expected = 'Proposed' }
+                    @{ Published = $false; Owned = $false; Previous = 'Orphaned'; Expected = 'Proposed' }
+                    @{ Published = $false; Owned = $false; Previous = 'Available'; Expected = 'Proposed' }
+                    @{ Published = $false; Owned = $true; Previous = 'Proposed'; Expected = 'Proposed' }
+                    @{ Published = $true; Owned = $false; Previous = 'Proposed'; Expected = 'Orphaned' }
+                    @{ Published = $true; Owned = $false; Previous = 'Available'; Expected = 'Orphaned' }
+                    @{ Published = $true; Owned = $true; Previous = 'Proposed'; Expected = 'Available' }
+                    @{ Published = $true; Owned = $true; Previous = 'Orphaned'; Expected = 'Available' }
+                    @{ Published = $false; Owned = $false; Previous = 'Deprecated'; Expected = 'Deprecated' }
+                    @{ Published = $true; Owned = $false; Previous = 'Deprecated'; Expected = 'Deprecated' }
+                )) {
+                $case + @{ Ecosystem = $ecosystem }
+            }
+        }
     ) {
-        param($Previous, $Expected)
+        param($Ecosystem, $Published, $Owned, $Previous, $Expected)
         $fixture = New-CatalogFixture -AdoptAll
-        $file = 'BicepResourceModules.csv'
+        $file = if ($Ecosystem -eq 'bicep') { 'BicepResourceModules.csv' } else { 'TerraformResourceModules.csv' }
         $row = $fixture.Original[$file]
         $row.ModuleStatus = $Previous
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
             (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row)))
-        $path = Join-Path $fixture.Modules[0].Directory 'metadata.json'
-        $metadata = Read-AvmCatalogJson -Path $path
-        $metadata.owners = @()
-        Save-CatalogJson -Path $path -Data $metadata
-        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly $Expected
-        ($bundle.Files["docs/$file"] | ConvertFrom-Csv).ModuleStatus | Should -BeExactly $Expected
+        $module = @($fixture.Modules | Where-Object { $_.Ecosystem -eq $Ecosystem -and $_.ModuleType -eq 'resource' })[0]
+        if (-not $Owned) {
+            $path = Join-Path $module.Directory 'metadata.json'
+            $metadata = Read-AvmCatalogJson -Path $path
+            $metadata.owners = @()
+            Save-CatalogJson -Path $path -Data $metadata
+        }
+        $null = Get-CatalogFixtureBundle -Fixture $fixture
+        if (-not $Published) {
+            $registryPath = Join-Path $fixture.Root 'registry.json'
+            $registry = Read-AvmCatalogJson -Path $registryPath
+            $registry[$module.Identity.Key] = New-AvmCatalogRegistryResult -MarRegistered $registry[$module.Identity.Key].marRegistered
+            Save-CatalogJson -Path $registryPath -Data $registry
+        }
+        & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output | Out-Null
+        $catalog = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'v1' 'modules.json')
+        $catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem][0].moduleStatus | Should -BeExactly $Expected
+        (Import-Csv -LiteralPath (Join-Path $fixture.Output 'docs' $file)).ModuleStatus | Should -BeExactly $Expected
     }
 
     It 'excludes Bicep examples and nested Terraform helper scopes from module discovery' {
@@ -1148,7 +1173,11 @@ Describe 'Component: module catalog transformations' -Tag Component {
         (Get-CatalogFixtureInventory -Fixture $fixture).Sources | Should -HaveCount 6
     }
 
-    It 'adopts scaffolded modules that have metadata but no source yet' {
+    It 'adopts scaffolded modules that have metadata but no source yet with owned=<Owned>' -TestCases @(
+        @{ Owned = $true }
+        @{ Owned = $false }
+    ) {
+        param($Owned)
         $fixture = New-CatalogFixture -AdoptAll
         $scaffolds = @{
             bicep = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
@@ -1156,6 +1185,14 @@ Describe 'Component: module catalog transformations' -Tag Component {
             terraform = Add-CatalogModule -Fixture $fixture -Ecosystem terraform `
                 -Repository 'Azure/terraform-azurerm-avm-ptn-ai-ml-landing-zone' `
                 -ModulePath '.' -Canonical 'ai-ml/landing-zone' -Adopt -SourcePending
+        }
+        if (-not $Owned) {
+            foreach ($scaffold in $scaffolds.Values) {
+                $path = Join-Path $scaffold.Directory 'metadata.json'
+                $metadata = Read-AvmCatalogJson -Path $path
+                $metadata.owners = @()
+                Save-CatalogJson -Path $path -Data $metadata
+            }
         }
 
         $inventory = Get-CatalogFixtureInventory -Fixture $fixture
