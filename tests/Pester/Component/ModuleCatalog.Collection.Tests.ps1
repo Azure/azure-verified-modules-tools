@@ -73,6 +73,19 @@ public class AvmCatalogStubHandler : HttpMessageHandler
             $client.Dispose()
         }
     }
+
+    function Get-AvmCatalogGraphQlMockRepositoryData {
+        param([Parameter(Mandatory)][string] $Body, [Parameter(Mandatory)][scriptblock] $ResolveRepository)
+
+        $query = (ConvertFrom-Json -InputObject $Body -AsHashtable).query
+        $data = @{}
+        foreach ($match in [regex]::Matches($query, 'g(\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')) {
+            $alias = "g$($match.Groups[1].Value)"
+            $repository = "$($match.Groups[2].Value)/$($match.Groups[3].Value)"
+            $data[$alias] = & $ResolveRepository $repository
+        }
+        return $data
+    }
 }
 
 AfterAll {
@@ -385,22 +398,30 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         }
         Mock Get-AvmCatalogBicepRegistrySet { @{} }
         Mock Invoke-AvmCatalogRequestSet {
+            $data = @{}
             foreach ($request in $Requests) {
-                $data = if ([string]$request.Uri -like '*/users/*') {
-                    @{ login = 'owner-one'; name = $null; type = 'User' }
+                $query = (ConvertFrom-Json -InputObject $request.Body -AsHashtable).query
+                foreach ($match in [regex]::Matches($query, 'g(\d+): user\(login: "([^"]+)"\)')) {
+                    $data["g$($match.Groups[1].Value)"] = @{ login = 'owner-one'; name = $null; __typename = 'User' }
                 }
-                else {
-                    @{ slug = ([uri]$request.Uri).Segments[-1]; organization = @{ login = 'Azure' } }
+                foreach ($match in [regex]::Matches($query, 'g(\d+): organization\(login: "Azure"\) \{ team\(slug: "([^"]+)"\)')) {
+                    $data["g$($match.Groups[1].Value)"] = @{ team = @{ slug = $match.Groups[2].Value; organization = @{ login = 'Azure' } } }
                 }
-                [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value $data }
             }
+            [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{ data = $data } }
         }
         $enrichment = Get-AvmCatalogEnrichment -Inventory $inventory
         $enrichment.GitHub.users.Count | Should -Be 1
         $enrichment.GitHub.teams.Count | Should -Be 2
         $enrichment.GitHub.users['owner-one'].name | Should -BeNullOrEmpty
-        Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -ParameterFilter { @($Requests).Count -eq 1 -and [string]$Requests[0].Uri -like '*/users/owner-one' }
-        Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -ParameterFilter { @($Requests).Count -eq 2 -and [string]$Requests[0].Uri -like '*/orgs/Azure/teams/*' }
+        Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -Exactly -ParameterFilter {
+            if (@($Requests).Count -ne 1 -or $Requests[0].Method -ne 'POST' -or [string]$Requests[0].Uri -ne 'https://api.github.com/graphql' -or -not $Requests[0].Body) {
+                return $false
+            }
+            $query = (ConvertFrom-Json -InputObject $Requests[0].Body -AsHashtable).query
+            $query -match 'user\(login: "owner-one"\)' -and
+            @([regex]::Matches($query, 'organization\(login: "Azure"\) \{ team\(slug: "[^"]+"\)')).Count -eq 2
+        }
     }
 
     It 'rejects truncated GitHub discovery instead of publishing a partial fleet' {
@@ -440,13 +461,21 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
                     }
                     continue
                 }
-                $body = if ($url -eq "https://api.github.com/repos/$script:sourceRepository") {
-                    @{ full_name = $script:sourceRepository; private = $false; default_branch = 'main'; archived = $script:sourceArchived }
+                if ($url -eq 'https://api.github.com/graphql') {
+                    [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{
+                            data = Get-AvmCatalogGraphQlMockRepositoryData -Body $request.Body -ResolveRepository {
+                                param($repository)
+                                if ($repository -ne $script:sourceRepository) { return $null }
+                                @{
+                                    nameWithOwner = $repository; isPrivate = $false; isArchived = $script:sourceArchived
+                                    defaultBranchRef = @{ target = @{ oid = $script:sourceCommit; tree = @{ oid = 'b' * 40 } } }
+                                }
+                            }
+                        }
+                    }
+                    continue
                 }
-                elseif ($url -like '*/commits/main') {
-                    @{ sha = $script:sourceCommit; commit = @{ tree = @{ sha = 'b' * 40 } } }
-                }
-                elseif ($url -like '*/git/trees/*') {
+                $body = if ($url -like '*/git/trees/*') {
                     @{ truncated = $false; tree = $script:sourceEntries }
                 }
                 else {
@@ -491,7 +520,9 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
     }
 
     It 'does not infer archive state for an unavailable repository' {
-        Mock Invoke-AvmCatalogRequestSet { foreach ($request in $Requests) { [pscustomobject]@{ StatusCode = 404; Content = '{}' } } }
+        Mock Invoke-AvmCatalogRequestSet {
+            foreach ($request in $Requests) { [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{ data = @{ g0 = $null } } } }
+        }
         $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $TestDrive -Confirm:$false
         $result.status | Should -Be 'not-found'
         $result.archived | Should -BeNullOrEmpty
@@ -515,20 +546,33 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         Test-Path -LiteralPath $root | Should -BeFalse
     }
 
-    It 'reports a confirmed empty repository without treating other 409 responses as absence' {
+    It 'reports a confirmed empty repository without inventing a default commit' {
         Mock Invoke-AvmCatalogRequestSet {
-            [pscustomobject]@{ StatusCode = 409; Content = '{"message":"Git Repository is empty."}' }
-        } -ParameterFilter { [string]$Requests[0].Uri -like '*/commits/main' }
+            foreach ($request in $Requests) {
+                [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{
+                        data = @{ g0 = @{ nameWithOwner = $script:sourceRepository; isPrivate = $false; isArchived = $true; defaultBranchRef = $null } }
+                    }
+                }
+            }
+        }
         $root = Join-Path $TestDrive 'empty-source'
-        $script:sourceArchived = $true
         $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
         $result.status | Should -BeExactly 'empty'
         $result.archived | Should -BeTrue
         Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'rejects an unresolved commit or tree for a repository that is not confirmed empty' {
         Mock Invoke-AvmCatalogRequestSet {
-            [pscustomobject]@{ StatusCode = 409; Content = '{"message":"Unexpected service state"}' }
-        } -ParameterFilter { [string]$Requests[0].Uri -like '*/commits/main' }
-        { Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false } | Should -Throw '*not a confirmed empty repository*'
+            foreach ($request in $Requests) {
+                [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{
+                        data = @{ g0 = @{ nameWithOwner = $script:sourceRepository; isPrivate = $false; isArchived = $false; defaultBranchRef = @{ target = @{ oid = 'not-a-sha' } } } }
+                    }
+                }
+            }
+        }
+        { Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $TestDrive -Confirm:$false } |
+            Should -Throw '*Cannot resolve an immutable source commit*'
     }
 
     It 'collects every repository through shared batched phases' {
@@ -548,17 +592,20 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
                     }
                     continue
                 }
-                $repository = ($url -replace '^https://api\.github\.com/repos/([^/]+/[^/]+).*$', '$1')
-                $body = if ($url -match '^https://api\.github\.com/repos/[^/]+/[^/]+$') {
-                    @{ full_name = $repository; private = $false; default_branch = 'main'; archived = $false }
+                if ($url -eq 'https://api.github.com/graphql') {
+                    [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{
+                            data = Get-AvmCatalogGraphQlMockRepositoryData -Body $request.Body -ResolveRepository {
+                                param($repository)
+                                @{
+                                    nameWithOwner = $repository; isPrivate = $false; isArchived = $false
+                                    defaultBranchRef = @{ target = @{ oid = $script:sourceCommit; tree = @{ oid = 'b' * 40 } } }
+                                }
+                            }
+                        }
+                    }
+                    continue
                 }
-                elseif ($url -like '*/commits/main') {
-                    @{ sha = $script:sourceCommit; commit = @{ tree = @{ sha = 'b' * 40 } } }
-                }
-                else {
-                    @{ truncated = $false; tree = $script:sourceEntries }
-                }
-                [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value $body }
+                [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{ truncated = $false; tree = $script:sourceEntries } }
             }
         }
         $results = Save-AvmCatalogTerraformSourceSet -Target $target -Confirm:$false
@@ -568,7 +615,10 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         foreach ($entry in $target) {
             (Join-Path $entry.Destination 'main.tf') | Should -Exist
         }
-        Should -Invoke Invoke-AvmCatalogRequestSet -Times 4 -Exactly
+        Should -Invoke Invoke-AvmCatalogRequestSet -Times 3 -Exactly
+        Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -Exactly -ParameterFilter {
+            @($Requests).Count -eq 1 -and $Requests[0].Method -eq 'POST' -and [string]$Requests[0].Uri -eq 'https://api.github.com/graphql'
+        }
     }
 }
 
