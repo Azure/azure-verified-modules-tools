@@ -136,13 +136,17 @@ currently resets `$LASTEXITCODE` before the work step ends. That is an
 accidental escape rather than a safe dependency: a future path without a later
 native command would be vulnerable to the same stale status.
 
-The 3-4 matrix jobs currently failing in runs such as
-[35729368568](https://github.com/Azure/azure-verified-modules-tools/actions/runs/35729368568)
-have a separate, correctly reported cause: `gh pr merge --admin` is blocked by
-branch protection/CODEOWNERS requirements on specific Terraform repositories.
+In [run 35729368568](https://github.com/Azure/azure-verified-modules-tools/actions/runs/35729368568),
+97 of 100 matrix jobs succeeded. The successful `avm-utl-roledefinitions` job
+contains the same `GH_TOKEN` + `gh auth login` pattern but later resets
+`$LASTEXITCODE` through a direct native command. The 3-4 matrix jobs that do
+fail each run have a separate, correctly reported cause: `gh pr merge --admin`
+is blocked by branch protection/CODEOWNERS requirements on specific Terraform
+repositories. That issue is already tracked in
+[microsoft/github-operations#1841](https://github.com/microsoft/github-operations/issues/1841).
 This slice deliberately does not modify `repository-management-sync.yml` or
-`terraform-module.yml`, and does not treat those production failures as part
-of this incident.
+`terraform-module.yml`, does not treat those production failures as part of
+this incident, and does not require a new follow-up issue for them.
 
 ## Checklist
 
