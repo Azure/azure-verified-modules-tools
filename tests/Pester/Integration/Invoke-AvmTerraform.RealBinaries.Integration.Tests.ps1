@@ -244,13 +244,12 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
             }
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,check convention,transform,format,docs,metadata'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,sync,check convention,transform,format,docs'
             $result.Status | Should -Be 'pass'
             $metadataStep = $result.Steps | Where-Object Step -eq 'metadata'
             $metadataStep.Result.ToolSource | Should -Be 'builtin'
-            @($metadataStep.Result.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_MISSING' -and $_.File -eq 'metadata.json' }) | Should -HaveCount 1
-            @($metadataStep.Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
-            Test-Path -LiteralPath (Join-Path $script:StagedModule 'metadata.json') | Should -BeFalse
+            $metadataStep.Result.Issues | Should -HaveCount 0
+            Test-Path -LiteralPath (Join-Path $script:StagedModule 'metadata.json') | Should -BeTrue
 
             # Fail the build if pre-commit changed anything: a canonical module
             # (synced from legacy Terraform governance) must survive pre-commit
@@ -382,13 +381,12 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
-            ($result.Steps.Step -join ',') | Should -BeExactly 'sync,format,transform,lint,check policy,check convention,validate,docs,metadata'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,sync,format,transform,lint,check policy,check convention,validate,docs'
             $result.Status | Should -Be 'pass'
             $metadataStep = $result.Steps | Where-Object Step -eq 'metadata'
             $metadataStep.Result.ToolSource | Should -Be 'builtin'
-            @($metadataStep.Result.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_MISSING' -and $_.File -eq 'metadata.json' }) | Should -HaveCount 1
-            @($metadataStep.Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
-            Test-Path -LiteralPath (Join-Path $script:StagedModule 'metadata.json') | Should -BeFalse
+            $metadataStep.Result.Issues | Should -HaveCount 0
+            Test-Path -LiteralPath (Join-Path $script:StagedModule 'metadata.json') | Should -BeTrue
 
             # F07: no verb may create a repo-local .avm/ folder. Persistent state
             # belongs under $AVM_HOME.

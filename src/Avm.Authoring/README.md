@@ -25,7 +25,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmLint.ps1`                       | `avm lint` -> route to the bicep / terraform engine and run lint diagnostics.      |
 | `Public/Invoke-AvmTest.ps1`                       | `avm test` -> route to the bicep / terraform engine and run build-validation.      |
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
-| `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> composition: format -> lint -> test against the same context.  |
+| `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
@@ -143,8 +143,10 @@ telemetry prefix; a helper without a prefix leaves source unchanged.
 Terraform rejects `-UpdateSource` before writes and never
 generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
 Existing authored source files are preserved. Metadata-only initialization
-does not rewrite source. Pre-commit and PR checks warn for missing metadata
-during rollout but fail for invalid existing files.
+does not rewrite source. Pre-commit and PR checks require valid metadata on
+every module root and child. Metadata validation runs first and stops the chain
+on missing or invalid files, before tool setup or file changes. Initialize
+missing files with `avm metadata initialize` before rerunning either check.
 
 ## Local smoke test
 
@@ -165,7 +167,7 @@ avm lint            # Invoke-AvmLint   (bicep lint; scoped AVM TFLint rulesets f
 avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json per example)
 avm test --no-init  # Use initialized examples; module coverage is not assessed
 avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
-avm pre-commit      # Invoke-AvmPreCommit (terraform: sync -> check convention -> transform -> format -> docs)
+avm pre-commit      # terraform: metadata -> sync -> check convention -> transform -> format -> docs
 avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring

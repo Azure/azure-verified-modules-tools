@@ -11,21 +11,26 @@ function Get-AvmMetadataScope {
     if ($Context.Ecosystem -eq 'terraform') {
         $scopes.Add([pscustomobject]@{ Path = $root; ChildModule = $false })
         $childrenPath = Join-Path $root 'modules'
+        $pending = [System.Collections.Generic.Queue[string]]::new()
         if (Test-Path -LiteralPath $childrenPath -PathType Container) {
-            if ((Get-Item -LiteralPath $childrenPath -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            $pending.Enqueue($childrenPath)
+        }
+        while ($pending.Count -gt 0) {
+            $path = $pending.Dequeue()
+            if ((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
                 throw [System.ArgumentException]::new('Metadata checks do not traverse a linked modules directory.')
             }
-            foreach ($child in Get-ChildItem -LiteralPath $childrenPath -Directory -Force | Sort-Object Name -CaseSensitive) {
-                if ($child.Name.StartsWith('.') -or $child.Name -in $excluded) {
+            $items = @(Get-ChildItem -LiteralPath $path -Force)
+            if ($path -cne $childrenPath -and @($items | Where-Object {
+                        (-not $_.PSIsContainer -and $_.Name -cmatch '\.tf(\.json)?$') -or $_.Name -ieq 'metadata.json'
+                    }).Count -gt 0) {
+                $scopes.Add([pscustomobject]@{ Path = $path; ChildModule = $true })
+            }
+            foreach ($child in $items | Where-Object { $_.PSIsContainer } | Sort-Object Name -CaseSensitive) {
+                if ($child.Name.StartsWith('.') -or ($child.Name -in $excluded -and $child.Name -ne 'modules')) {
                     continue
                 }
-                if ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-                    throw [System.ArgumentException]::new("Metadata checks do not traverse linked module paths: $($child.FullName)")
-                }
-                $files = @(Get-ChildItem -LiteralPath $child.FullName -File -Force)
-                if (@($files | Where-Object { $_.Name -cmatch '\.tf(\.json)?$' -or $_.Name -ieq 'metadata.json' }).Count -gt 0) {
-                    $scopes.Add([pscustomobject]@{ Path = $child.FullName; ChildModule = $true })
-                }
+                $pending.Enqueue($child.FullName)
             }
         }
         return $scopes.ToArray()

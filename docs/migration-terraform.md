@@ -36,8 +36,8 @@ in sync, and a custom CA story for corporate networks.
   download at module-load time.
 - **One CLI**: every workflow is an `Invoke-Avm…` cmdlet (also
   available as the short verb form, e.g. `avm pre-commit`). The
-  cmdlets compose: `avm pre-commit` chains four engines, `avm pr-check`
-  chains eight, and each engine is also runnable standalone.
+  cmdlets compose: `avm pre-commit` chains six steps, `avm pr-check`
+  chains nine, and each engine is also runnable standalone.
 - **Same upstream binaries**: every engine shells out to the canonical
   tool (`terraform`, `tflint`, `terraform-docs`, `conftest`) — no
   alternate implementation, no re-implementation drift. The module
@@ -232,9 +232,13 @@ through the host's own TLS trust store.
 The composition cmdlets and the exact order of engines they call:
 
 - **`avm pre-commit`** →
-  - **Terraform**: `sync` → fixable `check convention` rules → `transform` → `format` → `docs` (re-aligned 2026-06-19 to match upstream `porch-configs/pre-commit.porch.yaml`, which keeps `tflint`/validate in pr-check; `lint`+`validate` were dropped from this chain because both require `terraform init` and would force pre-commit online — they now live in `avm pr-check` only, mirroring upstream porch)
-  - **Bicep**: `format` → `lint` → `test` → `docs` (unchanged)
-- **`avm pr-check`** → require a clean `git status --porcelain`, then `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
+  - **Terraform**: `metadata` → `sync` → fixable `check convention` rules → `transform` → `format` → `docs`. Lint and validate remain in `pr-check` because they require `terraform init`.
+  - **Bicep**: `metadata` → `format` → `lint` → `validate` → `docs`
+- **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
+
+Both chains stop immediately on missing or invalid root or child metadata,
+before managed-tool setup or file changes. Create the missing files with
+`avm metadata initialize` before running either chain.
 
 Unit tests remain a separate CI job. Unit, integration, and end-to-end test
 commands report `Status='skipped'`, not `pass`, when no matching tests are

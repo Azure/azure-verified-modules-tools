@@ -64,14 +64,18 @@ BeforeAll {
 
         InModuleScope Avm.Authoring -Parameters @{ ModuleContext = $Fixture.Context; CommandName = $Command; Actions = $Actions.IsPresent } {
             param($ModuleContext, $CommandName, $Actions)
+            $script:metadataLaterCalls = 0
             Mock Get-AvmModuleContext { $ModuleContext }
             Mock Test-AvmModuleVersion {}
-            Mock Resolve-AvmCommandTool { @() }
+            Mock Resolve-AvmCommandTool { $script:metadataLaterCalls++; @() }
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Invoke-AvmHttp { throw 'Metadata validation must not fetch external data.' }
             Mock Invoke-AvmProcess { throw 'These metadata fixtures must not run a subprocess.' }
             foreach ($name in @('Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform', 'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention', 'Invoke-AvmTest', 'Invoke-AvmDocs')) {
-                Mock -CommandName $name -MockWith { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
+                Mock -CommandName $name -MockWith {
+                    $script:metadataLaterCalls++
+                    [pscustomobject]@{ Status = 'pass'; Issues = @() }
+                }
             }
             $savedActions = $env:GITHUB_ACTIONS
             try {
@@ -79,6 +83,11 @@ BeforeAll {
                 $output = @(& $CommandName -Path $ModuleContext.Root -Ecosystem $ModuleContext.Ecosystem `
                         -SkipModuleVersionCheck 3>&1 6>&1)
                 $result = $output | Where-Object { $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                if ($result.Status -ne 'pass') {
+                    $result.Steps | Should -HaveCount 1
+                    $result.Steps[0].Step | Should -Be 'metadata'
+                    $script:metadataLaterCalls | Should -Be 0
+                }
                 $warnings = @($output | Where-Object {
                         $_ -is [System.Management.Automation.WarningRecord] -or
                         ($_ -is [System.Management.Automation.InformationRecord] -and [string]$_.MessageData -match '^::warning')
@@ -232,16 +241,17 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         $probe.Warnings | Should -HaveCount 0
     }
 
-    It 'emits GitHub warning annotations for missing metadata without failing CI' {
+    It 'returns actionable errors for missing metadata in CI' {
         $fixture = New-AuthoringMetadataFixture -Ecosystem terraform -Child
         $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck -Actions
-        $probe.Result.Status | Should -Be 'pass'
-        $probe.Warnings | Should -HaveCount 2
-        ($probe.Warnings -join "`n") | Should -Match '::warning file=metadata.json,line=1'
-        ($probe.Warnings -join "`n") | Should -Match 'modules/blob-service/metadata.json'
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Warnings | Should -HaveCount 0
+        $issues = $probe.Result.Steps[0].Result.Issues
+        $issues.File | Should -Be @('metadata.json', 'modules/blob-service/metadata.json')
+        $issues[0].Message | Should -Match 'avm metadata initialize'
     }
 
-    It 'warns without failing for missing <Ecosystem> metadata in <Command>' -TestCases @(
+    It 'fails fast for missing <Ecosystem> root and child metadata in <Command>' -TestCases @(
         @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPreCommit' }
         @{ Ecosystem = 'bicep'; Command = 'Invoke-AvmPrCheck' }
         @{ Ecosystem = 'terraform'; Command = 'Invoke-AvmPreCommit' }
@@ -250,12 +260,12 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         param($Ecosystem, $Command)
         $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
         $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
-        $probe.Result.Status | Should -Be 'pass'
+        $probe.Result.Status | Should -Be 'fail'
         $metadata = $probe.Result.Steps | Where-Object Step -eq 'metadata'
-        $metadata.Status | Should -Be 'pass'
+        $metadata.Status | Should -Be 'fail'
         $metadata.Result.Issues | Should -HaveCount 2
-        @($metadata.Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
-        $probe.Warnings | Should -HaveCount 2
+        @($metadata.Result.Issues | Where-Object Severity -ne 'error') | Should -HaveCount 0
+        $probe.Warnings | Should -HaveCount 0
         foreach ($path in $fixture.Paths) {
             Test-Path -LiteralPath (Join-Path $path 'metadata.json') | Should -BeFalse
         }
@@ -343,18 +353,61 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         $probe.Warnings | Should -HaveCount 0
     }
 
-    It 'does not validate test or example metadata as module metadata' {
-        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
+    It 'does not validate test or example metadata as <Ecosystem> module metadata' -TestCases @(
+        @{ Ecosystem = 'bicep'; Extension = 'bicep' }
+        @{ Ecosystem = 'terraform'; Extension = 'tf' }
+    ) {
+        param($Ecosystem, $Extension)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
         Save-AuthoringMetadataFixture -Fixture $fixture
-        foreach ($directory in @('tests', 'examples', '.test', 'modules')) {
-            $path = Join-Path $fixture.Root $directory 'helper'
+        foreach ($directory in @('tests', 'examples', '.test', 'node_modules')) {
+            $path = Join-Path $fixture.Paths[1] $directory 'helper'
             $null = New-Item -ItemType Directory -Path $path -Force
-            [System.IO.File]::WriteAllText((Join-Path $path 'main.bicep'), "metadata name = 'ignored'")
+            [System.IO.File]::WriteAllText((Join-Path $path "main.$Extension"), '')
             [System.IO.File]::WriteAllText((Join-Path $path 'metadata.json'), '{}')
         }
         $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck
         $probe.Result.Status | Should -Be 'pass'
         ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+    }
+
+    It 'requires metadata for deep <Ecosystem> children in <Command>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($command in @('Invoke-AvmPreCommit', 'Invoke-AvmPrCheck')) {
+                @{ Ecosystem = $ecosystem; Command = $command }
+            }
+        }
+    ) {
+        param($Ecosystem, $Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $deepPath = if ($Ecosystem -eq 'terraform') {
+            Join-Path $fixture.Paths[1] 'modules' 'container'
+        }
+        else {
+            Join-Path $fixture.Paths[1] 'container'
+        }
+        $null = New-Item -ItemType Directory -Path $deepPath -Force
+        $source = if ($Ecosystem -eq 'terraform') { 'main.tf.json' } else { 'main.bicep' }
+        [System.IO.File]::WriteAllText((Join-Path $deepPath $source), '{}')
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'fail'
+        $issues = $probe.Result.Steps[0].Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_MISSING'
+        $issues[0].File | Should -Be ([System.IO.Path]::GetRelativePath($fixture.Root, (Join-Path $deepPath 'metadata.json')).Replace('\', '/'))
+    }
+
+    It 'fails for malformed JSON without running later steps in <Command>' -TestCases @(
+        @{ Command = 'Invoke-AvmPreCommit' }
+        @{ Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem terraform
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'metadata.json'), '{')
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Steps[0].Result.Issues[0].Code | Should -Be 'AVM_METADATA_INVALID'
     }
 
     It 'validates Bicep monorepo roots and deep children without requiring metadata on grouping directories' {

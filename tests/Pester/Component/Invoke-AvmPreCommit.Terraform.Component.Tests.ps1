@@ -45,7 +45,7 @@ BeforeAll {
     $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
 
     # Point the managed-files sync engine at an empty local source so the
-    # sync step (now first in the pre-commit chain) is a deterministic
+    # sync step is a deterministic
     # offline no-op: an empty 'root/' yields zero desired files, so the
     # engine reports Status='pass' with FilesProcessed=0 and never fetches
     # the governance repo over the network.
@@ -55,6 +55,8 @@ BeforeAll {
 
     $script:fixtureRoot = Join-Path $TestDrive 'module'
     $null = New-Item -ItemType Directory -Path $script:fixtureRoot -Force
+    $metadataFixture = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' 'terraform-azure-avm-res-mock' 'metadata.json'
+    Copy-Item -LiteralPath $metadataFixture -Destination $script:fixtureRoot
     $null = New-Item -ItemType Directory -Path (Join-Path $script:fixtureRoot 'tests/unit') -Force
 
     # Pre-stage the pinned policy-library cache so
@@ -199,7 +201,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.0.0)'
     }
 
-    It 'pre-commit composes the six-step terraform chain end-to-end (sync first) via launcher-resolved stubs and built-in checks' {
+    It 'pre-commit composes the six-step terraform chain end-to-end (metadata first) via launcher-resolved stubs and built-in checks' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -208,18 +210,17 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
 
         $steps = $result.PSObject.Properties['Steps'].Value
         $steps.Count | Should -Be 6
-        $expected = @('sync', 'check convention', 'transform', 'format', 'docs', 'metadata')
+        $expected = @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
         $byName['metadata'].Status | Should -Be 'pass'
         $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
-        $byName['metadata'].Result.Issues.Code | Should -Contain 'AVM_METADATA_MISSING'
-        @($byName['metadata'].Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
-        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeFalse
+        $byName['metadata'].Result.Issues | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeTrue
 
-        # sync runs FIRST against an empty local managed-files source
+        # sync runs against an empty local managed-files source
         # (AVM_MANAGED_FILES_LOCAL_PATH -> TestDrive/managed-files-src with an
         # empty root/), so it is an offline no-op: zero desired files, nothing
         # added/updated/removed, Status='pass', ToolSource='local'.
@@ -265,6 +266,9 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $nestedModule = Join-Path $script:fixtureRoot 'modules' 'azure-identity'
         $null = New-Item -ItemType Directory -Path $nestedModule -Force
         Set-Content -LiteralPath (Join-Path $nestedModule 'output.tf') -Value '# output' -Encoding utf8NoBOM
+        $childMetadata = Get-Content -LiteralPath $metadataFixture -Raw | ConvertFrom-Json -AsHashtable
+        $childMetadata.Remove('owners')
+        $childMetadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $nestedModule 'metadata.json') -Encoding utf8NoBOM
 
         try {
             $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
@@ -286,6 +290,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $bootstrapRoot = Join-Path $TestDrive 'module-without-tests'
         $exampleDir = Join-Path $bootstrapRoot 'examples/default'
         $null = New-Item -ItemType Directory -Path $exampleDir -Force
+        Copy-Item -LiteralPath $metadataFixture -Destination $bootstrapRoot
         Set-Content -LiteralPath (Join-Path $bootstrapRoot 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $bootstrapRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value '# example' -Encoding utf8NoBOM
@@ -299,7 +304,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
     }
 
-    It 'pr-check composes nine steps (sync drift-check first) with a metadata check after the drift checks' {
+    It 'pr-check composes nine steps with metadata validation before the drift checks' {
         $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -308,18 +313,17 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
 
         $steps = $result.PSObject.Properties['Steps'].Value
         $steps.Count | Should -Be 9
-        $expected = @('sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs', 'metadata')
+        $expected = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
         foreach ($s in $steps) { $byName[$s.PSObject.Properties['Step'].Value] = $s }
         $byName['metadata'].Status | Should -Be 'pass'
         $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
-        $byName['metadata'].Result.Issues.Code | Should -Contain 'AVM_METADATA_MISSING'
-        @($byName['metadata'].Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
-        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeFalse
+        $byName['metadata'].Result.Issues | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeTrue
 
-        # sync runs FIRST under -CheckDrift (drift-check mode) against the empty
+        # sync runs under -CheckDrift (drift-check mode) against the empty
         # local managed-files source (AVM_MANAGED_FILES_LOCAL_PATH -> an empty
         # root/), so it writes nothing and finds no drift: Status='pass',
         # ToolSource='local', zero files processed and no add/update/remove.

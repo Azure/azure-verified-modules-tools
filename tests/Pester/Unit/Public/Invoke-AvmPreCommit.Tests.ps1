@@ -83,7 +83,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 2/5: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 3/5: lint'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit pass'
         @($observed.VerboseInfo) | Should -Contain 'nested pre-commit info'
@@ -129,18 +129,14 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
         $result.Steps.Count               | Should -Be 5
-        $result.Steps[0].Step             | Should -Be 'format'
-        $result.Steps[1].Step             | Should -Be 'lint'
-        $result.Steps[2].Step             | Should -Be 'validate'
-        $result.Steps[3].Step             | Should -Be 'docs'
-        $result.Steps[4].Step             | Should -Be 'metadata'
+        $result.Steps.Step | Should -Be @('metadata', 'format', 'lint', 'validate', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
                 $Command -eq 'pre-commit' -and $Ecosystem -eq 'bicep'
             }
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
-                $Context.Ecosystem -eq 'bicep' -and $WarnIfMissing
+                $Context.Ecosystem -eq 'bicep'
             }
         }
     }
@@ -208,7 +204,7 @@ Describe 'Invoke-AvmPreCommit' {
             Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
-                $Context.Root -eq $D -and $Context.Ecosystem -eq 'terraform' -and $WarnIfMissing
+                $Context.Root -eq $D -and $Context.Ecosystem -eq 'terraform'
             }
 
             # pre-commit is the auto-fix surface: format and docs must rewrite
@@ -226,12 +222,7 @@ Describe 'Invoke-AvmPreCommit' {
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
         $result.Steps.Count               | Should -Be 6
-        $result.Steps[0].Step             | Should -Be 'sync'
-        $result.Steps[1].Step             | Should -Be 'check convention'
-        $result.Steps[2].Step             | Should -Be 'transform'
-        $result.Steps[3].Step             | Should -Be 'format'
-        $result.Steps[4].Step             | Should -Be 'docs'
-        $result.Steps[5].Step             | Should -Be 'metadata'
+        $result.Steps.Step | Should -Be @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -285,7 +276,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status | Should -Be 'pass'
-        $result.Steps.Step | Should -Be @('sync', 'check convention', 'transform', 'format', 'docs', 'metadata')
+        $result.Steps.Step | Should -Be @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
     }
 
     It 'exposes the managed-files version switches the engine understands' {
@@ -379,12 +370,12 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result.Status            | Should -Be 'fail'
         $result.Steps.Count       | Should -Be 6
-        $result.Steps[0].Step     | Should -Be 'sync'
-        $result.Steps[0].Status   | Should -Be 'fail'
-        $result.Steps[0].Error    | Should -Match 'major release 2\.0\.0'
-        $result.Steps[0].Error    | Should -Match '-Upgrade'
+        $result.Steps[1].Step     | Should -Be 'sync'
+        $result.Steps[1].Status   | Should -Be 'fail'
+        $result.Steps[1].Error    | Should -Match 'major release 2\.0\.0'
+        $result.Steps[1].Error    | Should -Match '-Upgrade'
         # An adoption gap must not abort the chain the way 'error' does.
-        ($result.Steps[1..5] | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
+        ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
@@ -489,7 +480,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
@@ -518,7 +509,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
