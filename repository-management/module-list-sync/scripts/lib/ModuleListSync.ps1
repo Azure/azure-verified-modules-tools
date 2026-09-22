@@ -7,12 +7,18 @@
 
 $script:AvmModuleListSyncCategoryOrder = @('ptn', 'res', 'utl')
 $script:AvmModuleListSyncLineRegex = '^(?<indent>\s*)(?<comment>#\s*)?-\s+"(?<path>avm/(?:res|ptn|utl)/[^"]+)"\s*$'
+$script:AvmModuleListSyncIncludedStatuses = @('Available', 'Orphaned')
 
 function Get-AvmModuleListSyncCatalogModulePaths {
     <#
     .SYNOPSIS
     Returns the desired, sorted dropdown module paths per category (ptn/res/utl)
     for one repository, derived from the published module catalog.
+
+    .DESCRIPTION
+    Only top-level modules (an empty/absent `parentModule`) with a
+    moduleStatus of Available or Orphaned are included; child modules and
+    Proposed/Deprecated modules are excluded.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -22,7 +28,8 @@ function Get-AvmModuleListSyncCatalogModulePaths {
     $byCategory = @{}
     foreach ($category in $script:AvmModuleListSyncCategoryOrder) { $byCategory[$category] = [System.Collections.Generic.List[string]]::new() }
     foreach ($entry in $index.Values) {
-        if ($entry.moduleStatus -cne 'Available') { continue }
+        if ($entry.moduleStatus -cnotin $script:AvmModuleListSyncIncludedStatuses) { continue }
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry.parentModule)) { continue }
         $path = [string]$entry.modulePath
         if ($path -notmatch '^avm/(?<category>res|ptn|utl)/') { continue }
         $byCategory[$Matches['category']].Add($path)

@@ -36,15 +36,43 @@ Describe 'Get-AvmModuleListSyncCatalogModulePaths' {
     It 'groups Available modules by category and drops other repositories/statuses' {
         Mock Get-AvmReviewerRoutingCatalogIndex {
             @{
-                'avm/res/aaa/bbb' = @{ modulePath = 'avm/res/aaa/bbb'; moduleStatus = 'Available' }
-                'avm/ptn/foo/bar' = @{ modulePath = 'avm/ptn/foo/bar'; moduleStatus = 'Available' }
-                'avm/res/zzz/yyy' = @{ modulePath = 'avm/res/zzz/yyy'; moduleStatus = 'Deprecated' }
+                'avm/res/aaa/bbb' = @{ modulePath = 'avm/res/aaa/bbb'; moduleStatus = 'Available'; parentModule = $null }
+                'avm/ptn/foo/bar' = @{ modulePath = 'avm/ptn/foo/bar'; moduleStatus = 'Available'; parentModule = $null }
+                'avm/res/zzz/yyy' = @{ modulePath = 'avm/res/zzz/yyy'; moduleStatus = 'Deprecated'; parentModule = $null }
             }
         }
         $result = Get-AvmModuleListSyncCatalogModulePaths -Repository 'Azure/bicep-registry-modules'
         $result.res | Should -Be @('avm/res/aaa/bbb')
         $result.ptn | Should -Be @('avm/ptn/foo/bar')
         $result.utl | Should -HaveCount 0
+    }
+
+    It 'includes Orphaned modules alongside Available and drops Proposed/Deprecated' {
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{
+                'avm/res/aaa/bbb' = @{ modulePath = 'avm/res/aaa/bbb'; moduleStatus = 'Available'; parentModule = $null }
+                'avm/res/ccc/ddd' = @{ modulePath = 'avm/res/ccc/ddd'; moduleStatus = 'Orphaned'; parentModule = $null }
+                'avm/res/eee/fff' = @{ modulePath = 'avm/res/eee/fff'; moduleStatus = 'Proposed'; parentModule = $null }
+                'avm/res/ggg/hhh' = @{ modulePath = 'avm/res/ggg/hhh'; moduleStatus = 'Deprecated'; parentModule = $null }
+            }
+        }
+        $result = Get-AvmModuleListSyncCatalogModulePaths -Repository 'Azure/bicep-registry-modules'
+        $result.res | Should -Be @('avm/res/aaa/bbb', 'avm/res/ccc/ddd')
+    }
+
+    It 'includes only top-level Available/Orphaned modules and drops top-level Proposed/Deprecated and all child modules' {
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{
+                'avm/res/top-available' = @{ modulePath = 'avm/res/top-available'; moduleStatus = 'Available'; parentModule = $null }
+                'avm/res/top-orphaned' = @{ modulePath = 'avm/res/top-orphaned'; moduleStatus = 'Orphaned'; parentModule = $null }
+                'avm/res/top-proposed' = @{ modulePath = 'avm/res/top-proposed'; moduleStatus = 'Proposed'; parentModule = $null }
+                'avm/res/top-deprecated' = @{ modulePath = 'avm/res/top-deprecated'; moduleStatus = 'Deprecated'; parentModule = $null }
+                'avm/res/child-available' = @{ modulePath = 'avm/res/child-available'; moduleStatus = 'Available'; parentModule = 'avm/res/top-available' }
+                'avm/res/child-orphaned' = @{ modulePath = 'avm/res/child-orphaned'; moduleStatus = 'Orphaned'; parentModule = 'avm/res/top-orphaned' }
+            }
+        }
+        $result = Get-AvmModuleListSyncCatalogModulePaths -Repository 'Azure/bicep-registry-modules'
+        $result.res | Should -Be @('avm/res/top-available', 'avm/res/top-orphaned')
     }
 }
 
