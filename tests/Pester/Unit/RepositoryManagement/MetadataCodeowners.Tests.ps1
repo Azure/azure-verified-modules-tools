@@ -1,24 +1,11 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
     $terraformRoot = Join-Path $script:root 'repository-management' 'repository-sync'
-    $bicepRoot = Join-Path $script:root 'repository-management' 'bicep-codeowners-sync'
     . (Join-Path $terraformRoot 'scripts' 'lib' 'TerraformCodeowners.ps1')
-    . (Join-Path $bicepRoot 'scripts' 'lib' 'Codeowners.ps1')
     $script:metadataRule = 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
-    $script:templates = @{
-        Terraform = Get-Content -LiteralPath (Join-Path $terraformRoot 'CODEOWNERS.template') -Raw
-        Bicep = Get-Content -LiteralPath (Join-Path $bicepRoot 'CODEOWNERS.template') -Raw
-    }
-    $modules = @(
-        [pscustomobject]@{ Name = 'avm/res/test/parent'; Owners = @('alice') }
-        [pscustomobject]@{ Name = 'avm/ptn/test/parent'; Owners = @() }
-        [pscustomobject]@{ Name = 'avm/utl/test/parent'; Owners = @() }
-    )
-    $script:contents = @{
-        Terraform = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @('module-reviewers') `
-            -FileProtectionTeams @('file-reviewers') -Template $script:templates.Terraform
-        Bicep = ConvertTo-AvmBicepCodeowners -Modules $modules -Template $script:templates.Bicep
-    }
+    $script:template = Get-Content -LiteralPath (Join-Path $terraformRoot 'CODEOWNERS.template') -Raw
+    $script:content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @('module-reviewers') `
+        -FileProtectionTeams @('file-reviewers') -Template $script:template
 
     function Get-TestCodeownersForPath {
         param([string] $Content, [string] $Path)
@@ -45,63 +32,41 @@ BeforeAll {
 }
 
 Describe 'Metadata CODEOWNERS scope and last-match precedence' {
-    It 'keeps both eligible review teams on one exact final rule in <Ecosystem>' -ForEach @(
-        @{ Ecosystem = 'Terraform' }
-        @{ Ecosystem = 'Bicep' }
-    ) {
-        foreach ($content in @($script:templates[$Ecosystem], $script:contents[$Ecosystem])) {
+    It 'keeps both eligible review teams on one exact final rule' {
+        foreach ($content in @($script:template, $script:content)) {
             $rules = @($content.Split("`n") | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
             $rules[-1] | Should -BeExactly $script:metadataRule
             @($rules | Where-Object { $_ -ceq $script:metadataRule }) | Should -HaveCount 1
         }
     }
 
-    It 'assigns engineering and module owners to <Path> in both ecosystems' -ForEach @(
+    It 'assigns engineering and module owners to <Path>' -ForEach @(
         @{ Path = 'metadata.json' }
         @{ Path = 'modules/child/metadata.json' }
         @{ Path = 'modules/child/modules/grandchild/metadata.json' }
-        @{ Path = 'avm/res/test/parent/metadata.json' }
-        @{ Path = 'avm/res/test/parent/child/metadata.json' }
-        @{ Path = 'avm/res/test/parent/child/grandchild/metadata.json' }
-        @{ Path = 'avm/ptn/test/parent/metadata.json' }
-        @{ Path = 'avm/ptn/test/parent/child/metadata.json' }
-        @{ Path = 'avm/utl/test/parent/metadata.json' }
-        @{ Path = 'avm/utl/test/parent/child/metadata.json' }
         @{ Path = 'avm/res/unindexed/module/metadata.json' }
         @{ Path = '.github/metadata.json' }
         @{ Path = 'utilities/metadata.json' }
     ) {
-        foreach ($ecosystem in @('Terraform', 'Bicep')) {
-            $owners = @(Get-TestCodeownersForPath -Content $script:contents[$ecosystem] -Path $Path)
-            $owners | Should -Be @('@Azure/azure-verified-modules-engineering-owners', '@Azure/azure-verified-modules-module-owners') -Because "$ecosystem metadata ownership must override earlier rules"
-        }
+        $owners = @(Get-TestCodeownersForPath -Content $script:content -Path $Path)
+        $owners | Should -Be @('@Azure/azure-verified-modules-engineering-owners', '@Azure/azure-verified-modules-module-owners') -Because 'metadata ownership must override earlier rules'
     }
 
-    It 'preserves unrelated ownership for <Ecosystem> <Path>' -ForEach @(
-        @{ Ecosystem = 'Terraform'; Path = 'main.tf'; Owners = '@Azure/module-reviewers' }
-        @{ Ecosystem = 'Terraform'; Path = 'modules/child/main.tf'; Owners = '@Azure/module-reviewers' }
-        @{ Ecosystem = 'Terraform'; Path = '.github/CODEOWNERS'; Owners = '@Azure/file-reviewers' }
-        @{ Ecosystem = 'Terraform'; Path = 'modules/child/metadata.json.bak'; Owners = '@Azure/module-reviewers' }
-        @{ Ecosystem = 'Terraform'; Path = 'modules/child/other-metadata.json'; Owners = '@Azure/module-reviewers' }
-        @{ Ecosystem = 'Terraform'; Path = 'modules/child/Metadata.json'; Owners = '@Azure/module-reviewers' }
-        @{ Ecosystem = 'Bicep'; Path = 'README.md'; Owners = '@Azure/azure-verified-modules-tooling-contributors' }
-        @{ Ecosystem = 'Bicep'; Path = '.github/CODEOWNERS'; Owners = '@Azure/azure-verified-modules-tooling-contributors' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/main.bicep'; Owners = '@alice @Azure/azure-verified-modules-module-owners' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/child/main.bicep'; Owners = '@alice @Azure/azure-verified-modules-module-owners' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/child/metadata.json.bak'; Owners = '@alice @Azure/azure-verified-modules-module-owners' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/child/other-metadata.json'; Owners = '@alice @Azure/azure-verified-modules-module-owners' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/child/Metadata.json'; Owners = '@alice @Azure/azure-verified-modules-module-owners' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/tests/avm.core.team.tests.ps1'; Owners = '@Azure/azure-verified-modules-tooling-contributors' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/test/parent/tests/default.e2eignore'; Owners = '@Azure/azure-verified-modules-tooling-contributors' }
-        @{ Ecosystem = 'Bicep'; Path = 'avm/res/unindexed/module/main.bicep'; Owners = '@Azure/azure-verified-modules-module-owners' }
+    It 'preserves unrelated ownership for <Path>' -ForEach @(
+        @{ Path = 'main.tf'; Owners = '@Azure/module-reviewers' }
+        @{ Path = 'modules/child/main.tf'; Owners = '@Azure/module-reviewers' }
+        @{ Path = '.github/CODEOWNERS'; Owners = '@Azure/file-reviewers' }
+        @{ Path = 'modules/child/metadata.json.bak'; Owners = '@Azure/module-reviewers' }
+        @{ Path = 'modules/child/other-metadata.json'; Owners = '@Azure/module-reviewers' }
+        @{ Path = 'modules/child/Metadata.json'; Owners = '@Azure/module-reviewers' }
     ) {
-        $actual = @(Get-TestCodeownersForPath -Content $script:contents[$Ecosystem] -Path $Path)
+        $actual = @(Get-TestCodeownersForPath -Content $script:content -Path $Path)
         ($actual -join ' ') | Should -BeExactly $Owners
     }
 
     It 'protects metadata without introducing a default owner when Terraform team lists are empty' {
         $content = ConvertTo-TerraformCodeowners -Organization Azure -DefaultTeams @() `
-            -FileProtectionTeams @() -Template $script:templates.Terraform
+            -FileProtectionTeams @() -Template $script:template
         @(Get-TestCodeownersForPath -Content $content -Path 'modules/child/metadata.json') |
             Should -Be @('@Azure/azure-verified-modules-engineering-owners', '@Azure/azure-verified-modules-module-owners')
         @(Get-TestCodeownersForPath -Content $content -Path 'modules/child/main.tf') | Should -BeNullOrEmpty

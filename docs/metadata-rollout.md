@@ -132,6 +132,13 @@ commands to bypass the compatible-release prerequisite.
 
 ## Bicep file adoption and CODEOWNERS
 
+> **Update:** Bicep CODEOWNERS synchronization has been removed from the
+> `repository-management-bicep-sync.yml` workflow and the codebase (the
+> `repository-management/bicep-codeowners-sync/` module is gone). That
+> workflow now only runs the BAMI test-tenant variable sync
+> (`sync-test-tenant-variables`). The historical notes below describe the
+> retired feature and are kept for context only.
+
 The Bicep files, compatible governance tests, ownership rule and tools generator
 are already merged. Verify their current state rather than attempting to merge
 the old branches again.
