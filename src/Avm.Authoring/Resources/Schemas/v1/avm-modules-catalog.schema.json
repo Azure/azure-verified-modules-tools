@@ -57,15 +57,46 @@
     "owners": {
       "type": "array",
       "uniqueItems": true,
+      "description": "Ordered GitHub owners. User display names are profile names; team display names are team descriptions. Display names are null when unavailable.",
       "items": {
-        "type": "string",
-        "anyOf": [
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "handle", "type", "displayName" ],
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "A bare GitHub username for user owners or a qualified @organization/team-slug for team owners."
+          },
+          "type": {
+            "enum": [ "user", "team" ],
+            "description": "Identifies whether the handle refers to a GitHub user or team."
+          },
+          "displayName": {
+            "$ref": "#/definitions/nullableText",
+            "description": "The GitHub user profile name or team description, or null when unavailable."
+          }
+        },
+        "allOf": [
           {
-            "maxLength": 39,
-            "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+            "if": { "properties": { "type": { "const": "user" } } },
+            "then": {
+              "properties": {
+                "handle": {
+                  "maxLength": 39,
+                  "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+                }
+              }
+            }
           },
           {
-            "pattern": "^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
+            "if": { "properties": { "type": { "const": "team" } } },
+            "then": {
+              "properties": {
+                "handle": {
+                  "pattern": "^@[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
+                }
+              }
+            }
           }
         ]
       }
@@ -106,7 +137,7 @@
     "module": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Identity is (ecosystem, repository, modulePath), not canonicalType alone. Owner strings are usernames or qualified team handles.",
+      "description": "Identity is (ecosystem, repository, modulePath), not canonicalType alone. Owners identify GitHub users or qualified teams and include nullable profile display data.",
       "required": [
         "ecosystem", "moduleType", "moduleStatus", "moduleName", "modulePath", "repository",
         "repoURL", "parentModule", "familyModule", "provider",

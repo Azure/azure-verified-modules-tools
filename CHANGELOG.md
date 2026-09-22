@@ -65,6 +65,10 @@ section when cutting a release.
 
 ### Changed
 
+- The combined module catalog now publishes each owner as a structured
+  `handle`, `type`, and nullable `displayName` object. User display names come
+  from GitHub profile names, while Azure team display names come from team
+  descriptions; authored metadata continues to use handle strings.
 - Commands no longer query PowerShell Gallery or require the latest
   `Avm.Authoring` version before running. Use `avm update` to explicitly check
   for and install an update. Source builds identify themselves with the

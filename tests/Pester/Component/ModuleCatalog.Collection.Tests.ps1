@@ -387,7 +387,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         (Get-AvmCatalogTerraformRegistry -Identity $identity).Root.status | Should -BeExactly 'not-published'
     }
 
-    It 'caches every migrated user and team across modules and permits profiles with no personal name' {
+    It 'caches every migrated user and team across modules with nullable display data' {
         $owners = @('owner-one', '@Azure/avm-core-modules', '@Azure/second-team')
         $inventory = [pscustomobject]@{
             Mar = @('avm/res/test/module', 'avm/res/test/other')
@@ -405,7 +405,10 @@ Describe 'Component: module catalog registry collection' -Tag Component {
                     $data["g$($match.Groups[1].Value)"] = @{ login = 'owner-one'; name = $null; __typename = 'User' }
                 }
                 foreach ($match in [regex]::Matches($query, 'g(\d+): organization\(login: "Azure"\) \{ team\(slug: "([^"]+)"\)')) {
-                    $data["g$($match.Groups[1].Value)"] = @{ team = @{ slug = $match.Groups[2].Value; organization = @{ login = 'Azure' } } }
+                    $description = if ($match.Groups[2].Value -eq 'avm-core-modules') { 'Maintains AVM core modules.' } else { $null }
+                    $data["g$($match.Groups[1].Value)"] = @{
+                        team = @{ slug = $match.Groups[2].Value; description = $description; organization = @{ login = 'Azure' } }
+                    }
                 }
             }
             [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value @{ data = $data } }
@@ -414,12 +417,15 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         $enrichment.GitHub.users.Count | Should -Be 1
         $enrichment.GitHub.teams.Count | Should -Be 2
         $enrichment.GitHub.users['owner-one'].name | Should -BeNullOrEmpty
+        $enrichment.GitHub.teams['@Azure/avm-core-modules'].description | Should -BeExactly 'Maintains AVM core modules.'
+        $enrichment.GitHub.teams['@Azure/second-team'].description | Should -BeNullOrEmpty
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -Exactly -ParameterFilter {
             if (@($Requests).Count -ne 1 -or $Requests[0].Method -ne 'POST' -or [string]$Requests[0].Uri -ne 'https://api.github.com/graphql' -or -not $Requests[0].Body) {
                 return $false
             }
             $query = (ConvertFrom-Json -InputObject $Requests[0].Body -AsHashtable).query
             $query -match 'user\(login: "owner-one"\)' -and
+            $query -match 'team\(slug: "avm-core-modules"\) \{ slug description organization' -and
             @([regex]::Matches($query, 'organization\(login: "Azure"\) \{ team\(slug: "[^"]+"\)')).Count -eq 2
         }
     }

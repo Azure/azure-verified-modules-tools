@@ -365,8 +365,11 @@ Download the `module-metadata-catalog` artifact. Check:
   `test-` CSV is included in the publication write list.
 - Child CSV `AlternativeNames` and `Comments` are unchanged, including blank
   cells. They must not be replaced with the parent's values.
-- `v1/modules.json` includes every owner, distinct implementations, and children
-  with inherited ownership. Check representative deprecated/unowned modules.
+- `v1/modules.json` includes every owner as a `handle`, `type`, and nullable
+  `displayName` object, distinct implementations, and children with inherited
+  ownership. `user` display names are GitHub profile names; `team` display names
+  are GitHub team descriptions. Check representative user, team,
+  deprecated, and unowned modules.
 - The artifact-only migration report explains every missing/unresolved module and parity gap.
   Its `sourceCsvRows` contains the source identity snapshots, `csvRowRemovals`
   lists other removed `sourceFile`, `moduleName`, and `repoURL` values, and

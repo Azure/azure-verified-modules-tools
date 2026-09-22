@@ -551,7 +551,7 @@ function Get-AvmCatalogInventory {
 function Resolve-AvmCatalogOwnerProfiles {
     [CmdletBinding()]
     param(
-        [AllowEmptyCollection()][string[]] $Owners,
+        [AllowEmptyCollection()][object[]] $Owners,
         [System.Collections.IDictionary] $Cache,
         [System.Collections.Generic.List[string]] $Missing
     )
@@ -559,42 +559,56 @@ function Resolve-AvmCatalogOwnerProfiles {
     if ($Cache['users'] -isnot [System.Collections.IDictionary] -or $Cache['teams'] -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('GitHub cache requires users and teams dictionaries.')
     }
-    $names = [System.Collections.Generic.List[string]]::new()
-    foreach ($handle in @($Owners | Where-Object { -not $_.StartsWith('@') })) {
-        if (-not $Cache.users.Contains($handle)) {
-            throw [System.IO.InvalidDataException]::new("GitHub profile cache is missing owner $handle.")
+    $profiles = [System.Collections.Generic.List[object]]::new()
+    foreach ($owner in $Owners) {
+        $handle = if ($owner -is [System.Collections.IDictionary] -and $owner.Contains('handle')) {
+            [string]$owner.handle
         }
-        $profile = $Cache.users[$handle]
-        if ($null -eq $profile) {
+        elseif ($owner -is [string]) {
+            $owner
+        }
+        else {
+            throw [System.IO.InvalidDataException]::new('Catalog owners must be handle strings or generated owner records.')
+        }
+        if (-not $handle.StartsWith('@')) {
+            if (-not $Cache.users.Contains($handle)) {
+                throw [System.IO.InvalidDataException]::new("GitHub profile cache is missing owner $handle.")
+            }
+            $profile = $Cache.users[$handle]
+            if ($null -eq $profile) {
+                if ($null -ne $Missing) {
+                    $Missing.Add($handle)
+                }
+                $profiles.Add([ordered]@{ handle = $handle; type = 'user'; displayName = $null })
+                continue
+            }
+            if ($profile.login -ine $handle -or $profile.type -cnotin @('User', 'Bot') -or
+                -not $profile.Contains('name') -or ($null -ne $profile.name -and $profile.name -isnot [string])) {
+                throw [System.IO.InvalidDataException]::new("GitHub profile cache does not validate owner $handle.")
+            }
+            $profiles.Add([ordered]@{ handle = $handle; type = 'user'; displayName = $profile.name })
+            continue
+        }
+
+        $parts = $handle.Substring(1).Split('/')
+        if ($parts[0] -cne 'Azure' -or -not $Cache.teams.Contains($handle)) {
+            throw [System.IO.InvalidDataException]::new("GitHub team cache is missing Azure owner team $handle.")
+        }
+        $entry = $Cache.teams[$handle]
+        if ($null -eq $entry) {
             if ($null -ne $Missing) {
                 $Missing.Add($handle)
             }
-            $names.Add('')
+            $profiles.Add([ordered]@{ handle = $handle; type = 'team'; displayName = $null })
             continue
         }
-        if ($profile.login -ine $handle -or $profile.type -cnotin @('User', 'Bot') -or
-            -not $profile.Contains('name') -or ($null -ne $profile.name -and $profile.name -isnot [string])) {
-            throw [System.IO.InvalidDataException]::new("GitHub profile cache does not validate owner $handle.")
+        if ($entry.slug -cne $parts[1] -or $entry.organization -cne 'Azure' -or
+            -not $entry.Contains('description') -or ($null -ne $entry.description -and $entry.description -isnot [string])) {
+            throw [System.IO.InvalidDataException]::new("GitHub team cache does not validate $handle.")
         }
-        $names.Add([string]$profile.name)
+        $profiles.Add([ordered]@{ handle = $handle; type = 'team'; displayName = $entry.description })
     }
-    foreach ($team in @($Owners | Where-Object { $_.StartsWith('@') })) {
-        $parts = $team.Substring(1).Split('/')
-        if ($parts[0] -cne 'Azure' -or -not $Cache.teams.Contains($team)) {
-            throw [System.IO.InvalidDataException]::new("GitHub team cache is missing Azure owner team $team.")
-        }
-        $entry = $Cache.teams[$team]
-        if ($null -eq $entry) {
-            if ($null -ne $Missing) {
-                $Missing.Add($team)
-            }
-            continue
-        }
-        if ($entry.slug -cne $parts[1] -or $entry.organization -cne 'Azure') {
-            throw [System.IO.InvalidDataException]::new("GitHub team cache does not validate $team.")
-        }
-    }
-    return ,$names.ToArray()
+    return ,$profiles.ToArray()
 }
 
 function New-AvmCatalogBundle {
@@ -675,7 +689,7 @@ function New-AvmCatalogBundle {
         }
         if ($record.metadataSource -eq 'metadata') {
             $missingOwners = [System.Collections.Generic.List[string]]::new()
-            $names = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub -Missing $missingOwners
+            $ownerProfiles = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub -Missing $missingOwners
             if ($missingOwners.Count -gt 0 -and
                 -not ($record.moduleStatus -ceq 'Deprecated' -and $record.registry.status -ceq 'not-published')) {
                 $ownerDefects.Add([ordered]@{
@@ -685,8 +699,8 @@ function New-AvmCatalogBundle {
                         owners = @($missingOwners)
                     })
             }
-            $owners = @($record.owners | Where-Object { -not $_.StartsWith('@') })
-            $teams = @($record.owners | Where-Object { $_.StartsWith('@') })
+            $owners = @($ownerProfiles | Where-Object { $_.type -ceq 'user' })
+            $teams = @($ownerProfiles | Where-Object { $_.type -ceq 'team' })
             $values = @{
                 ModuleDisplayName = $record.moduleDisplayName
                 ModuleName = $record.moduleName
@@ -695,11 +709,11 @@ function New-AvmCatalogBundle {
                 RepoURL = $record.repoURL
                 PublicRegistryReference = $record.publicRegistryReference
                 TelemetryIdPrefix = [string]$record.telemetryIdPrefix
-                PrimaryModuleOwnerGHHandle = if ($owners.Count -gt 0) { $owners[0] } else { '' }
-                PrimaryModuleOwnerDisplayName = if ($names.Count -gt 0) { $names[0] } else { '' }
-                SecondaryModuleOwnerGHHandle = if ($owners.Count -gt 1) { $owners[1] } else { '' }
-                SecondaryModuleOwnerDisplayName = if ($names.Count -gt 1) { $names[1] } else { '' }
-                ModuleOwnersGHTeam = if ($teams.Count -gt 0) { $teams[0] } else { '' }
+                PrimaryModuleOwnerGHHandle = if ($owners.Count -gt 0) { $owners[0].handle } else { '' }
+                PrimaryModuleOwnerDisplayName = if ($owners.Count -gt 0) { [string]$owners[0].displayName } else { '' }
+                SecondaryModuleOwnerGHHandle = if ($owners.Count -gt 1) { $owners[1].handle } else { '' }
+                SecondaryModuleOwnerDisplayName = if ($owners.Count -gt 1) { [string]$owners[1].displayName } else { '' }
+                ModuleOwnersGHTeam = if ($teams.Count -gt 0) { $teams[0].handle } else { '' }
                 Description = $record.moduleDescription
                 FirstPublishedIn = [string]$record.registry.firstPublishedIn
                 ProviderNamespace = [string]$record.providerNamespace
@@ -714,6 +728,7 @@ function New-AvmCatalogBundle {
                     $item.Row[$column] = $values[$column]
                 }
             }
+            $record.owners = $ownerProfiles
         }
         $modules[$record.canonicalType][$record.ecosystem] += $record
     }

@@ -600,7 +600,7 @@ Describe 'Component: single-segment metadata backfill' -Tag Component {
         foreach ($canonicalType in @($Canonical, 'helper')) {
             $record = $catalog.modules[$canonicalType].terraform[0]
             $record.canonicalType | Should -BeExactly $canonicalType
-            $record.owners | Should -Be @('jaredfholgate')
+            @($record.owners.handle) | Should -Be @('jaredfholgate')
             $record.provider | Should -BeExactly 'azure'
             ($null -eq $record.providerNamespace) | Should -BeTrue
             ($null -eq $record.resourceType) | Should -BeTrue
