@@ -148,9 +148,25 @@ function Invoke-AvmModuleListSync {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $desired = Get-AvmModuleListSyncCatalogModulePaths -Repository $Repository
-    $file = Get-AvmRepositoryFileAtRef -Repository $Repository -Path $IssueTemplatePath -Ref $DefaultBranch
-    $plan = Resolve-AvmModuleDropdownSync -Content $file.Content -DesiredModulePaths $desired
+    # Printed unconditionally, before any network call, so a run that dies without an
+    # exception (e.g. a process kill) still leaves an unambiguous last-seen item in the log.
+    Write-Verbose "[1/1] Syncing module dropdown for [$Repository]." -Verbose
+
+    try {
+        $desired = Get-AvmModuleListSyncCatalogModulePaths -Repository $Repository
+        $file = Get-AvmRepositoryFileAtRef -Repository $Repository -Path $IssueTemplatePath -Ref $DefaultBranch
+        $plan = Resolve-AvmModuleDropdownSync -Content $file.Content -DesiredModulePaths $desired
+    }
+    catch {
+        # A setup failure is fatal (there is nothing left to sync), but a bare rethrow can be
+        # rendered without detail by the host. Guarantee the full exception always reaches the
+        # log before propagating it unchanged.
+        Write-Host "FATAL: Failed to prepare the module dropdown sync for [$Repository]."
+        Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        Write-Host $_.ScriptStackTrace
+        throw
+    }
+
     if (-not $plan.Changed) {
         Write-Host "[AVM] $Repository module dropdown already matches the published catalog." -ForegroundColor DarkGray
         return @{ HasChanges = $false; Status = 'NoChange'; PullRequestUrl = $null }

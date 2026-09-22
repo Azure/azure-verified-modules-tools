@@ -82,8 +82,6 @@ jobs:
           UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
           WHAT_IF: ${{ inputs.what_if }}
         run: |
-          Write-Host 'Authenticating gh cli'
-          gh auth login -h 'GitHub.com'
           Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
@@ -98,3 +96,5 @@ jobs:
             -IssueUrl $env:ISSUE_URL `
             -UpdatedWithinMinutes $updatedWithinMinutes `
             -WhatIf:$whatIf
+
+          $global:LASTEXITCODE = 0

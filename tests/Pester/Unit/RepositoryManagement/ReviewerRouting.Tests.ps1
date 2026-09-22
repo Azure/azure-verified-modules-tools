@@ -272,6 +272,54 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
     }
 }
 
+Describe 'Invoke-AvmPrReviewerRouting diagnostics' {
+    BeforeEach {
+        $script:pr1 = [pscustomobject]@{
+            author = [pscustomobject]@{ login = 'contributor' }
+            number = 1
+            url = 'https://github.com/Azure/bicep-registry-modules/pull/1'
+            isDraft = $true
+            reviewRequests = @()
+            reviews = @()
+            headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+            labels = @()
+        }
+        Mock Get-AvmReviewerRoutingCatalogIndex { @{} }
+    }
+
+    It 'emits a per-item progress marker for every pull request before it is processed' {
+        Mock Get-AvmPrReviewerRoutingCandidates { @($script:pr1) }
+        $verboseOutput = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' -Verbose 4>&1 | Out-String
+        $verboseOutput | Should -Match ([regex]::Escape("[1/1] Routing pull request [$($script:pr1.url)]"))
+    }
+
+    It 'writes full exception detail and rethrows when pre-loop setup fails' {
+        Mock Get-AvmPrReviewerRoutingCandidates { throw [System.InvalidOperationException]::new('candidate fetch boom') }
+        $hostOutput = & {
+            try { Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' *>&1 }
+            catch { "THREW: $($_.Exception.Message)" }
+        } | Out-String
+        $hostOutput | Should -Match 'candidate fetch boom'
+        $hostOutput | Should -Match 'InvalidOperationException'
+        $hostOutput | Should -Match 'THREW: candidate fetch boom'
+    }
+}
+
+Describe 'Invoke-AvmPrReviewerRouting entry point diagnostics' {
+    BeforeAll {
+        $script:entryPointPath = Join-Path $root 'repository-management' 'reviewer-routing' 'scripts' 'Invoke-AvmPrReviewerRouting.ps1'
+        $script:entryPointText = Get-Content -Raw -Path $script:entryPointPath
+    }
+
+    It 'exists' {
+        Test-Path $script:entryPointPath | Should -BeTrue
+    }
+
+    It 'wraps the sweep invocation in a try/catch that prints a FATAL banner and rethrows' {
+        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmPrReviewerRouting\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
+    }
+}
+
 Describe 'Reviewer routing workflow safety' {
     BeforeAll {
         $script:workflowPath = Join-Path $root '.github' 'workflows' 'repository-management-pr-reviewer-routing.yml'
@@ -332,6 +380,22 @@ Describe 'Reviewer routing workflow safety' {
                 $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
             $importIndex | Should -BeGreaterThan -1
             $importIndex | Should -BeLessThan $scriptIndex
+        }
+    }
+
+    It 'uses GH_TOKEN directly and clears native exit status after the work script' {
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $workRunBlocks) {
+            $runBody = $match.Groups['body'].Value
+            $runBody | Should -Not -Match '(?m)^\s*gh auth login\b'
+            $scriptIndex = [System.Text.RegularExpressions.Regex]::Match(
+                $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
+            $resetIndex = $runBody.LastIndexOf('$global:LASTEXITCODE = 0')
+            $resetIndex | Should -BeGreaterThan $scriptIndex
+            $runBody | Should -Match '(?s)\$global:LASTEXITCODE\s*=\s*0\s*\z'
         }
     }
 }

@@ -201,6 +201,57 @@ Describe 'Set-AvmIssueOwnerRoutingForIssue' {
     }
 }
 
+Describe 'Invoke-AvmIssueOwnerRouting diagnostics' {
+    BeforeEach {
+        $script:issue1 = [pscustomobject]@{
+            number    = 42
+            title     = '[AVM CI Environment Issue]: not a module issue'
+            body      = 'no module line here'
+            url       = 'https://github.com/Azure/bicep-registry-modules/issues/42'
+            createdAt = (Get-Date).ToUniversalTime().ToString('o')
+            updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+            author    = [pscustomobject]@{ login = 'contributor' }
+            assignees = @()
+            labels    = @()
+            comments  = @()
+        }
+        Mock Get-AvmReviewerRoutingCatalogIndex { @{} }
+        Mock Get-AvmIssueOwnerRoutingTimeline { @() }
+    }
+
+    It 'emits a per-item progress marker for every issue before it is processed' {
+        Mock Get-AvmIssueOwnerRoutingCandidates { @($script:issue1) }
+        $verboseOutput = Invoke-AvmIssueOwnerRouting -Repository 'Azure/bicep-registry-modules' -Verbose 4>&1 | Out-String
+        $verboseOutput | Should -Match ([regex]::Escape("[1/1] Routing issue [$($script:issue1.url)]"))
+    }
+
+    It 'writes full exception detail and rethrows when pre-loop setup fails' {
+        Mock Get-AvmIssueOwnerRoutingCandidates { throw [System.InvalidOperationException]::new('candidate fetch boom') }
+        $hostOutput = & {
+            try { Invoke-AvmIssueOwnerRouting -Repository 'Azure/bicep-registry-modules' *>&1 }
+            catch { "THREW: $($_.Exception.Message)" }
+        } | Out-String
+        $hostOutput | Should -Match 'candidate fetch boom'
+        $hostOutput | Should -Match 'InvalidOperationException'
+        $hostOutput | Should -Match 'THREW: candidate fetch boom'
+    }
+}
+
+Describe 'Invoke-AvmIssueOwnerRouting entry point diagnostics' {
+    BeforeAll {
+        $script:entryPointPath = Join-Path $root 'repository-management' 'reviewer-routing' 'scripts' 'Invoke-AvmIssueOwnerRouting.ps1'
+        $script:entryPointText = Get-Content -Raw -Path $script:entryPointPath
+    }
+
+    It 'exists' {
+        Test-Path $script:entryPointPath | Should -BeTrue
+    }
+
+    It 'wraps the sweep invocation in a try/catch that prints a FATAL banner and rethrows' {
+        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmIssueOwnerRouting\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
+    }
+}
+
 Describe 'Issue owner routing workflow safety' {
     BeforeAll {
         $script:workflowPath = Join-Path $root '.github' 'workflows' 'repository-management-issue-owner-routing.yml'
@@ -261,6 +312,22 @@ Describe 'Issue owner routing workflow safety' {
                 $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
             $importIndex | Should -BeGreaterThan -1
             $importIndex | Should -BeLessThan $scriptIndex
+        }
+    }
+
+    It 'uses GH_TOKEN directly and clears native exit status after the work script' {
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $workRunBlocks) {
+            $runBody = $match.Groups['body'].Value
+            $runBody | Should -Not -Match '(?m)^\s*gh auth login\b'
+            $scriptIndex = [System.Text.RegularExpressions.Regex]::Match(
+                $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
+            $resetIndex = $runBody.LastIndexOf('$global:LASTEXITCODE = 0')
+            $resetIndex | Should -BeGreaterThan $scriptIndex
+            $runBody | Should -Match '(?s)\$global:LASTEXITCODE\s*=\s*0\s*\z'
         }
     }
 }

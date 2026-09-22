@@ -75,8 +75,6 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           WHAT_IF: ${{ inputs.what_if }}
         run: |
-          Write-Host 'Authenticating gh cli'
-          gh auth login -h 'GitHub.com'
           Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
@@ -85,3 +83,5 @@ jobs:
           ./repository-management/workflow-failure-issues/scripts/Invoke-AvmWorkflowFailureIssues.ps1 `
             -Repository 'Azure/bicep-registry-modules' `
             -WhatIf:$whatIf
+
+          $global:LASTEXITCODE = 0

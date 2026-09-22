@@ -278,14 +278,31 @@ function Invoke-AvmWorkflowFailureIssues {
         [string] $DefaultRef = 'main'
     )
 
-    $workflows = @(Get-AvmWorkflowFailureWorkflows -Repository $Repository)
-    Write-Verbose "Evaluating [$($workflows.Count)] workflow(s) in [$Repository]." -Verbose
-
-    $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository)
-    $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+    try {
+        $workflows = @(Get-AvmWorkflowFailureWorkflows -Repository $Repository)
+        Write-Verbose "Evaluating [$($workflows.Count)] workflow(s) in [$Repository]." -Verbose
+        $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository)
+        $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+    }
+    catch {
+        # A pre-loop setup failure is fatal (there is nothing left to sweep), but a bare
+        # rethrow can be rendered without detail by the host. Guarantee the full exception
+        # always reaches the log before propagating it unchanged.
+        Write-Host "FATAL: Failed to prepare the workflow failure issue sweep for [$Repository]."
+        Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        Write-Host $_.ScriptStackTrace
+        throw
+    }
 
     $failures = [System.Collections.Generic.List[string]]::new()
+    $total = $workflows.Count
+    $index = 0
     foreach ($workflow in $workflows) {
+        $index++
+        # Printed unconditionally, before any network call for this workflow, so a run that
+        # dies without an exception (e.g. a process kill) still leaves an unambiguous
+        # last-seen item in the log, independent of gh's own argument echo.
+        Write-Verbose "[$index/$total] Checking workflow [$($workflow.name)]." -Verbose
         try {
             $latestRun = Get-AvmWorkflowFailureLatestRun -Repository $Repository -WorkflowId $workflow.id -Branch $Branch
             if ($null -eq $latestRun) {

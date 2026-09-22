@@ -244,12 +244,30 @@ function Invoke-AvmIssueOwnerRouting {
         [string] $DefaultRef = 'main'
     )
 
-    $issues = @(Get-AvmIssueOwnerRoutingCandidates -Repository $Repository -IssueUrl $IssueUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
-    Write-Verbose "Processing [$($issues.Count)] module issue(s) in [$Repository]." -Verbose
+    try {
+        $issues = @(Get-AvmIssueOwnerRoutingCandidates -Repository $Repository -IssueUrl $IssueUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
+        Write-Verbose "Processing [$($issues.Count)] module issue(s) in [$Repository]." -Verbose
+        $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+    }
+    catch {
+        # A pre-loop setup failure is fatal (there is nothing left to sweep), but a bare
+        # rethrow can be rendered without detail by the host. Guarantee the full exception
+        # always reaches the log before propagating it unchanged.
+        Write-Host "FATAL: Failed to prepare the issue owner routing sweep for [$Repository]."
+        Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        Write-Host $_.ScriptStackTrace
+        throw
+    }
 
-    $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
     $failures = [System.Collections.Generic.List[string]]::new()
+    $total = $issues.Count
+    $index = 0
     foreach ($issue in $issues) {
+        $index++
+        # Printed unconditionally, before any network call for this issue, so a run that dies
+        # without an exception (e.g. a process kill) still leaves an unambiguous last-seen
+        # item in the log, independent of gh's own argument echo.
+        Write-Verbose "[$index/$total] Routing issue [$($issue.url)]." -Verbose
         try {
             Set-AvmIssueOwnerRoutingForIssue -Issue $issue -Repository $Repository -CatalogIndex $catalogIndex -DefaultRef $DefaultRef -WhatIf:$WhatIfPreference
         }

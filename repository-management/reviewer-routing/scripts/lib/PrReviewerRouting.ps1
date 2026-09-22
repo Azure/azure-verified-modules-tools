@@ -217,12 +217,30 @@ function Invoke-AvmPrReviewerRouting {
         [int] $UpdatedWithinMinutes = 0
     )
 
-    $pullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
-    Write-Verbose "Processing [$($pullRequests.Count)] pull request(s) in [$Repository]." -Verbose
+    try {
+        $pullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
+        Write-Verbose "Processing [$($pullRequests.Count)] pull request(s) in [$Repository]." -Verbose
+        $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+    }
+    catch {
+        # A pre-loop setup failure is fatal (there is nothing left to sweep), but a bare
+        # rethrow can be rendered without detail by the host. Guarantee the full exception
+        # always reaches the log before propagating it unchanged.
+        Write-Host "FATAL: Failed to prepare the pull request reviewer routing sweep for [$Repository]."
+        Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        Write-Host $_.ScriptStackTrace
+        throw
+    }
 
-    $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
     $failures = [System.Collections.Generic.List[string]]::new()
+    $total = $pullRequests.Count
+    $index = 0
     foreach ($pr in $pullRequests) {
+        $index++
+        # Printed unconditionally, before any network call for this pull request, so a run
+        # that dies without an exception (e.g. a process kill) still leaves an unambiguous
+        # last-seen item in the log, independent of gh's own argument echo.
+        Write-Verbose "[$index/$total] Routing pull request [$($pr.url)]." -Verbose
         try {
             Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository -CatalogIndex $catalogIndex -WhatIf:$WhatIfPreference
         }

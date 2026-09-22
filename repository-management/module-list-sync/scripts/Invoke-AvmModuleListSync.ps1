@@ -23,4 +23,13 @@ $reviewerRoutingLibDir = Join-Path $repositoryRoot 'repository-management' 'revi
 $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'ModuleListSync.ps1')
 
-Invoke-AvmModuleListSync -Repository $Repository -DefaultBranch $DefaultBranch -WhatIf:$WhatIfPreference
+try {
+    Invoke-AvmModuleListSync -Repository $Repository -DefaultBranch $DefaultBranch -WhatIf:$WhatIfPreference
+}
+catch {
+    # Defense-in-depth: guarantee full exception detail always reaches the workflow log,
+    # then rethrow so the step still fails with a non-zero exit code exactly as today.
+    Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+    Write-Host $_.ScriptStackTrace
+    throw
+}
