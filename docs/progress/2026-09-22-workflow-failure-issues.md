@@ -9,7 +9,7 @@ status: complete
 Part of porting the metadata-driven AVM PR/issue routing tooling that
 `Azure/bicep-registry-modules#7378` removes from that repository (see
 `docs/progress/2026-09-22-pr-reviewer-routing.md` and
-`docs/progress/2026-09-23-issue-owner-routing.md` for slices 1 and 2). This
+`docs/progress/2026-09-22-issue-owner-routing.md` for slices 1 and 2). This
 slice ports `Set-AvmGitHubIssueForWorkflow.ps1` /
 `platform.manage-workflow-issue.yml`, recovered from
 `Azure/bicep-registry-modules` git history at commit `2eb210dbb`.

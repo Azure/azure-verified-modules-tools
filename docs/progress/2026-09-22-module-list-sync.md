@@ -9,8 +9,8 @@ status: complete
 Final slice of porting the metadata-driven AVM PR/issue routing tooling
 that `Azure/bicep-registry-modules#7378` removes from that repository (see
 `docs/progress/2026-09-22-pr-reviewer-routing.md`,
-`docs/progress/2026-09-23-issue-owner-routing.md`, and
-`docs/progress/2026-09-24-workflow-failure-issues.md` for slices 1-3).
+`docs/progress/2026-09-22-issue-owner-routing.md`, and
+`docs/progress/2026-09-22-workflow-failure-issues.md` for slices 1-3).
 This slice ports `Sync-AvmModulesList.ps1` /
 `platform.sync-avm-modules-list.yml`, recovered from
 `Azure/bicep-registry-modules` git history at commit `2eb210dbb`.
