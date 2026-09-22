@@ -121,6 +121,7 @@ function Invoke-RepositoryFileSync {
         [Parameter(Mandatory)] [string] $DefaultBranch,
         [switch] $PlanOnly,
         [switch] $ReviewOnly,
+        [switch] $PlanHasChanges,
         [scriptblock] $Prepare,
         [hashtable] $GeneratedFiles = @{},
         [string[]] $AllowedPaths = @(),
@@ -144,6 +145,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     $ErrorActionPreference = 'Stop'
     $result = @{ HasChanges = $false; Status = 'NoChange'; PullRequestUrl = $null; HeadSha = $null }
     if (-not $PSCmdlet.ShouldProcess($Repository, 'Prepare repository synchronization changes')) {
+        $result.HasChanges = $PlanHasChanges.IsPresent
         $result.Status = 'Preview'
         return $result
     }
