@@ -31,6 +31,21 @@ fix); it branches from `main` and does not touch that branch.
 - No other module-list-sync behavior (sorting, PR body generation, workflow
   triggers) changed.
 
+## Observed pre-existing convention (unchanged by this slice)
+
+`Get-AvmModuleListSyncCatalogModulePaths` filters purely on `moduleStatus`
+plus an `avm/(res|ptn|utl)/...` category-prefix regex match on `modulePath`;
+it has no top-level-vs-child-module distinction, and
+`Get-AvmReviewerRoutingCatalogIndex` (which supplies the flattened catalog
+index) likewise does not filter by module depth — it just maps every
+`bicep` entry under `catalog.modules` for the target repository into
+`modulePath -> entry`. So the dropdown already admits any catalog entry
+matching the category prefix and included status, whether that entry
+represents a top-level or a child module; this slice's status-inclusion
+change (`Available` + `Orphaned`) does not alter that existing behavior in
+either direction and this remains a separate, unaddressed question left for
+a future explicit decision if a top-level-only filter is ever wanted.
+
 ## Checklist
 
 - [x] Read `AGENTS.md`, `docs/progress.md`, active/blocked progress slices,
