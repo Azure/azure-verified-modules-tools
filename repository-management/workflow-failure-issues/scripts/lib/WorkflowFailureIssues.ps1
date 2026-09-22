@@ -46,10 +46,17 @@ function Get-AvmWorkflowFailureWorkflows {
     [OutputType([object[]])]
     param([Parameter(Mandatory)] [string] $Repository)
 
-    $workflows = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
-        'api', '--paginate', "repos/$Repository/actions/workflows?per_page=100", '--hostname', 'github.com',
-        '--jq', '.workflows[] | select(.state == "active") | {id, name}'
+    # `repos/{repo}/actions/workflows` is an object endpoint (each page is
+    # `{total_count, workflows: [...]}`), so `--paginate` alone concatenates
+    # whole page objects back-to-back, which is not valid JSON as a whole.
+    # `--slurp` wraps the pages into a JSON array of page-objects instead;
+    # the `.workflows` projection then has to happen client-side because a
+    # streaming `--jq` filter is also incompatible with the single-document
+    # parse `-AsJson` performs.
+    $pages = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'api', '--paginate', '--slurp', "repos/$Repository/actions/workflows?per_page=100", '--hostname', 'github.com'
     ))
+    $workflows = @($pages | ForEach-Object { $_.workflows } | Where-Object { $_.state -eq 'active' } | Select-Object id, name)
     return @($workflows | Where-Object {
             $_.name -match $script:AvmWorkflowFailureWorkflowFilter -and
             $script:AvmWorkflowFailureIgnoredWorkflowNames -notcontains $_.name
@@ -110,12 +117,17 @@ function Get-AvmWorkflowFailureIssueCommentsToday {
         [Parameter(Mandatory)] [int] $Number
     )
 
+    # This endpoint is a top-level array, so `--paginate` merges pages
+    # correctly on its own. `--jq '.[].body'` is dropped because it emits
+    # each comment's raw markdown body as a bare text stream (one value per
+    # comment), which `-AsJson`'s single-document parse cannot read; the
+    # `.body` projection is done client-side instead.
     $since = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddT00:00:00Z')
     $comments = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
         'api', '--paginate', "repos/$Repository/issues/$Number/comments?since=$since&per_page=100",
-        '--hostname', 'github.com', '--jq', '.[].body'
+        '--hostname', 'github.com'
     ))
-    return @($comments | ForEach-Object { [string]$_ })
+    return @($comments | ForEach-Object { [string]$_.body })
 }
 
 function Get-AvmWorkflowFailureModuleReference {
