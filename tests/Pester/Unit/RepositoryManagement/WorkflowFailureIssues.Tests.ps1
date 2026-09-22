@@ -20,6 +20,55 @@ Describe 'Get-AvmWorkflowFailureModuleReference' {
     }
 }
 
+Describe 'Get-AvmWorkflowFailureWorkflows' {
+    It 'slurps the paginated object-shaped workflows endpoint and never uses --jq' {
+        Mock Invoke-RepositoryGitHub {
+            @(
+                [pscustomobject]@{
+                    workflows = @(
+                        [pscustomobject]@{ id = 1; name = 'avm.res.storage.storage-account'; state = 'active' }
+                        [pscustomobject]@{ id = 2; name = 'avm.res.network.virtual-network'; state = 'disabled_manually' }
+                    )
+                }
+                [pscustomobject]@{
+                    workflows = @(
+                        [pscustomobject]@{ id = 3; name = '.Module - Check and Publish'; state = 'active' }
+                        [pscustomobject]@{ id = 4; name = '.Platform - Check PSRule'; state = 'active' }
+                    )
+                }
+            )
+        }
+
+        $workflows = Get-AvmWorkflowFailureWorkflows -Repository 'Azure/bicep-registry-modules'
+
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains '--paginate' -and
+            $Arguments -contains '--slurp' -and
+            $Arguments -notcontains '--jq'
+        }
+        $workflows.name | Should -Be @('avm.res.storage.storage-account', '.Module - Check and Publish')
+    }
+}
+
+Describe 'Get-AvmWorkflowFailureIssueCommentsToday' {
+    It 'fetches paginated comments and projects bodies client-side without --jq' {
+        Mock Invoke-RepositoryGitHub {
+            @(
+                [pscustomobject]@{ body = 'first comment' }
+                [pscustomobject]@{ body = 'second comment' }
+            )
+        }
+
+        $bodies = Get-AvmWorkflowFailureIssueCommentsToday -Repository 'Azure/bicep-registry-modules' -Number 42
+
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains '--paginate' -and
+            $Arguments -notcontains '--jq'
+        }
+        $bodies | Should -Be @('first comment', 'second comment')
+    }
+}
+
 Describe 'Resolve-AvmWorkflowFailureRouting' {
     BeforeEach {
         $script:run = [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/1' }
@@ -82,7 +131,10 @@ Describe 'Resolve-AvmWorkflowFailureRouting' {
 Describe 'Set-AvmWorkflowFailureIssueForRun' {
     BeforeEach {
         $script:run = [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/1' }
-        Mock Invoke-RepositoryGitHub { @('https://github.com/Azure/bicep-registry-modules/issues/99') }
+        # Return value is discarded by every call site except the comments
+        # fetch, which now projects `.body`; shaped as a comment object so
+        # it works there too.
+        Mock Invoke-RepositoryGitHub { @([pscustomobject]@{ body = 'https://github.com/Azure/bicep-registry-modules/issues/99' }) }
     }
 
     It 'creates, assigns, and comments on a brand new failure issue' {
