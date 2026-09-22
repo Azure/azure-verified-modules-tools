@@ -112,6 +112,8 @@ Describe 'Workflow failure issue management workflow safety' {
         $script:workflowText = Get-Content -Raw -Path $script:workflowPath
         $script:triggerBlock = [System.Text.RegularExpressions.Regex]::Match(
             $script:workflowText, '(?ms)^on:\r?\n(.*?)(?=^\S)').Groups[1].Value
+        $script:runBlocks = [System.Text.RegularExpressions.Regex]::Matches(
+            $script:workflowText, '(?ms)^        run:\s*\|\r?\n(?<body>.*?)(?=^      - |\z)')
     }
 
     It 'exists' {
@@ -144,10 +146,24 @@ Describe 'Workflow failure issue management workflow safety' {
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {
-        $runBlocks = [System.Text.RegularExpressions.Regex]::Matches($script:workflowText, '(?m)^( +)run:\s*\|\r?\n((?:\1 .*\r?\n?)*)')
-        $runBlocks.Count | Should -BeGreaterThan 0
-        foreach ($match in $runBlocks) {
-            $match.Groups[2].Value | Should -Not -Match '\$\{\{'
+        $script:runBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $script:runBlocks) {
+            $match.Groups['body'].Value | Should -Not -Match '\$\{\{'
+        }
+    }
+
+    It 'imports Avm.Authoring in the work run block before invoking the repository-management script' {
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $workRunBlocks) {
+            $runBody = $match.Groups['body'].Value
+            $importIndex = $runBody.IndexOf('Import-Module Avm.Authoring -Force -ErrorAction Stop')
+            $scriptIndex = [System.Text.RegularExpressions.Regex]::Match(
+                $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
+            $importIndex | Should -BeGreaterThan -1
+            $importIndex | Should -BeLessThan $scriptIndex
         }
     }
 }

@@ -80,6 +80,7 @@ jobs:
         run: |
           Write-Host 'Authenticating gh cli'
           gh auth login -h 'GitHub.com'
+          Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
           Write-Output "What if: $whatIf"
