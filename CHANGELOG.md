@@ -21,6 +21,14 @@ section when cutting a release.
 
 ### Added
 
+- `avm test integration --max-retry` defaults to two retries for recognized
+  Azure capacity and region-ineligible failures, matching the E2E retry bound.
+  Replay requires completed Terraform-owned teardown and preserves test
+  selection, credentials, and subscription. Assertions, authorization errors,
+  incomplete output, interruptions, and failed cleanup are never retried.
+  Earlier transient diagnostics remain visible as warnings; empty or skipped
+  integration attempts cannot report a pass. E2E and unit retry behavior is
+  unchanged.
 - Shared Bicep/Terraform `metadata.json` reading, validation, and
   non-overwriting initialization through `avm metadata show`, `avm metadata
   validate`, and `avm metadata initialize`.

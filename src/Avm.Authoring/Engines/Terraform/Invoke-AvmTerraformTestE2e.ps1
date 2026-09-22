@@ -382,68 +382,6 @@ function New-AvmE2eIssue {
     }
 }
 
-function Test-AvmTerraformTransientError {
-    <#
-    .SYNOPSIS
-        Decide whether terraform output describes a transient availability failure
-        that is worth retrying.
-
-    .DESCRIPTION
-        e2e deploys real infrastructure, so an apply fails intermittently on
-        region and SKU availability rather than on a module defect. The patterns
-        below are matched case-insensitively against terraform's combined
-        stdout+stderr and are deliberately anchored to availability, capacity,
-        and quota wording.
-
-        Broad Azure codes are excluded on purpose. 'OperationNotAllowed', for
-        example, covers both quota exhaustion and 'cannot delete resource while
-        nested resources exist'; only the former should ever be retried, and
-        matching the code would mask the latter.
-
-        $env:AVM_E2E_RETRY_PATTERN adds one further regex to the list. It is
-        additive, never a replacement, so a module hitting a capacity error the
-        built-in list does not know about can opt in without weakening the
-        defaults.
-
-    .PARAMETER Output
-        Combined terraform output to classify.
-
-    .OUTPUTS
-        System.Boolean
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $Output
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Output)) {
-        return $false
-    }
-
-    $patterns = @(
-        'SkuNotAvailable'
-        'Capacity Restrictions'
-        'is currently not available in location'
-        'sku_selector found no deployable VM size'
-        'Allocation ?Failed'
-        'results in exceeding approved'
-        'LocationNotAvailableForResourceGroup'
-        'currently experiencing high demand in .*? region'
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
-        $patterns += $env:AVM_E2E_RETRY_PATTERN
-    }
-
-    return [regex]::IsMatch(
-        $Output,
-        ($patterns -join '|'),
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-}
-
 function Invoke-AvmE2eHook {
     <#
     .SYNOPSIS

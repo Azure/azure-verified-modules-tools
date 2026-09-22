@@ -1482,10 +1482,10 @@ Three constraints make this safe rather than breaking:
 - Fix it in the **engine**, not the gauntlet. The gauntlets copy the engine
   status verbatim, so one change makes both the standalone verb and every chain
   that calls it honest. Fixing the gauntlet leaves the standalone verb lying.
-- Scope it to *nothing to run*, not *nothing happened*. A tier whose files exist
-  but execute no `run` blocks still reports `pass`; `RunsTotal = 0` is the signal
-  there, and conflating the two loses the distinction between "no tests written"
-  and "tests present but vacuous".
+- A unit tier whose files exist but execute no `run` blocks still reports
+  `pass`, with `RunsTotal = 0`. Integration targets instead fail when no runs
+  execute or any selected run is skipped, so an empty selection cannot appear
+  to recover a failed deployment. An absent integration tier remains `skipped`.
 
 The regression test that matters is the real-binary component tier on a fixture
 with no `tests/<tier>/`. A unit test asserting the returned status is easy to

@@ -35,6 +35,9 @@ function Invoke-AvmTerraformTestSuite {
              Issue shape (failing 'test_run' entries and error-level
              'diagnostic' entries), prefixing submodule paths with
              'modules/<name>/', and renders a live progress line per test run.
+          5. For integration only, retries recognized capacity failures up to
+             MaxRetry times after confirmed Terraform-owned teardown. Setup,
+             init, arguments, environment, and subscription remain unchanged.
 
         Status is 'fail' when any target reports a failing/errored run or a
         setup.ps1 hook fails; otherwise 'pass'. A terraform init failure or an
@@ -59,6 +62,9 @@ function Invoke-AvmTerraformTestSuite {
         against the module sources and providers the current configuration
         (including its .tftest.hcl files) requires.
 
+    .PARAMETER MaxRetry
+        Integration retries per target, default 2. Unit tests never retry.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
@@ -75,7 +81,10 @@ function Invoke-AvmTerraformTestSuite {
 
         [switch] $AllowPathFallback,
 
-        [switch] $NoInit
+        [switch] $NoInit,
+
+        [ValidateRange(0, 10)]
+        [int] $MaxRetry = 2
     )
 
     Set-StrictMode -Version 3.0
@@ -207,23 +216,64 @@ function Invoke-AvmTerraformTestSuite {
             Write-AvmLog ('    run {0}"{1}" -> {2} ({3})' -f $where, $name, $runEvent.Status, (Format-AvmDuration -Duration $elapsed))
         }
 
-        $result = Invoke-AvmProcess `
-            -FilePath $tool.Path `
-            -ArgumentList @('test', ('-test-directory={0}' -f $testDir), '-no-color', '-json') `
-            -WorkingDirectory $targetDir `
-            -EnvVars $envVars `
-            -StreamOutput `
-            -OnStdOutLine $progress `
-            -Label ('terraform test {0}{1}' -f $relPrefix, $testDir) `
-            -SuccessExitCode @(0, 1) `
-            -IgnoreExitCode
+        $retryAllowed = $Tier -eq 'integration' -and $MaxRetry -gt 0
+        $retryDisabledReason = ''
+        if ($retryAllowed) {
+            foreach ($file in $target.Files) {
+                if ((Get-Content -LiteralPath $file.FullName -Raw) -match '\b(skip_cleanup|state_store|backend)\b') {
+                    $retryDisabledReason = 'test configuration declares cleanup or persistent-state controls'
+                    $retryAllowed = $false
+                    break
+                }
+            }
+        }
+        $attempt = 0
+        while ($true) {
+            $runStopwatch.Restart()
+            $result = Invoke-AvmProcess `
+                -FilePath $tool.Path `
+                -ArgumentList @('test', ('-test-directory={0}' -f $testDir), '-no-color', '-json') `
+                -WorkingDirectory $targetDir `
+                -EnvVars $envVars `
+                -StreamOutput `
+                -OnStdOutLine $progress `
+                -Label ('terraform test {0}{1}' -f $relPrefix, $testDir) `
+                -SuccessExitCode @(0, 1) `
+                -IgnoreExitCode
 
+            $attemptIssues = @(ConvertFrom-AvmTerraformTestJson -Payload ([string]$result.StdOut) -TestDir $testDir -RelPrefix $relPrefix `
+                    -IncludeUnstructuredOutput:($Tier -eq 'integration' -and $result.ExitCode -ne 0))
+            if ($retryDisabledReason -and $result.ExitCode -ne 0) {
+                Write-AvmLog ('integration retries disabled for {0}{1}: {2}.' -f $relPrefix, $testDir, $retryDisabledReason) -Level Warning
+            }
+            if (-not $retryAllowed -or $attempt -ge $MaxRetry -or -not (Test-AvmTerraformTestCompleted -Result $result -RetryableFailure)) {
+                break
+            }
+            $attempt++
+            foreach ($issue in $attemptIssues) {
+                $issue.Severity = 'warning'
+                $issue.Message = 'Attempt {0}: {1}' -f $attempt, $issue.Message
+                $issues.Add($issue)
+            }
+            Write-AvmLog ('terraform test {0}{1} hit a transient capacity or region error; Terraform teardown completed, retrying ({2} of {3}).' -f $relPrefix, $testDir, $attempt, $MaxRetry) -Level Info
+        }
+
+        $targetRuns = 0
+        $targetPassed = 0
+        $targetFailed = 0
         foreach ($rawLine in ([string]$result.StdOut -split "`r?`n")) {
             $runEvent = Read-AvmTerraformTestRunEvent -Line $rawLine
             if ($null -eq $runEvent) { continue }
             $runsTotal++
-            if ($runEvent.Status -in @('fail', 'error')) { $runsFailed++ }
-            elseif ($runEvent.Status -eq 'pass') { $runsPassed++ }
+            $targetRuns++
+            if ($runEvent.Status -in @('fail', 'error')) {
+                $runsFailed++
+                $targetFailed++
+            }
+            elseif ($runEvent.Status -eq 'pass') {
+                $runsPassed++
+                $targetPassed++
+            }
         }
 
         # terraform test exit codes: 0 = all runs passed, 1 = one or more failing
@@ -238,8 +288,36 @@ function Invoke-AvmTerraformTestSuite {
         }
         if ($result.ExitCode -ne 0) { $anyFail = $true }
 
-        foreach ($issue in (ConvertFrom-AvmTerraformTestJson -Payload ([string]$result.StdOut) -TestDir $testDir -RelPrefix $relPrefix)) {
+        foreach ($issue in $attemptIssues) {
             $issues.Add($issue)
+        }
+        if ($Tier -eq 'integration') {
+            if ($targetFailed -gt 0 -or $attemptIssues.Count -gt 0) { $anyFail = $true }
+            if ($result.ExitCode -eq 0 -and
+                ($targetRuns -eq 0 -or $targetPassed -ne $targetRuns -or
+                ($attempt -gt 0 -and -not (Test-AvmTerraformTestCompleted -Result $result)))) {
+                $anyFail = $true
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = ('{0}{1}' -f $relPrefix, $testDir)
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = ''
+                        Message  = 'terraform test did not confirm a complete integration pass; skipped, empty, or incomplete retries cannot recover a failure.'
+                    })
+            }
+            if ($result.ExitCode -ne 0 -and ($attemptIssues.Count -eq 0 -or -not [string]::IsNullOrWhiteSpace($result.StdErr))) {
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = ('{0}{1}' -f $relPrefix, $testDir)
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = ''
+                        Message  = Add-AvmProcessFailureDetail `
+                            -Message ('terraform test failed (exit {0}) after {1} retries.' -f $result.ExitCode, $attempt) `
+                            -StdErr $result.StdErr
+                    })
+            }
         }
     }
 
@@ -368,6 +446,7 @@ function Read-AvmTerraformTestRunEvent {
 
     try { $obj = $trimmed | ConvertFrom-Json -ErrorAction Stop }
     catch { return $null }
+    if ($obj -isnot [pscustomobject]) { return $null }
 
     $type = if ($obj.PSObject.Properties.Name -contains 'type') { [string]$obj.type } else { '' }
     if ($type -ne 'test_run') { return $null }
@@ -402,7 +481,9 @@ function ConvertFrom-AvmTerraformTestJson {
         [string] $TestDir,
 
         [Parameter()]
-        [string] $RelPrefix = ''
+        [string] $RelPrefix = '',
+
+        [switch] $IncludeUnstructuredOutput
     )
 
     Set-StrictMode -Version 3.0
@@ -414,16 +495,65 @@ function ConvertFrom-AvmTerraformTestJson {
     foreach ($rawLine in ($Payload -split "`n")) {
         $line = $rawLine.Trim()
         if (-not $line) { continue }
-        if (-not $line.StartsWith('{')) { continue }
+        if (-not $line.StartsWith('{')) {
+            if ($IncludeUnstructuredOutput) {
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = ('{0}{1}' -f $RelPrefix, $TestDir)
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = ''
+                        Message  = $line
+                    })
+            }
+            continue
+        }
 
         try {
             $obj = $line | ConvertFrom-Json -ErrorAction Stop
         }
         catch {
+            if ($IncludeUnstructuredOutput) {
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = ('{0}{1}' -f $RelPrefix, $TestDir)
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = ''
+                        Message  = 'Malformed terraform test JSON output; automatic retry is unsafe.'
+                    })
+            }
             continue  # tolerate any non-JSON noise interleaved on the stream
         }
+        if ($obj -isnot [pscustomobject]) { continue }
 
         $type = if ($obj.PSObject.Properties.Name -contains 'type') { [string]$obj.type } else { '' }
+
+        if ($type -in @('test_cleanup', 'test_interrupt')) {
+            $file = if ($obj.PSObject.Properties['@testfile']) { [string]$obj.'@testfile' } else { $TestDir }
+            $message = if ($obj.PSObject.Properties['@message']) { [string]$obj.'@message' } else { 'Terraform test cleanup was incomplete or interrupted.' }
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = ('{0}{1}' -f $RelPrefix, $file)
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = $type
+                    Message  = $message
+                })
+            continue
+        }
+
+        if ($IncludeUnstructuredOutput -and $type -notin @('diagnostic', 'test_retry') -and
+            $obj.PSObject.Properties['@level'] -and $obj.'@level' -eq 'error' -and $obj.PSObject.Properties['@message']) {
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = ('{0}{1}' -f $RelPrefix, $TestDir)
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = $type
+                    Message  = [string]$obj.'@message'
+                })
+        }
 
         if ($type -eq 'test_run' -and ($obj.PSObject.Properties.Name -contains 'test_run') -and $obj.test_run) {
             $run = $obj.test_run
