@@ -1,0 +1,99 @@
+---
+name: Repository Management - Issue Owner Routing
+
+# Design invariants -- do not regress these without a very good reason:
+#  - workflow_dispatch only while live validation is pending, never an `issues`
+#    trigger: this run reads issue data with a privileged cross-repo app token.
+#  - Disabled schedules to restore after all four what-if validations pass:
+#    '9,24,39,54 * * * *' and '17 3 * * *'.
+on:
+  workflow_dispatch:
+    inputs:
+      issue_url:
+        description: 'Route a single issue (URL or number). Leave blank to sweep all open module issues.'
+        default: ''
+        type: string
+      updated_within_minutes:
+        description: 'Only sweep issues updated within the last N minutes. Use 0 for every open module issue.'
+        default: '60'
+        type: string
+      what_if:
+        description: 'Compute and log the routing decisions without calling gh issue edit/comment.'
+        default: true
+        type: boolean
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-management-issue-owner-routing
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  route:
+    name: '[AVM] Route module issue owners'
+    if: github.repository == 'Azure/azure-verified-modules-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: avm
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: '[AVM] Install Avm.Authoring'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              break
+            }
+            catch {
+              if ($attempt -eq $maxAttempts) {
+                throw
+              }
+              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+          Import-Module Avm.Authoring
+
+      - name: '[AVM] Create scoped issue routing token'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: bicep-registry-modules
+          permission-issues: write
+
+      - name: '[AVM] Route module issue owners'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ISSUE_URL: ${{ inputs.issue_url }}
+          UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
+          WHAT_IF: ${{ inputs.what_if }}
+        run: |
+          Write-Host 'Authenticating gh cli'
+          gh auth login -h 'GitHub.com'
+
+          $whatIf = $env:WHAT_IF -eq 'true'
+          $updatedWithinMinutes = [int]$env:UPDATED_WITHIN_MINUTES
+
+          Write-Output "Issue URL override: $($env:ISSUE_URL)"
+          Write-Output "Updated within minutes: $updatedWithinMinutes"
+          Write-Output "What if: $whatIf"
+
+          ./repository-management/reviewer-routing/scripts/Invoke-AvmIssueOwnerRouting.ps1 `
+            -Repository 'Azure/bicep-registry-modules' `
+            -IssueUrl $env:ISSUE_URL `
+            -UpdatedWithinMinutes $updatedWithinMinutes `
+            -WhatIf:$whatIf
