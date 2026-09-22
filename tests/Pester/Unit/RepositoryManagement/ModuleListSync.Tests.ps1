@@ -1,0 +1,183 @@
+BeforeAll {
+    $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+    $sharedLib = Join-Path $root 'repository-management' 'repository-sync' 'scripts' 'lib'
+    $reviewerRoutingLib = Join-Path $root 'repository-management' 'reviewer-routing' 'scripts' 'lib'
+    $lib = Join-Path $root 'repository-management' 'module-list-sync' 'scripts' 'lib'
+    . (Join-Path $sharedLib 'RetryHelpers.ps1')
+    . (Join-Path $sharedLib 'RepoTree.ps1')
+    . (Join-Path $sharedLib 'RepositoryFileSync.ps1')
+    . (Join-Path $reviewerRoutingLib 'RepositoryFileAccess.ps1')
+    . (Join-Path $reviewerRoutingLib 'ModuleOwners.ps1')
+    . (Join-Path $lib 'ModuleListSync.ps1')
+
+    function New-ModuleDropdownFixtureContent {
+        @'
+name: AVM - Module Issue
+body:
+  - type: dropdown
+    id: module-name-dropdown
+    attributes:
+      label: Module Name
+      options:
+        - ""
+        - "avm/ptn/foo/bar"
+        - "avm/ptn/foo/baz"
+        # - "avm/ptn/hidden/one"
+        - "avm/res/aaa/bbb"
+        - "avm/res/ccc/ddd"
+        - "avm/utl/types/avm-common-types"
+    validations:
+      required: true
+'@
+    }
+}
+
+Describe 'Get-AvmModuleListSyncCatalogModulePaths' {
+    It 'groups Available modules by category and drops other repositories/statuses' {
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{
+                'avm/res/aaa/bbb' = @{ modulePath = 'avm/res/aaa/bbb'; moduleStatus = 'Available' }
+                'avm/ptn/foo/bar' = @{ modulePath = 'avm/ptn/foo/bar'; moduleStatus = 'Available' }
+                'avm/res/zzz/yyy' = @{ modulePath = 'avm/res/zzz/yyy'; moduleStatus = 'Deprecated' }
+            }
+        }
+        $result = Get-AvmModuleListSyncCatalogModulePaths -Repository 'Azure/bicep-registry-modules'
+        $result.res | Should -Be @('avm/res/aaa/bbb')
+        $result.ptn | Should -Be @('avm/ptn/foo/bar')
+        $result.utl | Should -HaveCount 0
+    }
+}
+
+Describe 'Resolve-AvmModuleDropdownSync' {
+    BeforeEach {
+        $script:content = New-ModuleDropdownFixtureContent
+        $script:desired = @{
+            ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+            res = @('avm/res/aaa/bbb', 'avm/res/ccc/ddd')
+            utl = @('avm/utl/types/avm-common-types')
+        }
+    }
+
+    It 'reports no change when the dropdown already matches the catalog' {
+        $result = Resolve-AvmModuleDropdownSync -Content $script:content -DesiredModulePaths $script:desired
+        $result.Changed | Should -BeFalse
+        $result.Added | Should -HaveCount 0
+        $result.Removed | Should -HaveCount 0
+    }
+
+    It 'preserves commented-out lines untouched' {
+        $result = Resolve-AvmModuleDropdownSync -Content $script:content -DesiredModulePaths $script:desired
+        $result.Content | Should -Match '# - "avm/ptn/hidden/one"'
+    }
+
+    It 'detects a module missing from the dropdown' {
+        $script:desired.res += 'avm/res/new/module'
+        $result = Resolve-AvmModuleDropdownSync -Content $script:content -DesiredModulePaths $script:desired
+        $result.Changed | Should -BeTrue
+        $result.Added | Should -Contain 'avm/res/new/module'
+        $result.Content | Should -Match '"avm/res/new/module"'
+    }
+
+    It 'detects a module no longer in the catalog and drops it' {
+        $script:desired.res = @('avm/res/aaa/bbb')
+        $result = Resolve-AvmModuleDropdownSync -Content $script:content -DesiredModulePaths $script:desired
+        $result.Changed | Should -BeTrue
+        $result.Removed | Should -Contain 'avm/res/ccc/ddd'
+        $result.Content | Should -Not -Match '"avm/res/ccc/ddd"'
+    }
+
+    It 'corrects an out-of-order active entry' {
+        $search = "        - `"avm/res/aaa/bbb`"`n        - `"avm/res/ccc/ddd`""
+        $unsorted = $script:content.Replace(
+            $search,
+            "        - `"avm/res/ccc/ddd`"`n        - `"avm/res/aaa/bbb`"")
+        $unsorted | Should -Not -Be $script:content
+        $result = Resolve-AvmModuleDropdownSync -Content $unsorted -DesiredModulePaths $script:desired
+        $result.Changed | Should -BeTrue
+        ($result.Content -split "`n" | Where-Object { $_ -match '"avm/res/' }) | Should -Be @('        - "avm/res/aaa/bbb"', '        - "avm/res/ccc/ddd"')
+    }
+
+    It 'throws when the dropdown block cannot be found' {
+        { Resolve-AvmModuleDropdownSync -Content "no dropdown here`n" -DesiredModulePaths $script:desired } | Should -Throw
+    }
+}
+
+Describe 'New-AvmModuleListSyncPullRequestBody' {
+    It 'lists added and removed module paths' {
+        $body = New-AvmModuleListSyncPullRequestBody -Added @('avm/res/new/module') -Removed @('avm/res/old/module')
+        $body | Should -Match 'avm/res/new/module'
+        $body | Should -Match 'avm/res/old/module'
+    }
+
+    It 'omits empty added/removed sections' {
+        $body = New-AvmModuleListSyncPullRequestBody -Added @() -Removed @()
+        $body | Should -Not -Match '\*\*Added:\*\*'
+        $body | Should -Not -Match '\*\*Removed:\*\*'
+    }
+}
+
+Describe 'Invoke-AvmModuleListSync' {
+    BeforeEach {
+        Mock Get-AvmModuleListSyncCatalogModulePaths {
+            @{
+                ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+                res = @('avm/res/aaa/bbb', 'avm/res/ccc/ddd')
+                utl = @('avm/utl/types/avm-common-types')
+            }
+        }
+        Mock Get-AvmRepositoryFileAtRef { [pscustomobject]@{ Content = (New-ModuleDropdownFixtureContent); Sha = 'deadbeef' } }
+        Mock Invoke-RepositoryFileSync { @{ HasChanges = $true; Status = 'ReviewRequired'; PullRequestUrl = 'https://github.com/Azure/bicep-registry-modules/pull/1' } }
+    }
+
+    It 'does not open a pull request when the dropdown already matches the catalog' {
+        $result = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules'
+        $result.HasChanges | Should -BeFalse
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
+    It 'opens a review-required pull request through the shared sync engine when drift is found' {
+        Mock Get-AvmModuleListSyncCatalogModulePaths {
+            @{
+                ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+                res = @('avm/res/aaa/bbb', 'avm/res/ccc/ddd', 'avm/res/new/module')
+                utl = @('avm/utl/types/avm-common-types')
+            }
+        }
+        $result = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules'
+        $result.PullRequestUrl | Should -Be 'https://github.com/Azure/bicep-registry-modules/pull/1'
+        Should -Invoke Invoke-RepositoryFileSync -Times 1 -ParameterFilter {
+            $ReviewOnly -and $VerifyCandidate -and $StableBranch -eq 'avm-bot/sync-module-dropdown' -and
+            $ExpectedActor.login -eq 'azure-verified-modules[bot]' -and
+            $GeneratedFiles.ContainsKey('.github/ISSUE_TEMPLATE/avm_module_issue.yml')
+        }
+    }
+}
+
+Describe 'Module dropdown sync workflow safety' {
+    BeforeAll {
+        $script:workflowPath = Join-Path $root '.github' 'workflows' 'repository-management-module-list-sync.yml'
+        $script:workflowText = Get-Content -Raw -Path $script:workflowPath
+        $script:triggerBlock = [System.Text.RegularExpressions.Regex]::Match(
+            $script:workflowText, '(?ms)^on:\r?\n(.*?)(?=^\S)').Groups[1].Value
+    }
+
+    It 'exists' {
+        Test-Path $script:workflowPath | Should -BeTrue
+    }
+
+    It 'is triggered only by schedule and workflow_dispatch' {
+        $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
+        $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}issues:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}workflow_run:'
+    }
+
+    It 'never interpolates ${{ }} expressions directly into a run: body' {
+        $runBlocks = [System.Text.RegularExpressions.Regex]::Matches($script:workflowText, '(?m)^( +)run:\s*\|\r?\n((?:\1 .*\r?\n?)*)')
+        $runBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $runBlocks) {
+            $match.Groups[2].Value | Should -Not -Match '\$\{\{'
+        }
+    }
+}

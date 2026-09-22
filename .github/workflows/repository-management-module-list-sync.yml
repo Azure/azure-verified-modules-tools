@@ -1,0 +1,91 @@
+---
+name: Repository Management - Module List Sync
+
+# Design invariants -- do not regress these without a very good reason:
+#  - Scheduled and workflow_dispatch only. This opens pull requests with a privileged
+#    cross-repo app token and only ever needs to run once a day; there is no reason to
+#    trigger it from repository events.
+#  - The generated pull request is opened with -ReviewOnly and is never auto-merged: a
+#    human must review a module dropdown change before it lands in bicep-registry-modules.
+#  - The catalog-derived module list is compared against a stable branch/PR
+#    (avm-bot/sync-module-dropdown) so repeated runs update the same PR instead of
+#    opening a new one every day the catalog stays ahead of the template.
+on:
+  workflow_dispatch:
+    inputs:
+      what_if:
+        description: 'Compute and log the module dropdown diff without opening or updating a pull request.'
+        default: true
+        type: boolean
+  schedule:
+    - cron: '13 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-management-module-list-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  sync:
+    name: '[AVM] Sync module dropdown list'
+    if: github.repository == 'Azure/azure-verified-modules-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: avm
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: '[AVM] Install Avm.Authoring'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              break
+            }
+            catch {
+              if ($attempt -eq $maxAttempts) {
+                throw
+              }
+              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+          Import-Module Avm.Authoring
+
+      - name: '[AVM] Create scoped module-list-sync token'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: bicep-registry-modules
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: '[AVM] Sync module dropdown list'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          WHAT_IF: ${{ github.event_name == 'workflow_dispatch' && inputs.what_if }}
+        run: |
+          Write-Host 'Authenticating gh cli'
+          gh auth login -h 'GitHub.com'
+
+          $whatIf = $env:WHAT_IF -eq 'true'
+          Write-Output "What if: $whatIf"
+
+          ./repository-management/module-list-sync/scripts/Invoke-AvmModuleListSync.ps1 `
+            -Repository 'Azure/bicep-registry-modules' `
+            -WhatIf:$whatIf
