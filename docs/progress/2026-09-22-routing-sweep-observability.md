@@ -54,9 +54,11 @@ GitHub CLI refuses to store credentials while `GH_TOKEN` is set, prints that
 the environment variable is already being used, and exits 1. All later `gh`
 calls go through `Invoke-AvmProcess`, which starts
 `[System.Diagnostics.Process]` directly. Those calls do not update
-PowerShell's `$LASTEXITCODE`, so it remained 1 from `gh auth login` even after
-the sweep completed successfully. GitHub Actions' `pwsh` wrapper then exited
-with that stale value.
+PowerShell's `$LASTEXITCODE`. No later command in these four work blocks runs
+through PowerShell's native-command pipeline, so nothing resets the value from
+1 even when the sweep completes successfully. GitHub Actions' `pwsh` wrapper
+then exits with that stale value. A workflow with a later direct native command
+could reset `$LASTEXITCODE` and accidentally avoid the failure.
 
 **Conclusion**: this was a deterministic `$LASTEXITCODE` poisoning bug, not a
 runner crash and not a PR-specific library defect. No special case was added
@@ -124,16 +126,23 @@ around the entry-point script's invocation of the sweep function.
 No routing logic, labels, reviewers, or write conditions changed -- this is
 an execution-wrapper fix plus additive diagnostics.
 
-## Separate pre-existing production issue (not fixed here)
+## Latent pattern outside this slice
 
-The same `GH_TOKEN` + `gh auth login` + `Invoke-AvmProcess` pattern also exists
-in `.github/workflows/repository-management-sync.yml`. Its last five scheduled
-runs on `main` were all failures, including run
-[35729368568](https://github.com/Azure/azure-verified-modules-tools/actions/runs/35729368568),
-where a repository matrix job reported `found: 0, added: 0, failed: 0` and then
-failed from the poisoned exit code. That already-scheduled production workflow
-needs a separate follow-up fix. This slice deliberately does not modify
-`repository-management-sync.yml` or `terraform-module.yml`.
+The same `GH_TOKEN` + `gh auth login` pattern also exists in
+`.github/workflows/repository-management-sync.yml`, but that workflow is not
+currently exhibiting this exit-code failure. Its script path later invokes
+native commands such as `terraform` or `git` directly through PowerShell, which
+currently resets `$LASTEXITCODE` before the work step ends. That is an
+accidental escape rather than a safe dependency: a future path without a later
+native command would be vulnerable to the same stale status.
+
+The 3-4 matrix jobs currently failing in runs such as
+[35729368568](https://github.com/Azure/azure-verified-modules-tools/actions/runs/35729368568)
+have a separate, correctly reported cause: `gh pr merge --admin` is blocked by
+branch protection/CODEOWNERS requirements on specific Terraform repositories.
+This slice deliberately does not modify `repository-management-sync.yml` or
+`terraform-module.yml`, and does not treat those production failures as part
+of this incident.
 
 ## Checklist
 
@@ -168,4 +177,4 @@ needs a separate follow-up fix. This slice deliberately does not modify
     this change)
   - unit test: **1637 passed, 0 failed, 9 skipped**
   - component: **903 passed, 0 failed, 1 skipped**
-  - Overall: build succeeded, 0 errors, 54 warnings (pre-existing, unrelated).
+  - Overall: build succeeded, 0 errors, 55 warnings (pre-existing, unrelated).
