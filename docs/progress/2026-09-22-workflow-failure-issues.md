@@ -39,9 +39,8 @@ run on `main`:
 - New shared library `repository-management/workflow-failure-issues/scripts/lib/WorkflowFailureIssues.ps1`,
   entry point `Invoke-AvmWorkflowFailureIssues.ps1`, and workflow
   `.github/workflows/repository-management-workflow-failure-issues.yml`
-  (`schedule` + `workflow_dispatch` only, daily; there is no reason for
-  this sweep to run more than once a day, so it is not offset-cron/
-  lookback-windowed the way slices 1-2 are).
+  (`workflow_dispatch` only while live validation is pending; the disabled
+  daily schedule `41 5 * * *` is preserved in a comment).
 
 ## Scope reductions from the original
 
@@ -82,7 +81,8 @@ defaulted (`$null` / `@()`), regardless of which branch is taken.
 ## Open items (carried over / new)
 
 - Same open items as slices 1-2: `workflow_dispatch whatIf:true` live dry
-  run blocked until these workflows reach `main`; AVM GitHub App
+  run blocked until these workflows reach `main`, followed by a trigger-only
+  pull request restoring all four schedules; AVM GitHub App
   `Issues: write`/`Actions: read` on `bicep-registry-modules` not verified
   from this session; `Add-RepositoryItemsToProject.ps1` wiring deferred.
 - The label/comment text still references `Type: AVM`, `Type: Bug`,

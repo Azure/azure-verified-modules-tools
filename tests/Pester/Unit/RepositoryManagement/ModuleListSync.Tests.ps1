@@ -165,12 +165,29 @@ Describe 'Module dropdown sync workflow safety' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by schedule and workflow_dispatch' {
+    It 'is triggered only by workflow_dispatch while live validation is pending' {
+        $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
+                $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
+            ForEach-Object { $_.Groups[1].Value })
+        $triggerNames.Count | Should -Be 1
+        $triggerNames[0] | Should -Be 'workflow_dispatch'
         $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
-        $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}schedule:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}issues:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}workflow_run:'
+    }
+
+    It 'preserves the disabled schedule without schedule-dependent expressions' {
+        $script:workflowText | Should -Match "'13 6 \* \* \*'"
+        $script:workflowText | Should -Not -Match 'github\.event\.schedule'
+    }
+
+    It 'maps the what-if input directly' {
+        $script:triggerBlock | Should -Match '(?ms)^      what_if:\r?\n.*?^        default:\s*true\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{10}WHAT_IF:\s*\$\{\{\s*inputs\.what_if\s*\}\}\s*$'
+        $script:workflowText | Should -Match "\`$whatIf\s*=\s*\`$env:WHAT_IF\s*-eq\s*'true'"
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {

@@ -285,21 +285,30 @@ Describe 'Reviewer routing workflow safety' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by schedule and workflow_dispatch' {
+    It 'is triggered only by workflow_dispatch while live validation is pending' {
+        $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
+                $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
+            ForEach-Object { $_.Groups[1].Value })
+        $triggerNames.Count | Should -Be 1
+        $triggerNames[0] | Should -Be 'workflow_dispatch'
         $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
-        $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}schedule:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
     }
 
-    It 'uses offset, not round-minute, cron schedules' {
-        $crons = [System.Text.RegularExpressions.Regex]::Matches($script:triggerBlock, "cron:\s*'([^']+)'") |
-            ForEach-Object { $_.Groups[1].Value }
-        $crons.Count | Should -BeGreaterThan 0
-        foreach ($cron in $crons) {
-            $minuteField = ($cron -split '\s+')[0]
-            $minuteField | Should -Not -Match '^\*(/\d+)?$'
-        }
+    It 'preserves the disabled schedules without schedule-dependent expressions' {
+        $script:workflowText | Should -Match "'7,22,37,52 \* \* \* \*'"
+        $script:workflowText | Should -Match "'13 3 \* \* \*'"
+        $script:workflowText | Should -Not -Match 'github\.event\.schedule'
+    }
+
+    It 'maps dispatch inputs directly and preserves full-sweep values' {
+        $script:triggerBlock | Should -Match '(?ms)^      what_if:\r?\n.*?^        default:\s*true\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{10}UPDATED_WITHIN_MINUTES:\s*\$\{\{\s*inputs\.updated_within_minutes\s*\}\}\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{10}WHAT_IF:\s*\$\{\{\s*inputs\.what_if\s*\}\}\s*$'
+        $script:workflowText | Should -Match "\`$whatIf\s*=\s*\`$env:WHAT_IF\s*-eq\s*'true'"
+        ([int]'') | Should -Be 0
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {

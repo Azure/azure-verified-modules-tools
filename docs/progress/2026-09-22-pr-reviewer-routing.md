@@ -50,21 +50,23 @@ already shipped in the published catalog, converging both on the same bare
 - [x] `repository-management/reviewer-routing/scripts/Invoke-AvmPrReviewerRouting.ps1`
       entry point.
 - [x] `.github/workflows/repository-management-pr-reviewer-routing.yml` --
-      `schedule` (offset crons `7,22,37,52 * * * *` plus a daily `13 3 * * *`
-      full-sweep backstop) + `workflow_dispatch` only, cross-repo
+      `workflow_dispatch` only while live validation is pending, cross-repo
       `create-github-app-token` scoped to `bicep-registry-modules`
       (`pull-requests: write`, `members: read`), `environment: avm` gate.
-- [x] `tests/Pester/Unit/RepositoryManagement/ReviewerRouting.Tests.ps1` (27
-      tests): owner-path reduction, both owner normalizers, catalog-index /
+      The disabled schedules (`7,22,37,52 * * * *` and `13 3 * * *`) are
+      preserved in comments for the trigger-only follow-up after dry-run
+      validation.
+- [x] `tests/Pester/Unit/RepositoryManagement/ReviewerRouting.Tests.ps1`
+      -- owner-path reduction, both owner normalizers, catalog-index /
       metadata.json fallback / forced-refresh resolution, routing computation
       (owned, orphaned, out-of-module, author/reviewer/review skip,
       idempotent no-op, forced metadata re-read on metadata.json edits),
       draft-skip and conditional-write application, and a
       `'Reviewer routing workflow safety'` guard context asserting the
-      workflow is schedule/`workflow_dispatch`-only (never
-      `pull_request`/`pull_request_target`), uses offset (not round-minute)
-      cron fields, and never interpolates `${{ }}` directly into a `run:`
-      body.
+      workflow is `workflow_dispatch`-only (never `schedule`,
+      `pull_request`, or `pull_request_target`), preserves the disabled cron
+      values, maps dispatch inputs directly, and never interpolates `${{ }}`
+      directly into a `run:` body.
 - [x] Fixed a real bug found while porting: PowerShell unrolls a
       single-element array every time it crosses a function-call boundary
       via the output stream, regardless of comma-wrapping at the return
@@ -91,7 +93,8 @@ already shipped in the published catalog, converging both on the same bare
   request team reviews) and `Issues: write` on `bicep-registry-modules` --
   not verified from this session; flagged rather than worked around.
 - A `workflow_dispatch whatIf: true` dry run against live pull requests in
-  `bicep-registry-modules` is still required before enabling the schedule.
+  `bicep-registry-modules` is still required before enabling the preserved
+  schedules in a trigger-only follow-up pull request.
 - This is slice 1 of 4 (PR reviewer routing). Issue-owner routing,
   workflow-failure issue management, and module-dropdown sync are separate,
   not-yet-started slices tracked under the same branch.

@@ -2,9 +2,10 @@
 name: Repository Management - Workflow Failure Issues
 
 # Design invariants -- do not regress these without a very good reason:
-#  - Scheduled and workflow_dispatch only. This reads workflow-run/issue data with a
-#    privileged cross-repo app token and only ever needs to run once a day; there is no
-#    reason to trigger it from repository events.
+#  - workflow_dispatch only while live validation is pending. This reads
+#    workflow-run/issue data with a privileged cross-repo app token.
+#  - Disabled schedule to restore after all four what-if validations pass:
+#    '41 5 * * *'.
 #  - Every write (comment/assign/close) is conditional: an issue that already reflects the
 #    latest run's outcome is left untouched.
 on:
@@ -14,9 +15,6 @@ on:
         description: 'Compute and log the create/comment/close decisions without calling gh issue create/comment/edit/close.'
         default: true
         type: boolean
-  schedule:
-    - cron: '41 5 * * *'
-
 permissions:
   contents: read
 
@@ -75,7 +73,7 @@ jobs:
       - name: '[AVM] Manage workflow failure issues'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          WHAT_IF: ${{ github.event_name == 'workflow_dispatch' && inputs.what_if }}
+          WHAT_IF: ${{ inputs.what_if }}
         run: |
           Write-Host 'Authenticating gh cli'
           gh auth login -h 'GitHub.com'

@@ -40,8 +40,8 @@ they differ.
   `repository-management/module-list-sync/scripts/lib/ModuleListSync.ps1`,
   entry point `Invoke-AvmModuleListSync.ps1`, and workflow
   `.github/workflows/repository-management-module-list-sync.yml`
-  (`schedule` + `workflow_dispatch` only, daily — there is no reason for
-  this sweep to run more than once a day).
+  (`workflow_dispatch` only while live validation is pending; the disabled
+  daily schedule `13 6 * * *` is preserved in a comment).
 - Opens (or updates) the sync PR through the existing
   `Invoke-RepositoryFileSync` engine (`repository-management/repository-sync`)
   rather than a bespoke PR-creation path, using its `-ReviewOnly
@@ -105,6 +105,9 @@ they differ.
   permission-verification open items as slices 1-3
   (`Contents: write`/`Pull requests: write` needed here, in addition to
   the `Members: read`/`Issues: write` needed by slices 1-3).
+- After all four live dry runs are reviewed, restore the preserved schedules
+  together in one follow-up pull request containing only trigger-block
+  changes.
 - This slice is the first real exerciser of `Invoke-RepositoryFileSync`'s
   `ExpectedActor`/`VerifyCandidate`/`StableBranch`/`ReviewOnly` path
   against a live repository; the recommended `whatIf:true` dry run should

@@ -2,9 +2,10 @@
 name: Repository Management - Module List Sync
 
 # Design invariants -- do not regress these without a very good reason:
-#  - Scheduled and workflow_dispatch only. This opens pull requests with a privileged
-#    cross-repo app token and only ever needs to run once a day; there is no reason to
-#    trigger it from repository events.
+#  - workflow_dispatch only while live validation is pending. This opens pull
+#    requests with a privileged cross-repo app token.
+#  - Disabled schedule to restore after all four what-if validations pass:
+#    '13 6 * * *'.
 #  - The generated pull request is opened with -ReviewOnly and is never auto-merged: a
 #    human must review a module dropdown change before it lands in bicep-registry-modules.
 #  - The catalog-derived module list is compared against a stable branch/PR
@@ -17,9 +18,6 @@ on:
         description: 'Compute and log the module dropdown diff without opening or updating a pull request.'
         default: true
         type: boolean
-  schedule:
-    - cron: '13 6 * * *'
-
 permissions:
   contents: read
 
@@ -78,7 +76,7 @@ jobs:
       - name: '[AVM] Sync module dropdown list'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          WHAT_IF: ${{ github.event_name == 'workflow_dispatch' && inputs.what_if }}
+          WHAT_IF: ${{ inputs.what_if }}
         run: |
           Write-Host 'Authenticating gh cli'
           gh auth login -h 'GitHub.com'

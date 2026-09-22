@@ -29,8 +29,9 @@ repository, reusing slice 1's owner-resolution library
   reporting is dropped.** It was informational only, not routing behaviour.
 - **The `issues: [opened]` trigger is dropped**, per the standing design
   decision to never run cross-repo, privileged automation off of untrusted,
-  externally-triggerable events. This run is schedule + `workflow_dispatch`
-  only, same as slice 1. Immediacy on new issues is lost; see open items.
+  externally-triggerable events. This run is `workflow_dispatch` only until
+  live validation is complete. Immediacy on new issues is lost; see open
+  items.
 
 ## Checklist
 
@@ -59,10 +60,11 @@ repository, reusing slice 1's owner-resolution library
 - [x] `repository-management/reviewer-routing/scripts/Invoke-AvmIssueOwnerRouting.ps1`
       entry point, mirroring slice 1's dot-sourcing/strict-mode pattern.
 - [x] `.github/workflows/repository-management-issue-owner-routing.yml` --
-      `schedule` (offset crons `9,24,39,54 * * * *` plus a daily `17 3 * * *`
-      full-sweep backstop, `UpdatedWithinMinutes 0`) + `workflow_dispatch`
-      only, cross-repo `create-github-app-token` scoped to
+      `workflow_dispatch` only while live validation is pending, cross-repo
+      `create-github-app-token` scoped to
       `bicep-registry-modules` (`issues: write`), `environment: avm` gate.
+      The disabled schedules (`9,24,39,54 * * * *` and `17 3 * * *`) are
+      preserved in comments.
 - [x] `tests/Pester/Unit/RepositoryManagement/IssueOwnerRouting.Tests.ps1`
       (22 tests): module-reference extraction, candidate filtering
       (title-prefix and lookback window), all three reply/label states,
@@ -71,9 +73,10 @@ repository, reusing slice 1's owner-resolution library
       not re-added; a manually assigned non-owner is not removed; a
       bot-assigned non-owner is removed), conditional-write no-op, and an
       `'Issue owner routing workflow safety'` guard context mirroring
-      slice 1's (schedule/`workflow_dispatch`-only, never `issues:` or
-      `pull_request_target:`, offset cron fields, no `${{ }}` interpolation
-      into a `run:` body).
+      slice 1's (`workflow_dispatch`-only, never `schedule`, `issues:`,
+      `pull_request`, or `pull_request_target`, disabled cron preservation,
+      direct dispatch input mapping, and no `${{ }}` interpolation into a
+      `run:` body).
 - [x] Applied the same design-invariant lesson learned while fixing slice 1
       (team-vs-user must be decided by an owner's `Type`, never by inferring
       from a `/` in the handle): `Resolve-AvmIssueOwnerRouting` filters

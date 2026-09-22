@@ -2,12 +2,10 @@
 name: Repository Management - Issue Owner Routing
 
 # Design invariants -- do not regress these without a very good reason:
-#  - Scheduled and workflow_dispatch only, never an `issues` trigger: this run reads
-#    issue data with a privileged cross-repo app token, and immediate-on-open
-#    routing would need that token exposed to whatever created the trigger.
-#  - Offset crons, not round-minute marks. Lookback window is 4x the sweep cadence
-#    to absorb skipped/delayed scheduled runs, plus a daily full sweep
-#    (UpdatedWithinMinutes 0) as a backstop.
+#  - workflow_dispatch only while live validation is pending, never an `issues`
+#    trigger: this run reads issue data with a privileged cross-repo app token.
+#  - Disabled schedules to restore after all four what-if validations pass:
+#    '9,24,39,54 * * * *' and '17 3 * * *'.
 on:
   workflow_dispatch:
     inputs:
@@ -23,10 +21,6 @@ on:
         description: 'Compute and log the routing decisions without calling gh issue edit/comment.'
         default: true
         type: boolean
-  schedule:
-    - cron: '9,24,39,54 * * * *'
-    - cron: '17 3 * * *'
-
 permissions:
   contents: read
 
@@ -85,8 +79,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE_URL: ${{ inputs.issue_url }}
-          UPDATED_WITHIN_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.updated_within_minutes || (github.event.schedule == '17 3 * * *' && '0' || '60') }}
-          WHAT_IF: ${{ github.event_name == 'workflow_dispatch' && inputs.what_if }}
+          UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
+          WHAT_IF: ${{ inputs.what_if }}
         run: |
           Write-Host 'Authenticating gh cli'
           gh auth login -h 'GitHub.com'
