@@ -21,11 +21,20 @@ $script:AvmReviewerRoutingCatalogRepository = 'Azure/Azure-Verified-Modules'
 $script:AvmReviewerRoutingCatalogPath = 'docs/static/module-indexes/v1/modules.json'
 $script:AvmReviewerRoutingCatalogRef = 'main'
 
+# avm/ptn/example/module is the scaffold new modules are copied from, not a
+# real, ownable module: it has no metadata.json on any branch, so treating
+# it like an ordinary module folder would make every change to it look like
+# an orphaned module with zero owners. Routing a change here to the Core
+# Team (the same path taken for cross-cutting non-module files) is correct;
+# an orphan label and a metadata.json lookup that can never succeed are not.
+$script:AvmReviewerRoutingNonModulePaths = @('avm/ptn/example/module')
+
 function Get-AvmBicepTopLevelModulePath {
     <#
     .SYNOPSIS
     Reduces a changed-file path to its top-level AVM module folder, or
-    returns $null when the path is not inside a module folder at all.
+    returns $null when the path is not inside a module folder at all (or is
+    the non-ownable example/template scaffold).
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -35,7 +44,11 @@ function Get-AvmBicepTopLevelModulePath {
     if ($segments.Count -lt 4 -or $segments[0] -cne 'avm' -or $segments[1] -cnotin @('res', 'ptn', 'utl')) {
         return $null
     }
-    return ($segments[0..3] -join '/')
+    $topLevelModulePath = $segments[0..3] -join '/'
+    if ($script:AvmReviewerRoutingNonModulePaths -ccontains $topLevelModulePath) {
+        return $null
+    }
+    return $topLevelModulePath
 }
 
 function ConvertTo-AvmReviewerRoutingOwner {

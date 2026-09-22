@@ -22,6 +22,10 @@ Describe 'Get-AvmBicepTopLevelModulePath' {
     It 'returns $null for a bare module folder without a top-level module beneath it' {
         Get-AvmBicepTopLevelModulePath -Path 'avm/res/readme.md' | Should -BeNullOrEmpty
     }
+
+    It 'returns $null for the non-ownable example/template scaffold' {
+        Get-AvmBicepTopLevelModulePath -Path 'avm/ptn/example/module/main.bicep' | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'ConvertTo-AvmReviewerRoutingOwner (catalog owners)' {
@@ -183,6 +187,41 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty
+    }
+
+    It 'is a no-op when the pull request author is the module''s sole declared owner' {
+        # Regression: the sole owner must not be misread as "no owners" once
+        # filtered out, which would incorrectly apply the orphan label.
+        $script:pr.author.login = 'storage-owner'
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
+    }
+
+    It 'is a no-op when every declared owner already has a pending review request' {
+        $script:catalogIndex['avm/res/storage/storage-account'].owners = @(
+            @{ handle = 'storage-owner'; type = 'user'; displayName = $null },
+            @{ handle = 'second-owner'; type = 'user'; displayName = $null }
+        )
+        $script:pr.reviewRequests = @(
+            [pscustomobject]@{ login = 'storage-owner' },
+            [pscustomobject]@{ login = 'second-owner' }
+        )
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
+    }
+
+    It 'skips the non-ownable example/template scaffold entirely, without an orphan label or a metadata.json fetch' {
+        Mock Get-AvmBicepModuleMetadataOwners { throw 'should never fetch metadata.json for a non-module path' }
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/ptn/example/module/main.bicep')
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
+        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
+        Should -Invoke Get-AvmBicepModuleMetadataOwners -Exactly 0
     }
 }
 
