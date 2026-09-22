@@ -1,0 +1,319 @@
+#Requires -Version 7.4
+
+# Ports Set-AvmGitHubIssueForWorkflow from the retired bicep-registry-modules
+# platform tooling (git history commit 2eb210dbb), adapted to run cross-repo
+# and to resolve module owners via lib/ModuleOwners.ps1 (index-first,
+# metadata.json fallback) instead of a local metadata.json read.
+#
+# Scope changes from the original:
+#  - Adding the issue to a GitHub Project ("AVM - Issue Triage" /
+#    "AVM - Module Issues") is not done here, for the same reason as
+#    IssueOwnerRouting.ps1: the existing generic
+#    repository-management/repository-sync/scripts/Add-RepositoryItemsToProject.ps1
+#    already syncs project membership and will pick up newly created issues
+#    on its own schedule.
+#  - The original's created/commented/closed console counters are dropped;
+#    they were informational only.
+#
+# Design invariants carried over from the other routing libraries: one
+# failing workflow/issue must not abort the sweep, and every write is
+# conditional (an issue that is already up to date for this run is left
+# untouched).
+
+$script:AvmWorkflowFailureIssueTitlePrefix = '[Failed pipeline]'
+$script:AvmWorkflowFailureWorkflowFilter = '(?:avm\.(?:res|ptn|utl)\.|^\.Module - Check and Publish(?: \[EXPERIMENTAL\])?$)'
+$script:AvmWorkflowFailureIgnoredWorkflowNames = @(
+    '.Platform - Check PSRule'
+    '.Platform - Semantic PR Check'
+    'Semantic PR Check'
+)
+$script:AvmWorkflowFailureAvmLabel = 'Type: AVM :a: :v: :m:'
+$script:AvmWorkflowFailureBugLabel = 'Type: Bug :bug:'
+$script:AvmWorkflowFailureDuplicateLabel = 'Type: Duplicate :palms_up_together:'
+$script:AvmWorkflowFailurePlatformTaggingComment = @'
+> [!IMPORTANT]
+> This issue was created for a platform workflow. The maintainer team @Azure/azure-verified-modules-tooling-contributors should investigate and mitigate the reason.
+'@
+
+function Get-AvmWorkflowFailureWorkflows {
+    <#
+    .SYNOPSIS
+    Lists the active workflows a failure sweep should evaluate: per-module CI
+    workflows plus the shared cross-module check/publish pipeline, excluding
+    workflows whose failures are expected/uninteresting noise.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)] [string] $Repository)
+
+    $workflows = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'api', '--paginate', "repos/$Repository/actions/workflows?per_page=100", '--hostname', 'github.com',
+        '--jq', '.workflows[] | select(.state == "active") | {id, name}'
+    ))
+    return @($workflows | Where-Object {
+            $_.name -match $script:AvmWorkflowFailureWorkflowFilter -and
+            $script:AvmWorkflowFailureIgnoredWorkflowNames -notcontains $_.name
+        })
+}
+
+function Get-AvmWorkflowFailureLatestRun {
+    <#
+    .SYNOPSIS
+    Fetches a workflow's most recent completed run on the given branch, or
+    $null when it has never completed a run yet.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $WorkflowId,
+        [string] $Branch = 'main'
+    )
+
+    $runs = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'api', "repos/$Repository/actions/workflows/$WorkflowId/runs?branch=$Branch&status=completed&per_page=1",
+        '--hostname', 'github.com', '--jq', '.workflow_runs'
+    ))
+    if ($runs.Count -eq 0) {
+        return $null
+    }
+    return $runs[0]
+}
+
+function Get-AvmWorkflowFailureOpenIssues {
+    <#
+    .SYNOPSIS
+    Fetches every open '[Failed pipeline] ...' issue in one call, so the
+    sweep does not issue a `gh issue list` per workflow.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)] [string] $Repository)
+
+    $issues = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'issue', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
+        '--json', 'number,title,url,createdAt,labels'
+    ))
+    return @($issues | Where-Object { $_.title -and $_.title.StartsWith($script:AvmWorkflowFailureIssueTitlePrefix) })
+}
+
+function Get-AvmWorkflowFailureIssueCommentsToday {
+    <#
+    .SYNOPSIS
+    Fetches the bodies of comments posted on an issue today (UTC), used to
+    avoid posting an identical "failed run" comment twice for the same day.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [int] $Number
+    )
+
+    $since = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddT00:00:00Z')
+    $comments = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+        'api', '--paginate', "repos/$Repository/issues/$Number/comments?since=$since&per_page=100",
+        '--hostname', 'github.com', '--jq', '.[].body'
+    ))
+    return @($comments | ForEach-Object { [string]$_ })
+}
+
+function Get-AvmWorkflowFailureModuleReference {
+    <#
+    .SYNOPSIS
+    Converts a module workflow's name (dot-separated, e.g. 'avm.res.storage.storage-account')
+    into its top-level module path, or $null for a non-module (platform/shared) workflow.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string] $WorkflowName)
+
+    if ($WorkflowName -notmatch '^avm\.(res|ptn|utl)\.') {
+        return $null
+    }
+    return Get-AvmBicepTopLevelModulePath -Path ($WorkflowName -replace '\.', '/')
+}
+
+function Resolve-AvmWorkflowFailureRouting {
+    <#
+    .SYNOPSIS
+    Computes the desired create/comment/close actions for one workflow's
+    latest run, without applying them. Kept side-effect free so it can be
+    unit tested without mocking `gh issue create/comment/edit/close`.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [object] $WorkflowRun,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $ExistingIssues,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Owners,
+        [Parameter(Mandatory)] [bool] $IsModule,
+        [AllowEmptyCollection()] [string[]] $ExistingCommentBodiesToday = @()
+    )
+
+    $issueTitle = "$script:AvmWorkflowFailureIssueTitlePrefix $($WorkflowRun.name)"
+    $runUrl = [string]$WorkflowRun.html_url
+
+    # Every branch below returns the same fully-keyed shape (defaulting unused keys to $null/@())
+    # rather than only including the keys relevant to that branch. Set-AvmWorkflowFailureIssueForRun
+    # runs under Set-StrictMode -Version 3, under which dot-notation access to an absent hashtable
+    # key throws PropertyNotFoundException rather than returning $null.
+    $result = @{
+        IssuesToClose         = @()
+        CloseComment          = $null
+        CreateIssueTitle      = $null
+        CreateIssueBody       = $null
+        CreateIssueLabels     = @()
+        TaggingComment        = $null
+        AssigneeToAdd         = $null
+        DuplicateIssuesToClose = @()
+        CommentIssueUrl       = $null
+        CommentBody           = $null
+    }
+
+    if ($WorkflowRun.conclusion -cne 'failure') {
+        # A successful run closes every open issue that was tracking this workflow's failures.
+        $result.IssuesToClose = @($ExistingIssues)
+        $result.CloseComment = "Successful run: $runUrl"
+        return $result
+    }
+
+    $failedRunText = "Failed run: $runUrl"
+
+    if ($ExistingIssues.Count -eq 0) {
+        $isOrphaned = $IsModule -and $Owners.Count -eq 0
+        $ownerLogins = @($Owners | Where-Object { $_.Type -ceq 'user' } | ForEach-Object { $_.Handle })
+        $mentions = (@($Owners | ForEach-Object { $_.Handle }) | ForEach-Object { "@$_" }) -join ', '
+
+        if (-not $IsModule) {
+            $taggingComment = $script:AvmWorkflowFailurePlatformTaggingComment
+        }
+        elseif ($isOrphaned) {
+            $taggingComment = "> [!IMPORTANT]`n> This module is currently orphaned (has no owner), therefore expect a higher response time.`n> @Azure/azure-verified-modules-tooling-contributors, the workflow for the ``$($WorkflowRun.name)`` module has failed. Please investigate the failed workflow run."
+        }
+        else {
+            $taggingComment = "> [!IMPORTANT]`n> $mentions, the workflow for the ``$($WorkflowRun.name)`` module has failed. Please investigate the failed workflow run. If you are not able to do so, please inform the AVM core team to take over."
+        }
+
+        $result.CreateIssueTitle = $issueTitle
+        $result.CreateIssueBody = $failedRunText
+        $result.CreateIssueLabels = @($script:AvmWorkflowFailureAvmLabel, $script:AvmWorkflowFailureBugLabel)
+        $result.TaggingComment = $taggingComment
+        if ($ownerLogins.Count -gt 0) {
+            $result.AssigneeToAdd = $ownerLogins[0]
+        }
+        return $result
+    }
+
+    # One or more open issues already track this workflow. Comment on the newest; any older
+    # duplicates (which should not exist under normal operation, but did in the original due to
+    # a prior race) are labelled and closed in favour of the newest.
+    $sortedIssues = @($ExistingIssues | Sort-Object -Property 'createdAt' -Descending)
+    $newestIssue = $sortedIssues[0]
+    $duplicateIssues = @(if ($sortedIssues.Count -gt 1) { $sortedIssues[1..($sortedIssues.Count - 1)] })
+
+    $result.DuplicateIssuesToClose = $duplicateIssues
+    if ($ExistingCommentBodiesToday -notcontains $failedRunText) {
+        $result.CommentIssueUrl = $newestIssue.url
+        $result.CommentBody = $failedRunText
+    }
+    return $result
+}
+
+function Set-AvmWorkflowFailureIssueForRun {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [object] $WorkflowRun,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $ExistingIssues,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Owners,
+        [Parameter(Mandatory)] [bool] $IsModule
+    )
+
+    $existingCommentBodiesToday = @()
+    if ($ExistingIssues.Count -gt 0) {
+        $newest = @($ExistingIssues | Sort-Object -Property 'createdAt' -Descending)[0]
+        $existingCommentBodiesToday = @(Get-AvmWorkflowFailureIssueCommentsToday -Repository $Repository -Number $newest.number)
+    }
+
+    $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $WorkflowRun -ExistingIssues $ExistingIssues `
+        -Owners $Owners -IsModule $IsModule -ExistingCommentBodiesToday $existingCommentBodiesToday
+
+    foreach ($issueToClose in @($routing.IssuesToClose)) {
+        if ($null -eq $issueToClose) { continue }
+        if ($PSCmdlet.ShouldProcess("Issue [$($issueToClose.url)]", 'Close (run succeeded)')) {
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'close', $issueToClose.url, '--repo', $Repository, '--comment', $routing.CloseComment)
+        }
+    }
+
+    foreach ($duplicateIssue in @($routing.DuplicateIssuesToClose)) {
+        if ($null -eq $duplicateIssue) { continue }
+        if ($PSCmdlet.ShouldProcess("Issue [$($duplicateIssue.url)]", 'Label as duplicate and close')) {
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $duplicateIssue.url, '--repo', $Repository, '--add-label', $script:AvmWorkflowFailureDuplicateLabel)
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'close', $duplicateIssue.url, '--repo', $Repository, '--reason', 'not planned', '--comment', "This issue is succeeded by a newer issue for the same workflow.")
+        }
+    }
+
+    if ($routing.CommentIssueUrl -and $PSCmdlet.ShouldProcess("Comment on issue [$($routing.CommentIssueUrl)]", 'Add')) {
+        $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $routing.CommentIssueUrl, '--repo', $Repository, '--body', $routing.CommentBody)
+    }
+
+    if ($routing.CreateIssueTitle -and $PSCmdlet.ShouldProcess("Issue [$($routing.CreateIssueTitle)]", 'Create')) {
+        $createArguments = @('issue', 'create', '--repo', $Repository, '--title', $routing.CreateIssueTitle, '--body', $routing.CreateIssueBody)
+        foreach ($label in $routing.CreateIssueLabels) { $createArguments += @('--label', $label) }
+        $issueUrl = (Invoke-RepositoryGitHub -Arguments $createArguments | Select-Object -Last 1)
+
+        if ($routing.AssigneeToAdd) {
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $issueUrl, '--repo', $Repository, '--add-assignee', $routing.AssigneeToAdd)
+        }
+        $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $issueUrl, '--repo', $Repository, '--body', $routing.TaggingComment)
+    }
+}
+
+function Invoke-AvmWorkflowFailureIssues {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [string] $Branch = 'main',
+        [string] $DefaultRef = 'main'
+    )
+
+    $workflows = @(Get-AvmWorkflowFailureWorkflows -Repository $Repository)
+    Write-Verbose "Evaluating [$($workflows.Count)] workflow(s) in [$Repository]." -Verbose
+
+    $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository)
+    $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($workflow in $workflows) {
+        try {
+            $latestRun = Get-AvmWorkflowFailureLatestRun -Repository $Repository -WorkflowId $workflow.id -Branch $Branch
+            if ($null -eq $latestRun) {
+                Write-Verbose "Workflow [$($workflow.name)] has no completed run on [$Branch] yet. Skipping."
+                continue
+            }
+
+            $issueTitle = "$script:AvmWorkflowFailureIssueTitlePrefix $($workflow.name)"
+            $existingIssues = @($openIssues | Where-Object { $_.title -ceq $issueTitle })
+
+            $topLevelModulePath = Get-AvmWorkflowFailureModuleReference -WorkflowName $workflow.name
+            $isModule = $null -ne $topLevelModulePath
+            $owners = @()
+            if ($isModule) {
+                $owners = @(Get-AvmModuleOwners -TopLevelModulePath $topLevelModulePath -CatalogIndex $catalogIndex -Repository $Repository -Ref $DefaultRef)
+            }
+
+            Set-AvmWorkflowFailureIssueForRun -WorkflowRun $latestRun -Repository $Repository `
+                -ExistingIssues $existingIssues -Owners $owners -IsModule $isModule -WhatIf:$WhatIfPreference
+        }
+        catch {
+            # A single workflow's issue handling must not stop the remaining ones on a scheduled run.
+            $failures.Add("[$($workflow.name)]: $($_.Exception.Message)")
+            Write-Warning "Failed to manage the issue for workflow [$($workflow.name)]. $($_.Exception.Message)"
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        throw [System.AggregateException]::new(($failures -join [System.Environment]::NewLine))
+    }
+}
