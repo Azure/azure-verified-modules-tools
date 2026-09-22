@@ -167,6 +167,23 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewReviewers | Should -Contain 'fresh-owner'
         Should -Invoke Get-AvmBicepModuleMetadataOwners -Exactly 1
     }
+
+    It 'requests a team owner by Type, not by inferring from a slash in the handle' {
+        # Synthetic: real catalog/metadata.json data currently has zero team owners, so this
+        # path is only exercised here, not against production data.
+        $script:catalogIndex['avm/res/storage/storage-account'].owners = @(@{ handle = 'Azure/storage-owners'; type = 'team'; displayName = 'Storage owners' })
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
+        $routing.NewReviewers | Should -Contain 'Azure/storage-owners'
+    }
+
+    It 'skips a team owner that already has a pending review request' {
+        $script:catalogIndex['avm/res/storage/storage-account'].owners = @(@{ handle = 'Azure/storage-owners'; type = 'team'; displayName = 'Storage owners' })
+        $script:pr.reviewRequests = @([pscustomobject]@{ slug = 'storage-owners'; name = 'Storage owners' })
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
+        $routing.NewReviewers | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'Set-AvmPrReviewerRoutingForPullRequest' {

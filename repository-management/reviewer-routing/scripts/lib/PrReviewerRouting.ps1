@@ -121,7 +121,10 @@ function Resolve-AvmPrReviewerRouting {
     # is authoritative whenever the module isn't indexed yet or the pull
     # request itself edits that module's metadata.json.
     $headRef = [string]$PullRequest.headRefOid
-    $ownerHandles = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    # Keyed by Handle so the same owner declared on multiple modules is only
+    # requested once; the value keeps its {Handle, Type} record so team-vs-
+    # user is decided purely by Type below, never by inferring from '/'.
+    $owningHandles = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::Ordinal)
     $hasOrphanedModule = $false
     foreach ($topLevelModulePath in $topLevelModulePaths) {
         $forceMetadataLookup = $touchedMetadataModulePaths.Contains($topLevelModulePath)
@@ -130,11 +133,11 @@ function Resolve-AvmPrReviewerRouting {
         if ($owners.Count -eq 0) {
             Write-Warning "Module [$topLevelModulePath] does not declare any owners. Notifying [$script:AvmPrReviewerRoutingFallbackTeam] instead."
             $hasOrphanedModule = $true
-            $null = $ownerHandles.Add($script:AvmPrReviewerRoutingFallbackTeam)
+            $owningHandles[$script:AvmPrReviewerRoutingFallbackTeam] = [ordered]@{ Handle = $script:AvmPrReviewerRoutingFallbackTeam; Type = 'team' }
             continue
         }
         foreach ($owner in $owners) {
-            $null = $ownerHandles.Add($owner.Handle)
+            $owningHandles[$owner.Handle] = $owner
         }
     }
 
@@ -149,12 +152,12 @@ function Resolve-AvmPrReviewerRouting {
         $null
     }
 
-    $newReviewers = @($ownerHandles | Where-Object {
-            if ($_.Contains('/')) {
-                return $requestedTeamSlugs -notcontains ($_ -split '/')[-1]
+    $newReviewers = @($owningHandles.Values | Where-Object {
+            if ($_.Type -ceq 'team') {
+                return $requestedTeamSlugs -notcontains ($_.Handle -split '/')[-1]
             }
-            return $_ -ne $authorLogin -and $requestedLogins -notcontains $_ -and $reviewedLogins -notcontains $_
-        })
+            return $_.Handle -ne $authorLogin -and $requestedLogins -notcontains $_.Handle -and $reviewedLogins -notcontains $_.Handle
+        } | ForEach-Object { $_.Handle })
 
     $desiredLabels = @(if ($needsCoreTeam -or $hasOrphanedModule) { $script:AvmPrReviewerRoutingNeedsCoreTeamLabel } else { $script:AvmPrReviewerRoutingNeedsModuleOwnerLabel })
     if ($hasOrphanedModule) {
