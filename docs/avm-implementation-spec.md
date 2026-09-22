@@ -428,6 +428,10 @@ qualified `@organization/team-slug` handles. Empty arrays are permitted and
 case-insensitive duplicates are rejected. Tier is not part of this contract.
 Children carry only their own identity, description, and optional telemetry
 prefix; catalog generation inherits ownership from the family root.
+Generated catalog records enrich each inherited handle into a strict
+`{ handle, type, displayName }` object. `type` distinguishes GitHub users from
+teams; user display names are profile names and team display names are team
+descriptions. Missing profile display data is represented as null.
 Helpers may omit telemetry even when published or instrumented. Supplied helper
 prefixes are preserved and retain ecosystem, family-kind, format, and length
 validation. Non-helper resource/pattern roots and directly published children

@@ -685,7 +685,7 @@ function Get-AvmCatalogEnrichment {
             "user(login: $(ConvertTo-AvmCatalogGraphQlString $handle)) { login name __typename }"
         })
     $teamSelections = @(foreach ($team in $teams) {
-            "organization(login: `"Azure`") { team(slug: $(ConvertTo-AvmCatalogGraphQlString $team.Substring('@Azure/'.Length))) { slug organization { login } } }"
+            "organization(login: `"Azure`") { team(slug: $(ConvertTo-AvmCatalogGraphQlString $team.Substring('@Azure/'.Length))) { slug description organization { login } } }"
         })
     $resolved = Invoke-AvmCatalogGraphQlBatch -Activity 'GitHub owner and team profiles' -GitHubToken $GitHubToken -Selections @($userSelections + $teamSelections)
     for ($index = 0; $index -lt $handles.Count; $index++) {
@@ -705,7 +705,11 @@ function Get-AvmCatalogEnrichment {
             Write-AvmCatalogProgress ("GitHub owner team {0} no longer exists; the modules that name it cannot be published." -f $teams[$index])
             continue
         }
-        $github.teams[$teams[$index]] = [ordered]@{ slug = $team.slug; organization = $team.organization.login }
+        $github.teams[$teams[$index]] = [ordered]@{
+            slug = $team.slug
+            organization = $team.organization.login
+            description = $team.description
+        }
     }
     foreach ($item in $Inventory.Items) {
         if ($item.Record.metadataSource -eq 'metadata') {

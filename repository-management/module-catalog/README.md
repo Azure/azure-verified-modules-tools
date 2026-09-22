@@ -80,6 +80,12 @@ owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. The artifact's `v1/migration-report.json` records missing metadata, unresolved
 source identities, source-row snapshots, removals, and cross-ecosystem parity.
+Each catalog owner is an object with `handle`, `type`, and `displayName`.
+`type` is `user` for a GitHub username and `team` for a qualified handle such
+as `@Azure/avm-core-modules`. User display names come from the GitHub profile
+`name`; team display names come from the GitHub team `description`. Either may
+be null when GitHub does not supply or expose the value. Authored
+`metadata.json` files continue to store owner handles as strings.
 Canonical types come from metadata, not inferred CSV taxonomy.
 Resources use case-sensitive `Microsoft.*` or `Oracle.Database` ARM types.
 For `Oracle.Database/cloudVmClusters`, `providerNamespace` is `Oracle.Database`

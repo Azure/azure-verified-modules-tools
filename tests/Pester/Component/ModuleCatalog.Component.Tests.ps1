@@ -16,6 +16,11 @@ BeforeAll {
         [System.IO.File]::WriteAllText($Path, (ConvertTo-AvmCatalogJson -Value $Data), [System.Text.UTF8Encoding]::new($false))
     }
 
+    function Get-CatalogOwnerHandles {
+        param([object[]] $Owners)
+        return @($Owners | ForEach-Object { $_.handle })
+    }
+
     function Save-CatalogMetadata {
         param([object] $Module, [switch] $Child)
         $marker = if ($Module.Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
@@ -178,8 +183,10 @@ BeforeAll {
                 'owner-three' = @{ login = 'owner-three'; name = $null; type = 'User' }
             }
             teams = @{
-                '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' }
-                '@Azure/second-team' = @{ slug = 'second-team'; organization = 'Azure' }
+                '@Azure/avm-core-modules' = @{
+                    slug = 'avm-core-modules'; organization = 'Azure'; description = 'Maintains AVM core modules.'
+                }
+                '@Azure/second-team' = @{ slug = 'second-team'; organization = 'Azure'; description = $null }
             }
         }
         foreach ($handle in $MissingOwner) {
@@ -270,7 +277,7 @@ Describe 'Component: module catalog helpers' -Tag Component {
             $record.moduleType | Should -BeExactly $helper.Family.ModuleType
             $record.parentModule | Should -BeExactly $helper.Parent
             $record.familyModule | Should -BeExactly $helper.Family.ModulePath
-            $record.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+            Get-CatalogOwnerHandles $record.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
             $record.provider | Should -Be $module.Identity.Provider
             $record.Contains('providerNamespace') | Should -BeTrue
             $record.Contains('resourceType') | Should -BeTrue
@@ -352,6 +359,24 @@ Describe 'Component: module catalog helpers' -Tag Component {
         foreach ($field in @('providerNamespace', 'resourceType')) {
             $catalog = $json | ConvertFrom-Json -AsHashtable
             $catalog.modules['Microsoft.Storage/storageAccounts'][$Ecosystem][0][$field] = $null
+            Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
+                -ErrorAction SilentlyContinue | Should -BeFalse
+        }
+        foreach ($mutation in @(
+                @{ Property = 'type'; Value = 'team' },
+                @{ Property = 'handle'; Value = '@Azure/avm-core-modules' },
+                @{ Property = 'displayName'; Value = 42 },
+                @{ Property = 'extra'; Value = 'unsupported' }
+            )) {
+            $catalog = $json | ConvertFrom-Json -AsHashtable
+            $owner = $catalog.modules.helper[$Ecosystem][0].owners[0]
+            $owner[$mutation.Property] = $mutation.Value
+            Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
+                -ErrorAction SilentlyContinue | Should -BeFalse
+        }
+        foreach ($property in @('handle', 'type', 'displayName')) {
+            $catalog = $json | ConvertFrom-Json -AsHashtable
+            $catalog.modules.helper[$Ecosystem][0].owners[0].Remove($property)
             Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
                 -ErrorAction SilentlyContinue | Should -BeFalse
         }
@@ -490,8 +515,8 @@ Describe 'Component: module catalog transformations' -Tag Component {
             $child = @($records | Where-Object { $null -ne $_.parentModule })[0]
             $child.parentModule | Should -BeExactly $rootPaths[$ecosystem]
             $child.familyModule | Should -BeExactly $rootPaths[$ecosystem]
-            $child.owners | Should -Be $root.owners
-            $root.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+            ConvertTo-AvmCatalogJson -Value $child.owners | Should -BeExactly (ConvertTo-AvmCatalogJson -Value $root.owners)
+            Get-CatalogOwnerHandles $root.owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
             foreach ($record in $records) {
                 $record.moduleType | Should -BeExactly 'resource'
                 $record.canonicalType | Should -BeExactly $canonical
@@ -582,7 +607,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
             $child = @($records | Where-Object { $null -ne $_.parentModule })[0]
             $child.parentModule | Should -BeExactly $root.modulePath
             $child.familyModule | Should -BeExactly $root.modulePath
-            $child.owners | Should -Be $root.owners
+            ConvertTo-AvmCatalogJson -Value $child.owners | Should -BeExactly (ConvertTo-AvmCatalogJson -Value $root.owners)
             foreach ($record in $records) {
                 ($null -eq $record.providerNamespace) | Should -BeTrue
                 ($null -eq $record.resourceType) | Should -BeTrue
@@ -651,7 +676,16 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners | Should -HaveCount 4
         $published = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
         $publishedOwners = @($published.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners)
-        ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
+        Get-CatalogOwnerHandles $publishedOwners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+        $publishedOwners[0].handle | Should -BeExactly 'owner-one'
+        $publishedOwners[0].type | Should -BeExactly 'user'
+        $publishedOwners[0].displayName | Should -BeExactly 'Profile One'
+        $publishedOwners[2].handle | Should -BeExactly 'owner-three'
+        $publishedOwners[2].type | Should -BeExactly 'user'
+        $publishedOwners[2].displayName | Should -BeNullOrEmpty
+        $publishedOwners[3].handle | Should -BeExactly '@Azure/avm-core-modules'
+        $publishedOwners[3].type | Should -BeExactly 'team'
+        $publishedOwners[3].displayName | Should -BeExactly 'Maintains AVM core modules.'
         @($bundle.Files['docs/TerraformResourceModules.csv'] | ConvertFrom-Csv) | Should -HaveCount 0
         $bundle.Report.csvRowRemovals | Should -HaveCount 5
         $bundle.Report.csvRowRemovals.moduleName | Should -Not -Contain $fixture.Modules[0].Identity.ModuleName
@@ -738,7 +772,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         foreach ($canonical in @('Microsoft.Storage/storageAccounts', 'Microsoft.Storage/storageAccounts/blobServices/containers')) {
             foreach ($ecosystem in @('bicep', 'terraform')) {
                 $publishedOwners = @($published.modules[$canonical][$ecosystem][0].owners)
-                ($publishedOwners -join ',') | Should -BeExactly 'owner-one,owner-two,owner-three,@Azure/avm-core-modules'
+                Get-CatalogOwnerHandles $publishedOwners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
             }
         }
     }
@@ -860,7 +894,10 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Save-CatalogJson -Path $path -Data $metadata
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
         $record = $bundle.Catalog.modules['types/common'].bicep[0]
-        $record.owners | Should -Be @('@Azure/avm-core-modules')
+        Get-CatalogOwnerHandles $record.owners | Should -Be @('@Azure/avm-core-modules')
+        $record.owners[0].handle | Should -BeExactly '@Azure/avm-core-modules'
+        $record.owners[0].type | Should -BeExactly 'team'
+        $record.owners[0].displayName | Should -BeExactly 'Maintains AVM core modules.'
         $record.telemetryIdPrefix | Should -BeNullOrEmpty
         $row = @($bundle.Files['docs/BicepUtilityModules.csv'] | ConvertFrom-Csv)[0]
         $row.PrimaryModuleOwnerGHHandle | Should -BeExactly ''
@@ -889,7 +926,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $record = $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0]
         $record.alternativeNames | Should -HaveCount 0
         $record.comments | Should -BeExactly ''
-        $record.owners | Should -Be @('owner-one')
+        Get-CatalogOwnerHandles $record.owners | Should -Be @('owner-one')
     }
 
     It 'keeps multiple Terraform provider implementations under the same canonical key' {
@@ -1637,7 +1674,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
                     $found | Should -HaveCount 1
                     $expected = if ($deprecated) { 'Deprecated' } elseif ($name -eq $Published) { 'Available' } else { 'Proposed' }
                     $found[0].moduleStatus | Should -BeExactly $expected
-                    $found[0].owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
+                    Get-CatalogOwnerHandles $found[0].owners | Should -Be @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')
                     $row[0].ModuleStatus | Should -BeExactly $expected
                 }
             }
@@ -1871,7 +1908,11 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
                 'owner-two' = @{ login = 'owner-two'; name = 'Profile Two'; type = 'User' }
                 'owner-three' = @{ login = 'owner-three'; name = $null; type = 'User' }
             }
-            teams = @{ '@Azure/avm-core-modules' = @{ slug = 'avm-core-modules'; organization = 'Azure' } }
+            teams = @{
+                '@Azure/avm-core-modules' = @{
+                    slug = 'avm-core-modules'; organization = 'Azure'; description = 'Maintains AVM core modules.'
+                }
+            }
         }
         $revisions = @(
             foreach ($repository in @($inventory.Items | Where-Object { $_.Identity.Ecosystem -eq 'terraform' } |
@@ -1939,7 +1980,8 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $row.SecondaryModuleOwnerGHHandle | Should -BeExactly 'owner-one'
         $row.SecondaryModuleOwnerDisplayName | Should -BeExactly 'Profile One'
         $row.ModuleOwnersGHTeam | Should -BeExactly '@Azure/avm-core-modules'
-        $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners | Should -Be $metadata.owners
+        Get-CatalogOwnerHandles $bundle.Catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].owners |
+            Should -Be $metadata.owners
     }
 
     It 'holds back only the CSV that names a GitHub owner who no longer exists' {
