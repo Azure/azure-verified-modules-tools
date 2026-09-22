@@ -76,6 +76,7 @@ $syncScriptPath = Join-Path $PSScriptRoot "Invoke-RepositorySync.ps1"
 $avmPreCommitPath = Join-Path (Join-Path $PSScriptRoot "lib") "AvmPreCommit.ps1"
 $sharedSyncPath = Join-Path $PSScriptRoot "lib" "RepositoryFileSync.ps1"
 $teamsAndUsersPath = Join-Path (Join-Path $PSScriptRoot "lib") "TeamsAndUsers.ps1"
+$bicepCodeownersSyncPath = Join-Path (Join-Path (Join-Path $repoRoot "repository-management") "bicep-codeowners-sync") "scripts/lib/CodeownersSync.ps1"
 
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 Assert-True `
@@ -172,6 +173,21 @@ $sharedCallParameters = Get-CommandParameterNames -Ast $preCommitFunction.Body -
 Assert-True `
     -Actual (@($sharedCallParameters | Where-Object { $_ -in @('VerifyCandidate', 'ReviewOnly', 'StableBranch', 'ExpectedActor', 'Title', 'Body') }).Count -eq 0) `
     -Description "all Terraform sync runs to use the standard publisher options"
+
+$bicepCodeownersAst = Get-ScriptAst -Path $bicepCodeownersSyncPath
+$bicepCodeownersFunction = Get-FunctionAst `
+    -Ast $bicepCodeownersAst `
+    -Name "Invoke-AvmBicepCodeownersSync"
+Assert-True -Actual ($null -ne $bicepCodeownersFunction) -Description "Invoke-AvmBicepCodeownersSync to exist"
+$bicepCodeownersCallParameters = Get-CommandParameterNames `
+    -Ast $bicepCodeownersFunction.Body `
+    -Name "Invoke-RepositoryFileSync"
+Assert-True `
+    -Actual ($bicepCodeownersCallParameters -contains "VerifyCandidate" -and $bicepCodeownersCallParameters -contains "ExpectedActor") `
+    -Description "Bicep CODEOWNERS sync to keep app-verified candidate publication"
+Assert-True `
+    -Actual (@($bicepCodeownersCallParameters | Where-Object { $_ -in @('StableBranch', 'KeepBranch', 'ReviewOnly') }).Count -eq 0) `
+    -Description "Bicep CODEOWNERS sync to use the standard transient branch and merge lifecycle"
 
 $teamsAndUsers = Get-Content -LiteralPath $teamsAndUsersPath -Raw
 Assert-True `

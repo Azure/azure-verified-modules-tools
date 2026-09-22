@@ -182,6 +182,7 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             param($Repository, $Branch)
             if ($Branch -eq 'main') { return $script:state.MainSha }
             $script:state.Branch = $Branch
+            if ($Branch -match '^avm-bot/pre-commit-[0-9]{14}$' -and $script:state.RemoteHead -ceq ('b' * 40)) { return $null }
             return $script:state.RemoteHead
         }
         Mock Invoke-RepositoryGitHub {
@@ -489,7 +490,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $merge | Should -Contain '--squash'
         $merge | Should -Contain '--match-head-commit'
         $merge | Should -Contain ('c' * 40)
-        $merge | Should -Not -Contain '--delete-branch'
+        $merge | Should -Contain '--delete-branch'
         $merge | Should -Not -Contain '--auto'
     }
 
@@ -500,39 +501,21 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
-    It 'reuses an identical stable candidate without a second commit, push, or creation' {
+    It 'uses a fresh standard candidate branch instead of reusing a retained CODEOWNERS branch' {
         $script:state.RemoteHead = 'b' * 40
         $script:state.HasPullRequest = $true
         (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' -or $_ -contains 'commit' -or $_ -contains 'commit-tree' }) | Should -HaveCount 0
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 0
+        $script:state.Branch | Should -Match '^avm-bot/pre-commit-[0-9]{14}$'
+        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 1
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
     }
 
-    It 'updates a stable candidate as a descendant of both heads without checking out old head code' {
+    It 'does not carry stale stable-branch history into the CODEOWNERS candidate' {
         $script:state.RemoteHead = 'b' * 40
         $script:state.HasPullRequest = $true
         $script:state.OldTree = '3' * 40
         (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
-        $commit = @($script:state.GitCalls | Where-Object { $_ -contains 'commit-tree' })[0]
-        $commit | Should -Contain ('a' * 40)
-        $commit | Should -Contain ('b' * 40)
-        @($script:state.GitCalls | Where-Object { $_ -contains '--force' -or ($_[0] -eq 'checkout' -and $_ -contains ('b' * 40)) }) | Should -HaveCount 0
-    }
-
-    It 'rejects pre-enabled auto-merge before updating the existing candidate' {
-        $script:state.RemoteHead = 'b' * 40
-        $script:state.HasPullRequest = $true
-        $script:state.AutoMerge = @{ merge_method = 'squash' }
-        $script:state.OldTree = '3' * 40
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*auto-merge enabled*'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
-    }
-
-    It 'preserves human work on an existing candidate branch' {
-        $script:state.RemoteHead = 'b' * 40
-        $script:state.HumanHead = $true
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*expected app bot*'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'commit-tree' -or $_ -contains ('b' * 40) }) | Should -HaveCount 0
     }
 
     It 'rejects prepared changes outside the supplied file scope before publishing' {

@@ -167,8 +167,8 @@ before normal pre-commit. It uses the same installed authoring, management
 steps, publisher options and authorized merge as ordinary Terraform sync.
 
 CODEOWNERS opts into that verification and a sparse
-default-branch checkout limited to its managed file, a stable branch, strict dry
-runs, retained branch, and target-only app identity. There is no separate
+default-branch checkout limited to its managed file, strict dry runs, branch deletion,
+and target-only app identity. There is no separate
 Terraform metadata review-only lane and no Bicep workflow backfill adapter.
 Neither path
 checks out an existing candidate head. Git credential/hook configuration is
@@ -181,12 +181,10 @@ that timeout; production verification still requires
 operator approval.
 
 No branch or pull request mutation happens in plan-only mode or when main already matches. On apply,
-the only branch is `avm-bot/bicep-codeowners-sync`, with at most one open candidate.
-Existing candidate and commit authors must be the authenticated AVM App bot.
-Candidates with auto-merge already enabled are rejected before any head update,
-so synchronization cannot inadvertently advance a separately configured automatic merge.
-Updates retain the old head and current main as ancestors and never force-push
-or delete the branch. Unexpected user work is rejected, not overwritten.
+the workflow uses the same timestamped `avm-bot/pre-commit-*` branch and branch-deletion
+merge path as the standard shared publisher, while still requiring the authenticated
+AVM App bot for the candidate and commits. It never reuses or rewrites a retained
+candidate branch, so stale pull request metadata cannot expand the verified diff.
 
 Before bypass merging, the script checks exact repository IDs/names, main,
 app/author identity, complete changed-file and commit pagination, the generated

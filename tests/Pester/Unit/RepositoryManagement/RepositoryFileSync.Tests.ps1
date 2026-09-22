@@ -83,7 +83,7 @@ Describe 'Both repository-sync entry points use one existing publication core' {
         }
         Should -Invoke Invoke-RepositoryFileSync -Exactly 1 -ParameterFilter {
             $Repository -ceq 'Azure/bicep-registry-modules' -and $DefaultBranch -ceq 'main' -and
-            $PlanOnly -and -not $ReviewOnly -and $KeepBranch -and $VerifyCandidate -and $StableBranch -ceq 'avm-bot/bicep-codeowners-sync' -and
+            $PlanOnly -and -not $ReviewOnly -and -not $KeepBranch -and $VerifyCandidate -and -not $StableBranch -and
             $GeneratedFiles.Count -eq 1 -and $GeneratedFiles['.github/CODEOWNERS'] -ceq $script:snapshot.Content -and
             ($AllowedPaths -join ',') -ceq '.github/CODEOWNERS' -and $ExpectedActor.id -eq 187664033 -and
             $null -ne $ValidateChange -and -not $Prepare
