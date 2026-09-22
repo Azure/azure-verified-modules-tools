@@ -7,6 +7,7 @@
 
 $script:AvmModuleListSyncCategoryOrder = @('ptn', 'res', 'utl')
 $script:AvmModuleListSyncLineRegex = '^(?<indent>\s*)(?<comment>#\s*)?-\s+"(?<path>avm/(?:res|ptn|utl)/[^"]+)"\s*$'
+$script:AvmModuleListSyncIncludedStatuses = @('Available', 'Orphaned')
 
 function Get-AvmModuleListSyncCatalogModulePaths {
     <#
@@ -22,7 +23,7 @@ function Get-AvmModuleListSyncCatalogModulePaths {
     $byCategory = @{}
     foreach ($category in $script:AvmModuleListSyncCategoryOrder) { $byCategory[$category] = [System.Collections.Generic.List[string]]::new() }
     foreach ($entry in $index.Values) {
-        if ($entry.moduleStatus -cne 'Available') { continue }
+        if ($entry.moduleStatus -cnotin $script:AvmModuleListSyncIncludedStatuses) { continue }
         $path = [string]$entry.modulePath
         if ($path -notmatch '^avm/(?<category>res|ptn|utl)/') { continue }
         $byCategory[$Matches['category']].Add($path)

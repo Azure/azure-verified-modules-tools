@@ -46,6 +46,19 @@ Describe 'Get-AvmModuleListSyncCatalogModulePaths' {
         $result.ptn | Should -Be @('avm/ptn/foo/bar')
         $result.utl | Should -HaveCount 0
     }
+
+    It 'includes Orphaned modules alongside Available and drops Proposed/Deprecated' {
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{
+                'avm/res/aaa/bbb' = @{ modulePath = 'avm/res/aaa/bbb'; moduleStatus = 'Available' }
+                'avm/res/ccc/ddd' = @{ modulePath = 'avm/res/ccc/ddd'; moduleStatus = 'Orphaned' }
+                'avm/res/eee/fff' = @{ modulePath = 'avm/res/eee/fff'; moduleStatus = 'Proposed' }
+                'avm/res/ggg/hhh' = @{ modulePath = 'avm/res/ggg/hhh'; moduleStatus = 'Deprecated' }
+            }
+        }
+        $result = Get-AvmModuleListSyncCatalogModulePaths -Repository 'Azure/bicep-registry-modules'
+        $result.res | Should -Be @('avm/res/aaa/bbb', 'avm/res/ccc/ddd')
+    }
 }
 
 Describe 'Resolve-AvmModuleDropdownSync' {
