@@ -23,5 +23,14 @@ $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'ModuleOwners.ps1')
 . (Join-Path $libDir 'PrReviewerRouting.ps1')
 
-Invoke-AvmPrReviewerRouting -Repository $Repository -PullRequestUrl $PullRequestUrl `
-    -UpdatedWithinMinutes $UpdatedWithinMinutes -WhatIf:$WhatIfPreference
+try {
+    Invoke-AvmPrReviewerRouting -Repository $Repository -PullRequestUrl $PullRequestUrl `
+        -UpdatedWithinMinutes $UpdatedWithinMinutes -WhatIf:$WhatIfPreference
+}
+catch {
+    # Defense-in-depth: guarantee full exception detail always reaches the workflow log,
+    # then rethrow so the step still fails with a non-zero exit code exactly as today.
+    Write-Host "FATAL: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+    Write-Host $_.ScriptStackTrace
+    throw
+}

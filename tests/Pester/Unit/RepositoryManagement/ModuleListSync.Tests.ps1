@@ -153,6 +153,50 @@ Describe 'Invoke-AvmModuleListSync' {
     }
 }
 
+Describe 'Invoke-AvmModuleListSync diagnostics' {
+    BeforeEach {
+        Mock Get-AvmModuleListSyncCatalogModulePaths {
+            @{
+                ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+                res = @('avm/res/aaa/bbb', 'avm/res/ccc/ddd')
+                utl = @('avm/utl/types/avm-common-types')
+            }
+        }
+        Mock Get-AvmRepositoryFileAtRef { [pscustomobject]@{ Content = (New-ModuleDropdownFixtureContent); Sha = 'deadbeef' } }
+    }
+
+    It 'emits a progress marker before fetching or comparing anything' {
+        $verboseOutput = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules' -Verbose 4>&1 | Out-String
+        $verboseOutput | Should -Match ([regex]::Escape('[1/1] Syncing module dropdown for [Azure/bicep-registry-modules]'))
+    }
+
+    It 'writes full exception detail and rethrows when pre-sync setup fails' {
+        Mock Get-AvmModuleListSyncCatalogModulePaths { throw [System.InvalidOperationException]::new('catalog fetch boom') }
+        $hostOutput = & {
+            try { Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules' *>&1 }
+            catch { "THREW: $($_.Exception.Message)" }
+        } | Out-String
+        $hostOutput | Should -Match 'catalog fetch boom'
+        $hostOutput | Should -Match 'InvalidOperationException'
+        $hostOutput | Should -Match 'THREW: catalog fetch boom'
+    }
+}
+
+Describe 'Invoke-AvmModuleListSync entry point diagnostics' {
+    BeforeAll {
+        $script:entryPointPath = Join-Path $root 'repository-management' 'module-list-sync' 'scripts' 'Invoke-AvmModuleListSync.ps1'
+        $script:entryPointText = Get-Content -Raw -Path $script:entryPointPath
+    }
+
+    It 'exists' {
+        Test-Path $script:entryPointPath | Should -BeTrue
+    }
+
+    It 'wraps the sync invocation in a try/catch that prints a FATAL banner and rethrows' {
+        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmModuleListSync\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
+    }
+}
+
 Describe 'Module dropdown sync workflow safety' {
     BeforeAll {
         $script:workflowPath = Join-Path $root '.github' 'workflows' 'repository-management-module-list-sync.yml'

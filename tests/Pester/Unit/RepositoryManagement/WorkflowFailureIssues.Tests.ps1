@@ -106,6 +106,47 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
     }
 }
 
+Describe 'Invoke-AvmWorkflowFailureIssues diagnostics' {
+    BeforeEach {
+        Mock Get-AvmReviewerRoutingCatalogIndex { @{} }
+        $script:workflow1 = [pscustomobject]@{ id = 11; name = 'avm.res.storage.storage-account' }
+    }
+
+    It 'emits a per-item progress marker for every workflow before it is processed' {
+        Mock Get-AvmWorkflowFailureWorkflows { @($script:workflow1) }
+        Mock Get-AvmWorkflowFailureOpenIssues { @() }
+        Mock Get-AvmWorkflowFailureLatestRun { $null }
+        $verboseOutput = Invoke-AvmWorkflowFailureIssues -Repository 'Azure/bicep-registry-modules' -Verbose 4>&1 | Out-String
+        $verboseOutput | Should -Match ([regex]::Escape("[1/1] Checking workflow [$($script:workflow1.name)]"))
+    }
+
+    It 'writes full exception detail and rethrows when pre-loop setup fails' {
+        Mock Get-AvmWorkflowFailureWorkflows { throw [System.InvalidOperationException]::new('workflow fetch boom') }
+        $hostOutput = & {
+            try { Invoke-AvmWorkflowFailureIssues -Repository 'Azure/bicep-registry-modules' *>&1 }
+            catch { "THREW: $($_.Exception.Message)" }
+        } | Out-String
+        $hostOutput | Should -Match 'workflow fetch boom'
+        $hostOutput | Should -Match 'InvalidOperationException'
+        $hostOutput | Should -Match 'THREW: workflow fetch boom'
+    }
+}
+
+Describe 'Invoke-AvmWorkflowFailureIssues entry point diagnostics' {
+    BeforeAll {
+        $script:entryPointPath = Join-Path $root 'repository-management' 'workflow-failure-issues' 'scripts' 'Invoke-AvmWorkflowFailureIssues.ps1'
+        $script:entryPointText = Get-Content -Raw -Path $script:entryPointPath
+    }
+
+    It 'exists' {
+        Test-Path $script:entryPointPath | Should -BeTrue
+    }
+
+    It 'wraps the sweep invocation in a try/catch that prints a FATAL banner and rethrows' {
+        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmWorkflowFailureIssues\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
+    }
+}
+
 Describe 'Workflow failure issue management workflow safety' {
     BeforeAll {
         $script:workflowPath = Join-Path $root '.github' 'workflows' 'repository-management-workflow-failure-issues.yml'
