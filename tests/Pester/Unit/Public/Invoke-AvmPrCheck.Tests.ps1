@@ -102,7 +102,7 @@ Describe 'Invoke-AvmPrCheck' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 4/9: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 5/9: lint'
         @($observed.DefaultWarnings) | Should -Contain 'nested lint warning'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint pass'
@@ -254,19 +254,11 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
         $result.Steps.Count               | Should -Be 9
-        $result.Steps[0].Step             | Should -Be 'sync'
-        $result.Steps[0].Status           | Should -Be 'skipped'
-        $result.Steps[1].Step             | Should -Be 'format'
-        $result.Steps[2].Step             | Should -Be 'transform'
-        $result.Steps[3].Step             | Should -Be 'lint'
-        $result.Steps[4].Step             | Should -Be 'check policy'
-        $result.Steps[5].Step             | Should -Be 'check convention'
-        $result.Steps[6].Step             | Should -Be 'validate'
-        $result.Steps[7].Step             | Should -Be 'docs'
-        $result.Steps[8].Step             | Should -Be 'metadata'
+        $result.Steps.Step | Should -Be @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $result.Steps[1].Status           | Should -Be 'skipped'
         InModuleScope Avm.Authoring {
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
-                $Context.Ecosystem -eq 'bicep' -and $WarnIfMissing
+                $Context.Ecosystem -eq 'bicep'
             }
         }
         ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
@@ -388,9 +380,8 @@ Describe 'Invoke-AvmPrCheck' {
             Invoke-AvmPrCheck -Path $D -StopOnFail
         }
 
-        # sync(skipped) -> format(pass) -> transform(pass) -> lint(fail) -> abort
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'lint'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
@@ -424,9 +415,8 @@ Describe 'Invoke-AvmPrCheck' {
             Invoke-AvmPrCheck -Path $D
         }
 
-        # sync(skipped) -> format(pass) -> transform(error) -> abort
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 3
+        $result.Steps.Count                  | Should -Be 4
         $result.Steps[-1].Step               | Should -Be 'transform'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'
@@ -479,15 +469,7 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
         $result.Steps.Count               | Should -Be 9
-        $result.Steps[0].Step             | Should -Be 'sync'
-        $result.Steps[1].Step             | Should -Be 'format'
-        $result.Steps[2].Step             | Should -Be 'transform'
-        $result.Steps[3].Step             | Should -Be 'lint'
-        $result.Steps[4].Step             | Should -Be 'check policy'
-        $result.Steps[5].Step             | Should -Be 'check convention'
-        $result.Steps[6].Step             | Should -Be 'validate'
-        $result.Steps[7].Step             | Should -Be 'docs'
-        $result.Steps[8].Step             | Should -Be 'metadata'
+        $result.Steps.Step | Should -Be @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 

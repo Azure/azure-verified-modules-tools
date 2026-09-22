@@ -137,8 +137,8 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
-| `avm pre-commit`              | `format` → `lint` → `validate` → `docs` → `metadata`                    | `sync` → `check convention` → `transform` → `format` → `docs` → `metadata` |
-| `avm pr-check`                | Requires a clean Git worktree, then composes `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs` → `metadata`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
+| `avm pre-commit`              | `metadata` → `format` → `lint` → `validate` → `docs`                    | `metadata` → `sync` → `check convention` → `transform` → `format` → `docs` |
+| `avm pr-check`                | Requires a clean Git worktree, then composes `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |
 | `avm index update`            | `Invoke-AvmJsonModuleIndexGeneration.ps1`                                | Update governance index entry                                              |
@@ -153,6 +153,10 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm update`                  | Update Avm.Authoring to the latest PowerShell Gallery version in the CurrentUser scope | Same                                                        |
 
 Global flags: `--ecosystem bicep|terraform|auto` (default `auto`), `--module <path>`, `--json` (machine output), `--verbose`, `--dry-run`, `--auto-install` / `AVM_AUTO_INSTALL=1` (install any missing managed tool without prompting).
+
+Both authoring chains require valid root and child `metadata.json` files.
+Metadata failure stops the chain before tool setup or other steps, regardless
+of `StopOnFail`.
 
 ### Developer experience
 

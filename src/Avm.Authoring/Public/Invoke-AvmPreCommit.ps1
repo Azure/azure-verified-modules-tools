@@ -2,8 +2,8 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     format -> lint -> validate -> docs -> metadata.
-        terraform: sync -> check convention -> transform -> format -> docs -> metadata.
+        bicep:     metadata -> format -> lint -> validate -> docs.
+        terraform: metadata -> sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -17,14 +17,14 @@ function Invoke-AvmPreCommit {
         pre-commit.porch.yaml philosophy: after an initial managed-files
         sync it stays fast and fully offline
         (check convention -> transform -> format -> docs), so it
-        never needs `terraform init`. The `sync` step runs FIRST so the
+        never needs `terraform init`. The `sync` step runs after metadata so the
         rest of the chain sees the freshest governed files; it fetches the
         managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
-        The final metadata check validates local root and child metadata without
-        creating files or reading indexes. Missing metadata produces a warning
-        during rollout; invalid existing metadata fails the chain.
+        Metadata validation runs before tool resolution and all other steps.
+        Missing or invalid root or child metadata aborts the chain without
+        creating files or reading indexes, regardless of StopOnFail.
         The two checks that require an
         initialised working directory - lint (tflint) and validate
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
@@ -180,7 +180,6 @@ function Invoke-AvmPreCommit {
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
-    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
@@ -207,12 +206,12 @@ function Invoke-AvmPreCommit {
         )
     }
 
-    $stepDefs += [pscustomobject]@{
+    $stepDefs = @([pscustomobject]@{
         Name = 'metadata'
         Cmdlet = 'Test-AvmMetadataModules'
         ContextOnly = $true
-        ExtraArgs = @{ Context = $context; WarnIfMissing = $true }
-    }
+        ExtraArgs = @{ Context = $context }
+    }) + $stepDefs
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'
@@ -232,6 +231,9 @@ function Invoke-AvmPreCommit {
     )
 
     foreach ($def in $stepDefs) {
+        if ($stepIndex -eq 1) {
+            $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
+        }
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
@@ -321,6 +323,7 @@ function Invoke-AvmPreCommit {
 
         if ($stepStatus -eq 'fail' -or $stepStatus -eq 'error') { $overall = $stepStatus }
         if ($stepStatus -eq 'error') { break }
+        if ($def.Name -eq 'metadata' -and $stepStatus -ne 'pass') { break }
         if ($StopOnFail -and $stepStatus -eq 'fail') { break }
     }
 

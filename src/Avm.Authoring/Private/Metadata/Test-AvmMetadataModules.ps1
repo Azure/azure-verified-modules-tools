@@ -2,8 +2,7 @@ function Test-AvmMetadataModules {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)][pscustomobject] $Context,
-        [switch] $WarnIfMissing
+        [Parameter(Mandatory)][pscustomobject] $Context
     )
 
     Set-StrictMode -Version 3.0
@@ -21,19 +20,8 @@ function Test-AvmMetadataModules {
         }
         $files = @(Get-ChildItem -LiteralPath $scope.Path -Force | Where-Object { $_.Name -ieq 'metadata.json' })
         if ($files.Count -eq 0) {
-            $message = if ($WarnIfMissing) {
-                'metadata.json is missing. Initialize it with avm metadata initialize; missing files are temporarily allowed by authoring checks.'
-            }
-            else {
-                'metadata.json is required. Initialize it with avm metadata initialize.'
-            }
             $issue = New-AvmMetadataIssue -Code 'AVM_METADATA_MISSING' -File $relativePath `
-                -Message $message
-            if ($WarnIfMissing) {
-                $issue.Severity = 'warning'
-                Write-AvmLog -Message $issue.Message -Level Warning -File $issue.File -Line $issue.Line | Out-Null
-                Register-AvmPresentedIssue -Issue $issue
-            }
+                -Message 'metadata.json is required. Initialize it with avm metadata initialize.'
             $issues.Add($issue)
             continue
         }

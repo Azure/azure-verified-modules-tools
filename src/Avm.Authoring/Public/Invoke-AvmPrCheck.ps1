@@ -2,8 +2,8 @@ function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
-        sync -> format -> transform -> lint -> check policy ->
-        check convention -> validate -> docs -> metadata.
+        metadata -> sync -> format -> transform -> lint -> check policy ->
+        check convention -> validate -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -17,9 +17,9 @@ function Invoke-AvmPrCheck {
         credentialled policy evaluation and read-only drift checks used to
         verify that pre-commit output is current. Before any step runs, git
         status must report a clean working tree.
-        The final metadata check validates local root and child metadata without
-        creating files or reading indexes. Missing metadata produces a warning
-        during rollout; invalid existing metadata fails the chain.
+        Metadata validation runs before tool resolution and all other steps.
+        Missing or invalid root or child metadata aborts the chain without
+        creating files or reading indexes, regardless of StopOnFail.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a
@@ -28,7 +28,7 @@ function Invoke-AvmPrCheck {
         The convention step requires a tests/unit/*.tftest.hcl fixture,
         preventing an empty unit tier from reading as a green gauntlet.
 
-        The chain opens with the managed-files sync step (terraform
+        After metadata validation, the managed-files sync step (terraform
         only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
         which reconciles the governed files by writing them, pr-check
         writes nothing and instead treats any needed add/update/remove
@@ -124,9 +124,14 @@ function Invoke-AvmPrCheck {
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pr-check: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Assert-AvmGitWorkingTreeClean -Path $context.Root
-    $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = @(
+        [pscustomobject]@{
+            Name = 'metadata'
+            Cmdlet = 'Test-AvmMetadataModules'
+            ContextOnly = $true
+            ExtraArgs = @{ Context = $context }
+        }
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{
@@ -144,12 +149,6 @@ function Invoke-AvmPrCheck {
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
         [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
-        [pscustomobject]@{
-            Name = 'metadata'
-            Cmdlet = 'Test-AvmMetadataModules'
-            ContextOnly = $true
-            ExtraArgs = @{ Context = $context; WarnIfMissing = $true }
-        }
     )
 
     $steps = New-Object System.Collections.Generic.List[object]
@@ -157,6 +156,9 @@ function Invoke-AvmPrCheck {
     $stepIndex = 0
 
     foreach ($def in $stepDefs) {
+        if ($stepIndex -eq 1) {
+            $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
+        }
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
@@ -225,6 +227,7 @@ function Invoke-AvmPrCheck {
 
         if ($stepStatus -eq 'fail' -or $stepStatus -eq 'error') { $overall = $stepStatus }
         if ($stepStatus -eq 'error') { break }
+        if ($def.Name -eq 'metadata' -and $stepStatus -ne 'pass') { break }
         if ($StopOnFail -and $stepStatus -eq 'fail') { break }
     }
 

@@ -217,8 +217,11 @@ Existing helper rows in source CSVs still require the explicit removal override.
 This supersedes only the helper omission policy, not repository access or
 archived/missing/private restrictions.
 The inventory and actual migration data stay outside the packaged module.
-Normal authoring checks still warn on missing metadata during rollout and fail
-on invalid existing metadata.
+Normal authoring checks require valid metadata on every module root and child.
+Both `avm pre-commit` and `avm pr-check` stop on missing or invalid metadata before
+tool setup or subsequent steps. Initialize missing files with
+`avm metadata initialize`, or complete the metadata backfill before adopting
+this authoring release.
 
 This procedure creates no `main.metadata.tf` or other Terraform wiring and does
 not run full repository sync, managed-file updates, settings changes, App
