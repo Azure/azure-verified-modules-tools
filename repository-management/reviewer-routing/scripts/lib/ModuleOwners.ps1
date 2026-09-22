@@ -174,6 +174,28 @@ function Get-AvmBicepModuleMetadataOwners {
     return @(ConvertTo-AvmReviewerRoutingMetadataOwner -Owners @($metadata['owners']) -Source "$Repository@$Ref`:$metadataPath")
 }
 
+function Test-AvmBicepModuleExists {
+    <#
+    .SYNOPSIS
+    Returns whether a top-level module folder is known: either indexed in the
+    published catalog, or it has its own metadata.json at the given ref.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string] $TopLevelModulePath,
+        [Parameter(Mandatory)] [hashtable] $CatalogIndex,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $Ref
+    )
+
+    if ($CatalogIndex.Contains($TopLevelModulePath)) {
+        return $true
+    }
+    $file = Get-AvmRepositoryFileAtRef -Repository $Repository -Path "$TopLevelModulePath/metadata.json" -Ref $Ref -AllowMissing
+    return $null -ne $file
+}
+
 function Get-AvmModuleOwners {
     <#
     .SYNOPSIS
