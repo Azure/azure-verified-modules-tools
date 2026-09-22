@@ -382,4 +382,20 @@ Describe 'Reviewer routing workflow safety' {
             $importIndex | Should -BeLessThan $scriptIndex
         }
     }
+
+    It 'uses GH_TOKEN directly and clears native exit status after the work script' {
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -BeGreaterThan 0
+        foreach ($match in $workRunBlocks) {
+            $runBody = $match.Groups['body'].Value
+            $runBody | Should -Not -Match '(?m)^\s*gh auth login\b'
+            $scriptIndex = [System.Text.RegularExpressions.Regex]::Match(
+                $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
+            $resetIndex = $runBody.LastIndexOf('$global:LASTEXITCODE = 0')
+            $resetIndex | Should -BeGreaterThan $scriptIndex
+            $runBody | Should -Match '(?s)\$global:LASTEXITCODE\s*=\s*0\s*\z'
+        }
+    }
 }
