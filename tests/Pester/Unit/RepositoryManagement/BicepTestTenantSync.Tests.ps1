@@ -730,53 +730,15 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
 Describe 'Bicep workflow isolation and trusted input boundary' {
     BeforeAll {
         $script:workflow = (Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-bicep-sync.yml') -Raw).Replace("`r`n", "`n")
-        $script:originalJob = [regex]::Match($script:workflow, '(?ms)^  sync:\n.*?(?=^  [a-z-]+:\n|\z)').Value.TrimEnd()
         $script:variablesJob = [regex]::Match($script:workflow, '(?ms)^  sync-test-tenant-variables:\n.*\z').Value
         $script:entry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1') -Raw
     }
 
-    It 'preserves the CODEOWNERS writer and token scopes without the retired enable gate' {
-        $expected = @'
-  sync:
-    name: Repository Management - Bicep Sync
-    if: >-
-      github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: avm
-    timeout-minutes: 20
-    steps:
-      - name: Checkout trusted tools
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          persist-credentials: false
-
-      - name: Create target-scoped GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
-          owner: Azure
-          repositories: bicep-registry-modules
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: Generate and synchronize CODEOWNERS
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          AVM_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
-        run: |
-          if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
-            throw 'The configured GitHub App is not azure-verified-modules.'
-          }
-          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-codeowners-sync' 'scripts' 'Invoke-BicepCodeownersSync.ps1') `
-            -PlanOnly:($env:PLAN_ONLY -eq 'true')
-'@
-        $script:originalJob | Should -BeExactly $expected.Replace("`r`n", "`n").TrimEnd()
+    It 'no longer schedules or manages Bicep CODEOWNERS from this workflow' {
+        $script:workflow | Should -Not -Match '(?m)^  sync:$'
+        $script:workflow | Should -Not -Match '(?m)^\s+schedule:$'
+        $script:workflow | Should -Not -Match 'BicepCodeownersSync|bicep-codeowners-sync|Generate and synchronize CODEOWNERS'
+        Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'bicep-codeowners-sync') | Should -BeFalse
     }
 
     It 'keeps manual operation and plan defaults without a global activation gate' {

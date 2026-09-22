@@ -8,13 +8,10 @@ BeforeAll {
         (Join-Path $PSHOME 'Modules')
     ) -join [System.IO.Path]::PathSeparator
     $shared = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
-    $codeowners = Join-Path $script:repoRoot 'repository-management' 'bicep-codeowners-sync'
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     foreach ($name in @('RepositoryFileSync.ps1', 'AvmPreCommit.ps1', 'ManagedFilesUpgrade.ps1')) {
         . (Join-Path $shared $name)
     }
-    . (Join-Path $codeowners 'scripts' 'lib' 'Codeowners.ps1')
-    . (Join-Path $codeowners 'scripts' 'lib' 'CodeownersSync.ps1')
     $script:terraformOwnership = @{
         codeOwnersDefaultTeams = @('module-reviewers')
         codeOwnersFileProtectionTeams = @('engineering-reviewers')
@@ -22,14 +19,6 @@ BeforeAll {
     $terraformTemplate = Get-Content -LiteralPath (Join-Path $shared '..' '..' 'CODEOWNERS.template') -Raw
     $script:terraformContent = $terraformTemplate.Replace('__AVM_CODEOWNERS_RULES__',
         "* @Azure/module-reviewers`n.github/CODEOWNERS @Azure/engineering-reviewers")
-    $script:template = Get-Content -LiteralPath (Join-Path $codeowners 'CODEOWNERS.template') -Raw
-    $script:content = $script:template.Replace('__AVM_MODULE_OWNERS__', '/avm/res/test/module/ @alice @Azure/azure-verified-modules-module-owners')
-    $script:snapshot = [pscustomobject]@{
-        Content = $script:content
-        BlobSha = Get-RepositoryGitBlobSha -Bytes ([System.Text.Encoding]::UTF8.GetBytes($script:content))
-        SourceSha = 'f' * 40
-        ModuleCount = 1
-    }
     function New-CoreActor {
         [pscustomobject]@{ login = 'azure-verified-modules[bot]'; id = 187664033; type = 'Bot' }
     }
@@ -61,10 +50,8 @@ BeforeAll {
                 if ($script:state.HasPullRequest -and -not $script:state.Merged) { return [pscustomobject]@{ number = 123 } }
                 return @()
             }
-            '/pulls/7343$' { return [pscustomobject]@{ merged = $true; base = @{ ref = 'main'; repo = $script:state.Repo } } }
             '/pulls/123$' { return New-CorePullRequest }
             '/pulls/123/files\?' { return @($script:state.RemotePaths | ForEach-Object { [pscustomobject]@{ filename = $_ } }) }
-            '/codeowners/errors\?' { return [pscustomobject]@{ errors = @($script:state.OwnerErrors) } }
             '/commits/' {
                 $sha = $Endpoint.Split('/')[-1]
                 $actor = if ($script:state.HumanHead -and $sha -ceq ('b' * 40)) {
@@ -170,7 +157,7 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             OwnerErrors = @()
             Root = $null
             CreateGithub = $true
-            InitialCodeowners = $script:content
+            InitialCodeowners = $script:terraformContent
             PreparedCodeownersBytes = @()
             GitCalls = [System.Collections.Generic.List[object]]::new()
             GhCalls = [System.Collections.Generic.List[object]]::new()
@@ -203,8 +190,6 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             }
             throw 'An unexpected remote command was attempted.'
         }
-        Mock Get-AvmBicepCodeownersSnapshot { $script:snapshot }
-        Mock Get-RepositoryFileAtCommit { [pscustomobject]@{ Content = $script:content; Sha = $script:snapshot.BlobSha } }
         Mock Remove-AvmMetadataFileConflict { $false }
         Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $false; Reason = 'current pin' } }
         Mock Invoke-AvmPreCommitWithUpgradeRetry {
@@ -368,23 +353,6 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
     }
 
-    It 'keeps a CODEOWNERS dry run read-only with <RoleMetadata> repository-role metadata' -ForEach @(
-        @{ RoleMetadata = 'push false'; Permissions = [pscustomobject]@{ admin = $false; maintain = $false; push = $false; triage = $false; pull = $true } }
-        @{ RoleMetadata = 'null'; Permissions = $null }
-        @{ RoleMetadata = 'omitted'; Permissions = $null }
-    ) {
-        $script:state.Repo.permissions = $Permissions
-        if ($RoleMetadata -eq 'omitted') { $script:state.Repo.PSObject.Properties.Remove('permissions') }
-        $result = Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly
-        $result.Status | Should -Be 'Planned'
-        $script:state.Branch | Should -BeNullOrEmpty
-        @($script:state.GitCalls | Where-Object { $_[0] -eq 'status' }) | Should -HaveCount 1
-        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' -or $_ -contains 'push' }) | Should -HaveCount 0
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 0
-        @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
-        Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Times 0
-    }
-
     It 'publishes a verified review-only metadata candidate without requiring merge capability' {
         $script:state.Repo.allow_squash_merge = $false
         $script:state.LocalPaths = @('metadata.json')
@@ -410,170 +378,11 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main `
             -StableBranch 'avm-bot/bicep-metadata-backfill' -ExpectedActor (New-CoreActor) `
             -AllowedPaths @('.github/CODEOWNERS') -VerifyCandidate -ReviewOnly -PlanOnly `
-            -GeneratedFiles @{ '.github/CODEOWNERS' = $script:content }
+            -GeneratedFiles @{ '.github/CODEOWNERS' = $script:terraformContent }
         $result.Status | Should -Be 'Planned'
         $result.PullRequestUrl | Should -BeNullOrEmpty
         @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' -or $_ -contains 'push' }) | Should -HaveCount 0
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
-    }
-
-    It 'rejects a repository ID that differs from the target-only installation before cloning' {
-        Mock Invoke-RepositoryGitHubApi {
-            [pscustomobject]@{ total_count = 1; repositories = @([pscustomobject]@{ id = 99; full_name = 'Azure/bicep-registry-modules' }) }
-        } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
-            Should -Throw '*repository ID*app installation*'
-        Should -Invoke Invoke-RepositoryGit -Times 0
-    }
-
-    It 'rejects unexpected target <Property> before cloning' -ForEach @(
-        @{ Property = 'full_name'; Value = 'Other/repository' }
-        @{ Property = 'default_branch'; Value = 'release' }
-        @{ Property = 'fork'; Value = $true }
-        @{ Property = 'archived'; Value = $true }
-        @{ Property = 'disabled'; Value = $true }
-    ) {
-        Mock Invoke-RepositoryGitHubApi {
-            [pscustomobject]@{ total_count = 1; repositories = @([pscustomobject]@{ id = 42; full_name = 'Azure/bicep-registry-modules' }) }
-        } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
-        $script:state.Repo.$Property = $Value
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
-            Should -Throw '*target or default branch is unexpected*'
-        Should -Invoke Invoke-RepositoryGit -Times 0
-    }
-
-    It 'rejects an installation with <Scope> before cloning' -ForEach @(
-        @{ Scope = 'multiple reported repositories'; Total = 2; Names = @('Azure/bicep-registry-modules') }
-        @{ Scope = 'multiple returned repositories'; Total = 1; Names = @('Azure/bicep-registry-modules', 'Azure/other') }
-        @{ Scope = 'a different target'; Total = 1; Names = @('Azure/other') }
-    ) {
-        $script:installation = [pscustomobject]@{
-            total_count = $Total
-            repositories = @($Names | ForEach-Object { [pscustomobject]@{ id = 42; full_name = $_ } })
-        }
-        Mock Invoke-RepositoryGitHubApi { $script:installation } -ParameterFilter { $Endpoint -ceq 'installation/repositories?per_page=100' }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
-            Should -Throw '*authenticated app or its target-only token scope is unexpected*'
-        Should -Invoke Invoke-RepositoryGit -Times 0
-    }
-
-    It 'rejects unexpected app viewer <Property> before cloning' -ForEach @(
-        @{ Property = 'login'; Value = 'human' }
-        @{ Property = 'databaseId'; Value = 7 }
-    ) {
-        $script:viewer = [pscustomobject]@{ login = 'azure-verified-modules[bot]'; databaseId = 187664033 }
-        $script:viewer.$Property = $Value
-        Mock Invoke-RepositoryGitHub { [pscustomobject]@{ data = @{ viewer = $script:viewer } } } -ParameterFilter { $Arguments -contains 'graphql' }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template -PlanOnly } |
-            Should -Throw '*authenticated app or its target-only token scope is unexpected*'
-        Should -Invoke Invoke-RepositoryGit -Times 0
-    }
-
-    It 'propagates a denied <Operation> write without merging' -ForEach @(
-        @{ Operation = 'push' }
-        @{ Operation = 'create' }
-    ) {
-        if ($Operation -eq 'push') {
-            Mock Invoke-RepositoryGit { throw '403 write denied' } -ParameterFilter { $Arguments[0] -eq 'push' }
-        } else {
-            Mock Invoke-RepositoryGitHub { throw '403 write denied' } -ParameterFilter { $Arguments -contains 'create' }
-        }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*403 write denied*'
-        Should -Invoke Invoke-RepositoryGitHub -Times 0 -ParameterFilter { $Arguments -contains 'merge' }
-        $script:state.Merged | Should -BeFalse
-    }
-
-    It 'merges CODEOWNERS with the shared app-bypass implementation pinned to the exact head' {
-        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
-        $merge = @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'merge' })[0]
-        $merge | Should -Contain '--admin'
-        $merge | Should -Contain '--squash'
-        $merge | Should -Contain '--match-head-commit'
-        $merge | Should -Contain ('c' * 40)
-        $merge | Should -Contain '--delete-branch'
-        $merge | Should -Not -Contain '--auto'
-    }
-
-    It 'does not publish anything when shared diff detection reports no changes' {
-        $script:state.NoChanges = $true
-        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'NoChange'
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
-    }
-
-    It 'uses a fresh standard candidate branch instead of reusing a retained CODEOWNERS branch' {
-        $script:state.RemoteHead = 'b' * 40
-        $script:state.HasPullRequest = $true
-        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
-        $script:state.Branch | Should -Match '^avm-bot/pre-commit-[0-9]{14}$'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 1
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
-    }
-
-    It 'does not carry stale stable-branch history into the CODEOWNERS candidate' {
-        $script:state.RemoteHead = 'b' * 40
-        $script:state.HasPullRequest = $true
-        $script:state.OldTree = '3' * 40
-        (Invoke-AvmBicepCodeownersSync -Template $script:template).Status | Should -Be 'Merged'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'commit-tree' -or $_ -contains ('b' * 40) }) | Should -HaveCount 0
-    }
-
-    It 'rejects prepared changes outside the supplied file scope before publishing' {
-        $script:state.LocalPaths += 'unrelated.ps1'
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*outside*'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
-    }
-
-    It 'checks the complete remote file scope before merging' {
-        $script:state.RemotePaths += 'unrelated.ps1'
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*outside*'
-        @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
-    }
-
-    It 'leaves an apply candidate reviewable while surfacing GitHub owner diagnostics' {
-        $script:state.OwnerErrors = @(@{ message = 'Unknown owner alice' })
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*candidate remains open*'
-        $script:state.HasPullRequest | Should -BeTrue
-        $script:state.Merged | Should -BeFalse
-    }
-
-    It 'propagates bypass failure instead of enabling auto-merge or using another credential' {
-        Mock Invoke-RepositoryGitHub { throw '403 bypass denied' } -ParameterFilter { $Arguments -contains 'merge' }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*403 bypass denied*'
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'merge' -and $MaxRetries -eq 0 }
-        $script:state.HasPullRequest | Should -BeTrue
-    }
-
-    It 'propagates non-fast-forward failures without forcing an update' {
-        $script:state.RejectPush = $true
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*non-fast-forward*'
-        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
-    }
-
-    It 'rejects unexpected post-merge tree changes' {
-        $script:state.MergedTree = '3' * 40
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*merged base or tree differs*'
-    }
-
-    It 'does not publish after a concurrent base update' {
-        Mock Get-RepositoryBranchHead {
-            if ($Branch -eq 'main') { return 'e' * 40 }
-            $script:state.Branch = $Branch
-            return $script:state.RemoteHead
-        }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*moved before publishing*'
-        @($script:state.GitCalls | Where-Object { $_ -contains 'push' }) | Should -HaveCount 0
-    }
-
-    It 'does not merge after a concurrent candidate-head update' {
-        Mock Get-RepositoryBranchHead {
-            if ($Branch -eq 'main') { return $script:state.MainSha }
-            $script:state.Branch = $Branch
-            if ($script:state.RemoteHead) { return 'e' * 40 }
-            return $null
-        }
-        { Invoke-AvmBicepCodeownersSync -Template $script:template } | Should -Throw '*moved during validation*'
-        @($script:state.GhCalls | Where-Object { $_ -contains 'merge' }) | Should -HaveCount 0
     }
 }
 

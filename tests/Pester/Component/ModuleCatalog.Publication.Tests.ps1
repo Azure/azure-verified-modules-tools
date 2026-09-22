@@ -703,13 +703,13 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
     }
 
-    It 'keeps four-hour catalog starts between the repository sync schedules without cancelling active runs' {
+    It 'keeps four-hour catalog starts distinct from the Terraform repository sync schedule without cancelling active runs' {
         $workflow | Should -Match "(?m)^    - cron: '33 1-23/4 \* \* \*'$"
         $workflow | Should -Match "(?m)^concurrency:\n  group: module-metadata-sync\n  cancel-in-progress: false$"
         $terraform = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml'))
-        $bicep = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-bicep-sync.yml'))
         $terraform | Should -Match "(?m)^    - cron: '33 \*/4 \* \* 1-5'$"
-        $bicep | Should -Match "(?m)^    - cron: '33 2-23/4 \* \* \*'$"
+        $bicep = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-bicep-sync.yml'))
+        $bicep | Should -Not -Match '(?m)^\s+schedule:$'
     }
 
     It 'routes scheduled events directly to publication and merging independently of manual plan-only defaults' {
