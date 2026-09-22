@@ -43,7 +43,46 @@ Describe 'Invoke-AvmTestIntegration' {
         $result.Tier   | Should -Be 'integration'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformTestSuite -Exactly 1 -ParameterFilter { $Tier -eq 'integration' }
+            Should -Invoke Invoke-AvmTerraformTestSuite -Exactly 1 -ParameterFilter { $Tier -eq 'integration' -and $MaxRetry -eq 2 }
+        }
+    }
+
+    It 'forwards the retry budget and existing CLI options (<Token>)' -ForEach @(
+        @{ Token = '--max-retry'; Budget = 0 }
+        @{ Token = '-MaxRetry'; Budget = 1 }
+        @{ Token = '--max-retry'; Budget = 10 }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Flag = $Token; Budget = $Budget } {
+            param($Flag, $Budget)
+            Mock Test-AvmDisableSentinel { $null }
+            Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
+            Mock Invoke-AvmTerraformTestSuite {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
+            }
+            $null = avm test integration $Flag $Budget --no-init --allow-path-fallback --ecosystem terraform
+            Should -Invoke Invoke-AvmTerraformTestSuite -Exactly 1 -ParameterFilter {
+                $Tier -eq 'integration' -and $MaxRetry -eq $Budget -and $NoInit -and $AllowPathFallback
+            }
+        }
+    }
+
+    It 'rejects retry counts outside the E2E bounds (<Budget>)' -ForEach @(
+        @{ Budget = -1 }; @{ Budget = 11 }
+    ) {
+        { Invoke-AvmTestIntegration -MaxRetry $Budget } | Should -Throw
+    }
+
+    It 'keeps the CLI failure terminating after retry exhaustion' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Test-AvmDisableSentinel { $null }
+            Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
+            Mock Invoke-AvmTerraformTestSuite {
+                [pscustomobject]@{
+                    Engine = 'terraform'; Status = 'fail'; FilesProcessed = 1
+                    Issues = @([pscustomobject]@{ File = 'main.tf'; Line = 12; Column = 3; Severity = 'error'; Code = ''; Message = 'SkuNotAvailable' })
+                }
+            }
+            { avm test integration --max-retry 2 } | Should -Throw -ExceptionType ([AvmCommandException]) -ExpectedMessage '*SkuNotAvailable*'
         }
     }
 

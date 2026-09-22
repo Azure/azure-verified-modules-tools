@@ -20,10 +20,17 @@ function Invoke-AvmTestIntegration {
 
         Modules that ship no tests/integration/*.tftest.hcl report Status
         'skipped' with RunsTotal = 0 rather than a pass, so an absent tier can
-        never look like a green one.
+        never look like a green one. Existing targets that execute no runs or
+        skip selected runs fail rather than reporting a pass.
 
         This verb is a standalone command; it needs credentials, so it is NOT
         part of the 'avm pre-commit' or 'avm pr-check' gauntlets.
+
+        Recognized capacity and region-ineligible failures are retried only
+        after Terraform confirms completed test teardown. Assertions,
+        authorization, configuration, cleanup, and unknown errors are not
+        retried. Each new invocation recreates Terraform's test fixtures, so a
+        fixture that selects a random region can choose another region.
 
         Routed by the dispatcher: 'avm test integration'.
 
@@ -43,12 +50,22 @@ function Invoke-AvmTestIntegration {
         Skip the auto 'terraform init -backend=false -upgrade -test-directory=tests/integration'
         step, which otherwise always runs.
 
+    .PARAMETER MaxRetry
+        Maximum retries per test target. Defaults to 2 (three total attempts);
+        accepts 0 through 10. No additional delay is inserted. Set 0 to disable.
+        Prior failures remain visible as warnings; final failure stays nonzero
+        through the CLI. Tests declaring persistent state or skip_cleanup are
+        not replayed. AVM_E2E_RETRY_PATTERN remains E2E-only.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
 
     .EXAMPLE
         avm test integration
+
+    .EXAMPLE
+        avm test integration --max-retry 0
 
     .EXAMPLE
         Invoke-AvmTestIntegration -Path C:\repos\terraform-azurerm-avm-res-foo
@@ -66,6 +83,9 @@ function Invoke-AvmTestIntegration {
 
         [switch] $NoInit,
 
+        [ValidateRange(0, 10)]
+        [int] $MaxRetry = 2,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -78,7 +98,7 @@ function Invoke-AvmTestIntegration {
 
     switch ($context.Ecosystem) {
         'terraform' {
-            Invoke-AvmTerraformTestSuite -Context $context -Tier 'integration' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
+            Invoke-AvmTerraformTestSuite -Context $context -Tier 'integration' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit -MaxRetry $MaxRetry
         }
         default {
             throw [AvmNotSupportedException]::new(

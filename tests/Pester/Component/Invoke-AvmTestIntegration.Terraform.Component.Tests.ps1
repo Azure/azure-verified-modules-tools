@@ -54,6 +54,23 @@ BeforeAll {
         '}'
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $integrationDir 'integration.tftest.hcl') -Value $tftest -Encoding utf8NoBOM
+
+    function New-RetryFixture {
+        param([string] $Name, [string] $Mode = 'region', [switch] $InheritFilter)
+        $root = Join-Path $TestDrive $Name
+        $testDirectory = Join-Path $root 'tests' 'integration'
+        $null = New-Item -ItemType Directory -Path $testDirectory -Force
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $testDirectory 'deploy.tftest.hcl') -Value 'run "deploy" {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $testDirectory 'unselected.tftest.hcl') -Value 'run "unselected" {}' -Encoding utf8NoBOM
+        @(
+            'AVM_STUB_TERRAFORM_TEST_REGIONS=["restricted-test-region","eligible-test-region"]'
+            "AVM_STUB_TERRAFORM_TEST_MODE=$Mode"
+            "AVM_STUB_TERRAFORM_TRACE=$(Join-Path $root 'stub-trace.jsonl')"
+            if (-not $InheritFilter) { 'TF_CLI_ARGS_test=-filter=tests/integration/deploy.tftest.hcl' }
+        ) | Set-Content -LiteralPath (Join-Path $root '.env') -Encoding utf8NoBOM
+        return $root
+    }
 }
 
 AfterAll {
@@ -104,5 +121,75 @@ Describe 'Component: Invoke-AvmTestIntegration (terraform integration tier end-t
         $result.PSObject.Properties['FilesProcessed'].Value  | Should -Be 0
         $result.PSObject.Properties['RunsTotal'].Value       | Should -Be 0
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+    }
+
+    It 'recreates a fixture in another eligible region only after the failed attempt cleans up' {
+        $root = New-RetryFixture -Name 'region-retry' -InheritFilter
+        $originalDirectory = (Get-Location).Path
+        $originalFilter = $env:TF_CLI_ARGS_test
+
+        try {
+            $env:TF_CLI_ARGS_test = '-filter=tests/integration/deploy.tftest.hcl'
+            $result = Invoke-AvmTestIntegration -Path $root -Ecosystem terraform -AllowPathFallback
+            $env:TF_CLI_ARGS_test | Should -Be '-filter=tests/integration/deploy.tftest.hcl'
+        }
+        finally {
+            $env:TF_CLI_ARGS_test = $originalFilter
+        }
+
+        $result.Status | Should -Be 'pass'
+        $result.RunsTotal | Should -Be 3
+        $result.RunsPassed | Should -Be 3
+        $result.RunsFailed | Should -Be 0
+        @($result.Issues | Where-Object Severity -eq 'warning').Count | Should -Be 2
+        @($result.Issues | Where-Object Severity -eq 'error').Count | Should -Be 0
+        $trace = @(Get-Content -LiteralPath (Join-Path $root 'stub-trace.jsonl') | ConvertFrom-Json)
+        $selected = @($trace | Where-Object Command -eq 'test-region')
+        ($selected.Region -join ',') | Should -Be 'restricted-test-region,eligible-test-region'
+        ($trace.Command -join ',') | Should -Be 'init,test,test-region,test-cleanup,test,test-region,test-cleanup'
+        foreach ($selection in $selected) {
+            $selection.Filter | Should -Be '-filter=tests/integration/deploy.tftest.hcl'
+            $selection.Directory | Should -Be $root
+        }
+        Test-Path -LiteralPath (Join-Path $root 'stub-owned-resource.txt') | Should -BeFalse
+        (Get-Location).Path | Should -Be $originalDirectory
+        $env:TF_CLI_ARGS_test | Should -Be $originalFilter
+    }
+
+    It 'preserves failed Terraform-owned cleanup and never starts another attempt' {
+        $root = New-RetryFixture -Name 'cleanup-failure' -Mode cleanup
+
+        $result = Invoke-AvmTestIntegration -Path $root -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'fail'
+        ($result.Issues | Where-Object Code -eq 'test_cleanup').Message | Should -Match 'manual cleanup is required'
+        $trace = @(Get-Content -LiteralPath (Join-Path $root 'stub-trace.jsonl') | ConvertFrom-Json)
+        @($trace | Where-Object Command -eq 'test').Count | Should -Be 1
+        Test-Path -LiteralPath (Join-Path $root 'stub-owned-resource.txt') | Should -BeTrue
+        Get-Content -LiteralPath (Join-Path $root 'stub-owned-resource.txt') -Raw | Should -Match 'restricted-test-region'
+    }
+
+    It 'never hides a failed assertion behind an available successful second region' {
+        $root = New-RetryFixture -Name 'assertion-failure' -Mode assertion
+
+        $result = Invoke-AvmTestIntegration -Path $root -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        ($result.Issues.Message -join "`n") | Should -Match 'Test assertion failed'
+        $trace = @(Get-Content -LiteralPath (Join-Path $root 'stub-trace.jsonl') | ConvertFrom-Json)
+        @($trace | Where-Object Command -eq 'test').Count | Should -Be 1
+        Test-Path -LiteralPath (Join-Path $root 'stub-owned-resource.txt') | Should -BeFalse
+    }
+
+    It 'honors the CLI no-retry override and propagates the original region error' {
+        $root = New-RetryFixture -Name 'cli-no-retry'
+
+        { avm test integration --path $root --ecosystem terraform --allow-path-fallback --max-retry 0 } |
+            Should -Throw -ExpectedMessage '*RequestDisallowedByAzure*'
+
+        $trace = @(Get-Content -LiteralPath (Join-Path $root 'stub-trace.jsonl') | ConvertFrom-Json)
+        @($trace | Where-Object Command -eq 'test').Count | Should -Be 1
+        Test-Path -LiteralPath (Join-Path $root 'stub-owned-resource.txt') | Should -BeFalse
     }
 }

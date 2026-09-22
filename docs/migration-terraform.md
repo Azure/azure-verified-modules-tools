@@ -117,6 +117,31 @@ the `Avm.Authoring` verb you call instead.
 > single example (leaf or `examples/<name>`) and `avm test e2e --list`
 > emits a JSON array of runnable example names for building a CI matrix.
 
+`avm test integration` also accepts `--max-retry` (default 2, range 0-10).
+It reuses the built-in E2E capacity/quota patterns and recognizes
+`RequestDisallowedByAzure` only with the `aka.ms/locationineligible` explanation,
+not an ordinary authorization-related HTTP 403. Unit tests never retry, and
+`AVM_E2E_RETRY_PATTERN` remains E2E-only.
+
+Integration retries rerun the same selected test target without an extra delay,
+subscription change, or another setup/init. Native `TF_CLI_ARGS_test` filters
+and the original working directory and environment are preserved. Terraform
+owns fixture state and cleanup: the runner requires the selected
+`test_abstract` runs, terminal `test_run` events, each `test_file` moving through
+`teardown` to `complete`, and matching final `test_summary` counts.
+Assertions, configuration/authentication errors, unknown errors, malformed or
+incomplete output, cleanup diagnostics, `test_cleanup`, and interruptions
+prevent replay. In-run `test_retry` provider backoff remains allowed.
+Test files mentioning `skip_cleanup`, `state_store`, or `backend` run normally
+but conservatively disable automatic replay. No state is deleted or inspected.
+
+A fixture using a random region can select another region on its next fresh
+test invocation; a fixed-region fixture stays fixed, and a random draw can
+repeat. Earlier transient diagnostics remain warning-level issues, while run
+counts describe the final attempt. A failed, skipped, empty, or incomplete
+retry never becomes a pass. Integration targets that execute no runs fail;
+an absent integration tier still reports `skipped`.
+
 Example validation warns when the checkout's root module or a direct
 `modules/*` configuration is not reached by any successfully validated example.
 Direct and transitive local references count; downloaded Registry/Git copies
@@ -313,7 +338,7 @@ exactly this status today.
 | `avm lint`            | `terraform` + `tflint`  | in a cleaned temporary copy, per root / direct `modules/*` / direct `examples/*`: `terraform init -upgrade -input=false`, optional `tflint-pre.ps1` for examples, `tflint --init`, then `--config <scope-config> --format=json --minimum-failure-severity=warning` |   ✅   | AVM rules use canonical `avm_*` names and are default-enabled; packaged configs contain deliberate scope disables and native notice-severity overrides. Root `avm.tflint.override.hcl`, all-module `avm.tflint_module.override.hcl`, all-example `avm.tflint_example.override.hcl`, and per-target `modules/<name>/avm.tflint.override.hcl` or `examples/<name>/avm.tflint.override.hcl` files merge in increasing specificity. A convention rule rejects nested Terraform module or example roots. Hooks and generated Terraform files cannot mutate the source repository. AVM notices, including `avm_interface_*_deprecated`, are emitted inline as non-failing warnings. `tflint-pre.sh` is rejected with PowerShell migration guidance. Exit `2` means findings. |
 | `avm test`            | `terraform validate`    | per direct `examples/*`: `init -backend=false -upgrade -input=false -no-color` then `validate -no-color -json`, with isolated module data |   ✅   | Includes `.e2eignore` examples. Warns about uncovered local modules; no examples is `skipped`. `--no-init` skips initialization and coverage. Upgrade mode may update example dependency locks. |
 | `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess. `setup.sh` / `teardown.sh` hooks are rejected. |
-| `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers — needs `az`/creds at runtime (no preflight; documented). `setup.sh` / `teardown.sh` hooks are rejected.                            |
+| `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers; needs credentials. Recognized capacity failures retry after confirmed Terraform teardown (`-MaxRetry`, default 2). Assertions and cleanup failures never retry. Shell hooks are rejected. |
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): PowerShell hooks → `init -upgrade` → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. `pre.sh` and `post.sh` are rejected with PowerShell migration guidance. Requires provider credentials for planning. |
