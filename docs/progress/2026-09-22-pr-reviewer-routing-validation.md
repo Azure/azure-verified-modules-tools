@@ -22,9 +22,12 @@ validation is complete.
 
 ## Validation
 
-- Targeted reviewer-routing tests: 38 passed, 0 failed.
-- `./build.ps1 pre-commit`: 1,556 unit tests passed, 9 skipped; component
+- Targeted reviewer-routing tests: 40 passed, 0 failed.
+- `./build.ps1 pre-commit`: 1,558 unit tests passed, 9 skipped; component
   batches passed 903 tests with 1 skipped; 0 failed.
+- Follow-up validation updates the dispatch-only workflow to map
+  `inputs.updated_within_minutes` directly, preserving an explicit `0`, with a
+  unit assertions covering the mapping and empty-input full-sweep coercion.
 - No reviewer-routing-specific component test exists.
 - Shared `RetryHelpers.ps1` and `RepoTree.ps1` are unchanged from `main` and
   are used without copying or modification.

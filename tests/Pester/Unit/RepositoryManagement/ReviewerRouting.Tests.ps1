@@ -299,6 +299,18 @@ Describe 'Reviewer routing workflow safety' {
         $crons.Count | Should -Be 0
     }
 
+    It 'maps the workflow dispatch lookback input directly so 0 reaches the script' {
+        $script:workflowText | Should -Match '(?m)^\s{10}UPDATED_WITHIN_MINUTES:\s*\$\{\{\s*inputs\.updated_within_minutes\s*\}\}\s*$'
+        $script:workflowText | Should -Not -Match 'github\.event\.schedule'
+        $script:workflowText | Should -Match '(?m)^\s{10}\$updatedWithinMinutes\s*=\s*\[int\]\$env:UPDATED_WITHIN_MINUTES\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{12}-UpdatedWithinMinutes\s+\$updatedWithinMinutes\s+`?\s*$'
+    }
+
+    It 'preserves an empty lookback input as 0 for a full sweep' {
+        $emptyUpdatedWithinMinutes = [int]''
+        $emptyUpdatedWithinMinutes | Should -Be 0
+    }
+
     It 'never interpolates ${{ }} expressions directly into a run: body' {
         $runBlocks = [System.Text.RegularExpressions.Regex]::Matches($script:workflowText, '(?m)^( +)run:\s*\|\r?\n((?:\1 .*\r?\n?)*)')
         $runBlocks.Count | Should -BeGreaterThan 0

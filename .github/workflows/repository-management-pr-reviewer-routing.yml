@@ -82,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
-          UPDATED_WITHIN_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.updated_within_minutes || (github.event.schedule == '13 3 * * *' && '0' || '60') }}
+          UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
           WHAT_IF: ${{ github.event_name == 'workflow_dispatch' && inputs.what_if }}
         run: |
           Write-Host 'Authenticating gh cli'
