@@ -6,8 +6,9 @@ name: Repository Management - Module List Sync
 #    requests with a privileged cross-repo app token.
 #  - Disabled schedule to restore after all four what-if validations pass:
 #    '13 6 * * *'.
-#  - The generated pull request is opened with -ReviewOnly and is never auto-merged: a
-#    human must review a module dropdown change before it lands in bicep-registry-modules.
+#  - The generated pull request is auto-merged (squash) through the same
+#    VerifyCandidate/ExpectedActor-gated path the terraform pre-commit flow
+#    uses, once verification of the actor/branch/tree state passes.
 #  - The catalog-derived module list is compared against a stable branch/PR
 #    (avm-bot/sync-module-dropdown) so repeated runs update the same PR instead of
 #    opening a new one every day the catalog stays ahead of the template.

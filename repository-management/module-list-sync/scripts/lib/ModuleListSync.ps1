@@ -1,9 +1,9 @@
 #Requires -Version 7.4
 
 # Keeps the "Module Name" dropdown in bicep-registry-modules'
-# avm_module_issue.yml in sync with the published module catalog, opening a
-# review-required pull request through the shared RepositoryFileSync engine
-# instead of the original's drift-report issue.
+# avm_module_issue.yml in sync with the published module catalog, opening
+# and auto-merging a pull request through the shared RepositoryFileSync
+# engine instead of the original's drift-report issue.
 
 $script:AvmModuleListSyncCategoryOrder = @('ptn', 'res', 'utl')
 $script:AvmModuleListSyncLineRegex = '^(?<indent>\s*)(?<comment>#\s*)?-\s+"(?<path>avm/(?:res|ptn|utl)/[^"]+)"\s*$'
@@ -134,7 +134,7 @@ function New-AvmModuleListSyncPullRequestBody {
         foreach ($path in $Removed) { $lines.Add("- ``$path``") }
         $lines.Add('')
     }
-    $lines.Add('This PR is opened by the AVM bot from [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools) and requires human review before merging.')
+    $lines.Add('This PR is opened and merged by the AVM bot from [azure-verified-modules-tools](https://github.com/Azure/azure-verified-modules-tools).')
     return [string]::Join("`n", $lines)
 }
 
@@ -142,8 +142,8 @@ function Invoke-AvmModuleListSync {
     <#
     .SYNOPSIS
     Entry point: compares the published catalog against
-    avm_module_issue.yml's module dropdown and opens or updates a
-    review-required pull request when they have drifted.
+    avm_module_issue.yml's module dropdown and opens or updates an
+    auto-merged pull request when they have drifted.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -182,7 +182,7 @@ function Invoke-AvmModuleListSync {
     Write-Host "[AVM] $Repository module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed." -ForegroundColor Yellow
     $expectedActor = @{ login = 'azure-verified-modules[bot]'; id = 1049636; type = 'Bot' }
     $result = Invoke-RepositoryFileSync -Repository $Repository -DefaultBranch $DefaultBranch `
-        -ReviewOnly -VerifyCandidate -ExpectedActor $expectedActor `
+        -VerifyCandidate -ExpectedActor $expectedActor -PlanHasChanges:$plan.Changed `
         -StableBranch 'avm-bot/sync-module-dropdown' `
         -AllowedPaths @($IssueTemplatePath) `
         -GeneratedFiles @{ $IssueTemplatePath = $plan.Content } `

@@ -154,7 +154,7 @@ Describe 'Invoke-AvmModuleListSync' {
             }
         }
         Mock Get-AvmRepositoryFileAtRef { [pscustomobject]@{ Content = (New-ModuleDropdownFixtureContent); Sha = 'deadbeef' } }
-        Mock Invoke-RepositoryFileSync { @{ HasChanges = $true; Status = 'ReviewRequired'; PullRequestUrl = 'https://github.com/Azure/bicep-registry-modules/pull/1' } }
+        Mock Invoke-RepositoryFileSync { @{ HasChanges = $true; Status = 'Merged'; PullRequestUrl = 'https://github.com/Azure/bicep-registry-modules/pull/1' } }
     }
 
     It 'does not open a pull request when the dropdown already matches the catalog' {
@@ -163,7 +163,7 @@ Describe 'Invoke-AvmModuleListSync' {
         Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 
-    It 'opens a review-required pull request through the shared sync engine when drift is found' {
+    It 'opens and auto-merges a pull request through the shared sync engine when drift is found' {
         Mock Get-AvmModuleListSyncCatalogModulePaths {
             @{
                 ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
@@ -174,8 +174,8 @@ Describe 'Invoke-AvmModuleListSync' {
         $result = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules'
         $result.PullRequestUrl | Should -Be 'https://github.com/Azure/bicep-registry-modules/pull/1'
         Should -Invoke Invoke-RepositoryFileSync -Times 1 -ParameterFilter {
-            $ReviewOnly -and $VerifyCandidate -and $StableBranch -eq 'avm-bot/sync-module-dropdown' -and
-            $ExpectedActor.login -eq 'azure-verified-modules[bot]' -and
+            -not $ReviewOnly -and $VerifyCandidate -and $StableBranch -eq 'avm-bot/sync-module-dropdown' -and
+            $ExpectedActor.login -eq 'azure-verified-modules[bot]' -and $PlanHasChanges -and
             $GeneratedFiles.ContainsKey('.github/ISSUE_TEMPLATE/avm_module_issue.yml')
         }
     }

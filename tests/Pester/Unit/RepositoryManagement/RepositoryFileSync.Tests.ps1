@@ -176,6 +176,22 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
     }
 }
 
+Describe 'Invoke-RepositoryFileSync preview (-WhatIf) reporting' {
+    It 'reports the caller-signaled planned change while staying a preview' {
+        $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main -PlanHasChanges -WhatIf
+        $result.HasChanges | Should -BeTrue
+        $result.Status | Should -Be 'Preview'
+        $result.PullRequestUrl | Should -BeNullOrEmpty
+        $result.HeadSha | Should -BeNullOrEmpty
+    }
+
+    It 'reports no changes when the caller signals none, even under -WhatIf' {
+        $result = Invoke-RepositoryFileSync -Repository 'Azure/bicep-registry-modules' -DefaultBranch main -WhatIf
+        $result.HasChanges | Should -BeFalse
+        $result.Status | Should -Be 'Preview'
+    }
+}
+
 Describe 'Shared candidate identity, scope, and commit history guards' {
     BeforeEach {
         $script:context = New-SyncTestContext
