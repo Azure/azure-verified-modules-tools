@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Terraform Sync
+name: 'Repos: Terraform Sync'
 
 on:
   repository_dispatch:
@@ -59,7 +59,7 @@ defaults:
 
 jobs:
   generate-matrix:
-    name: Repository Management - Generate Matrix
+    name: Generate matrix
     runs-on: ubuntu-latest
     environment: avm
     outputs:
@@ -70,7 +70,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Generate Matrix
+      - name: Generate matrix
         uses: ./repository-management/repository-sync/actions/avm-repos
         id: matrix
         with:
@@ -80,7 +80,7 @@ jobs:
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
   run-sync:
-    name: Repository Management - ${{ matrix.repoId }} (${{ matrix.repoUrl }})
+    name: Sync ${{ matrix.repoName }}
     runs-on: ubuntu-latest
     environment: avm
     needs: generate-matrix
@@ -93,13 +93,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: '[AVM] Setup Terraform'
+      - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: latest
           terraform_wrapper: false
 
-      - name: '[AVM] Install Avm.Authoring'
+      - name: Install Avm.Authoring
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -123,7 +123,7 @@ jobs:
             throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
           }
 
-      - name: '[AVM] Create GitHub App Token'
+      - name: Create GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -131,7 +131,7 @@ jobs:
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: '[AVM] Resolve state backend'
+      - name: Resolve state backend
         id: state-backend
         shell: pwsh
         env:
@@ -157,19 +157,19 @@ jobs:
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
       # Only state lock recovery uses this CLI login; providers retain ARM_* below.
-      - name: '[AVM] Azure Login for state (OIDC)'
+      - name: Azure login for state (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ steps.state-backend.outputs.client-id }}
           tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
 
-      - name: '[AVM] Download Labels CSV File'
+      - name: Download labels CSV file
         run: |
           ./scripts/Get-AvmLabels.ps1
         shell: pwsh
 
-      - name: '[AVM] Run Sync for ${{ matrix.repoId }}'
+      - name: Run sync for ${{ matrix.repoId }}
         run: |
 
           $triggerType = "${{ github.event_name }}"
@@ -251,14 +251,14 @@ jobs:
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
 
-      - name: Upload Issue Logs Json
+      - name: Upload issue log JSON
         if: always() && hashFiles('issue.log.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.repoId }}.issue.log.json
           path: issue.log.json
 
-      - name: Issue Error
+      - name: Report sync issues
         if: always() && hashFiles('issue.log.json') != ''
         run: |
           $issueLogJson = Get-Content -Path "${{ github.workspace }}/issue.log.json" -Raw
@@ -276,7 +276,7 @@ jobs:
           if ($hasError) { exit 1 }
         shell: pwsh
 
-      - name: '[AVM] Add Repository Items to AVM All Up Project'
+      - name: Add repository items to the AVM All Up project
         if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
         run: |
 
@@ -320,14 +320,14 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
-      - name: Upload Project Sync Log Json
+      - name: Upload project sync log JSON
         if: always() && hashFiles('project-sync.log.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.repoId }}.project-sync.log.json
           path: project-sync.log.json
 
-      - name: Project Sync Error
+      - name: Report project sync issues
         if: always() && hashFiles('project-sync.log.json') != ''
         run: |
           $projectSyncLogJson = Get-Content -Path "${{ github.workspace }}/project-sync.log.json" -Raw

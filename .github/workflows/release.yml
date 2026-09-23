@@ -1,4 +1,4 @@
-name: Publish signed release
+name: 'Authoring: Release'
 
 on:
   release:

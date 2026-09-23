@@ -29,7 +29,7 @@
 #   * The tiers emit structured envelopes to the log rather than JUnit XML, so
 #     there is no separate test-report publishing job.
 
-name: AVM Terraform Module
+name: 'Reusable: Terraform Module'
 
 on:
   workflow_call:

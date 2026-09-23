@@ -383,6 +383,25 @@ Currently vendored:
   `tflint --init` acquires the AVM plugin and TFLint evaluates the scope.
 - No `*.override.hcl` merge and no `AVM_TFLINT_CONFIG_URL`-style remote fetch. The only supported override is `AVM_TFLINT_CONFIG_DIR` pointing at a directory that contains all three configs; otherwise the vendored copies are authoritative.
 
+## 13. GitHub Actions naming
+
+Workflow display names use `<Group>: <Name>` in title case, so related
+workflows sit together in the Actions list and fit its sidebar (about 25
+characters).
+
+| Group | Use for | Example |
+| --- | --- | --- |
+| `Authoring:` | Building, testing and releasing `Avm.Authoring` | `Authoring: CI` |
+| `Repos:` | Automation under `repository-management/` | `Repos: PR Routing` |
+| `Reusable:` | `workflow_call` workflows that other repositories run | `Reusable: Terraform Module` |
+
+- Job and step names use sentence case. They do not repeat the workflow group
+  or add an `[AVM]` prefix.
+- Change display names only. Workflow file names are referenced by other
+  repositories, OIDC `job_workflow_ref` claims and documentation.
+- Job names in `Reusable:` workflows appear in every calling repository's
+  checks, so rename them only deliberately.
+
 ## Appendix D. Decision: long-path support on Windows
 
 ### Context

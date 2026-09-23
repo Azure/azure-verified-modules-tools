@@ -1,5 +1,5 @@
 ---
-name: Module Metadata Catalog Sync
+name: 'Repos: Catalog Sync'
 
 on:
   schedule:

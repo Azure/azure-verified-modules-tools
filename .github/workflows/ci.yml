@@ -1,4 +1,4 @@
-name: CI
+name: 'Authoring: CI'
 
 # Avm.Authoring CI runs on changes to main, pull requests, and manual dispatch.
 # Lint runs once; the three test tiers retain their platform coverage:
@@ -42,7 +42,7 @@ concurrency:
 
 jobs:
   lint:
-    name: lint (ubuntu-latest)
+    name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -60,7 +60,7 @@ jobs:
         run: ./build.ps1 lint
 
   build:
-    name: ci (${{ matrix.os }})
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +111,7 @@ jobs:
           retention-days: 7
 
   workflows:
-    name: workflow tests (ubuntu-latest)
+    name: Workflow tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -139,7 +139,7 @@ jobs:
           retention-days: 7
 
   integration:
-    name: integration (${{ matrix.fixture }} on ${{ matrix.os }})
+    name: Integration (${{ matrix.fixture }} on ${{ matrix.os }})
     if: github.event_name != 'push'
     strategy:
       # Cover every test module on every OS independently; one red leg must not

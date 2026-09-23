@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Workflow Failure Issues
+name: 'Repos: Workflow Failures'
 
 # Design invariants -- do not regress these without a very good reason:
 #  - schedule + workflow_dispatch only. This reads workflow-run/issue data
@@ -30,7 +30,7 @@ defaults:
 
 jobs:
   manage-issues:
-    name: '[AVM] Manage workflow failure issues'
+    name: Manage workflow failure issues
     if: github.repository == 'Azure/azure-verified-modules-tools'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: '[AVM] Install Avm.Authoring'
+      - name: Install Avm.Authoring
         run: |
           $ErrorActionPreference = 'Stop'
           $maxAttempts = 3
@@ -61,7 +61,7 @@ jobs:
           }
           Import-Module Avm.Authoring
 
-      - name: '[AVM] Create scoped workflow-issue token'
+      - name: Create scoped workflow-issue token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -72,7 +72,7 @@ jobs:
           permission-issues: write
           permission-actions: read
 
-      - name: '[AVM] Manage workflow failure issues'
+      - name: Manage workflow failure issues
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           WHAT_IF: ${{ inputs.what_if }}

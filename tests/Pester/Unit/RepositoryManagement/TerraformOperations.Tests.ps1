@@ -271,7 +271,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'partial' }
     ) {
         $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
-        $step = [regex]::Match($workflow, '(?ms)^      - name: ''\[AVM\] Resolve state backend''\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
         $step.Success | Should -BeTrue
         $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |
             ForEach-Object { $_.Groups[1].Value } | Sort-Object)

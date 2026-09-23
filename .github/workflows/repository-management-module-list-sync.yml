@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Module List Sync
+name: 'Repos: Module List Sync'
 
 # Design invariants -- do not regress these without a very good reason:
 #  - schedule + workflow_dispatch only. This opens pull requests with a
@@ -34,7 +34,7 @@ defaults:
 
 jobs:
   sync:
-    name: '[AVM] Sync module dropdown list'
+    name: Sync module dropdown list
     if: github.repository == 'Azure/azure-verified-modules-tools'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: '[AVM] Install Avm.Authoring'
+      - name: Install Avm.Authoring
         run: |
           $ErrorActionPreference = 'Stop'
           $maxAttempts = 3
@@ -65,7 +65,7 @@ jobs:
           }
           Import-Module Avm.Authoring
 
-      - name: '[AVM] Create scoped module-list-sync token'
+      - name: Create scoped module-list-sync token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -76,7 +76,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: '[AVM] Sync module dropdown list'
+      - name: Sync module dropdown list
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}

@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Bicep Sync
+name: 'Repos: Bicep Sync'
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   sync-test-tenant-variables:
-    name: Repository Management - Bicep Nonsecret Test Tenant Sync
+    name: Sync test tenant variables
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
       github.ref == 'refs/heads/main' &&

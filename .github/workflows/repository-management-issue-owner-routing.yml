@@ -1,5 +1,5 @@
 ---
-name: Repository Management - Issue Owner Routing
+name: 'Repos: Issue Routing'
 
 # Design invariants -- do not regress these without a very good reason:
 #  - schedule + workflow_dispatch only, never an `issues` trigger: this run
@@ -38,7 +38,7 @@ defaults:
 
 jobs:
   route:
-    name: '[AVM] Route module issue owners'
+    name: Route module issue owners
     if: github.repository == 'Azure/azure-verified-modules-tools'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -49,7 +49,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: '[AVM] Install Avm.Authoring'
+      - name: Install Avm.Authoring
         run: |
           $ErrorActionPreference = 'Stop'
           $maxAttempts = 3
@@ -69,7 +69,7 @@ jobs:
           }
           Import-Module Avm.Authoring
 
-      - name: '[AVM] Create scoped issue routing token'
+      - name: Create scoped issue routing token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -79,7 +79,7 @@ jobs:
           repositories: bicep-registry-modules
           permission-issues: write
 
-      - name: '[AVM] Route module issue owners'
+      - name: Route module issue owners
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           EVENT_NAME: ${{ github.event_name }}
