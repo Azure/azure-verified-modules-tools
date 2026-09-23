@@ -21,10 +21,6 @@ on:
         description: 'Force the latest managed-file release onto the selected repositories, even without a new major release.'
         default: false
         type: boolean
-      metadata_backfill:
-        description: 'ONE-OFF: create missing metadata.json before full normal sync, including standard merge on apply. Existing metadata is preserved.'
-        default: false
-        type: boolean
       sync_project_items:
         description: 'Whether to add each repository''s issues and PRs to the AVM All Up GitHub Project.'
         default: true
@@ -180,12 +176,10 @@ jobs:
 
           $planOnly = $false
           $forceFileUpdate = $false
-          $metadataBackfill = $false
 
           if($triggerType -eq "workflow_dispatch") {
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
             $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
-            $metadataBackfill = $env:METADATA_BACKFILL_ENABLED -eq 'true'
           }
 
           Write-Output "Repositories: $repositories"
@@ -229,8 +223,7 @@ jobs:
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
             -bamiSettings $bamiSettings `
-            -forceFileUpdate:$forceFileUpdate `
-            -metadataBackfill:$metadataBackfill
+            -forceFileUpdate:$forceFileUpdate
 
         shell: pwsh
         env:
@@ -257,7 +250,6 @@ jobs:
           TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
-          METADATA_BACKFILL_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}
 
       - name: Upload Issue Logs Json
         if: always() && hashFiles('issue.log.json') != ''

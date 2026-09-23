@@ -32,18 +32,10 @@ param(
         "azurecla-write"
     ),
     [switch]$forceFileUpdate,
-    [switch]$metadataBackfill,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @(),
     [hashtable]$bamiSettings = @{}
 )
-
-if ($metadataBackfill -and $repositoryCreationModeEnabled) {
-    throw [System.ArgumentException]::new('One-off metadata backfill only supports existing module repositories.')
-}
-if ($metadataBackfill -and $env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
-    throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
-}
 
 Write-Host "Running repo sync script"
 
@@ -282,7 +274,6 @@ if(!$repositoryCreationModeEnabled) {
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
-            -metadataBackfill $metadataBackfill.IsPresent `
             -issueLog $issueLog
         $issueLog = $preCommitResult.IssueLog
     }

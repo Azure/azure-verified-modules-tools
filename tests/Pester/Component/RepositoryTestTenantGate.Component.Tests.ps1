@@ -206,32 +206,13 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    It 'keeps metadata backfill pending only for an unready BAMI identity with plan <RequestedPlanOnly>' -TestCases @(
-        @{ RequestedPlanOnly = $true }
-        @{ RequestedPlanOnly = $false }
+    It 'rejects removed metadata option <Option> before any work' -TestCases @(
+        @{ Option = 'metadataBackfill' }
+        @{ Option = 'metadataUpdateSource' }
     ) {
-        param($RequestedPlanOnly)
-
-        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
-        $script:arguments.metadataBackfill = $true
-        $script:arguments.planOnly = $RequestedPlanOnly
-        Mock Invoke-AvmPreCommitForRepository {}
-        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
-        Mock Clear-TerraformWorkspace {}
-
-        $result = & $script:driver @script:arguments
-
-        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
-        $env:ARM_USE_AZUREAD | Should -BeExactly 'true'
-        Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
-        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $PlanOnly -eq $RequestedPlanOnly }
-        Should -Invoke Clear-TerraformWorkspace -Exactly 1
-        Should -Invoke Start-Process -Exactly 0
-        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
-    }
-
-    It 'rejects the removed Terraform source-reader option before any work' {
-        { & $script:driver @script:arguments -metadataUpdateSource } | Should -Throw '*metadataUpdateSource*'
+        param($Option)
+        $removedOption = @{ $Option = $true }
+        { & $script:driver @script:arguments @removedOption } | Should -Throw "*$Option*"
         Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
         Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
@@ -243,10 +224,8 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    Context 'Full management with optional metadata creation' {
+    Context 'Full management and file preparation' {
         BeforeEach {
-            $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
-            $script:arguments.metadataBackfill = $true
             $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
             $management = $script:managementState
             Mock Resolve-RepositorySyncStateConfiguration ({ $management.Events.Add('state') }.GetNewClosure())
@@ -275,7 +254,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             Mock Invoke-AvmPreCommitForRepository ({
                 param($issueLog)
                 $management.Events.Add('files')
-                if ($management.Failure -ceq 'metadata') { throw 'metadata preparation failed' }
+                if ($management.Failure -ceq 'pre-commit') { throw 'authoring pre-commit failed' }
                 @{ HasChanges = $true; IssueLog = @($issueLog) }
             }.GetNewClosure())
         }
@@ -306,7 +285,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
                 $planOnly -eq $Plan -and $stateSubscriptionId -eq '55555555-5555-4555-8555-555555555555'
             }
             Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
-                $metadataBackfill -and $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
+                $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
             }
             if ($Tenant -ceq 'bami') {
                 Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
@@ -338,9 +317,9 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             Get-Content (Join-Path $TestDrive 'issue.log.json') -Raw | Should -Match 'terraform failed'
         }
 
-        It 'surfaces metadata failure after earlier normal management without claiming rollback' {
-            $script:managementState.Failure = 'metadata'
-            { & $script:driver @script:arguments } | Should -Throw '*metadata preparation failed*'
+        It 'surfaces pre-commit failure after earlier normal management without claiming rollback' {
+            $script:managementState.Failure = 'pre-commit'
+            { & $script:driver @script:arguments } | Should -Throw '*authoring pre-commit failed*'
             $script:managementState.Events[-3..-1] | Should -Be @('init', 'terraform', 'files')
             Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1
             Should -Invoke Remove-LegacyBranchProtection -Exactly 1

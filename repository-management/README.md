@@ -2,13 +2,10 @@
 
 This area owns the managed files, scheduled repository synchronization, and
 operator-driven repository creation used by AVM Terraform repositories, plus
-shared Bicep/Terraform metadata tooling.
+the shared Bicep/Terraform module catalog.
 
 [Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
-indexes and source CSV row-removal protection. [Metadata file creation](module-metadata/README.md)
-uses existing indexes and source without intermediate approval files.
-Terraform supports this operation in its sync; Bicep files are added directly
-to the module repository.
+indexes and source CSV row-removal protection.
 
 Repository sync and [repository creation](repository-creation/README.md) are
 intentionally independent. New repositories initialize their own metadata from
@@ -31,8 +28,8 @@ authoritative; archived repositories are skipped without reading metadata.
 The generated public module indexes remain separate catalog outputs.
 
 During rollout, a missing file produces a warning and leaves the repository
-eligible for sync and optional metadata backfill, but direct collaborator
-cleanup is skipped until ownership is available. Invalid metadata or API
+eligible for sync, but direct collaborator cleanup is skipped until ownership
+is available. Sync does not create metadata files. Invalid metadata or API
 failures exclude the affected repository and produce an error.
 
 Direct administrators listed as owners, including members of qualified owning
@@ -179,9 +176,9 @@ Review enforcement also requires the existing active ruleset's
 `require_code_owner_review = true` and visible teams with repository write
 access. Default Terraform configuration grants both teams `push` without
 adding environment approvals; the existing CODEOWNERS-file rule remains
-engineering-only. Initial backfill uses only the existing AVM App's authorized
-pull-request bypass. Neither the template nor its generation grants or broadens
-that bypass; authorized operators must verify these prerequisites before rollout.
+engineering-only. Neither the template nor its generation grants or broadens
+the existing AVM App bypass; authorized operators must verify these
+prerequisites before rollout.
 
 Repository groups may set `pullRequestBypassTeams` to a list of configured team
 slugs. Terraform resolves their team IDs and grants a pull-request-only bypass

@@ -136,7 +136,7 @@ and length validation. Catalog JSON includes helpers under `helper`, with null
 missing. `Test-AvmModuleMetadata -InputObject` validates supplied values without
 reading `metadata.json`. `Initialize-AvmModuleMetadata` requires explicit values,
 preserves existing files, and supports `-WhatIf`. None of these commands reads
-CSV indexes or infers backfill values.
+CSV indexes or infers missing values from source.
 
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
 telemetry prefix; a helper without a prefix leaves source unchanged.

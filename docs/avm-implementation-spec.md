@@ -495,7 +495,8 @@ Source CSVs, not existing preview outputs, are the comparison baseline; this
 remains true after canonical CSV replacement. Hash-protected source-row evidence
 is checked again against the unchanged publication base before writes.
 Matched-row compatibility fields and published Deprecated status remain preserved.
-Fleet backfill and canonical CSV replacement remain explicit operator actions.
+The one-off migration and canonical CSV replacement remain explicit operator
+actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
 Terraform repository discovery reads validated root metadata from each
@@ -515,23 +516,10 @@ superseding their previous one-off omission. The excluded `test-repo5` root and
 archived/missing/private repository restrictions remain unchanged. Migration
 data remains outside the packaged module. Compatible installed/released schemas are required
 for adoption; successful checkout validation or CI is not a release.
-Separately, Terraform sync can create missing files directly from existing
-indexes and source, without an intermediate approval file or repository
-registration. The manual,
-default-off `metadata_backfill` input adds preparation before ordinary pre-commit
-in the temporary checkout. This optional facility is unchanged and is not used
-by the current one-off migration. It does not select a metadata-only execution or
-publication path: normal managed files, CODEOWNERS, repository/Azure management,
-tenant gates and standard publication/merge controls still apply. The temporary
-worker loads checkout metadata APIs in a separate PowerShell process; ordinary
-authoring uses the installed release. Plan-only never publishes files. Metadata
-failure stops file publication without undoing earlier normal management steps.
-Bicep files
-are added directly to the module repository rather than through Bicep Sync.
-CSV conversion and backfill-only source inference live exclusively under
-`repository-management/module-metadata/`, outside the packaged module. That
-temporary directory and its sync hooks can be removed after reconciliation
-without changing the permanent metadata API or normal authoring checks.
+Terraform sync never creates missing metadata files or infers values from CSV
+indexes. Existing repositories use owner-authored files or the reviewed one-off
+migration; ordinary authoring still uses the installed release. Bicep files
+were added directly to the module repository rather than through Bicep Sync.
 
 ### Files inside the user's home
 

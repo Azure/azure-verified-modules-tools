@@ -135,13 +135,9 @@ function Invoke-AvmPreCommitForRepository {
         [string]$defaultBranch,
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
-        [bool]$metadataBackfill = $false,
         [array]$issueLog
     )
 
-    if ($metadataBackfill -and $env:GITHUB_EVENT_NAME -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch') {
-        throw [System.InvalidOperationException]::new('Metadata backfill is manual-only; scheduled and repository_dispatch runs cannot enable it.')
-    }
     $result = @{ IssueLog = $issueLog; HasChanges = $false }
 
     try {
@@ -153,7 +149,6 @@ function Invoke-AvmPreCommitForRepository {
             RepoId = $repoId
             RepositoryConfigDir = $repositoryConfigDir
             ForceFileUpdate = $forceFileUpdate
-            MetadataBackfill = $metadataBackfill
             CodeownersContent = $codeowners
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
@@ -161,7 +156,6 @@ function Invoke-AvmPreCommitForRepository {
                 param($context)
                 $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
                 $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
-                if ($context.State.MetadataBackfill) { $null = & (Join-Path $PSScriptRoot '..' '..' '..' 'module-metadata' 'MetadataBackfillSync.ps1') -Context $context }
                 $upgrade = Resolve-AvmManagedFilesUpgradeDecision -orgAndRepoName $context.Repository.full_name `
                     -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
                 Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray
