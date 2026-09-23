@@ -14,6 +14,15 @@ resource "github_repository_ruleset" "main" {
     }
   }
 
+  dynamic "bypass_actors" {
+    for_each = toset(var.pull_request_bypass_teams)
+    content {
+      actor_id    = data.github_team.this[bypass_actors.value].id
+      actor_type  = "Team"
+      bypass_mode = "pull_request"
+    }
+  }
+
   conditions {
     ref_name {
       include = ["~DEFAULT_BRANCH"]

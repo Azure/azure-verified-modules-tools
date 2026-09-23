@@ -42,6 +42,25 @@ function Resolve-RepositorySettings {
         }
     }
 
+    $configuredTeamSlugs = @($teams | ForEach-Object { $_.name })
+    $pullRequestBypassTeams = @()
+    foreach ($repositoryGroup in $repositoryGroups) {
+        if ($repositoryGroup.PSObject.Properties.Name -notcontains 'pullRequestBypassTeams') {
+            continue
+        }
+        if ($repositoryGroup.pullRequestBypassTeams -isnot [array]) {
+            throw [System.ArgumentException]::new("Repository group '$($repositoryGroup.name)' pullRequestBypassTeams must be an array of configured team slugs.")
+        }
+        foreach ($teamSlug in $repositoryGroup.pullRequestBypassTeams) {
+            if ($teamSlug -isnot [string] -or [string]::IsNullOrWhiteSpace($teamSlug) -or
+                $configuredTeamSlugs -cnotcontains $teamSlug) {
+                throw [System.ArgumentException]::new("Repository group '$($repositoryGroup.name)' lists pullRequestBypassTeams entry '$teamSlug' that is not a configured team slug for '$repoId'.")
+            }
+            $pullRequestBypassTeams += $teamSlug
+        }
+    }
+    $pullRequestBypassTeams = @($pullRequestBypassTeams | Select-Object -Unique)
+
     # Collect the CODEOWNERS default teams from every repository group that
     # contains this repo. These teams become required reviewers for all files
     # in the repo (e.g. tier 1 modules require review from the engineering
@@ -112,6 +131,7 @@ function Resolve-RepositorySettings {
         RepositoryGroups                                = $repositoryGroups
         RepositoryGroupNames                            = $repositoryGroupNames
         Teams                                           = $teams
+        PullRequestBypassTeams                          = $pullRequestBypassTeams
         CodeOwnersDefaultTeams                          = $codeOwnersDefaultTeams
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics

@@ -95,4 +95,16 @@ Describe 'Existing metadata review enforcement prerequisites' {
         $engineering[0].environmentApproval | Should -BeFalse
         @($default.codeOwnersFileProtectionTeams) | Should -Be @('azure-verified-modules-engineering-owners')
     }
+
+    It 'wires configured team IDs into the existing pull-request-only ruleset bypass' {
+        $terraformRoot = Join-Path $script:root 'repository-management' 'repository-sync' 'terraform'
+        $rulesets = Get-Content -LiteralPath (Join-Path $terraformRoot 'modules' 'github' 'github.rulesets.tf') -Raw
+        $rulesets | Should -Match '(?s)dynamic "bypass_actors" \{\s*for_each\s*=\s*toset\(var\.pull_request_bypass_teams\)\s*content \{\s*actor_id\s*=\s*data\.github_team\.this\[bypass_actors\.value\]\.id\s+actor_type\s*=\s*"Team"\s+bypass_mode\s*=\s*"pull_request"'
+        $main = Get-Content -LiteralPath (Join-Path $terraformRoot 'main.tf') -Raw
+        $main | Should -Match '(?m)^\s*pull_request_bypass_teams\s*=\s*var\.pull_request_bypass_teams$'
+        $rootVariables = Get-Content -LiteralPath (Join-Path $terraformRoot 'variables.tf') -Raw
+        $rootVariables | Should -Match '(?s)variable "pull_request_bypass_teams" \{\s*type\s*=\s*list\(string\).*?default\s*=\s*\[\]'
+        $sync = Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1') -Raw
+        $sync | Should -Match '(?m)^\s*pull_request_bypass_teams\s*=\s*\$settings\.PullRequestBypassTeams$'
+    }
 }

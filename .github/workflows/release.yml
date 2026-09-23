@@ -48,7 +48,7 @@ jobs:
 
           $releaseJson = gh release view $env:RELEASE_TAG `
               --repo $env:GITHUB_REPOSITORY `
-              --json tagName,isDraft,isPrerelease,publishedAt
+              --json tagName,isDraft,isPrerelease,publishedAt,databaseId
           if ($LASTEXITCODE -ne 0) {
               throw "Unable to read release '$env:RELEASE_TAG'."
           }
@@ -63,17 +63,11 @@ jobs:
               throw "Release '$env:RELEASE_TAG' must be a published full release."
           }
 
-          $version = $env:RELEASE_TAG.Substring(1)
-          New-Item -ItemType Directory -Path ./out/release -Force | Out-Null
-          gh release download $env:RELEASE_TAG `
-              --repo $env:GITHUB_REPOSITORY `
-              --pattern "Avm.Authoring-$version.zip" `
-              --pattern SHA256SUMS `
-              --dir ./out/release `
-              --clobber
-          if ($LASTEXITCODE -ne 0) {
-              throw "Unable to download the signed release assets for '$env:RELEASE_TAG'."
-          }
+          ./scripts/Save-AvmAuthoringReleaseAssets.ps1 `
+              -ReleaseTag $env:RELEASE_TAG `
+              -Repository $env:GITHUB_REPOSITORY `
+              -ReleaseId $release.databaseId `
+              -OutputPath ./out/release
 
       - name: Validate and publish signed module
         shell: pwsh

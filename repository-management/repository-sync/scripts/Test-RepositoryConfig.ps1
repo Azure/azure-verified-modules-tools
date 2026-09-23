@@ -64,6 +64,7 @@ $defaultOnlyConfig = [pscustomobject]@{
 $defaultOnlySettings = Resolve-RepositorySettings -repositoryConfig $defaultOnlyConfig -repoId "unlisted-repository"
 Assert-Equal $defaultRef $defaultOnlySettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "Default group OIDC subject was not applied."
 Assert-Equal 2 $defaultOnlySettings.Teams.Count "Default group teams were not resolved."
+Assert-Equal 0 $defaultOnlySettings.PullRequestBypassTeams.Count "Unlisted repositories must not have a team bypass."
 
 $overrideConfig = [pscustomobject]@{
     repositoryGroups = @(
@@ -75,14 +76,24 @@ $overrideConfig = [pscustomobject]@{
             workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
                 jobWorkflowRef = $groupRef
             }
+            pullRequestBypassTeams = @("test-contributors")
+        },
+        [pscustomobject]@{
+            name = "also-overridden"
+            order = 5
+            repositories = @("overridden-repository")
+            teams = @([pscustomobject]@{ name = "test-owners"; repositoryPermission = "push" })
+            pullRequestBypassTeams = @("test-contributors", "test-owners")
         }
     )
 }
 $overrideSettings = Resolve-RepositorySettings -repositoryConfig $overrideConfig -repoId "overridden-repository"
 Assert-Equal $groupRef $overrideSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "Repository-group OIDC subject override did not win."
+Assert-Equal "test-contributors,test-owners" ($overrideSettings.PullRequestBypassTeams -join ",") "Matching group bypass teams were not combined without duplicates."
 
 $unmatchedSettings = Resolve-RepositorySettings -repositoryConfig $overrideConfig -repoId "other-repository"
 Assert-Equal $defaultRef $unmatchedSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "A non-matching group leaked its OIDC subject override."
+Assert-Equal 0 $unmatchedSettings.PullRequestBypassTeams.Count "A non-matching group leaked its bypass teams."
 
 $actualConfigPath = [System.IO.Path]::Combine(
     $PSScriptRoot,
@@ -102,6 +113,36 @@ $configuredRepositories += "unlisted-repository"
 foreach ($repository in $configuredRepositories) {
     $actualSettings = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId $repository
     Assert-Equal $defaultRef $actualSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "The checked-in OIDC subject is incorrect for '$repository'."
+    $expectedBypassTeams = if ($repository -eq "avm-ptn-example-repo") { "azure-verified-modules-engineering-owners" } else { "" }
+    Assert-Equal $expectedBypassTeams ($actualSettings.PullRequestBypassTeams -join ",") "Unexpected pull-request bypass teams for '$repository'."
+}
+
+Assert-Throws -MessagePattern "*pullRequestBypassTeams must be an array*" -Action {
+    $invalidConfig = [pscustomobject]@{
+        repositoryGroups = @(
+            (New-DefaultGroup -claimOverrides $null),
+            [pscustomobject]@{
+                name = "invalid"
+                repositories = @("repository")
+                pullRequestBypassTeams = "test-contributors"
+            }
+        )
+    }
+    Resolve-RepositorySettings -repositoryConfig $invalidConfig -repoId "repository"
+}
+
+Assert-Throws -MessagePattern "*not a configured team slug*" -Action {
+    $invalidConfig = [pscustomobject]@{
+        repositoryGroups = @(
+            (New-DefaultGroup -claimOverrides $null),
+            [pscustomobject]@{
+                name = "invalid"
+                repositories = @("repository")
+                pullRequestBypassTeams = @("unconfigured-team")
+            }
+        )
+    }
+    Resolve-RepositorySettings -repositoryConfig $invalidConfig -repoId "repository"
 }
 
 Assert-Throws -MessagePattern "Repository group 'default' sets unsupported*" -Action {
