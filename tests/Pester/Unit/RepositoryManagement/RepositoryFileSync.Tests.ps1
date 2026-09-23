@@ -73,6 +73,7 @@ Describe 'Configured repository-sync bot identity' {
 
     It 'rejects missing or invalid configuration before it can be used' -ForEach @(
         @{ Login = ''; Id = '12345'; Message = '*AVM_APP_BOT_LOGIN*' }
+        @{ Login = "configured`nbot[bot]"; Id = '12345'; Message = '*AVM_APP_BOT_LOGIN*' }
         @{ Login = 'configured-bot[bot]'; Id = ''; Message = '*AVM_APP_BOT_USER_ID*' }
         @{ Login = 'configured-bot[bot]'; Id = 'abc'; Message = '*AVM_APP_BOT_USER_ID*' }
         @{ Login = 'configured-bot[bot]'; Id = '0'; Message = '*AVM_APP_BOT_USER_ID*' }

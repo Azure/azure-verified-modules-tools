@@ -17,6 +17,10 @@ function Get-RepositorySyncConfiguredBotActor {
     if ([string]::IsNullOrWhiteSpace($login)) {
         throw [System.InvalidOperationException]::new('AVM_APP_BOT_LOGIN must be configured with the AVM app bot login.')
     }
+    $login = $login.Trim()
+    if ($login -cmatch '[\x00-\x1F\x7F]') {
+        throw [System.InvalidOperationException]::new('AVM_APP_BOT_LOGIN must not contain control characters.')
+    }
 
     $idText = [string]$env:AVM_APP_BOT_USER_ID
     $id = 0L
@@ -24,7 +28,7 @@ function Get-RepositorySyncConfiguredBotActor {
         throw [System.InvalidOperationException]::new('AVM_APP_BOT_USER_ID must be configured with the positive numeric AVM app bot user database ID.')
     }
 
-    [pscustomobject]@{ login = $login.Trim(); id = $id; type = 'Bot' }
+    [pscustomobject]@{ login = $login; id = $id; type = 'Bot' }
 }
 
 function Assert-RepositorySyncFileScope {
