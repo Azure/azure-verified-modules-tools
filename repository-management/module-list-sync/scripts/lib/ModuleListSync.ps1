@@ -180,7 +180,7 @@ function Invoke-AvmModuleListSync {
     }
 
     Write-Host "[AVM] $Repository module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed." -ForegroundColor Yellow
-    $expectedActor = @{ login = 'azure-verified-modules[bot]'; id = 1049636; type = 'Bot' }
+    $expectedActor = Get-RepositorySyncConfiguredBotActor
     $result = Invoke-RepositoryFileSync -Repository $Repository -DefaultBranch $DefaultBranch `
         -VerifyCandidate -ExpectedActor $expectedActor -PlanHasChanges:$plan.Changed `
         -StableBranch 'avm-bot/sync-module-dropdown' `
