@@ -17,6 +17,26 @@ function script:Resolve-AvmPowerShellPath {
     throw 'Unable to resolve the current PowerShell executable path.'
 }
 
+function script:Start-AvmPesterLogIsolation {
+    if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {
+        return
+    }
+
+    $token = [guid]::NewGuid().ToString('N')
+    Microsoft.PowerShell.Utility\Write-Host "::stop-commands::$token"
+    return $token
+}
+
+function script:Stop-AvmPesterLogIsolation {
+    param(
+        [string] $Token
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Token)) {
+        Microsoft.PowerShell.Utility\Write-Host "::$Token::"
+    }
+}
+
 function script:Get-AvmComponentShardCount {
     $default = [Math]::Min([Environment]::ProcessorCount, 6)
     if ($default -lt 1) {
@@ -148,35 +168,41 @@ function script:Invoke-AvmPesterShardedTier {
         $shard.Process.WaitForExit()
     }
 
-    $aggregate = [pscustomobject]@{ TotalCount = 0; PassedCount = 0; FailedCount = 0; SkippedCount = 0 }
-    foreach ($shard in $running) {
-        $exit = $shard.Process.ExitCode
-        if (Test-Path -LiteralPath $shard.Log) {
-            Get-Content -LiteralPath $shard.Log | Write-Host
-        }
-        $errLog = "$($shard.Log).err"
-        if ((Test-Path -LiteralPath $errLog) -and (Get-Item -LiteralPath $errLog).Length -gt 0) {
-            Get-Content -LiteralPath $errLog | Write-Host
-        }
-        if ($exit -eq 2) {
-            throw "$Tier shard $($shard.Index) ran no tests."
-        }
-        if (-not (Test-Path -LiteralPath $shard.Output)) {
-            throw "$Tier shard $($shard.Index) produced no result file (exit $exit)."
-        }
+    $logToken = script:Start-AvmPesterLogIsolation
+    try {
+        $aggregate = [pscustomobject]@{ TotalCount = 0; PassedCount = 0; FailedCount = 0; SkippedCount = 0 }
+        foreach ($shard in $running) {
+            $exit = $shard.Process.ExitCode
+            if (Test-Path -LiteralPath $shard.Log) {
+                Get-Content -LiteralPath $shard.Log | Write-Host
+            }
+            $errLog = "$($shard.Log).err"
+            if ((Test-Path -LiteralPath $errLog) -and (Get-Item -LiteralPath $errLog).Length -gt 0) {
+                Get-Content -LiteralPath $errLog | Write-Host
+            }
+            if ($exit -eq 2) {
+                throw "$Tier shard $($shard.Index) ran no tests."
+            }
+            if (-not (Test-Path -LiteralPath $shard.Output)) {
+                throw "$Tier shard $($shard.Index) produced no result file (exit $exit)."
+            }
 
-        $xml = [xml](Get-Content -LiteralPath $shard.Output -Raw)
-        $root = $xml.'test-results'
-        $total = [int] $root.total
-        $failures = [int] $root.failures + [int] $root.errors
-        $skipped = [int] $root.skipped + [int] $root.'not-run' + [int] $root.ignored
-        $aggregate.TotalCount += $total
-        $aggregate.FailedCount += $failures
-        $aggregate.SkippedCount += $skipped
-        $aggregate.PassedCount += $total - $failures - $skipped
-        if ($exit -ne 0 -and $failures -eq 0) {
-            throw "$Tier shard $($shard.Index) exited with code $exit."
+            $xml = [xml](Get-Content -LiteralPath $shard.Output -Raw)
+            $root = $xml.'test-results'
+            $total = [int] $root.total
+            $failures = [int] $root.failures + [int] $root.errors
+            $skipped = [int] $root.skipped + [int] $root.'not-run' + [int] $root.ignored
+            $aggregate.TotalCount += $total
+            $aggregate.FailedCount += $failures
+            $aggregate.SkippedCount += $skipped
+            $aggregate.PassedCount += $total - $failures - $skipped
+            if ($exit -ne 0 -and $failures -eq 0) {
+                throw "$Tier shard $($shard.Index) exited with code $exit."
+            }
         }
+    }
+    finally {
+        script:Stop-AvmPesterLogIsolation -Token $logToken
     }
 
     $aggregate

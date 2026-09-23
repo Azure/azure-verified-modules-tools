@@ -653,6 +653,13 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
+During Pester runs, the build harness temporarily clears `GITHUB_ACTIONS` and
+`GITHUB_STEP_SUMMARY`, and pauses workflow-command parsing while tests
+deliberately exercise GitHub
+annotations. Their diagnostics remain in the job log, but do not appear as
+real run annotations or write to the run's step summary. Normal commands
+retain native GitHub annotations.
+
 Warnings and errors that carry a file and line position preserve it as
 `message (path, line N[, column N])` in ordinary terminal output. GitHub Actions
 keeps using native workflow annotations without duplicating the position in
@@ -747,11 +754,13 @@ Both call the same implementation. The dispatcher is generated from a single ver
   - `AvmProcessException` (`AVM1020`) — subprocess exited non-zero; includes captured stdout / stderr.
   - `AvmContextException` (`AVM1030`) — repo context resolver couldn't classify the path.
   - `AvmCommandException` (`AVM1040`) — a composite verb reported a failing status.
+  - `AvmModuleVersionException` (`AVM1050`) — the installed module is behind the published release.
   - `AvmManagedFilesVersionException` (`AVM1060`) — a new major managed-files release supersedes the repo's pin.
 - Exit codes from the dispatcher:
   - `0` — success.
   - `1` — user error (bad args, bad config, expected condition).
   - `2` — internal / unexpected error.
+  - `10` — the installed module is superseded and must be upgraded.
   - `11` — the managed-files pin is superseded by a major release.
   - `12–19` — reserved for the `tool` verb tree.
   - `20–29` — reserved for the `test` verb tree.
@@ -869,7 +878,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 
 > See also: [`quality-standards.md`](quality-standards.md) § 5 for the `AvmAvoidStringThrow` custom rule, the transient `NullReferenceException` mitigation and retry wrapper, the cross-platform `@(...)` consumer wrap, and the known PSSA rule conflicts.
 
-- PSScriptAnalyzer settings in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. CI runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path>` and treats `Warning` and above as fixable, `Error` as blocking.
+- PSScriptAnalyzer settings live in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. A dedicated Ubuntu CI job runs lint once; informational findings, warnings, errors, and parse errors fail the gate.
 - A `pre-commit` Pester suite runs:
   - Manifest layout (`Test-AvmModuleLayout`).
   - Encoding check (no BOM, LF line endings).
@@ -881,6 +890,12 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 
 ## 20. Release and versioning
 
+- Normal commands compare the running module against the latest PowerShell
+  Gallery release and stop with upgrade guidance when outdated. `avm version`
+  and `Get-AvmVersion` instead return the running version with an update warning.
+  `avm update` bypasses the guard so it can install the newer version.
+  `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
+  checkouts; Gallery lookup failures warn and allow the command to continue.
 - SemVer 2.0.0. Pre-release labels: `-preview.N`, `-rc.N`.
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.

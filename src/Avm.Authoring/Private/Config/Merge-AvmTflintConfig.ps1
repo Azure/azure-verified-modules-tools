@@ -23,11 +23,11 @@ function Get-AvmTflintOverrideBlock {
 
     $text = [System.IO.File]::ReadAllText($Path)
     $pattern = '(?ms)^[ \t]*(?<type>[A-Za-z_][A-Za-z0-9_-]*)[ \t]+"(?<label>(?:\\.|[^"])*)"[ \t]*\{(?<body>[^{}]*)\}'
-    $matches = [regex]::Matches($text, $pattern)
+    $blockMatches = [regex]::Matches($text, $pattern)
     $blocks = New-Object System.Collections.Generic.List[object]
     $cursor = 0
 
-    foreach ($match in $matches) {
+    foreach ($match in $blockMatches) {
         if (-not (Test-AvmHclTrivia -Text $text.Substring($cursor, $match.Index - $cursor))) {
             throw [AvmConfigurationException]::new(
                 "TFLint override '$Path' contains unsupported HCL before block '$($match.Groups['type'].Value)'.")
@@ -112,7 +112,7 @@ function Get-AvmTflintOverrideWarning {
 }
 
 function Merge-AvmTflintConfig {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
     param(
         [Parameter(Mandatory)]
         [string] $BasePath,
@@ -159,8 +159,12 @@ function Merge-AvmTflintConfig {
         }
 
         $replacementBlock = $baseMatch.Value.Substring(0, $baseMatch.Groups['body'].Index - $baseMatch.Index) +
-            $body + '}'
+        $body + '}'
         $merged = $merged.Remove($baseMatch.Index, $baseMatch.Length).Insert($baseMatch.Index, $replacementBlock)
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write merged TFLint config')) {
+        throw [System.OperationCanceledException]::new('TFLint config staging was not approved.')
     }
 
     [System.IO.File]::WriteAllText(
@@ -216,7 +220,7 @@ function Get-AvmTflintScopeOverridePath {
 }
 
 function New-AvmTflintConfigSet {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
@@ -270,7 +274,11 @@ function New-AvmTflintConfigSet {
         }
     }
 
-    $stageRoot = Join-Path (Get-AvmFolder -Kind Cache) 'tflint-config-stage'
+    $stageRoot = Join-Path (Get-AvmFolder -Kind Cache -NoCreate) 'tflint-config-stage'
+    if (-not $PSCmdlet.ShouldProcess($stageRoot, 'Stage TFLint config overrides')) {
+        throw [System.OperationCanceledException]::new('TFLint config staging was not approved.')
+    }
+    $null = Get-AvmFolder -Kind Cache
     if (-not (Test-Path -LiteralPath $stageRoot)) {
         New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
     }

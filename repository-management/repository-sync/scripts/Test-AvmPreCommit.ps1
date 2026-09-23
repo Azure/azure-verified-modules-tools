@@ -117,8 +117,10 @@ try {
 }
 
 $script:moduleImportCount = 0
+$script:moduleUpdateCount = 0
 $script:preCommitInvocationCount = 0
 $script:preCommitErrorCodes = @()
+$script:moduleUpdateParameters = @{}
 
 function Import-Module {
     [CmdletBinding()]
@@ -129,6 +131,18 @@ function Import-Module {
     )
 
     $script:moduleImportCount++
+}
+
+function Update-PSResource {
+    [CmdletBinding()]
+    param(
+        [string]$Name,
+        [string]$Scope,
+        [switch]$TrustRepository
+    )
+
+    $script:moduleUpdateCount++
+    $script:moduleUpdateParameters = @{} + $PSBoundParameters
 }
 
 $script:preCommitParameters = @{}
@@ -161,18 +175,24 @@ $script:retryParameters = @{
 }
 
 try {
+    $script:preCommitErrorCodes = @("AVM1050")
     $result = Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters
 
-    Assert-Equal -Actual $result.Status -Expected "pass" -Description "pre-commit status"
+    Assert-Equal -Actual $result.Status -Expected "pass" -Description "pre-commit status after upgrade"
     Assert-Equal -Actual $script:preCommitParameters.Ecosystem -Expected "terraform" -Description "forwarded ecosystem"
     Assert-Equal -Actual $script:preCommitParameters.RepoId -Expected $script:retryParameters.repoId -Description "forwarded repo id"
     Assert-Equal -Actual $script:preCommitParameters.ContainsKey("ManagedFilesLocalPath") -Expected $false -Description "managed files local path not forwarded"
     Assert-Equal -Actual $script:preCommitParameters.ContainsKey("Upgrade") -Expected $false -Description "upgrade switch not forwarded by default"
     Assert-Equal -Actual $script:preCommitParameters.ConfigLocalPath -Expected $script:retryParameters.repositoryConfigDir -Description "forwarded repository config path"
-    Assert-Equal -Actual $script:preCommitInvocationCount -Expected 1 -Description "pre-commit invocation count"
-    Assert-Equal -Actual $script:moduleImportCount -Expected 1 -Description "module import count"
+    Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "pre-commit invocation count"
+    Assert-Equal -Actual $script:moduleImportCount -Expected 2 -Description "module import count"
+    Assert-Equal -Actual $script:moduleUpdateCount -Expected 1 -Description "module update count"
+    Assert-Equal -Actual $script:moduleUpdateParameters.Name -Expected "Avm.Authoring" -Description "updated module name"
+    Assert-Equal -Actual $script:moduleUpdateParameters.Scope -Expected "CurrentUser" -Description "module update scope"
+    Assert-Equal -Actual $script:moduleUpdateParameters.TrustRepository.IsPresent -Expected $true -Description "trusted repository switch"
 
     $script:moduleImportCount = 0
+    $script:moduleUpdateCount = 0
     $script:preCommitInvocationCount = 0
     $script:preCommitErrorCodes = @("AVM9999")
 
@@ -184,8 +204,25 @@ try {
 
     Assert-Equal -Actual $script:preCommitInvocationCount -Expected 1 -Description "unrelated error invocation count"
     Assert-Equal -Actual $script:moduleImportCount -Expected 1 -Description "unrelated error import count"
+    Assert-Equal -Actual $script:moduleUpdateCount -Expected 0 -Description "unrelated error update count"
 
     $script:moduleImportCount = 0
+    $script:moduleUpdateCount = 0
+    $script:preCommitInvocationCount = 0
+    $script:preCommitErrorCodes = @("AVM1050", "AVM1050")
+
+    Assert-Throws `
+        -ExpectedMessage "A newer version of Avm.Authoring is required." `
+        -Action {
+        Invoke-AvmPreCommitWithUpgradeRetry @script:retryParameters
+    }
+
+    Assert-Equal -Actual $script:preCommitInvocationCount -Expected 2 -Description "retry failure invocation count"
+    Assert-Equal -Actual $script:moduleImportCount -Expected 2 -Description "retry failure import count"
+    Assert-Equal -Actual $script:moduleUpdateCount -Expected 1 -Description "retry failure update count"
+
+    $script:moduleImportCount = 0
+    $script:moduleUpdateCount = 0
     $script:preCommitInvocationCount = 0
     $script:preCommitErrorCodes = @()
 
@@ -195,6 +232,7 @@ try {
     Assert-Equal -Actual $script:preCommitParameters.Upgrade -Expected $true -Description "forwarded upgrade switch value"
 } finally {
     Remove-Item Function:Import-Module
+    Remove-Item Function:Update-PSResource
     Remove-Item Function:Invoke-AvmPreCommit
 }
 

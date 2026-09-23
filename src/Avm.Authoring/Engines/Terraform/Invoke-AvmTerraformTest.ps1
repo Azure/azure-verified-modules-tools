@@ -174,7 +174,7 @@ function Invoke-AvmTerraformTest {
             if ($NoInit) { continue }
 
             try {
-                $manifestPath = Join-Path $dataDirectory 'modules' 'modules.json'
+                $manifestPath = Join-Path -Path (Join-Path -Path $dataDirectory -ChildPath 'modules') -ChildPath 'modules.json'
                 $manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
                 foreach ($directory in (ConvertFrom-AvmTerraformModuleManifest -Payload $manifest -WorkingDirectory $example.Path -TestFiles $example.TestFiles)) {
                     $null = $coveredModules.Add($directory)

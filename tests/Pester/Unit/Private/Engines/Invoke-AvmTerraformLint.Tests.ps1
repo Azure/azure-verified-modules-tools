@@ -61,6 +61,29 @@ Describe 'Merge-AvmTflintConfig' {
         $script:destinationPath = Join-Path $TestDrive 'merged.hcl'
     }
 
+    It 'does not write a merged config when WhatIf denies staging' {
+        @'
+rule "x" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8
+        @'
+rule "x" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8
+
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+            } {
+                param($B, $O, $D)
+                Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D -WhatIf
+            }
+        } | Should -Throw -ExceptionType ([System.OperationCanceledException])
+        $script:destinationPath | Should -Not -Exist
+    }
+
     It 'applies a genuine rule-disable override without dropping base attributes' {
         @'
 plugin "avm" {
@@ -177,6 +200,42 @@ rule "x" {
                 Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
             }
         } | Should -Throw '*unsupported HCL*'
+    }
+}
+
+Describe 'New-AvmTflintConfigSet' {
+    It 'does not create a staging directory when WhatIf denies it' {
+        $root = Join-Path $TestDrive 'repo'
+        $base = Join-Path $TestDrive 'base-config'
+        New-Item -ItemType Directory -Path $root, $base -Force | Out-Null
+        @'
+rule "x" {
+  enabled = true
+}
+'@ | Set-Content -LiteralPath (Join-Path $base 'avm.tflint.hcl') -Encoding utf8
+        @'
+rule "x" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath (Join-Path $root 'avm.tflint.override.hcl') -Encoding utf8
+
+        $previousHome = $env:AVM_HOME
+        $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
+        try {
+            {
+                InModuleScope 'Avm.Authoring' -Parameters @{
+                    R = $root; B = $base; C = (Join-Path $base 'avm.tflint.hcl')
+                } {
+                    param($R, $B, $C)
+                    New-AvmTflintConfigSet -Root $R -BaseConfigDir $B `
+                        -Scopes @([pscustomobject]@{ RelPath = '.'; Config = $C }) -WhatIf
+                }
+            } | Should -Throw -ExceptionType ([System.OperationCanceledException])
+            $env:AVM_HOME | Should -Not -Exist
+        }
+        finally {
+            $env:AVM_HOME = $previousHome
+        }
     }
 }
 

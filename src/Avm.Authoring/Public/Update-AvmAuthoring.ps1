@@ -6,7 +6,8 @@ function Update-AvmAuthoring {
     .DESCRIPTION
         Queries the PowerShell Gallery for the latest published version. If the
         running module is outdated, safely invokes Update-PSResource for the
-        CurrentUser scope.
+        CurrentUser scope. This command bypasses stale-version enforcement so
+        an outdated module can update itself.
 
         Routed by the dispatcher: 'avm update'.
 

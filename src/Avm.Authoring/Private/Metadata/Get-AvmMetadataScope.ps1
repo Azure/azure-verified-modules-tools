@@ -39,7 +39,7 @@ function Get-AvmMetadataScope {
     $pending = [System.Collections.Generic.Queue[string]]::new()
     if ($Context.Kind -eq 'bicep-monorepo') {
         foreach ($kind in @('res', 'ptn', 'utl')) {
-            $path = Join-Path $root 'avm' $kind
+            $path = Join-Path -Path (Join-Path -Path $root -ChildPath 'avm') -ChildPath $kind
             if (Test-Path -LiteralPath $path -PathType Container) {
                 $pending.Enqueue($path)
             }

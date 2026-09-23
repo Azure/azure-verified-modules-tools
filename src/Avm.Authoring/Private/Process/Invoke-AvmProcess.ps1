@@ -354,7 +354,7 @@ function Get-AvmProcessReplayLine {
     }
 
     if ($body.Count -eq 0) {
-        return @()
+        return
     }
 
     $lines.Add(('  ---- captured output: {0} ----' -f $Label))

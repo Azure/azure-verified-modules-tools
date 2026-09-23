@@ -134,7 +134,7 @@ function ConvertTo-AvmRunSummaryLine {
 
     $totalProperty = $Result.PSObject.Properties['RunsTotal']
     if ($null -eq $totalProperty -or $null -eq $totalProperty.Value) {
-        return @()
+        return
     }
 
     $total = [int]$totalProperty.Value
@@ -144,7 +144,7 @@ function ConvertTo-AvmRunSummaryLine {
     $failed = if ($null -ne $failedProperty) { [int]$failedProperty.Value } else { 0 }
 
     $runNoun = if ($total -eq 1) { 'run' } else { 'runs' }
-    return @(('{0}{1} {2}, {3} passed, {4} failed' -f $Indent, $total, $runNoun, $passed, $failed))
+    return [string[]]@(('{0}{1} {2}, {3} passed, {4} failed' -f $Indent, $total, $runNoun, $passed, $failed))
 }
 
 function ConvertTo-AvmIssueLine {
@@ -161,7 +161,7 @@ function ConvertTo-AvmIssueLine {
 
     $issuesProperty = $Result.PSObject.Properties['Issues']
     if ($null -eq $issuesProperty) {
-        return @()
+        return
     }
 
     $lines = [System.Collections.Generic.List[string]]::new()

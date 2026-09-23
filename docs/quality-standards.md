@@ -127,14 +127,14 @@ Drop `SupportsShouldProcess` on read-only cmdlets. Keep `Set-StrictMode -Version
 
 ## 5. PSScriptAnalyzer
 
-**Settings.** `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. The `lint` Invoke-Build task runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path> -CustomRulePath <path>` and treats `Warning` and above as fixable, `Error` as blocking.
+**Settings.** `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. The `lint` Invoke-Build task runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path> -CustomRulePath <path>`. Informational findings, warnings, errors, and parse errors all fail lint. GitHub Actions runs this job once on Ubuntu, while the full local `ci` and `pre-commit` tasks retain lint.
 
 **Custom rule: `AvmAvoidStringThrow`.** Lives at `src/Avm.Authoring/Resources/CustomRules/AvmAvoidStringThrow.psm1`. Flags `throw 'literal'` and `throw "expandable $var"` at `Warning` severity. Allows the canonical `throw [Type]::new(...)`, bare `throw` re-throws, and variable throws (`throw $_`, `throw $exception`).
 
 - The rule body gates on `$ScriptBlockAst.Parent -eq $null` so each throw is reported exactly once when `FindAll(..., $true)` walks descendants. Without that gate, PSSA's per-`ScriptBlockAst` invocation reports throws nested inside functions twice — once for the file SBA, once for the function-body SBA.
 - Returns `[Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]@{ RuleName = 'AvmAvoidStringThrow'; Severity = 'Warning'; ... }` via the hashtable-cast pattern.
 
-**Transient `NullReferenceException` mitigation.** PSScriptAnalyzer occasionally throws `NullReferenceException` from `AnalyzeScript` in a way that doesn't reproduce on a re-run. The `lint` task wraps `Invoke-ScriptAnalyzer` in `Invoke-ScriptAnalyzerWithRetry` (`build/avm.build.ps1`) which retries up to `$env:AVM_LINT_MAX_ATTEMPTS` (default 3) times before giving up. If lint ever crashes locally with `Object reference not set to an instance of an object.` and re-running passes, that's the symptom — don't go hunting for the cause unless it becomes reproducible.
+**Transient `NullReferenceException` mitigation.** PSScriptAnalyzer occasionally throws `NullReferenceException` from `AnalyzeScript` in a way that doesn't reproduce on a re-run. The `lint` task wraps `Invoke-ScriptAnalyzer` in `Invoke-ScriptAnalyzerWithRetry` (`build/avm.build.ps1`) which retries up to `$env:AVM_LINT_MAX_ATTEMPTS` (default 8) times before giving up. Retry notices are information in the log, not workflow warnings; the final failure still stops lint. If lint crashes locally with `Object reference not set to an instance of an object.` and re-running passes, that's the symptom.
 
 **Cross-platform consumer wrap.** `Invoke-ScriptAnalyzer` returns nothing (pipeline `$AutomationNull`) on Linux/macOS when there are zero findings. Under `Set-StrictMode -Version 3.0`, `$records.Count` then throws `PropertyNotFoundException: The property 'Count' cannot be found on this object`. Wrap consumer-side call sites with `@(...)` so the result is always an array:
 
@@ -147,7 +147,7 @@ The `BeforeAll` helper can `return @($records)` but PowerShell unrolls array ret
 
 **Two well-known rule conflicts.**
 
-- **`PSUseConsistentWhitespace` ↔ `PSAlignAssignmentStatement`** are mutually exclusive in their default forms. `PSAlignAssignmentStatement` wants `$foo    = 1; $foobar = 2`; `PSUseConsistentWhitespace` wants exactly one space around `=`. Pick one and disable the other in the settings file — both can't be on.
+- **`PSUseConsistentWhitespace` ↔ `PSAlignAssignmentStatement`** conflict in their default forms. This repository keeps both enabled by setting `IgnoreAssignmentOperatorInsideHashTable = $true` for the whitespace rule and aligning hashtable assignments; do not disable either rule to bypass a formatting finding.
 - **`PSUseProcessBlockForPipelineCommand`** requires an explicit `begin {}` block around `Set-StrictMode -Version 3.0` when the function has `[Parameter(ValueFromPipeline)]`. Putting the strict-mode setup at the top of `process {}` instead trips the rule.
 
 **Known historical crash.** A `function script:Foo { … }` nested inside another function once crashed PSScriptAnalyzer with `NullReferenceException` in a 2026-05 session. Not currently reproducing; the retry wrapper above handles it if it returns.
@@ -228,7 +228,15 @@ Three layers; each runs with its own tag filter.
 | Component   | `tests/Pester/Component/`    | No      | Real (under `TestDrive`); stub binaries via `tests/fixtures/bin/`  | Opt-in via `./build.ps1 component`   |
 | Integration | `tests/Pester/Integration/`  | Yes (pulls and runs the real managed tools from the resolver) | Real | Opt-in via `./build.ps1 integration`; PR CI via the `integration` job in the `ci` workflow |
 
-**Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
+**Local gate.** `./build.ps1 pre-commit` chains `layout, lint, test, component`. The `test` task excludes Component and Integration via `Filter.ExcludeTag = @('Integration', 'Component')`. Run this before every push.
+
+**Test diagnostics in Actions.** `Invoke-AvmPester` temporarily clears
+`GITHUB_ACTIONS` and `GITHUB_STEP_SUMMARY` only while tests run. A paired GitHub
+`stop-commands` token prevents tests that deliberately simulate GitHub output
+from creating real annotations; sharded component logs are similarly isolated
+when replayed. The token and environment are restored before the build reports
+any actual test failure, and normal module runs keep their annotations and
+step summaries.
 
 **Stub binaries.** `tests/fixtures/bin/*.ps1` emit canned output and exit with intentional codes. Each stub honours `--version` so `Find-AvmToolOnPath`'s semver regex passes. `Install-AvmStubLauncher.ps1` reads `avm.pins.jsonc`, injects the matching versions, and wires the stubs into a temp `$env:PATH` for the Component tier, so pin updates never require fixture edits. Anything else exits `64` with stderr so an unexpected argv shape fails loudly.
 
@@ -236,7 +244,7 @@ Three layers; each runs with its own tag filter.
 
 **Coverage.** 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor. Tracked per file; new files start at the floor and ratchet up as code matures.
 
-**CI matrix.** Every PR runs Unit + Component on `windows-2025` (x64), `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64). Integration runs on every PR via the `integration` job in the `ci` workflow on each.
+**CI matrix.** The build job runs layout, Unit coverage, and Component tests on `windows-latest`, `ubuntu-latest`, and `macos-latest` through `./build.ps1 ci-tests`. Lint and workflow-definition tests have separate Ubuntu-only jobs. The full local `./build.ps1 ci` still runs lint; integration runs separately on all three OSes.
 
 **PowerShell startup-profile workaround.** CI sets
 `DOTNET_MultiCoreJitMinNumCpus=7fffffff` before launching PowerShell to avoid

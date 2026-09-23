@@ -54,6 +54,8 @@ elseif ($Tag) {
 $testRunId = [guid]::NewGuid().ToString()
 $env:AVM_TEST_RUN_ID = $testRunId
 $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $testRunId
+$env:GITHUB_ACTIONS = ''
+$env:GITHUB_STEP_SUMMARY = ''
 
 $result = Invoke-Pester -Configuration $config
 
