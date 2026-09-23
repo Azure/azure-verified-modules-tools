@@ -266,22 +266,23 @@ Describe 'Issue owner routing workflow safety' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by workflow_dispatch while live validation is pending' {
+    It 'is triggered only by schedule and workflow_dispatch, never pull_request(_target) or issues' {
         $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
                 $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
             ForEach-Object { $_.Groups[1].Value })
-        $triggerNames.Count | Should -Be 1
-        $triggerNames[0] | Should -Be 'workflow_dispatch'
+        $triggerNames.Count | Should -Be 2
+        $triggerNames | Should -Contain 'workflow_dispatch'
+        $triggerNames | Should -Contain 'schedule'
         $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
-        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}issues:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
     }
 
-    It 'preserves the disabled schedules without schedule-dependent expressions' {
-        $script:workflowText | Should -Match "'9,24,39,54 \* \* \* \*'"
-        $script:workflowText | Should -Match "'17 3 \* \* \*'"
+    It 'runs the offset crons without schedule-dependent expressions' {
+        $script:workflowText | Should -Match "- cron:\s*'9,24,39,54 \* \* \* \*'"
+        $script:workflowText | Should -Match "- cron:\s*'17 3 \* \* \*'"
         $script:workflowText | Should -Not -Match 'github\.event\.schedule'
     }
 

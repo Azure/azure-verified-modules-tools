@@ -2,13 +2,15 @@
 name: Repository Management - Workflow Failure Issues
 
 # Design invariants -- do not regress these without a very good reason:
-#  - workflow_dispatch only while live validation is pending. This reads
-#    workflow-run/issue data with a privileged cross-repo app token.
-#  - Disabled schedule to restore after all four what-if validations pass:
-#    '41 5 * * *'.
+#  - schedule + workflow_dispatch only. This reads workflow-run/issue data
+#    with a privileged cross-repo app token.
+#  - Offset cron ('41 5 * * *') rather than a round-minute mark, because
+#    schedule runs are best-effort and can be delayed or skipped.
 #  - Every write (comment/assign/close) is conditional: an issue that already reflects the
 #    latest run's outcome is left untouched.
 on:
+  schedule:
+    - cron: '41 5 * * *'
   workflow_dispatch:
     inputs:
       what_if:

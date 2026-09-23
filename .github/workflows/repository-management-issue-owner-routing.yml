@@ -2,11 +2,15 @@
 name: Repository Management - Issue Owner Routing
 
 # Design invariants -- do not regress these without a very good reason:
-#  - workflow_dispatch only while live validation is pending, never an `issues`
-#    trigger: this run reads issue data with a privileged cross-repo app token.
-#  - Disabled schedules to restore after all four what-if validations pass:
-#    '9,24,39,54 * * * *' and '17 3 * * *'.
+#  - schedule + workflow_dispatch only, never an `issues` trigger: this run
+#    reads issue data with a privileged cross-repo app token.
+#  - Offset crons ('9,24,39,54 * * * *' plus a daily '17 3 * * *' full-sweep
+#    backstop) rather than a round-minute mark, because schedule runs are
+#    best-effort and can be delayed or skipped near :00/:15/:30/:45.
 on:
+  schedule:
+    - cron: '9,24,39,54 * * * *'
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       issue_url:
