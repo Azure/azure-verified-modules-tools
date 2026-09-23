@@ -158,7 +158,7 @@ Describe 'Release workflow' {
     }
 
     It 'accepts only an existing published full release with the exact selected tag' {
-        $script:release | Should -Match '--json tagName,isDraft,isPrerelease,publishedAt'
+        $script:release | Should -Match '--json tagName,isDraft,isPrerelease,publishedAt,databaseId'
         $script:release | Should -Match '\$release\.tagName -cne \$env:RELEASE_TAG'
         $script:release | Should -Match '\$release\.isDraft -or'
         $script:release | Should -Match '\$release\.isPrerelease -or'
@@ -170,7 +170,9 @@ Describe 'Release workflow' {
     }
 
     It 'downloads release assets and delegates publication to the validated script' {
-        $script:release | Should -Match 'gh release download'
+        $script:release | Should -Match '\./scripts/Save-AvmAuthoringReleaseAssets\.ps1'
+        $script:release | Should -Match '-ReleaseId \$release\.databaseId'
+        $script:release | Should -Not -Match 'gh release download'
         $script:release | Should -Match '\./scripts/Publish-AvmAuthoring\.ps1'
     }
 
