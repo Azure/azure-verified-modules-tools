@@ -96,6 +96,11 @@ variable "bypass_ruleset_for_approval_enabled" {
   description = "Whether to bypass the ruleset for approval for the GitHub App."
 }
 
+variable "pull_request_bypass_teams" {
+  type        = list(string)
+  description = "GitHub team slugs allowed to bypass the main ruleset on pull requests."
+}
+
 variable "github_avm_app_id" {
   type        = string
   description = "The GitHub App ID for the AVM."
