@@ -33,7 +33,7 @@ existing `avm` environment.
       mismatches.
 - [x] Run targeted Pester tests.
 - [x] Run `./build.ps1 pre-commit`.
-- [ ] Commit, push, and open a draft PR.
+- [x] Commit, push, and open a draft PR.
 
 ## Validation
 
