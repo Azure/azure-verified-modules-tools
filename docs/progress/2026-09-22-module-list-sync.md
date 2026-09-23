@@ -46,8 +46,11 @@ they differ.
   `Invoke-RepositoryFileSync` engine (`repository-management/repository-sync`)
   rather than a bespoke PR-creation path, using its `-ReviewOnly
   -VerifyCandidate -ExpectedActor -StableBranch` combination so the PR:
-  - is verified to have actually been opened by the AVM bot app
-    (`azure-verified-modules[bot]`, id `1049636`) before being trusted,
+  - is verified to have actually been opened by the configured AVM bot app
+    actor before being trusted. The GitHub App ID (`1049636`, used for
+    Terraform/token provisioning) is distinct from the bot user account
+    database ID (`187664033`, used for GitHub API actor-identity comparisons
+    and git commit authorship),
   - reuses a single stable branch (`avm-bot/sync-module-dropdown`) across
     runs instead of opening a new PR every day, and
   - is never auto-merged — a human always reviews the dropdown diff.

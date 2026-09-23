@@ -1,5 +1,7 @@
 BeforeAll {
     $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+    $script:originalBotLogin = $env:AVM_APP_BOT_LOGIN
+    $script:originalBotUserId = $env:AVM_APP_BOT_USER_ID
     $sharedLib = Join-Path $root 'repository-management' 'repository-sync' 'scripts' 'lib'
     $reviewerRoutingLib = Join-Path $root 'repository-management' 'reviewer-routing' 'scripts' 'lib'
     $lib = Join-Path $root 'repository-management' 'module-list-sync' 'scripts' 'lib'
@@ -30,6 +32,11 @@ body:
       required: true
 '@
     }
+}
+
+AfterAll {
+    $env:AVM_APP_BOT_LOGIN = $script:originalBotLogin
+    $env:AVM_APP_BOT_USER_ID = $script:originalBotUserId
 }
 
 Describe 'Get-AvmModuleListSyncCatalogModulePaths' {
@@ -146,6 +153,8 @@ Describe 'New-AvmModuleListSyncPullRequestBody' {
 
 Describe 'Invoke-AvmModuleListSync' {
     BeforeEach {
+        $env:AVM_APP_BOT_LOGIN = 'azure-verified-modules[bot]'
+        $env:AVM_APP_BOT_USER_ID = '187664033'
         Mock Get-AvmModuleListSyncCatalogModulePaths {
             @{
                 ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
@@ -175,9 +184,24 @@ Describe 'Invoke-AvmModuleListSync' {
         $result.PullRequestUrl | Should -Be 'https://github.com/Azure/bicep-registry-modules/pull/1'
         Should -Invoke Invoke-RepositoryFileSync -Times 1 -ParameterFilter {
             -not $ReviewOnly -and $VerifyCandidate -and $StableBranch -eq 'avm-bot/sync-module-dropdown' -and
-            $ExpectedActor.login -eq 'azure-verified-modules[bot]' -and $PlanHasChanges -and
+            $ExpectedActor.login -eq 'azure-verified-modules[bot]' -and $ExpectedActor.id -eq 187664033 -and
+            $ExpectedActor.type -eq 'Bot' -and $PlanHasChanges -and
             $GeneratedFiles.ContainsKey('.github/ISSUE_TEMPLATE/avm_module_issue.yml')
         }
+    }
+
+    It 'fails before repository publication when the configured bot identity is missing' {
+        $env:AVM_APP_BOT_USER_ID = ''
+        Mock Get-AvmModuleListSyncCatalogModulePaths {
+            @{
+                ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+                res = @('avm/res/aaa/bbb', 'avm/res/ccc/ddd', 'avm/res/new/module')
+                utl = @('avm/utl/types/avm-common-types')
+            }
+        }
+        { Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules' } |
+            Should -Throw '*AVM_APP_BOT_USER_ID*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 }
 

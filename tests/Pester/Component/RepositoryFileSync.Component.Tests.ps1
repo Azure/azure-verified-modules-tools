@@ -2,6 +2,8 @@ BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $script:originalModulePath = $env:PSModulePath
     $script:originalToken = $env:GH_TOKEN
+    $script:originalBotLogin = $env:AVM_APP_BOT_LOGIN
+    $script:originalBotUserId = $env:AVM_APP_BOT_USER_ID
     $script:removeItemCommand = Get-Command Microsoft.PowerShell.Management\Remove-Item -CommandType Cmdlet
     $env:PSModulePath = @(
         (Join-Path $script:repoRoot 'src')
@@ -129,12 +131,16 @@ BeforeAll {
 
 AfterAll {
     $env:GH_TOKEN = $script:originalToken
+    $env:AVM_APP_BOT_LOGIN = $script:originalBotLogin
+    $env:AVM_APP_BOT_USER_ID = $script:originalBotUserId
     $env:PSModulePath = $script:originalModulePath
 }
 
 Describe 'Existing repository-sync publication core' -Tag Component {
     BeforeEach {
         $env:GH_TOKEN = 'offline-test-token'
+        $env:AVM_APP_BOT_LOGIN = 'azure-verified-modules[bot]'
+        $env:AVM_APP_BOT_USER_ID = '187664033'
         $script:state = @{
             Repo = [pscustomobject]@{ id = 42; full_name = 'Azure/bicep-registry-modules'; default_branch = 'main'; fork = $false; archived = $false; disabled = $false; allow_squash_merge = $true; permissions = @{ push = $true } }
             MainSha = 'a' * 40
@@ -217,7 +223,7 @@ Describe 'Existing repository-sync publication core' -Tag Component {
         $clone | Should -Not -Contain '--filter=blob:none'
         $commit = @($script:state.GitCalls | Where-Object { $_ -contains 'commit' })[0]
         $commit | Should -Contain 'user.name=azure-verified-modules[bot]'
-        $commit | Should -Contain 'user.email=1049636+azure-verified-modules[bot]@users.noreply.github.com'
+        $commit | Should -Contain 'user.email=187664033+azure-verified-modules[bot]@users.noreply.github.com'
         $commit[-2..-1] | Should -Be @('-m', 'chore: run avm pre-commit [skip ci]')
         $create = @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' })[0]
         $create | Should -Contain 'chore: run avm pre-commit [skip ci]'
@@ -241,6 +247,15 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $script:state.ApiCalls | Should -HaveCount 0
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'merge' -and $MaxRetries -eq 5 }
         Test-Path -LiteralPath $script:state.Root | Should -BeFalse
+    }
+
+    It 'fails before pushing when fallback bot identity configuration is invalid' {
+        $env:AVM_APP_BOT_USER_ID = 'not-a-number'
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @() } |
+            Should -Throw '*AVM_APP_BOT_USER_ID*'
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
     }
 
     It 'preserves Terraform plan-only behavior without opening or merging a candidate' {

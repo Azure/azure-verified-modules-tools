@@ -1,6 +1,8 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
     $script:shared = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib'
+    $script:originalBotLogin = $env:AVM_APP_BOT_LOGIN
+    $script:originalBotUserId = $env:AVM_APP_BOT_USER_ID
     Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     . (Join-Path $script:shared 'RepositoryFileSync.ps1')
     . (Join-Path $script:shared 'AvmPreCommit.ps1')
@@ -48,6 +50,36 @@ BeforeAll {
             base = [pscustomobject]@{ ref = 'main'; sha = 'a' * 40; repo = [pscustomobject]@{ id = 42; full_name = 'Azure/bicep-registry-modules'; default_branch = 'main' } }
             head = [pscustomobject]@{ ref = 'avm-bot/pre-commit-example'; sha = 'b' * 40; repo = [pscustomobject]@{ id = 42; full_name = 'Azure/bicep-registry-modules'; fork = $false } }
         }
+    }
+}
+
+AfterAll {
+    $env:AVM_APP_BOT_LOGIN = $script:originalBotLogin
+    $env:AVM_APP_BOT_USER_ID = $script:originalBotUserId
+}
+
+Describe 'Configured repository-sync bot identity' {
+    BeforeEach {
+        $env:AVM_APP_BOT_LOGIN = 'configured-bot[bot]'
+        $env:AVM_APP_BOT_USER_ID = '12345'
+    }
+
+    It 'returns the configured bot actor with a numeric database ID' {
+        $actor = Get-RepositorySyncConfiguredBotActor
+        $actor.login | Should -Be 'configured-bot[bot]'
+        $actor.id | Should -Be 12345
+        $actor.type | Should -Be 'Bot'
+    }
+
+    It 'rejects missing or invalid configuration before it can be used' -ForEach @(
+        @{ Login = ''; Id = '12345'; Message = '*AVM_APP_BOT_LOGIN*' }
+        @{ Login = 'configured-bot[bot]'; Id = ''; Message = '*AVM_APP_BOT_USER_ID*' }
+        @{ Login = 'configured-bot[bot]'; Id = 'abc'; Message = '*AVM_APP_BOT_USER_ID*' }
+        @{ Login = 'configured-bot[bot]'; Id = '0'; Message = '*AVM_APP_BOT_USER_ID*' }
+    ) {
+        $env:AVM_APP_BOT_LOGIN = $Login
+        $env:AVM_APP_BOT_USER_ID = $Id
+        { Get-RepositorySyncConfiguredBotActor } | Should -Throw $Message
     }
 }
 
@@ -338,4 +370,3 @@ Describe 'Bulk repository file reads at a pinned commit' {
             Should -Throw
     }
 }
-
