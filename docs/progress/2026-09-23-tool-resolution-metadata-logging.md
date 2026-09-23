@@ -25,11 +25,11 @@ steps. Provide useful verbose diagnostics for metadata discovery and validation.
 'Invoke-AvmPrCheck*','Component: metadata in authoring checks*'` passed
 37 unit and 89 component tests.
 
-`.\build.ps1 pre-commit` passed: layout, lint, 1,772 unit tests (9 skipped),
-and 910 component tests (1 skipped), with no failures. The initial gate
-encountered an intermittent module-catalog schema parsing failure in an
-unrelated component test; its 54-test lifecycle group and the full retry
-passed unchanged.
+`.\build.ps1 pre-commit` passed after rebasing onto current main: layout,
+lint, 1,774 unit tests (9 skipped), and 799 component tests, with no failures.
+Before the rebase, the initial gate encountered an intermittent module-catalog
+schema parsing failure in an unrelated component test; its 54-test lifecycle
+group and the full retry passed unchanged.
 
 ## Blockers or dependencies
 
