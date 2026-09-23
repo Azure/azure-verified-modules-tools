@@ -155,8 +155,9 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 Global flags: `--ecosystem bicep|terraform|auto` (default `auto`), `--module <path>`, `--json` (machine output), `--verbose`, `--dry-run`, `--auto-install` / `AVM_AUTO_INSTALL=1` (install any missing managed tool without prompting).
 
 Both authoring chains require valid root and child `metadata.json` files.
-Metadata failure stops the chain before tool setup or other steps, regardless
-of `StopOnFail`.
+Required tools are resolved before the metadata step. Metadata failure then
+stops the chain before other steps or module-file changes, regardless of
+`StopOnFail`.
 
 ### Developer experience
 
