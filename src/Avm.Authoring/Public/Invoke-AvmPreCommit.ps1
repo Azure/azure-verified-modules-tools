@@ -22,9 +22,9 @@ function Invoke-AvmPreCommit {
         managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
         and writes any adds/updates/removals straight into the working tree.
-        Metadata validation runs before tool resolution and all other steps.
+        Metadata validation runs after tool resolution but before the other steps.
         Missing or invalid root or child metadata aborts the chain without
-        creating files or reading indexes, regardless of StopOnFail.
+        changing module files or reading indexes, regardless of StopOnFail.
         The two checks that require an
         initialised working directory - lint (tflint) and validate
         (`terraform validate`) - live in `avm pr-check` instead, mirroring
@@ -180,6 +180,7 @@ function Invoke-AvmPreCommit {
 
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
+    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
@@ -231,9 +232,6 @@ function Invoke-AvmPreCommit {
     )
 
     foreach ($def in $stepDefs) {
-        if ($stepIndex -eq 1) {
-            $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
-        }
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null

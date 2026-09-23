@@ -108,6 +108,38 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
+    It 'resolves <Ecosystem> tools before metadata and stops on metadata failure' -TestCases @(
+        @{ Ecosystem = 'bicep'; Kind = 'bicep-module' }
+        @{ Ecosystem = 'terraform'; Kind = 'terraform-module-repo' }
+    ) {
+        param($Ecosystem, $Kind)
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; E = $Ecosystem; K = $Kind } {
+            param($D, $E, $K)
+            $script:resolutionOrder = [System.Collections.Generic.List[string]]::new()
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = $K; Root = $D; Ecosystem = $E; Source = 'path-heuristic' }
+            }
+            Mock Resolve-AvmCommandTool { $script:resolutionOrder.Add('tools'); @() }
+            Mock Test-AvmMetadataModules {
+                $script:resolutionOrder.Add('metadata')
+                [pscustomobject]@{ Status = 'fail'; Issues = @() }
+            }
+            Mock Invoke-AvmSync { throw [System.InvalidOperationException]::new('Sync must not run.') }
+            Mock Invoke-AvmFormat { throw [System.InvalidOperationException]::new('Format must not run.') }
+
+            $result = Invoke-AvmPreCommit -Path $D -AllowPathFallback -SkipModuleVersionCheck
+            Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
+                $Command -eq 'pre-commit' -and $Ecosystem -eq $E -and $AllowPathFallback
+            }
+            [pscustomobject]@{ Order = $script:resolutionOrder.ToArray(); Result = $result }
+        }
+
+        $probe.Order | Should -Be @('tools', 'metadata')
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Steps.Step | Should -Be @('metadata')
+    }
+
     It 'composes all five steps in the expected order on a passing chain (bicep)' {
         $dir = Join-Path $TestDrive ("precommit-bicep-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

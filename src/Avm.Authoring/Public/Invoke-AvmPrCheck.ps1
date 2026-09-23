@@ -17,9 +17,9 @@ function Invoke-AvmPrCheck {
         credentialled policy evaluation and read-only drift checks used to
         verify that pre-commit output is current. Before any step runs, git
         status must report a clean working tree.
-        Metadata validation runs before tool resolution and all other steps.
+        Metadata validation runs after tool resolution but before the other steps.
         Missing or invalid root or child metadata aborts the chain without
-        creating files or reading indexes, regardless of StopOnFail.
+        changing module files or reading indexes, regardless of StopOnFail.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a
@@ -124,6 +124,7 @@ function Invoke-AvmPrCheck {
     $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pr-check: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Assert-AvmGitWorkingTreeClean -Path $context.Root
+    $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = @(
         [pscustomobject]@{
@@ -156,9 +157,6 @@ function Invoke-AvmPrCheck {
     $stepIndex = 0
 
     foreach ($def in $stepDefs) {
-        if ($stepIndex -eq 1) {
-            $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
-        }
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null

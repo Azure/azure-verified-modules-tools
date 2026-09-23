@@ -470,12 +470,15 @@ existing authored source. Terraform telemetry wiring is deferred to MaPoTF.
 The one-time source rewrite can change compiled Bicep output; subsequent
 owner/canonical metadata edits do not.
 
-`avm pre-commit` and `avm pr-check` finish with read-only metadata validation for
-the selected root and its module children. Invalid existing metadata fails the
-check. Missing files produce explicit warnings during rollout, without creating
-files or reading indexes. Explicit `avm metadata validate` and `show` still fail
-for missing files. Discovered helper children are validated; existing test,
-example, and internal-only source-directory exclusions remain unchanged.
+`avm pre-commit` and `avm pr-check` resolve their required tools before the
+first step, which validates metadata for the selected root and its module
+children. Missing or invalid metadata fails and stops either chain before
+other steps, without changing module files or reading indexes. `avm pr-check`
+also requires a clean worktree before tool resolution. `-Verbose` logs the
+discovered module count, each validated metadata path, and any issues.
+Explicit `avm metadata validate` and `show` still fail for missing files.
+Discovered helper children are validated; existing test, example, and
+internal-only source-directory exclusions remain unchanged.
 
 The catalog workflow lives in this tools repository and generates entries only
 from valid module metadata. Helpers remain in catalog JSON under `helper`, with

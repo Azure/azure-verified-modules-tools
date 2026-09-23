@@ -60,14 +60,15 @@ BeforeAll {
     }
 
     function Invoke-AuthoringMetadataFixture {
-        param([object] $Fixture, [string] $Command, [switch] $Actions)
+        param([object] $Fixture, [string] $Command, [switch] $Actions, [switch] $LogVerbose)
 
-        InModuleScope Avm.Authoring -Parameters @{ ModuleContext = $Fixture.Context; CommandName = $Command; Actions = $Actions.IsPresent } {
-            param($ModuleContext, $CommandName, $Actions)
+        InModuleScope Avm.Authoring -Parameters @{ ModuleContext = $Fixture.Context; CommandName = $Command; Actions = $Actions.IsPresent; LogVerbose = $LogVerbose.IsPresent } {
+            param($ModuleContext, $CommandName, $Actions, $LogVerbose)
             $script:metadataLaterCalls = 0
+            $script:metadataToolResolutions = 0
             Mock Get-AvmModuleContext { $ModuleContext }
             Mock Test-AvmModuleVersion {}
-            Mock Resolve-AvmCommandTool { $script:metadataLaterCalls++; @() }
+            Mock Resolve-AvmCommandTool { $script:metadataToolResolutions++; @() }
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Invoke-AvmHttp { throw 'Metadata validation must not fetch external data.' }
             Mock Invoke-AvmProcess { throw 'These metadata fixtures must not run a subprocess.' }
@@ -81,8 +82,9 @@ BeforeAll {
             try {
                 $env:GITHUB_ACTIONS = if ($Actions) { 'true' } else { '' }
                 $output = @(& $CommandName -Path $ModuleContext.Root -Ecosystem $ModuleContext.Ecosystem `
-                        -SkipModuleVersionCheck 3>&1 6>&1)
+                        -SkipModuleVersionCheck -Verbose:$LogVerbose 3>&1 4>&1 6>&1)
                 $result = $output | Where-Object { $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                $script:metadataToolResolutions | Should -Be 1
                 if ($result.Status -ne 'pass') {
                     $result.Steps | Should -HaveCount 1
                     $result.Steps[0].Step | Should -Be 'metadata'
@@ -92,7 +94,10 @@ BeforeAll {
                         $_ -is [System.Management.Automation.WarningRecord] -or
                         ($_ -is [System.Management.Automation.InformationRecord] -and [string]$_.MessageData -match '^::warning')
                     } | ForEach-Object { [string]$_ })
-                [pscustomobject]@{ Result = $result; Warnings = $warnings }
+                $verboseLogs = @($output | Where-Object {
+                        $_ -is [System.Management.Automation.VerboseRecord]
+                    } | ForEach-Object { [string]$_.Message })
+                [pscustomobject]@{ Result = $result; Warnings = $warnings; VerboseLogs = $verboseLogs }
             }
             finally {
                 $env:GITHUB_ACTIONS = $savedActions
@@ -269,6 +274,31 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         foreach ($path in $fixture.Paths) {
             Test-Path -LiteralPath (Join-Path $path 'metadata.json') | Should -BeFalse
         }
+    }
+
+    It 'logs validated paths and results for <Command> in verbose mode' -TestCases @(
+        @{ Command = 'Invoke-AvmPreCommit' }
+        @{ Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem terraform -Child
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $childFile = Join-Path $fixture.Paths[1] 'metadata.json'
+        [System.IO.File]::Delete($childFile)
+
+        $failed = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command -LogVerbose
+        $failed.Result.Status | Should -Be 'fail'
+        $failedLogs = $failed.VerboseLogs -join "`n"
+        $failedLogs | Should -Match 'metadata: discovered 2 module scope\(s\)'
+        $failedLogs | Should -Match 'metadata: validating metadata\.json \(root\)'
+        $failedLogs | Should -Match 'metadata: validating modules/blob-service/metadata\.json \(child\)'
+        $failedLogs | Should -Match 'metadata: \[AVM_METADATA_MISSING\] modules/blob-service/metadata\.json:'
+        $failedLogs | Should -Match 'metadata: checked 2 module scope\(s\); status=fail; issues=1'
+
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $passed = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command -LogVerbose
+        $passed.Result.Status | Should -Be 'pass'
+        ($passed.VerboseLogs -join "`n") | Should -Match 'metadata: checked 2 module scope\(s\); status=pass; issues=0'
     }
 
     It 'validates <Ecosystem> roots and children without changing files in <Command>' -TestCases @(

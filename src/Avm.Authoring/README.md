@@ -144,9 +144,10 @@ Terraform rejects `-UpdateSource` before writes and never
 generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
 Existing authored source files are preserved. Metadata-only initialization
 does not rewrite source. Pre-commit and PR checks require valid metadata on
-every module root and child. Metadata validation runs first and stops the chain
-on missing or invalid files, before tool setup or file changes. Initialize
-missing files with `avm metadata initialize` before rerunning either check.
+every module root and child. Required tools resolve first; metadata validation
+then stops the chain on missing or invalid files before other steps or module-file
+changes. Initialize missing files with `avm metadata initialize` before
+rerunning either check.
 
 ## Local smoke test
 

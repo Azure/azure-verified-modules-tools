@@ -262,8 +262,8 @@ The composition cmdlets and the exact order of engines they call:
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 
 Both chains stop immediately on missing or invalid root or child metadata,
-before managed-tool setup or file changes. Create the missing files with
-`avm metadata initialize` before running either chain.
+after resolving managed tools but before changing module files. Create the
+missing files with `avm metadata initialize` before running either chain.
 
 Unit tests remain a separate CI job. Unit, integration, and end-to-end test
 commands report `Status='skipped'`, not `pass`, when no matching tests are
