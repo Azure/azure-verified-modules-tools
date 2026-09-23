@@ -266,23 +266,25 @@ Describe 'Issue owner routing workflow safety' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by workflow_dispatch while live validation is pending' {
+    It 'is triggered only by schedule and workflow_dispatch, never pull_request(_target) or issues' {
         $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
                 $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
             ForEach-Object { $_.Groups[1].Value })
-        $triggerNames.Count | Should -Be 1
-        $triggerNames[0] | Should -Be 'workflow_dispatch'
+        $triggerNames.Count | Should -Be 2
+        $triggerNames | Should -Contain 'workflow_dispatch'
+        $triggerNames | Should -Contain 'schedule'
         $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
-        $script:triggerBlock | Should -Not -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}issues:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
     }
 
-    It 'preserves the disabled schedules without schedule-dependent expressions' {
-        $script:workflowText | Should -Match "'9,24,39,54 \* \* \* \*'"
-        $script:workflowText | Should -Match "'17 3 \* \* \*'"
-        $script:workflowText | Should -Not -Match 'github\.event\.schedule'
+    It 'runs the offset crons and passes the triggering event to the run step via env, not the run body' {
+        $script:workflowText | Should -Match "- cron:\s*'9,24,39,54 \* \* \* \*'"
+        $script:workflowText | Should -Match "- cron:\s*'17 3 \* \* \*'"
+        $script:workflowText | Should -Match '(?m)^\s{10}EVENT_NAME:\s*\$\{\{\s*github\.event_name\s*\}\}\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{10}EVENT_SCHEDULE:\s*\$\{\{\s*github\.event\.schedule\s*\}\}\s*$'
     }
 
     It 'maps dispatch inputs directly and preserves full-sweep values' {
@@ -291,6 +293,23 @@ Describe 'Issue owner routing workflow safety' {
         $script:workflowText | Should -Match '(?m)^\s{10}WHAT_IF:\s*\$\{\{\s*inputs\.what_if\s*\}\}\s*$'
         $script:workflowText | Should -Match "\`$whatIf\s*=\s*\`$env:WHAT_IF\s*-eq\s*'true'"
         ([int]'') | Should -Be 0
+    }
+
+    It 'maps each scheduled cron to an explicit non-empty lookback, using the dispatch input only for workflow_dispatch' {
+        # Regression: on a schedule trigger, inputs.updated_within_minutes is an empty
+        # string and [int]'' casts to 0, which the candidate filter treats as "sweep
+        # everything". Without an explicit per-cron mapping, every 15-minute cadence
+        # run would silently become a full sweep instead of only the daily backstop.
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -Be 1
+        $runBody = $workRunBlocks[0].Groups['body'].Value
+        $runBody | Should -Match "'workflow_dispatch'\s*\{\s*\[int\]\`$env:UPDATED_WITHIN_MINUTES\s*\}"
+        $runBody | Should -Match "'9,24,39,54 \* \* \* \*'\s*\{\s*60\s*\}"
+        $runBody | Should -Match "'17 3 \* \* \*'\s*\{\s*0\s*\}"
+        $runBody | Should -Match '(?s)default\s*\{\s*throw.*?Unexpected schedule'
+        $runBody | Should -Match '(?s)default\s*\{\s*throw.*?Unexpected event'
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {

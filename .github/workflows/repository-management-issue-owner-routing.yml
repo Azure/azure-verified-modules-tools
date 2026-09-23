@@ -2,11 +2,15 @@
 name: Repository Management - Issue Owner Routing
 
 # Design invariants -- do not regress these without a very good reason:
-#  - workflow_dispatch only while live validation is pending, never an `issues`
-#    trigger: this run reads issue data with a privileged cross-repo app token.
-#  - Disabled schedules to restore after all four what-if validations pass:
-#    '9,24,39,54 * * * *' and '17 3 * * *'.
+#  - schedule + workflow_dispatch only, never an `issues` trigger: this run
+#    reads issue data with a privileged cross-repo app token.
+#  - Offset crons ('9,24,39,54 * * * *' plus a daily '17 3 * * *' full-sweep
+#    backstop) rather than a round-minute mark, because schedule runs are
+#    best-effort and can be delayed or skipped near :00/:15/:30/:45.
 on:
+  schedule:
+    - cron: '9,24,39,54 * * * *'
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       issue_url:
@@ -78,6 +82,8 @@ jobs:
       - name: '[AVM] Route module issue owners'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
           ISSUE_URL: ${{ inputs.issue_url }}
           UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
           WHAT_IF: ${{ inputs.what_if }}
@@ -85,7 +91,24 @@ jobs:
           Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
-          $updatedWithinMinutes = [int]$env:UPDATED_WITHIN_MINUTES
+
+          # workflow_dispatch has no `github.event.schedule`, so the lookback
+          # comes from the dispatch input there. A `schedule` trigger has no
+          # inputs (an empty UPDATED_WITHIN_MINUTES would otherwise cast to
+          # 0, turning every cadence run into a full sweep) so the lookback
+          # is mapped explicitly from the cron that fired, failing fast on
+          # an unrecognized cron rather than silently defaulting.
+          $updatedWithinMinutes = switch ($env:EVENT_NAME) {
+            'workflow_dispatch' { [int]$env:UPDATED_WITHIN_MINUTES }
+            'schedule' {
+              switch ($env:EVENT_SCHEDULE) {
+                '9,24,39,54 * * * *' { 60 }
+                '17 3 * * *' { 0 }
+                default { throw "Unexpected schedule '$($env:EVENT_SCHEDULE)' for the issue owner routing workflow." }
+              }
+            }
+            default { throw "Unexpected event '$($env:EVENT_NAME)' triggered the issue owner routing workflow." }
+          }
 
           Write-Output "Issue URL override: $($env:ISSUE_URL)"
           Write-Output "Updated within minutes: $updatedWithinMinutes"

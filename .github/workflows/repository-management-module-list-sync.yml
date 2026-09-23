@@ -2,10 +2,10 @@
 name: Repository Management - Module List Sync
 
 # Design invariants -- do not regress these without a very good reason:
-#  - workflow_dispatch only while live validation is pending. This opens pull
-#    requests with a privileged cross-repo app token.
-#  - Disabled schedule to restore after all four what-if validations pass:
-#    '13 6 * * *'.
+#  - schedule + workflow_dispatch only. This opens pull requests with a
+#    privileged cross-repo app token.
+#  - Offset cron ('13 6 * * *') rather than a round-minute mark, because
+#    schedule runs are best-effort and can be delayed or skipped.
 #  - The generated pull request is auto-merged (squash) through the same
 #    VerifyCandidate/ExpectedActor-gated path the terraform pre-commit flow
 #    uses, once verification of the actor/branch/tree state passes.
@@ -13,6 +13,8 @@ name: Repository Management - Module List Sync
 #    (avm-bot/sync-module-dropdown) so repeated runs update the same PR instead of
 #    opening a new one every day the catalog stays ahead of the template.
 on:
+  schedule:
+    - cron: '13 6 * * *'
   workflow_dispatch:
     inputs:
       what_if:

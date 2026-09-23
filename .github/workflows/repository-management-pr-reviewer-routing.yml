@@ -2,13 +2,16 @@
 name: Repository Management - PR Reviewer Routing
 
 # Design invariants -- do not regress these without a very good reason:
-#  - workflow_dispatch only while live validation is pending. Never
-#    pull_request/pull_request_target:
+#  - schedule + workflow_dispatch only. Never pull_request/pull_request_target:
 #    this run reads pull request data with a privileged cross-repo app token, and
 #    that token must never be exposed to a run triggered by untrusted fork content.
-#  - Disabled schedules to restore after all four what-if validations pass:
-#    '7,22,37,52 * * * *' and '13 3 * * *'.
+#  - Offset crons ('7,22,37,52 * * * *' plus a daily '13 3 * * *' full-sweep
+#    backstop) rather than a round-minute mark, because schedule runs are
+#    best-effort and can be delayed or skipped near :00/:15/:30/:45.
 on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+    - cron: '13 3 * * *'
   workflow_dispatch:
     inputs:
       pull_request_url:
@@ -81,6 +84,8 @@ jobs:
       - name: '[AVM] Route pull request reviewers and labels'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
           PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
           UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
           WHAT_IF: ${{ inputs.what_if }}
@@ -88,7 +93,24 @@ jobs:
           Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
-          $updatedWithinMinutes = [int]$env:UPDATED_WITHIN_MINUTES
+
+          # workflow_dispatch has no `github.event.schedule`, so the lookback
+          # comes from the dispatch input there. A `schedule` trigger has no
+          # inputs (an empty UPDATED_WITHIN_MINUTES would otherwise cast to
+          # 0, turning every cadence run into a full sweep) so the lookback
+          # is mapped explicitly from the cron that fired, failing fast on
+          # an unrecognized cron rather than silently defaulting.
+          $updatedWithinMinutes = switch ($env:EVENT_NAME) {
+            'workflow_dispatch' { [int]$env:UPDATED_WITHIN_MINUTES }
+            'schedule' {
+              switch ($env:EVENT_SCHEDULE) {
+                '7,22,37,52 * * * *' { 60 }
+                '13 3 * * *' { 0 }
+                default { throw "Unexpected schedule '$($env:EVENT_SCHEDULE)' for the PR reviewer routing workflow." }
+              }
+            }
+            default { throw "Unexpected event '$($env:EVENT_NAME)' triggered the PR reviewer routing workflow." }
+          }
 
           Write-Output "Pull request URL override: $($env:PULL_REQUEST_URL)"
           Write-Output "Updated within minutes: $updatedWithinMinutes"
