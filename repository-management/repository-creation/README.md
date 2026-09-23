@@ -4,7 +4,7 @@
 Terraform repository creation entry point. It initializes `metadata.json`
 through `Initialize-AvmModuleMetadata` before publishing the repository's first
 commit. There is no separate tooling-repository inventory registration.
-Creation does not read CSV indexes or run metadata backfill.
+Creation does not read CSV indexes or infer missing values from source.
 
 Run from a trusted checkout of this tools repository using PowerShell 7.4+.
 Creation imports `src/Avm.Authoring/Avm.Authoring.psd1` directly, not an installed

@@ -7,7 +7,6 @@ on:
       - .github/workflows/repository-management-config-test.yml
       - .github/workflows/repository-management-sync.yml
       - .github/workflows/repository-management-bicep-sync.yml
-      - repository-management/module-metadata/**
       - repository-management/repository-config/config.json
       - repository-management/shared/**
       - repository-management/bicep-test-tenant-config/**

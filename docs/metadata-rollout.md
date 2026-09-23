@@ -1,8 +1,9 @@
 # Module metadata rollout
 
-**Status: core tools, Bicep metadata, the optional full-sync metadata hook, and
-single-segment canonical support are merged. Oracle.Database compatibility
-requires its tooling change and a compatible authoring release.
+**Status: core tools, Bicep metadata, and single-segment canonical support are
+merged. The unused optional Terraform backfill hook has been removed.
+Oracle.Database compatibility requires its tooling change and a compatible
+authoring release.
 Child helper adoption also requires compatible released/installed tooling;
 this tools change does not release it or add helper files to module repositories.
 The current one-off Terraform migration is agent-led and metadata-only.
@@ -18,11 +19,10 @@ This document is a plan, not approval to run production commands.
   decisions because source inference is ambiguous. It preserves valid existing
   metadata and owners, creates no Terraform wiring, and does not run full
   repository sync, settings changes, or Azure operations.
-- The existing manual, default-off `metadata_backfill` input remains an optional
-  hook in ordinary full repository sync. Its behavior is unchanged, including
-  managed files, formatting, CODEOWNERS, repository/Azure management and normal
-  publication/merge on apply. It is not used for the current migration and is
-  not a metadata-only workflow switch or runner.
+- Terraform Sync does not create missing metadata files. Existing repositories
+  use owner-authored files or a reviewed one-off metadata-only migration.
+  Ordinary sync still handles managed files, CODEOWNERS, repository/Azure
+  management, and normal publication/merge on apply.
 - The catalog workflow reads module metadata and registry information, then
   publishes and merges updated CSV/JSON indexes through the existing AVM App.
   Migration diagnostics stay in the workflow artifact, not the repository.
@@ -37,15 +37,13 @@ This document is a plan, not approval to run production commands.
   selected helper submodules under canonical key `helper`; every generated CSV
   omits those helpers.
 - Either engineering owners or module owners can satisfy metadata code-owner
-  review. Optional full-sync apply retains the already-authorized standard AVM
-  App merge process, not a separate human-review-only lane. No new bypass or
-  permission is granted; approval for that facility must cover its full scope.
+  review. Ordinary sync retains the existing App publication/merge controls;
+  this change grants no new bypass or permission.
 - Avm.Authoring's metadata commands are permanent authoring tools, with no CSV
   input dependency. Both `pre-commit` and `pr-check` validate local metadata.
   Missing files warn during rollout; invalid existing files fail.
-- CSV conversion and backfill-only inference are isolated in the temporary
-  `repository-management/module-metadata` directory. Keep the permanent
-  initializer in new-repository creation after the migration is removed.
+- The unused CSV-based backfill adapter and workflow input have been removed.
+  Keep the permanent initializer in new-repository creation.
 
 ## Changes and merge order
 
@@ -57,7 +55,7 @@ This document is a plan, not approval to run production commands.
 | 2 | [#113: metadata tooling and ownership](https://github.com/Azure/azure-verified-modules-tools/pull/113) | Merged | Includes schemas and ownership generators; [#120](https://github.com/Azure/azure-verified-modules-tools/pull/120) is closed as superseded. |
 | 3 | [Azure/bicep-registry-modules#7349: Bicep files and release guards](https://github.com/Azure/bicep-registry-modules/pull/7349) | Merged | Adds metadata, the two-team ownership rule, compatible governance tests, and existing pipeline exclusions together. |
 | 4 | [#125: checkout module import fix](https://github.com/Azure/azure-verified-modules-tools/pull/125) | Merged | Fixed the former metadata-only flow's import dependency. |
-| 5 | [#126: full-standard Terraform backfill](https://github.com/Azure/azure-verified-modules-tools/pull/126) | Merged | Replaces the metadata-only flow with full normal sync and standard merge; removes Terraform source-reader generation. |
+| 5 | [#126: full-standard Terraform backfill](https://github.com/Azure/azure-verified-modules-tools/pull/126) | Merged; unused hook now removed | Replaced the metadata-only flow with full normal sync; the optional hook was never used. |
 | 6 | [#127: single-segment canonical support](https://github.com/Azure/azure-verified-modules-tools/pull/127) | Merged | Supports pattern/utility canonical names such as `naming`; consumers still need a compatible installed/released authoring schema. |
 | Next | [Oracle metadata compatibility](progress/2026-09-17-oracle-metadata-compatibility.md) | Pending review | Supports real `Oracle.Database` ARM types without inventing a Microsoft namespace; adoption requires a compatible authoring release. |
 | After data adoption and CSV cutover | [Azure/Azure-Verified-Modules#2936: metadata maintenance processes](https://github.com/Azure/Azure-Verified-Modules/pull/2936) | Draft | Updates ownership, orphaning, adoption, and generated-index processes once the new sources and review protections are in use. |
@@ -110,10 +108,10 @@ GitHub's workflow disable control rather than restoring that variable.
 BAMI routing uses the existing central `testTenant` selections without a global
 activation variable. Bicep variable propagation remains manual-only through
 `enable_test_tenant_sync`, with `plan_only=false` required for publication.
-Optional full-sync backfill includes normal tenant parsing and identity/state
-operations. A BAMI-selected repository with an incomplete bundle, untrusted
+Normal Terraform sync includes tenant parsing and identity/state operations.
+A BAMI-selected repository with an incomplete bundle, untrusted
 GitHub context, or pending identity validation stops before file preparation,
-including metadata creation. The agent-led migration does not invoke those
+including pre-commit and CODEOWNERS. The agent-led migration does not invoke those
 operations or bypass their safeguards.
 
 Consumers must have a compatible released Avm.Authoring package installed before
@@ -122,13 +120,12 @@ helper markers. Merging tools, passing local checks, and green hosted CI do not 
 update installed modules. Validators use their packaged schemas, not a runtime
 download of the authored `$schema` URL.
 
-Repository creation and the optional metadata worker can load trusted checkout
-code for preparation. The worker uses a separate PowerShell process without
-replacing caller commands or changing `PSModulePath`. Full Terraform sync still
-installs and uses the normal released authoring module. Successful preparation
-or validation with checkout code does not prove that installed authoring/CI
-consumers accept the output. Do not skip normal pre-commit or substitute checkout
-commands to bypass the compatible-release prerequisite.
+Repository creation can load trusted checkout code for preparation. Full
+Terraform sync installs and uses the normal released authoring module.
+Successful preparation or validation with checkout code does not prove that
+installed authoring/CI consumers accept the output. Do not skip normal
+pre-commit or substitute checkout commands to bypass the compatible-release
+prerequisite.
 
 ## Bicep file adoption and CODEOWNERS
 
@@ -217,127 +214,37 @@ Existing helper rows in source CSVs still require the explicit removal override.
 This supersedes only the helper omission policy, not repository access or
 archived/missing/private restrictions.
 The inventory and actual migration data stay outside the packaged module.
-Normal authoring checks require valid metadata on every module root and child.
-Both `avm pre-commit` and `avm pr-check` stop on missing or invalid metadata before
-tool setup or subsequent steps. Initialize missing files with
-`avm metadata initialize`, or complete the metadata backfill before adopting
-this authoring release.
+Normal authoring checks validate metadata on every module root and child.
+Missing files warn during rollout; invalid existing files fail. Initialize
+missing files with `avm metadata initialize` before adopting this authoring
+release.
 
 This procedure creates no `main.metadata.tf` or other Terraform wiring and does
 not run full repository sync, managed-file updates, settings changes, App
 authentication, or Azure operations. It introduces no execution switch, runner,
 automatic merge path, release exception, or access-gate change.
 
-## Optional full repository sync
+## Terraform repository sync
 
-Discovery now reads each repository's root `metadata.json`, not a tools-local
-inventory CSV. Missing metadata warns and allows remaining sync/backfill, but
-skips direct collaborator cleanup; invalid metadata or API failures exclude
-the affected repository. GitHub archive state is authoritative.
-Optional backfill still uses the canonical public CSV at a pinned commit for
-roots and children, without a tools inventory fallback.
+Discovery reads validated root `metadata.json` from each repository's default
+branch, not a tools-local inventory CSV. Missing metadata warns and leaves the
+repository eligible for ordinary sync, but skips direct collaborator cleanup;
+invalid metadata or API failures exclude the affected repository. GitHub
+archive state is authoritative. Sync does not create missing metadata or offer
+a `metadata_backfill` input. Use reviewed, owner-authored files for adoption,
+not repository sync as a metadata migration tool.
 
-The existing hook below is not the current one-off migration. Use it only for a
-separately approved full-sync trial, starting with `avm-ptn-example-repo`.
-The commands are for an operator after approval; none are executed by writing
-this plan.
-If Terraform Sync was disabled for the merge window, obtain approval to enable
-it before dispatching. That also permits its normal scheduled/repository-dispatch
-applies; there is no variable-based manual-only mode.
-
-```powershell
-$tools = 'Azure/azure-verified-modules-tools'
-$module = 'avm-ptn-example-repo'
-$ref = 'main'
-```
-
-Before the follow-up is merged, `$ref` can be its approved feature branch if the
-protected environment allows it. This still runs the full normal sync with
-installed authoring; only the metadata worker loads the selected checkout.
-
-The existing metadata-only
-[Azure/terraform-azurerm-avm-ptn-example-repo#298](https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo/pull/298)
-and its branch are not adopted, overwritten, merged or deleted by this follow-up.
-Review that outstanding work before authorizing another production run; resolve
-it through the normal operator-approved process, not automatic cleanup.
-
-### Check the review rule in the full sync plan
-
-Normal sync prepares CODEOWNERS in the same file change as metadata. Confirm
-the final matching rule is:
-
-```text
-metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners
-```
-
-No later rule may replace it. Either listed team may provide the code-owner
-approval; both are not required. Verify root, child, and deeper metadata paths,
-both teams' write access, and the unchanged branch approval requirements.
-
-### Preview metadata creation
-
-```powershell
-gh workflow run repository-management-sync.yml --repo $tools --ref $ref `
-    -f repositories=$module -f metadata_backfill=true -f plan_only=true `
-    -f sync_project_items=true
-```
-
-**Proceed only if:** the intended repository is selected; the run uses the
-selected checkout's metadata code; metadata creation adds only missing
-`metadata.json` files; and existing metadata and authored Terraform readers
-are unchanged. Inspect all normal managed-file, formatting, CODEOWNERS,
-repository/Azure and project plans too. No `main.metadata.tf` is generated.
-Plan-only does not publish a branch or merge a file change.
-
-### Apply through standard sync and merge
-
-After inspecting the dry run and receiving approval:
-
-```powershell
-gh workflow run repository-management-sync.yml --repo $tools --ref $ref `
-    -f repositories=$module -f metadata_backfill=true -f plan_only=false `
-    -f sync_project_items=true
-```
-
-**This is an apply, not a request to open a review-only change.** It performs
-normal repository/Azure management, runs pre-commit and CODEOWNERS preparation,
-then uses the standard timestamped branch, commit/title/body and `[skip ci]`
-publication followed by the existing authorized App squash merge with exact-head
-matching. Merge behavior and failure handling are unchanged; no extra bypass
-or failed-check override is introduced.
-
-Review names, descriptions, canonical types, flat owner handles and telemetry
-identifiers in the plan before approving apply. Metadata/script failure stops
-file publication, but cannot roll back management steps already applied earlier.
-Normal project synchronization still follows its existing input and conditions.
-Terraform `-UpdateSource` is unsupported; future telemetry wiring belongs in
-MaPoTF and is not part of this rollout.
-
-After the change is merged, repeat the dry run. It should produce no metadata
-changes, although ordinary sync may find other drift. There is no special stable
-backfill branch or review-deferral path. Never force-update someone else's work.
-
-### Expand optional full sync in small groups
-
-After the example passes, select a small explicit comma-separated repository
-list. Verify the two-team CODEOWNERS rule on every target and review all normal
-sync changes. Use the same full plan-then-apply sequence.
-Include a resource module, a pattern module, and a repository with children.
-Inspect every failed module rather than widening the run immediately.
-
-Missing source information is a stop for that repository. Correct the existing
-data or author the missing metadata values directly; never invent an owner,
-canonical type, or telemetry identifier just to satisfy validation. Keep
-`repositories=All` for a separately approved later run.
-Disable Terraform Sync again if automatic writes must stop between batches.
-Re-enable it only with approval covering normal automatic applies.
+Normal managed files, formatting, CODEOWNERS, repository/Azure management,
+tenant gates, and selected project synchronization still run. A plan-only run
+does not publish changes; an apply uses the existing standard publication and
+merge controls. Production runs still require separate operator approval.
 
 ## Preview and publish the catalog
 
 Catalog entries and CSV rows come only from valid module metadata. There are no
 ecosystem mode options or full legacy-row fallback. Publication replaces
 the six canonical CSV files; it no longer writes `test-*.csv` previews.
-The catalog workflow does not trigger metadata backfill.
+The catalog workflow never writes module metadata files.
 
 ```powershell
 $tools = 'Azure/azure-verified-modules-tools'
@@ -451,9 +358,8 @@ to hide unexplained omissions. Proposal approval and repository creation remain
 separate processes and do not create catalog entries before valid metadata exists.
 
 Retire manual metadata sources and old publication automation only after the
-replacement outputs and consumers are verified. Then follow the
-[migration cleanup instructions](../repository-management/module-metadata/README.md#removing-migration-after-reconciliation)
-to remove the one-off scripts and sync switches, retaining normal authoring,
+replacement outputs and consumers are verified. The unused backfill scripts and
+workflow switch have already been removed; retain normal authoring,
 new-repository initialization, schemas, and catalog generation.
 Keep source CSV collection and row-retention checks; they are permanent safeguards,
 not disposable backfill code.
@@ -470,9 +376,9 @@ metadata, truncated collection, unexplained row loss, owner omissions,
 unexpected repository-setting changes, or a release selected by metadata-only changes.
 
 Pause the relevant automation first. Keep run links, logs, artifacts, and commit
-IDs. In optional full sync, a metadata preparation failure does not undo earlier
-normal repository/Azure management; inspect those results before retrying. The
-current metadata-only migration does not perform those management steps. Correct
+IDs. In ordinary full sync, a file preparation failure does not undo earlier
+repository/Azure management; inspect those results before retrying. The current
+metadata-only migration does not perform those management steps. Correct
 data/tooling and generate again from fresh inputs. If an applied
 change must be reverted, revert only its reviewed commits; do not bulk-delete
 metadata or restore an old CSV over newer module-owned data.

@@ -435,9 +435,9 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   bypass the source-row removal guard. Other removals, including helper rows,
   hold back affected outputs by default; an explicit force option
   permits intentional removals without weakening validation or publication controls.
-  Permanent authoring commands never read CSV inputs. Temporary backfill lives
-  outside the module; ordinary checks validate local metadata and warn on
-  missing files during rollout.
+  Permanent authoring commands never read CSV inputs. The one-off migration
+  uses reviewed values outside normal repository sync; ordinary checks
+  validate local metadata and warn on missing files during rollout.
 
 **Exit criteria**: every `platform.*.yml` workflow can be expressed as `pwsh -c "avm governance …"` instead of `pwsh -File utilities/pipelines/platform/…`.
 

@@ -91,20 +91,8 @@ Assert-True `
     -Actual ($workflow -notmatch 'force_user_removal|forceUserRemoval') `
     -Description "the removed force-user-removal workflow input and logic to stay absent"
 Assert-True `
-    -Actual ($workflow -match '(?m)^      metadata_backfill:\r?\n        description: .+\r?\n        default: false\r?\n        type: boolean$') `
-    -Description "metadata_backfill to be a false-by-default boolean workflow input"
-Assert-True `
-    -Actual ($workflow.Contains("METADATA_BACKFILL_ENABLED: `${{ github.event_name == 'workflow_dispatch' && inputs.metadata_backfill || false }}")) `
-    -Description "metadata_backfill to be gated to workflow_dispatch in a runtime environment variable"
-Assert-True `
-    -Actual ($workflow.Contains("`$metadataBackfill = `$env:METADATA_BACKFILL_ENABLED -eq 'true'")) `
-    -Description "metadata_backfill to use runtime environment values rather than expression injection"
-Assert-True `
-    -Actual ($workflow.Contains('-metadataBackfill:$metadataBackfill')) `
-    -Description "the workflow to forward the explicit metadata switch"
-Assert-True `
-    -Actual ($workflow -notmatch 'metadata_update_source|metadataUpdateSource|METADATA_UPDATE_SOURCE') `
-    -Description "the removed Terraform source-reader option to stay absent"
+    -Actual ($workflow -notmatch '(?i)metadata_?backfill|metadata_?update_?source') `
+    -Description "the removed metadata backfill and source-reader workflow options to stay absent"
 
 $syncAst = Get-ScriptAst -Path $syncScriptPath
 $syncParameterNames = @(
@@ -113,8 +101,8 @@ $syncParameterNames = @(
 )
 Assert-True -Actual ($syncParameterNames -contains "forceFileUpdate") -Description "Invoke-RepositorySync.ps1 to expose forceFileUpdate"
 Assert-True -Actual ($syncParameterNames -notcontains "forceUserRemoval") -Description "Invoke-RepositorySync.ps1 to omit forceUserRemoval"
-Assert-True -Actual ($syncParameterNames -contains "metadataBackfill") -Description "Invoke-RepositorySync.ps1 to expose metadataBackfill"
-Assert-True -Actual ($syncParameterNames -notcontains "metadataUpdateSource") -Description "Invoke-RepositorySync.ps1 to omit metadataUpdateSource"
+Assert-True -Actual ($syncParameterNames -notcontains "metadataBackfill" -and $syncParameterNames -notcontains "metadataUpdateSource") `
+    -Description "Invoke-RepositorySync.ps1 to omit removed metadata automation switches"
 
 $preCommitCallParameters = @(
     $syncAst.FindAll({
@@ -130,8 +118,8 @@ Assert-True `
     -Actual ($preCommitCallParameters -contains "forceFileUpdate") `
     -Description "Invoke-RepositorySync.ps1 to forward forceFileUpdate"
 Assert-True `
-    -Actual ($preCommitCallParameters -contains "metadataBackfill" -and $preCommitCallParameters -notcontains "metadataUpdateSource") `
-    -Description "Invoke-RepositorySync.ps1 to forward only metadata creation"
+    -Actual ($preCommitCallParameters -notcontains "metadataBackfill" -and $preCommitCallParameters -notcontains "metadataUpdateSource") `
+    -Description "Invoke-RepositorySync.ps1 not to forward removed metadata automation switches"
 
 $avmPreCommitAst = Get-ScriptAst -Path $avmPreCommitPath
 $preCommitFunction = Get-FunctionAst `
@@ -146,8 +134,11 @@ Assert-True `
     -Actual ($preCommitParameterNames -contains "forceFileUpdate") `
     -Description "Invoke-AvmPreCommitForRepository to expose forceFileUpdate"
 Assert-True `
-    -Actual ($preCommitParameterNames -contains "metadataBackfill" -and $preCommitParameterNames -notcontains "metadataUpdateSource") `
-    -Description "Invoke-AvmPreCommitForRepository to expose only false-by-default metadata creation"
+    -Actual ($preCommitParameterNames -notcontains "metadataBackfill" -and $preCommitParameterNames -notcontains "metadataUpdateSource") `
+    -Description "Invoke-AvmPreCommitForRepository to omit removed metadata automation switches"
+Assert-True `
+    -Actual ((Get-Content -LiteralPath $avmPreCommitPath -Raw) -notmatch 'MetadataBackfillSync|MetadataBackfill') `
+    -Description "Terraform preparation to omit the retired backfill hook"
 
 foreach ($parameter in @("codeOwnersDefaultTeams", "codeOwnersFileProtectionTeams")) {
     Assert-True -Actual ($preCommitCallParameters -contains $parameter) -Description "the sync driver to forward $parameter"

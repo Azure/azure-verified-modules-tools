@@ -209,5 +209,5 @@ order, required workflow pauses, and the first module/catalog runs.
 
 The canonical CSV cutover requires a fresh snapshot because the manifest changed;
 bundles collected for `test-` destinations cannot be published with this manifest.
-Source CSV collection and row-retention checks remain permanent after the
-temporary metadata backfill tooling is removed.
+Source CSV collection and row-retention checks are permanent safeguards
+independent of metadata migration tooling.
