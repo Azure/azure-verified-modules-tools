@@ -6,6 +6,7 @@ BeforeAll {
     . (Join-Path $sharedLib 'RepoTree.ps1')
     . (Join-Path $lib 'RepositoryFileAccess.ps1')
     . (Join-Path $lib 'ModuleOwners.ps1')
+    . (Join-Path $lib 'RunSummary.ps1')
     . (Join-Path $lib 'PrReviewerRouting.ps1')
 }
 
@@ -223,6 +224,67 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
         Should -Invoke Get-AvmBicepModuleMetadataOwners -Exactly 0
     }
+
+    It 'explains the routing: each module''s owners and their source, and which modules each reviewer owns' {
+        Mock Get-AvmBicepModuleMetadataOwners { @(@{ Handle = 'new-owner'; Type = 'user' }) } -ParameterFilter { $TopLevelModulePath -eq 'avm/res/new/module' }
+        Mock Get-AvmBicepModuleMetadataOwners { @() } -ParameterFilter { $TopLevelModulePath -eq 'avm/res/network/virtual-network' }
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @(
+                'avm/res/storage/storage-account/main.bicep',
+                'avm/res/storage/storage-account/tests/e2e/defaults/main.test.bicep',
+                'avm/res/new/module/main.bicep',
+                'avm/res/network/virtual-network/main.bicep',
+                'README.md'
+            )
+
+        @($routing.Modules | ForEach-Object { $_.ModulePath }) |
+            Should -Be @('avm/res/network/virtual-network', 'avm/res/new/module', 'avm/res/storage/storage-account')
+        $storage = $routing.Modules | Where-Object { $_.ModulePath -eq 'avm/res/storage/storage-account' }
+        $storage.Owners | Should -Be @('storage-owner')
+        $storage.Source | Should -Be 'catalog'
+        ($routing.Modules | Where-Object { $_.ModulePath -eq 'avm/res/new/module' }).Source | Should -Be 'metadata.json'
+        $routing.OrphanedModules | Should -Be @('avm/res/network/virtual-network')
+        $routing.CoreTeamPaths | Should -Be @('README.md')
+        $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners', 'new-owner', 'storage-owner')
+        $routing.ReviewerModules['storage-owner'] | Should -Be @('avm/res/storage/storage-account')
+        $routing.ReviewerModules['new-owner'] | Should -Be @('avm/res/new/module')
+        $routing.ReviewerModules['Azure/azure-verified-modules-module-owners'] | Should -Be @('avm/res/network/virtual-network')
+    }
+
+    It 'maps an owner of several changed modules to all of them' {
+        $script:catalogIndex['avm/res/network/virtual-network'] = @{
+            owners = @(@{ handle = 'storage-owner'; type = 'user'; displayName = $null })
+        }
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep', 'avm/res/network/virtual-network/main.bicep')
+        $routing.NewReviewers | Should -Be @('storage-owner')
+        $routing.ReviewerModules['storage-owner'] | Should -Be @('avm/res/network/virtual-network', 'avm/res/storage/storage-account')
+    }
+
+    It 'reports why each owner is not requested' {
+        $script:catalogIndex['avm/res/storage/storage-account'].owners = @(
+            @{ handle = 'contributor'; type = 'user'; displayName = $null },
+            @{ handle = 'requested-owner'; type = 'user'; displayName = $null },
+            @{ handle = 'reviewing-owner'; type = 'user'; displayName = $null },
+            @{ handle = 'Azure/storage-owners'; type = 'team'; displayName = 'Storage owners' }
+        )
+        $script:pr.reviewRequests = @(
+            [pscustomobject]@{ login = 'requested-owner' },
+            [pscustomobject]@{ slug = 'storage-owners'; name = 'Storage owners' }
+        )
+        $script:pr.reviews = @([pscustomobject]@{ author = [pscustomobject]@{ login = 'reviewing-owner' } })
+        $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
+
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $reasons = @{}
+        foreach ($skipped in $routing.SkippedReviewers) { $reasons[$skipped.Handle] = $skipped.Reason }
+        $reasons.Count | Should -Be 4
+        $reasons['contributor'] | Should -Be 'pull request author'
+        $reasons['requested-owner'] | Should -Be 'review already requested'
+        $reasons['reviewing-owner'] | Should -Be 'already reviewed'
+        $reasons['Azure/storage-owners'] | Should -Be 'review already requested'
+    }
 }
 
 Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
@@ -269,6 +331,100 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
         Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'api' }
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'pr' }
+    }
+
+    It 'logs who is requested for which module and returns the outcome' {
+        $output = @(Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>&1)
+        $log = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n"
+        $outcome = $output | Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] }
+
+        $log | Should -Match ([regex]::Escape("Pull request [$($script:pr.url)] changes 1 module(s):"))
+        $log | Should -Match ([regex]::Escape('avm/res/storage/storage-account: storage-owner'))
+        $log | Should -Match ([regex]::Escape('storage-owner for avm/res/storage/storage-account'))
+        $log | Should -Match ([regex]::Escape('Adding labels: Needs: Module Owner :mega:'))
+        $outcome.Status | Should -Be 'Updated'
+        $outcome.NewReviewers | Should -Be @('storage-owner')
+        $outcome.NewLabels | Should -Be @('Needs: Module Owner :mega:')
+        $outcome.ReviewerModules['storage-owner'] | Should -Be @('avm/res/storage/storage-account')
+    }
+
+    It 'logs the plan but does not edit the pull request under WhatIf' {
+        $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex -WhatIf 6>$null
+        $outcome.Status | Should -Be 'WouldUpdate'
+        $outcome.NewReviewers | Should -Be @('storage-owner')
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'pr' }
+    }
+
+    It 'reports draft and already routed pull requests in the outcome' {
+        $script:pr.isDraft = $true
+        (Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null).Status |
+            Should -Be 'Draft'
+
+        $script:pr.isDraft = $false
+        $script:pr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
+        $script:pr.reviewRequests = @([pscustomobject]@{ login = 'storage-owner' })
+        (Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null).Status |
+            Should -Be 'AlreadyRouted'
+    }
+}
+
+Describe 'Invoke-AvmPrReviewerRouting summary' {
+    BeforeEach {
+        $script:previousSummary = $env:GITHUB_STEP_SUMMARY
+        $script:summaryPath = Join-Path $TestDrive 'summary.md'
+        Remove-Item -LiteralPath $script:summaryPath -ErrorAction SilentlyContinue
+        $env:GITHUB_STEP_SUMMARY = $script:summaryPath
+        $script:pr = [pscustomobject]@{
+            author = [pscustomobject]@{ login = 'contributor' }
+            number = 1
+            url = 'https://github.com/Azure/bicep-registry-modules/pull/1'
+            isDraft = $false
+            reviewRequests = @()
+            reviews = @()
+            headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+            labels = @()
+        }
+        Mock Get-AvmPrReviewerRoutingCandidates { @($script:pr) }
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{ 'avm/res/storage/storage-account' = @{ owners = @(@{ handle = 'storage-owner'; type = 'user'; displayName = $null }) } }
+        }
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            return $null
+        }
+    }
+
+    AfterEach {
+        $env:GITHUB_STEP_SUMMARY = $script:previousSummary
+    }
+
+    It 'lists who was requested for which modules in the log and the job summary' {
+        $log = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 6>&1 | Out-String
+        $log | Should -Match ([regex]::Escape('1 pull request(s) checked in [Azure/bicep-registry-modules]: 1 updated, 0 already routed, 0 draft(s) skipped, 0 failed.'))
+        $log | Should -Match ([regex]::Escape('Reviewers requested: storage-owner for avm/res/storage/storage-account'))
+
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '(?m)^### Pull request reviewer routing\r?$'
+        $summary | Should -Match ([regex]::Escape('| [#1](https://github.com/Azure/bicep-registry-modules/pull/1) | `storage-owner` for `avm/res/storage/storage-account` | `Needs: Module Owner :mega:` |'))
+    }
+
+    It 'marks a WhatIf run as a dry run without editing the pull request' {
+        $null = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' -WhatIf 6>&1
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match 'Pull request reviewer routing \(dry run, nothing changed\)'
+        $summary | Should -Match '1 would be updated'
+        $summary | Should -Match '\| Pull request \| Reviewers to request \| Labels to add \|'
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'pr' }
+    }
+
+    It 'lists failed pull requests in the job summary before rethrowing' {
+        Mock Invoke-RepositoryGitHub { throw [System.InvalidOperationException]::new('changed files boom') }
+        { Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 6>$null 3>$null } | Should -Throw '*changed files boom*'
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '0 updated, 0 already routed, 0 draft\(s\) skipped, 1 failed\.'
+        $summary | Should -Match ([regex]::Escape('- `[https://github.com/Azure/bicep-registry-modules/pull/1]: changed files boom`'))
     }
 }
 

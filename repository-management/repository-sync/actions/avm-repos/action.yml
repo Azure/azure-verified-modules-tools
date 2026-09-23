@@ -28,7 +28,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Create GitHub App Token
+    - name: Create GitHub App token
       id: app-token
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
@@ -36,7 +36,7 @@ runs:
         private-key: ${{ inputs.privateKey }}
         owner: ${{ github.repository_owner }}
 
-    - name: Generate Matrix
+    - name: Generate matrix
       id: matrix
       run: |
         $matrixParallel = 5
@@ -72,14 +72,14 @@ runs:
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
-    - name: Upload Repo Logs Json
+    - name: Upload repository log JSON
       if: always() && hashFiles('issues.log.json') != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: issues.log.json
         path: issues.log.json
 
-    - name: Repo Error
+    - name: Report repository issues
       if: always() && hashFiles('issues.log.json') != ''
       run: |
         $issueLogJson = Get-Content -Path "${{ github.workspace }}/issues.log.json" -Raw

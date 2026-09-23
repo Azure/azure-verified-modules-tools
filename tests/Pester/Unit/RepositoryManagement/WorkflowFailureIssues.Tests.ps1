@@ -7,6 +7,7 @@ BeforeAll {
     . (Join-Path $sharedLib 'RepoTree.ps1')
     . (Join-Path $reviewerRoutingLib 'RepositoryFileAccess.ps1')
     . (Join-Path $reviewerRoutingLib 'ModuleOwners.ps1')
+    . (Join-Path $reviewerRoutingLib 'RunSummary.ps1')
     . (Join-Path $lib 'WorkflowFailureIssues.ps1')
 }
 
@@ -126,6 +127,15 @@ Describe 'Resolve-AvmWorkflowFailureRouting' {
         $routing.DuplicateIssuesToClose[0].url | Should -Be $older.url
         $routing.CommentIssueUrl | Should -Be $newest.url
     }
+
+    It 'reports who a new issue notifies: <Case>' -ForEach @(
+        @{ Case = 'module owners'; IsModule = $true; Owners = @(@{ Handle = 'storage-owner'; Type = 'user' }, @{ Handle = 'Azure/storage-team'; Type = 'team' }); Expected = @('storage-owner', 'Azure/storage-team') }
+        @{ Case = 'orphaned module'; IsModule = $true; Owners = @(); Expected = @('Azure/azure-verified-modules-tooling-contributors') }
+        @{ Case = 'platform workflow'; IsModule = $false; Owners = @(); Expected = @('Azure/azure-verified-modules-tooling-contributors') }
+    ) {
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners $Owners -IsModule $IsModule
+        $routing.NotifiedHandles | Should -Be $Expected
+    }
 }
 
 Describe 'Set-AvmWorkflowFailureIssueForRun' {
@@ -155,6 +165,105 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
         $existingIssue = [pscustomobject]@{ number = 1; title = '[Failed pipeline] avm.res.storage.storage-account'; url = 'https://github.com/Azure/bicep-registry-modules/issues/1'; createdAt = (Get-Date).ToUniversalTime().ToString('o') }
         Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run -Repository 'Azure/bicep-registry-modules' -ExistingIssues @($existingIssue) -Owners @() -IsModule $true
         Should -Invoke Invoke-RepositoryGitHub -Times 1
+    }
+
+    It 'logs the new issue with who is assigned and notified, and returns the outcome' {
+        Mock Invoke-RepositoryGitHub { 'https://github.com/Azure/bicep-registry-modules/issues/99' }
+        $owners = @(@{ Handle = 'storage-owner'; Type = 'user' })
+        $output = @(Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run -Repository 'Azure/bicep-registry-modules' -ExistingIssues @() -Owners $owners -IsModule $true 6>&1)
+        $log = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n"
+        $outcome = $output | Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] }
+
+        $log | Should -Match ([regex]::Escape("Workflow [avm.res.storage.storage-account] failed in run [$($script:run.html_url)]. Creating issue [[Failed pipeline] avm.res.storage.storage-account], assigning storage-owner and notifying storage-owner."))
+        $log | Should -Match ([regex]::Escape('Created issue [https://github.com/Azure/bicep-registry-modules/issues/99].'))
+        $outcome.Status | Should -Be 'Created'
+        $outcome.IssueUrl | Should -Be 'https://github.com/Azure/bicep-registry-modules/issues/99'
+        $outcome.Assignee | Should -Be 'storage-owner'
+        $outcome.Notified | Should -Be @('storage-owner')
+    }
+
+    It 'returns a <Expected> outcome for <Case>' -ForEach @(
+        @{ Case = 'a repeat failure'; Conclusion = 'failure'; CommentsToday = @(); Expected = 'Commented' }
+        @{ Case = 'a failure already reported today'; Conclusion = 'failure'; CommentsToday = @('Failed run: https://github.com/Azure/bicep-registry-modules/actions/runs/1'); Expected = 'AlreadyReported' }
+        @{ Case = 'a fixed workflow'; Conclusion = 'success'; CommentsToday = @(); Expected = 'Closed' }
+    ) {
+        $script:run.conclusion = $Conclusion
+        $script:commentsToday = $CommentsToday
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { $script:commentsToday }
+        $existingIssue = [pscustomobject]@{ number = 1; title = '[Failed pipeline] avm.res.storage.storage-account'; url = 'https://github.com/Azure/bicep-registry-modules/issues/1'; createdAt = (Get-Date).ToUniversalTime().ToString('o') }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run -Repository 'Azure/bicep-registry-modules' -ExistingIssues @($existingIssue) -Owners @() -IsModule $true 6>$null
+        $outcome.Status | Should -Be $Expected
+        if ($Expected -eq 'Closed') {
+            $outcome.ClosedIssueUrls | Should -Be @($existingIssue.url)
+        }
+        else {
+            $outcome.IssueUrl | Should -Be $existingIssue.url
+        }
+    }
+
+    It 'describes the planned issue without writing under WhatIf' {
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run -Repository 'Azure/bicep-registry-modules' -ExistingIssues @() -Owners @() -IsModule $true -WhatIf 6>$null
+        $outcome.Status | Should -Be 'Created'
+        $outcome.IssueUrl | Should -BeNullOrEmpty
+        $outcome.Notified | Should -Be @('Azure/azure-verified-modules-tooling-contributors')
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
+    }
+}
+
+Describe 'Invoke-AvmWorkflowFailureIssues summary' {
+    BeforeEach {
+        $script:previousSummary = $env:GITHUB_STEP_SUMMARY
+        $script:summaryPath = Join-Path $TestDrive 'summary.md'
+        Remove-Item -LiteralPath $script:summaryPath -ErrorAction SilentlyContinue
+        $env:GITHUB_STEP_SUMMARY = $script:summaryPath
+        $script:now = (Get-Date).ToUniversalTime().ToString('o')
+        Mock Get-AvmWorkflowFailureWorkflows {
+            @(
+                [pscustomobject]@{ id = 1; name = 'avm.res.storage.storage-account' }
+                [pscustomobject]@{ id = 2; name = 'avm.res.network.virtual-network' }
+                [pscustomobject]@{ id = 3; name = 'avm.res.new.module' }
+            )
+        }
+        Mock Get-AvmWorkflowFailureOpenIssues {
+            @([pscustomobject]@{ number = 10; title = '[Failed pipeline] avm.res.network.virtual-network'; url = 'https://github.com/Azure/bicep-registry-modules/issues/10'; createdAt = $script:now })
+        }
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{ 'avm/res/storage/storage-account' = @{ owners = @(@{ handle = 'storage-owner'; type = 'user'; displayName = $null }) } }
+        }
+        Mock Get-AvmBicepModuleMetadataOwners { @() }
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        Mock Get-AvmWorkflowFailureLatestRun {
+            switch ($WorkflowId) {
+                1 { [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/101' } }
+                2 { [pscustomobject]@{ name = 'avm.res.network.virtual-network'; conclusion = 'success'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/102' } }
+                default { $null }
+            }
+        }
+        Mock Invoke-RepositoryGitHub { 'https://github.com/Azure/bicep-registry-modules/issues/99' }
+    }
+
+    AfterEach {
+        $env:GITHUB_STEP_SUMMARY = $script:previousSummary
+    }
+
+    It 'lists the issues created and closed, with who was assigned and notified' {
+        $log = Invoke-AvmWorkflowFailureIssues -Repository 'Azure/bicep-registry-modules' 6>&1 | Out-String
+        $log | Should -Match ([regex]::Escape('3 workflow(s) checked in [Azure/bicep-registry-modules]: 1 new issue(s), 0 repeat failure(s) commented, 0 already reported today, 1 fixed (issues closed), 1 without a completed run, 0 failed.'))
+        $log | Should -Match ([regex]::Escape('avm.res.storage.storage-account: created https://github.com/Azure/bicep-registry-modules/issues/99, assigned storage-owner and notified storage-owner'))
+        $log | Should -Match ([regex]::Escape('avm.res.network.virtual-network: closed after a successful run: https://github.com/Azure/bicep-registry-modules/issues/10'))
+
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '(?m)^### Workflow failure issues\r?$'
+        $summary | Should -Match ([regex]::Escape('| `avm.res.storage.storage-account` | [run](https://github.com/Azure/bicep-registry-modules/actions/runs/101) | [#99](https://github.com/Azure/bicep-registry-modules/issues/99) | Created, assigned `storage-owner` and notified `storage-owner` |'))
+        $summary | Should -Match ([regex]::Escape('| `avm.res.network.virtual-network` | [run](https://github.com/Azure/bicep-registry-modules/actions/runs/102) | [#10](https://github.com/Azure/bicep-registry-modules/issues/10) | Closed after a successful run |'))
+    }
+
+    It 'describes a WhatIf run as a dry run' {
+        $null = Invoke-AvmWorkflowFailureIssues -Repository 'Azure/bicep-registry-modules' -WhatIf 6>&1
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match 'Workflow failure issues \(dry run, nothing changed\)'
+        $summary | Should -Match ([regex]::Escape('| new issue | Would create, assign `storage-owner` and notify `storage-owner` |'))
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
     }
 }
 

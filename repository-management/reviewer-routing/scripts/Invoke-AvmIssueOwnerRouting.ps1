@@ -22,6 +22,7 @@ $sharedLibDir = Join-Path $repositoryRoot 'repository-management' 'repository-sy
 $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'RepositoryFileAccess.ps1')
 . (Join-Path $libDir 'ModuleOwners.ps1')
+. (Join-Path $libDir 'RunSummary.ps1')
 . (Join-Path $libDir 'IssueOwnerRouting.ps1')
 
 try {

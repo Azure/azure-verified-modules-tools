@@ -6,6 +6,7 @@ BeforeAll {
     . (Join-Path $sharedLib 'RepoTree.ps1')
     . (Join-Path $lib 'RepositoryFileAccess.ps1')
     . (Join-Path $lib 'ModuleOwners.ps1')
+    . (Join-Path $lib 'RunSummary.ps1')
     . (Join-Path $lib 'IssueOwnerRouting.ps1')
 }
 
@@ -161,6 +162,19 @@ Describe 'Resolve-AvmIssueOwnerRouting' {
             -CatalogIndex $script:catalogIndex -DefaultRef 'main' -TimelineEvents @()
         $routing.NewComment | Should -Not -BeNullOrEmpty
     }
+
+    It 'reports every owner and the owners it will not reassign after a manual unassignment' {
+        $script:catalogIndex['avm/res/storage/storage-account'].owners = @(
+            @{ handle = 'storage-owner'; type = 'user'; displayName = $null },
+            @{ handle = 'second-owner'; type = 'user'; displayName = $null }
+        )
+        $timeline = @([pscustomobject]@{ event = 'unassigned'; assignee = [pscustomobject]@{ login = 'second-owner' } })
+        $routing = Resolve-AvmIssueOwnerRouting -Issue $script:issue -Repository 'Azure/bicep-registry-modules' `
+            -CatalogIndex $script:catalogIndex -DefaultRef 'main' -TimelineEvents $timeline
+        $routing.Owners | Should -Be @('storage-owner', 'second-owner')
+        $routing.AssigneesToAdd | Should -Be @('storage-owner')
+        $routing.ManuallyUnassignedOwners | Should -Be @('second-owner')
+    }
 }
 
 Describe 'Set-AvmIssueOwnerRoutingForIssue' {
@@ -198,6 +212,78 @@ Describe 'Set-AvmIssueOwnerRoutingForIssue' {
         $script:issue.comments = @([pscustomobject]@{ body = "**@contributor, thanks for submitting this issue for the ``avm/res/storage/storage-account`` module!**`n`n> [!IMPORTANT]`n> The module owners $mentions will review it soon!" })
         Set-AvmIssueOwnerRoutingForIssue -Issue $script:issue -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex -DefaultRef 'main'
         Should -Invoke Invoke-RepositoryGitHub -Times 0
+    }
+
+    It 'logs the module owners and the changes, and returns the outcome' {
+        $output = @(Set-AvmIssueOwnerRoutingForIssue -Issue $script:issue -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex -DefaultRef 'main' 6>&1)
+        $log = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n"
+        $outcome = $output | Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] }
+
+        $log | Should -Match ([regex]::Escape("Issue [$($script:issue.url)] is about module [avm/res/storage/storage-account], owned by storage-owner."))
+        $log | Should -Match ([regex]::Escape('Assigning: storage-owner'))
+        $log | Should -Match ([regex]::Escape('Adding labels: Class: Resource Module :package:'))
+        $outcome.Status | Should -Be 'Updated'
+        $outcome.ModuleName | Should -Be 'avm/res/storage/storage-account'
+        $outcome.AssigneesAdded | Should -Be @('storage-owner')
+        $outcome.LabelsAdded | Should -Be @('Class: Resource Module :package:')
+        $outcome.Commented | Should -BeTrue
+    }
+
+    It 'reports what it would change without writing under WhatIf' {
+        $outcome = Set-AvmIssueOwnerRoutingForIssue -Issue $script:issue -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex -DefaultRef 'main' -WhatIf 6>$null
+        $outcome.Status | Should -Be 'WouldUpdate'
+        $outcome.AssigneesAdded | Should -Be @('storage-owner')
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
+    }
+}
+
+Describe 'Invoke-AvmIssueOwnerRouting summary' {
+    BeforeEach {
+        $script:previousSummary = $env:GITHUB_STEP_SUMMARY
+        $script:summaryPath = Join-Path $TestDrive 'summary.md'
+        Remove-Item -LiteralPath $script:summaryPath -ErrorAction SilentlyContinue
+        $env:GITHUB_STEP_SUMMARY = $script:summaryPath
+        $script:issue = [pscustomobject]@{
+            number    = 42
+            title     = '[AVM Module Issue]: cannot deploy'
+            body      = "### Module`n`navm/res/storage/storage-account`n`n### Description`nDetails."
+            url       = 'https://github.com/Azure/bicep-registry-modules/issues/42'
+            createdAt = (Get-Date).ToUniversalTime().ToString('o')
+            updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+            author    = [pscustomobject]@{ login = 'contributor' }
+            assignees = @()
+            labels    = @()
+            comments  = @()
+        }
+        Mock Get-AvmIssueOwnerRoutingCandidates { @($script:issue) }
+        Mock Get-AvmReviewerRoutingCatalogIndex {
+            @{ 'avm/res/storage/storage-account' = @{ owners = @(@{ handle = 'storage-owner'; type = 'user'; displayName = $null }) } }
+        }
+        Mock Get-AvmIssueOwnerRoutingTimeline { @() }
+        Mock Invoke-RepositoryGitHub { }
+    }
+
+    AfterEach {
+        $env:GITHUB_STEP_SUMMARY = $script:previousSummary
+    }
+
+    It 'lists the owners assigned to each issue in the log and the job summary' {
+        $log = Invoke-AvmIssueOwnerRouting -Repository 'Azure/bicep-registry-modules' 6>&1 | Out-String
+        $log | Should -Match ([regex]::Escape('1 module issue(s) checked in [Azure/bicep-registry-modules]: 1 updated, 0 already routed, 0 without a module reference, 0 failed.'))
+        $log | Should -Match ([regex]::Escape("$($script:issue.url) (avm/res/storage/storage-account): assigned storage-owner; added labels Class: Resource Module :package:; posted the owner notification comment"))
+
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '(?m)^### Issue owner routing\r?$'
+        $summary | Should -Match ([regex]::Escape('| [#42](https://github.com/Azure/bicep-registry-modules/issues/42) | `avm/res/storage/storage-account` | assigned `storage-owner`<br>'))
+    }
+
+    It 'describes a WhatIf run as a dry run' {
+        $null = Invoke-AvmIssueOwnerRouting -Repository 'Azure/bicep-registry-modules' -WhatIf 6>&1
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match 'Issue owner routing \(dry run, nothing changed\)'
+        $summary | Should -Match '1 would be updated'
+        $summary | Should -Match ([regex]::Escape('would assign `storage-owner`'))
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
     }
 }
 

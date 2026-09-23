@@ -12,8 +12,6 @@
 #    repository-management/repository-sync/scripts/Add-RepositoryItemsToProject.ps1
 #    already syncs project membership and will pick up newly created issues
 #    on its own schedule.
-#  - The original's created/commented/closed console counters are dropped;
-#    they were informational only.
 #
 # Design invariants carried over from the other routing libraries: one
 # failing workflow/issue must not abort the sweep, and every write is
@@ -178,6 +176,7 @@ function Resolve-AvmWorkflowFailureRouting {
         CreateIssueLabels     = @()
         TaggingComment        = $null
         AssigneeToAdd         = $null
+        NotifiedHandles       = @()
         DuplicateIssuesToClose = @()
         CommentIssueUrl       = $null
         CommentBody           = $null
@@ -211,6 +210,12 @@ function Resolve-AvmWorkflowFailureRouting {
         $result.CreateIssueBody = $failedRunText
         $result.CreateIssueLabels = @($script:AvmWorkflowFailureAvmLabel, $script:AvmWorkflowFailureBugLabel)
         $result.TaggingComment = $taggingComment
+        $result.NotifiedHandles = @(if (-not $IsModule -or $isOrphaned) {
+                'Azure/azure-verified-modules-tooling-contributors'
+            }
+            else {
+                $Owners | ForEach-Object { $_.Handle }
+            })
         if ($ownerLogins.Count -gt 0) {
             $result.AssigneeToAdd = $ownerLogins[0]
         }
@@ -233,7 +238,18 @@ function Resolve-AvmWorkflowFailureRouting {
 }
 
 function Set-AvmWorkflowFailureIssueForRun {
+    <#
+    .SYNOPSIS
+    Creates, comments on or closes the failure issue for one workflow's
+    latest run, and returns the outcome for the run summary.
+
+    .OUTPUTS
+    An ordered dictionary with Workflow, RunUrl, Status (Created, Commented,
+    AlreadyReported, Closed or Unchanged), IssueUrl, ClosedIssueUrls,
+    DuplicateIssueUrls, Assignee and Notified.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)] [object] $WorkflowRun,
         [Parameter(Mandatory)] [string] $Repository,
@@ -242,7 +258,21 @@ function Set-AvmWorkflowFailureIssueForRun {
         [Parameter(Mandatory)] [bool] $IsModule
     )
 
+    $workflowName = [string]$WorkflowRun.name
+    $runUrl = [string]$WorkflowRun.html_url
+    $outcome = [ordered]@{
+        Workflow           = $workflowName
+        RunUrl             = $runUrl
+        Status             = 'Unchanged'
+        IssueUrl           = $null
+        ClosedIssueUrls    = @()
+        DuplicateIssueUrls = @()
+        Assignee           = $null
+        Notified           = @()
+    }
+
     $existingCommentBodiesToday = @()
+    $newest = $null
     if ($ExistingIssues.Count -gt 0) {
         $newest = @($ExistingIssues | Sort-Object -Property 'createdAt' -Descending)[0]
         $existingCommentBodiesToday = @(Get-AvmWorkflowFailureIssueCommentsToday -Repository $Repository -Number $newest.number)
@@ -251,35 +281,143 @@ function Set-AvmWorkflowFailureIssueForRun {
     $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $WorkflowRun -ExistingIssues $ExistingIssues `
         -Owners $Owners -IsModule $IsModule -ExistingCommentBodiesToday $existingCommentBodiesToday
 
-    foreach ($issueToClose in @($routing.IssuesToClose)) {
-        if ($null -eq $issueToClose) { continue }
+    $issuesToClose = @($routing.IssuesToClose | Where-Object { $null -ne $_ })
+    if ($issuesToClose.Count -gt 0) {
+        $outcome.Status = 'Closed'
+        $outcome.ClosedIssueUrls = @($issuesToClose | ForEach-Object { [string]$_.url })
+        Write-Host "Workflow [$workflowName] succeeded in run [$runUrl]. Closing issue(s): $($outcome.ClosedIssueUrls -join ', ')"
+    }
+    foreach ($issueToClose in $issuesToClose) {
         if ($PSCmdlet.ShouldProcess("Issue [$($issueToClose.url)]", 'Close (run succeeded)')) {
             $null = Invoke-RepositoryGitHub -Arguments @('issue', 'close', $issueToClose.url, '--repo', $Repository, '--comment', $routing.CloseComment)
         }
     }
 
-    foreach ($duplicateIssue in @($routing.DuplicateIssuesToClose)) {
-        if ($null -eq $duplicateIssue) { continue }
+    $duplicateIssues = @($routing.DuplicateIssuesToClose | Where-Object { $null -ne $_ })
+    if ($duplicateIssues.Count -gt 0) {
+        $outcome.DuplicateIssueUrls = @($duplicateIssues | ForEach-Object { [string]$_.url })
+        Write-Host "Closing duplicate issue(s) for workflow [$workflowName]: $($outcome.DuplicateIssueUrls -join ', ')"
+    }
+    foreach ($duplicateIssue in $duplicateIssues) {
         if ($PSCmdlet.ShouldProcess("Issue [$($duplicateIssue.url)]", 'Label as duplicate and close')) {
             $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $duplicateIssue.url, '--repo', $Repository, '--add-label', $script:AvmWorkflowFailureDuplicateLabel)
             $null = Invoke-RepositoryGitHub -Arguments @('issue', 'close', $duplicateIssue.url, '--repo', $Repository, '--reason', 'not planned', '--comment', "This issue is succeeded by a newer issue for the same workflow.")
         }
     }
 
-    if ($routing.CommentIssueUrl -and $PSCmdlet.ShouldProcess("Comment on issue [$($routing.CommentIssueUrl)]", 'Add')) {
-        $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $routing.CommentIssueUrl, '--repo', $Repository, '--body', $routing.CommentBody)
-    }
-
-    if ($routing.CreateIssueTitle -and $PSCmdlet.ShouldProcess("Issue [$($routing.CreateIssueTitle)]", 'Create')) {
-        $createArguments = @('issue', 'create', '--repo', $Repository, '--title', $routing.CreateIssueTitle, '--body', $routing.CreateIssueBody)
-        foreach ($label in $routing.CreateIssueLabels) { $createArguments += @('--label', $label) }
-        $issueUrl = (Invoke-RepositoryGitHub -Arguments $createArguments | Select-Object -Last 1)
-
-        if ($routing.AssigneeToAdd) {
-            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $issueUrl, '--repo', $Repository, '--add-assignee', $routing.AssigneeToAdd)
+    if ($routing.CommentIssueUrl) {
+        $outcome.Status = 'Commented'
+        $outcome.IssueUrl = [string]$routing.CommentIssueUrl
+        Write-Host "Workflow [$workflowName] failed again in run [$runUrl]. Commenting on issue [$($routing.CommentIssueUrl)]."
+        if ($PSCmdlet.ShouldProcess("Comment on issue [$($routing.CommentIssueUrl)]", 'Add')) {
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $routing.CommentIssueUrl, '--repo', $Repository, '--body', $routing.CommentBody)
         }
-        $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $issueUrl, '--repo', $Repository, '--body', $routing.TaggingComment)
     }
+    elseif ($WorkflowRun.conclusion -ceq 'failure' -and $null -ne $newest) {
+        $outcome.Status = 'AlreadyReported'
+        $outcome.IssueUrl = [string]$newest.url
+        Write-Host "Workflow [$workflowName] failed in run [$runUrl], which issue [$($newest.url)] already reports today."
+    }
+
+    if ($routing.CreateIssueTitle) {
+        $outcome.Status = 'Created'
+        $outcome.Assignee = $routing.AssigneeToAdd
+        $outcome.Notified = $routing.NotifiedHandles
+        $assigneeText = if ($routing.AssigneeToAdd) { $routing.AssigneeToAdd } else { 'nobody' }
+        Write-Host "Workflow [$workflowName] failed in run [$runUrl]. Creating issue [$($routing.CreateIssueTitle)], assigning $assigneeText and notifying $(Format-AvmRunSummaryList -Values $routing.NotifiedHandles)."
+        if ($PSCmdlet.ShouldProcess("Issue [$($routing.CreateIssueTitle)]", 'Create')) {
+            $createArguments = @('issue', 'create', '--repo', $Repository, '--title', $routing.CreateIssueTitle, '--body', $routing.CreateIssueBody)
+            foreach ($label in $routing.CreateIssueLabels) { $createArguments += @('--label', $label) }
+            $issueUrl = (Invoke-RepositoryGitHub -Arguments $createArguments | Select-Object -Last 1)
+            $outcome.IssueUrl = [string]$issueUrl
+            Write-Host "Created issue [$issueUrl]."
+
+            if ($routing.AssigneeToAdd) {
+                $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $issueUrl, '--repo', $Repository, '--add-assignee', $routing.AssigneeToAdd)
+            }
+            $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $issueUrl, '--repo', $Repository, '--body', $routing.TaggingComment)
+        }
+    }
+    return $outcome
+}
+
+function Write-AvmWorkflowFailureIssuesSummary {
+    <#
+    .SYNOPSIS
+    Summarizes a workflow failure sweep: totals, and the issues created,
+    commented on or closed, with who was assigned and notified.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Outcomes,
+        [Parameter(Mandatory)] [int] $WithoutRunCount,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Failures,
+        [switch] $DryRun
+    )
+
+    $count = { param($Status) @($Outcomes | Where-Object { $_.Status -ceq $Status }).Count }
+    $overview = "$($Outcomes.Count + $WithoutRunCount + $Failures.Count) workflow(s) checked in [$Repository]: " +
+        "$(& $count 'Created') new issue(s), " +
+        "$(& $count 'Commented') repeat failure(s) commented, " +
+        "$(& $count 'AlreadyReported') already reported today, " +
+        "$(& $count 'Closed') fixed (issues closed), " +
+        "$WithoutRunCount without a completed run, " +
+        "$($Failures.Count) failed."
+
+    $issueLink = {
+        param([string] $Url)
+        if ([string]::IsNullOrWhiteSpace($Url)) { return 'new issue' }
+        "[#$(($Url -split '/')[-1])]($Url)"
+    }
+    $verb = if ($DryRun) {
+        @{ Create = 'would create'; Assign = 'assign'; Notify = 'notify'; Comment = 'would comment on the repeat failure'; Close = 'would close after a successful run'; Duplicate = 'would close duplicate(s)' }
+    }
+    else {
+        @{ Create = 'created'; Assign = 'assigned'; Notify = 'notified'; Comment = 'commented on the repeat failure'; Close = 'closed after a successful run'; Duplicate = 'closed duplicate(s)' }
+    }
+
+    $logLines = [System.Collections.Generic.List[string]]::new()
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($outcome in @($Outcomes | Where-Object { $_.Status -in @('Created', 'Commented', 'Closed') -or $_.DuplicateIssueUrls.Count -gt 0 })) {
+        switch ($outcome.Status) {
+            'Created' {
+                $logLine = "$($verb.Create) $(if ($outcome.IssueUrl) { $outcome.IssueUrl } else { 'an issue' }), $($verb.Assign) $(Format-AvmRunSummaryList -Values @($outcome.Assignee) -Empty 'nobody') and $($verb.Notify) $(Format-AvmRunSummaryList -Values $outcome.Notified)"
+                $action = "$($verb.Create), $($verb.Assign) $(Format-AvmRunSummaryList -Values @($outcome.Assignee) -AsCode -Empty 'nobody') and $($verb.Notify) $(Format-AvmRunSummaryList -Values $outcome.Notified -AsCode)"
+                $issues = & $issueLink $outcome.IssueUrl
+            }
+            'Commented' {
+                $logLine = "$($verb.Comment) $($outcome.IssueUrl)"
+                $action = $verb.Comment
+                $issues = & $issueLink $outcome.IssueUrl
+            }
+            'Closed' {
+                $logLine = "$($verb.Close): $($outcome.ClosedIssueUrls -join ', ')"
+                $action = $verb.Close
+                $issues = @($outcome.ClosedIssueUrls | ForEach-Object { & $issueLink $_ }) -join ', '
+            }
+            default {
+                $logLine = "issue $($outcome.IssueUrl) unchanged"
+                $action = 'no change'
+                $issues = & $issueLink $outcome.IssueUrl
+            }
+        }
+        if ($outcome.DuplicateIssueUrls.Count -gt 0) {
+            $logLine += "; $($verb.Duplicate) $($outcome.DuplicateIssueUrls -join ', ')"
+            $action += "; $($verb.Duplicate) $(@($outcome.DuplicateIssueUrls | ForEach-Object { & $issueLink $_ }) -join ', ')"
+        }
+        $logLines.Add("$($outcome.Workflow): $logLine (run $($outcome.RunUrl))")
+        $rows.Add([string[]]@(
+                (Format-AvmRunSummaryList -Values @($outcome.Workflow) -AsCode),
+                "[run]($($outcome.RunUrl))",
+                $issues,
+                ($action.Substring(0, 1).ToUpperInvariant() + $action.Substring(1))
+            ))
+    }
+
+    Write-AvmRunSummary -Title 'Workflow failure issues' -Overview $overview -LogLines $logLines `
+        -TableHeaders @('Workflow', 'Latest run', 'Issue', 'Action') -TableRows $rows.ToArray() `
+        -Failures $Failures -DryRun:$DryRun
 }
 
 function Invoke-AvmWorkflowFailureIssues {
@@ -306,7 +444,9 @@ function Invoke-AvmWorkflowFailureIssues {
         throw
     }
 
+    $outcomes = [System.Collections.Generic.List[object]]::new()
     $failures = [System.Collections.Generic.List[string]]::new()
+    $withoutRunCount = 0
     $total = $workflows.Count
     $index = 0
     foreach ($workflow in $workflows) {
@@ -319,6 +459,7 @@ function Invoke-AvmWorkflowFailureIssues {
             $latestRun = Get-AvmWorkflowFailureLatestRun -Repository $Repository -WorkflowId $workflow.id -Branch $Branch
             if ($null -eq $latestRun) {
                 Write-Verbose "Workflow [$($workflow.name)] has no completed run on [$Branch] yet. Skipping."
+                $withoutRunCount++
                 continue
             }
 
@@ -332,8 +473,9 @@ function Invoke-AvmWorkflowFailureIssues {
                 $owners = @(Get-AvmModuleOwners -TopLevelModulePath $topLevelModulePath -CatalogIndex $catalogIndex -Repository $Repository -Ref $DefaultRef)
             }
 
-            Set-AvmWorkflowFailureIssueForRun -WorkflowRun $latestRun -Repository $Repository `
+            $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $latestRun -Repository $Repository `
                 -ExistingIssues $existingIssues -Owners $owners -IsModule $isModule -WhatIf:$WhatIfPreference
+            $outcomes.Add($outcome)
         }
         catch {
             # A single workflow's issue handling must not stop the remaining ones on a scheduled run.
@@ -341,6 +483,9 @@ function Invoke-AvmWorkflowFailureIssues {
             Write-Warning "Failed to manage the issue for workflow [$($workflow.name)]. $($_.Exception.Message)"
         }
     }
+
+    Write-AvmWorkflowFailureIssuesSummary -Repository $Repository -Outcomes $outcomes.ToArray() `
+        -WithoutRunCount $withoutRunCount -Failures $failures.ToArray() -DryRun:$WhatIfPreference
 
     if ($failures.Count -gt 0) {
         throw [System.AggregateException]::new(($failures -join [System.Environment]::NewLine))

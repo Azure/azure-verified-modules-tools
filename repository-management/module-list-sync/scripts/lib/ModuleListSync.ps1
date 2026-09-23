@@ -175,11 +175,20 @@ function Invoke-AvmModuleListSync {
     }
 
     if (-not $plan.Changed) {
-        Write-Host "[AVM] $Repository module dropdown already matches the published catalog." -ForegroundColor DarkGray
+        Write-Host "$Repository module dropdown already matches the published catalog." -ForegroundColor DarkGray
+        Write-AvmRunSummary -Title 'Module dropdown sync' -DryRun:$WhatIfPreference `
+            -Overview "The [$Repository] module dropdown already matches the published catalog."
         return @{ HasChanges = $false; Status = 'NoChange'; PullRequestUrl = $null }
     }
 
-    Write-Host "[AVM] $Repository module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed." -ForegroundColor Yellow
+    Write-Host "$Repository module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed." -ForegroundColor Yellow
+    if ($plan.Added.Count -eq 0 -and $plan.Removed.Count -eq 0) {
+        Write-Host '  Only the order of the entries changes.'
+    }
+    else {
+        Write-Host "  Added: $(Format-AvmRunSummaryList -Values $plan.Added)"
+        Write-Host "  Removed: $(Format-AvmRunSummaryList -Values $plan.Removed)"
+    }
     $expectedActor = Get-RepositorySyncConfiguredBotActor
     $result = Invoke-RepositoryFileSync -Repository $Repository -DefaultBranch $DefaultBranch `
         -VerifyCandidate -ExpectedActor $expectedActor -PlanHasChanges:$plan.Changed `
@@ -191,7 +200,14 @@ function Invoke-AvmModuleListSync {
         -WhatIf:$WhatIfPreference
 
     if ($result.PullRequestUrl) {
-        Write-Host "[AVM] Module dropdown synchronization pull request: $($result.PullRequestUrl)" -ForegroundColor Green
+        Write-Host "Module dropdown pull request [$($result.PullRequestUrl)] is $($result.Status)." -ForegroundColor Green
     }
+    $pullRequest = if ($result.PullRequestUrl) { $result.PullRequestUrl } else { 'none' }
+    Write-AvmRunSummary -Title 'Module dropdown sync' -DryRun:$WhatIfPreference `
+        -Overview "The [$Repository] module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed. Pull request: $pullRequest (status: $($result.Status))." `
+        -TableHeaders @('Change', 'Modules') -TableRows @(
+            [string[]]@('Added', (Format-AvmRunSummaryList -Values $plan.Added -AsCode)),
+            [string[]]@('Removed', (Format-AvmRunSummaryList -Values $plan.Removed -AsCode))
+        )
     return $result
 }

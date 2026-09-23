@@ -10,6 +10,7 @@ BeforeAll {
     . (Join-Path $sharedLib 'RepositoryFileSync.ps1')
     . (Join-Path $reviewerRoutingLib 'RepositoryFileAccess.ps1')
     . (Join-Path $reviewerRoutingLib 'ModuleOwners.ps1')
+    . (Join-Path $reviewerRoutingLib 'RunSummary.ps1')
     . (Join-Path $lib 'ModuleListSync.ps1')
 
     function New-ModuleDropdownFixtureContent {
@@ -202,6 +203,34 @@ Describe 'Invoke-AvmModuleListSync' {
         { Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules' } |
             Should -Throw '*AVM_APP_BOT_USER_ID*'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
+    It 'logs which modules are added and removed and writes them to the job summary' {
+        $previousSummary = $env:GITHUB_STEP_SUMMARY
+        $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'summary.md'
+        try {
+            Mock Get-AvmModuleListSyncCatalogModulePaths {
+                @{
+                    ptn = @('avm/ptn/foo/bar', 'avm/ptn/foo/baz')
+                    res = @('avm/res/aaa/bbb', 'avm/res/new/module')
+                    utl = @('avm/utl/types/avm-common-types')
+                }
+            }
+            $log = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules' 6>&1 |
+                Where-Object { $_ -is [System.Management.Automation.InformationRecord] } | Out-String
+            $log | Should -Match ([regex]::Escape('Azure/bicep-registry-modules module dropdown is out of sync: 1 added, 1 removed.'))
+            $log | Should -Match ([regex]::Escape('Added: avm/res/new/module'))
+            $log | Should -Match ([regex]::Escape('Removed: avm/res/ccc/ddd'))
+
+            $summary = Get-Content -Raw -LiteralPath $env:GITHUB_STEP_SUMMARY
+            $summary | Should -Match '(?m)^### Module dropdown sync\r?$'
+            $summary | Should -Match ([regex]::Escape('Pull request: https://github.com/Azure/bicep-registry-modules/pull/1 (status: Merged).'))
+            $summary | Should -Match ([regex]::Escape('| Added | `avm/res/new/module` |'))
+            $summary | Should -Match ([regex]::Escape('| Removed | `avm/res/ccc/ddd` |'))
+        }
+        finally {
+            $env:GITHUB_STEP_SUMMARY = $previousSummary
+        }
     }
 }
 
