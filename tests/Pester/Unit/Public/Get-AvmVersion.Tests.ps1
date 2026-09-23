@@ -34,6 +34,33 @@ Describe 'Get-AvmVersion' {
         }
     }
 
+    It 'returns the running version with an update warning when a newer release exists' {
+        InModuleScope 'Avm.Authoring' {
+            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
+            try {
+                $script:AvmLatestModuleVersion = $null
+                $script:AvmModuleVersionCheckCompleted = $false
+                Mock Find-PSResource {
+                    [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '99.0.0' }
+                }
+
+                $records = @(Get-AvmVersion 3>&1)
+                $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+                $result = @($records | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+
+                $result.Count | Should -Be 1
+                $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'update available: 99\.0\.0'
+                Should -Invoke Find-PSResource -Times 1 -Exactly
+            }
+            finally {
+                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
+            }
+        }
+    }
+
     It 'reports Module=Avm.Authoring (exact casing)' {
         (Get-AvmVersion).Module | Should -BeExactly 'Avm.Authoring'
     }
@@ -148,6 +175,62 @@ Describe 'avm version (dispatcher)' {
         }
     }
 
+    It 'returns the version and warns once instead of failing when an update is available' {
+        InModuleScope 'Avm.Authoring' {
+            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
+            try {
+                $script:AvmLatestModuleVersion = $null
+                $script:AvmModuleVersionCheckCompleted = $false
+                Mock Find-PSResource {
+                    [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '99.0.0' }
+                }
+
+                $records = @(Invoke-Avm version 3>&1)
+                $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+                $result = @($records | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+
+                $result.Count | Should -Be 1
+                $result[0].Module | Should -BeExactly 'Avm.Authoring'
+                $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'update available: 99\.0\.0'
+                [string]$warnings[0] | Should -Match 'avm update'
+                Should -Invoke Find-PSResource -Times 1 -Exactly
+            }
+            finally {
+                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
+            }
+        }
+    }
+
+    It 'reports the version with a lookup warning when PowerShell Gallery is unavailable' {
+        InModuleScope 'Avm.Authoring' {
+            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
+            try {
+                $script:AvmLatestModuleVersion = $null
+                $script:AvmModuleVersionCheckCompleted = $false
+                Mock Find-PSResource {
+                    throw [System.Net.Http.HttpRequestException]::new('offline')
+                }
+
+                $records = @(Invoke-Avm version 3>&1)
+                $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+                $result = @($records | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+
+                $result.Count | Should -Be 1
+                $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'The Gallery request failed'
+                Should -Invoke Find-PSResource -Times 1 -Exactly
+            }
+            finally {
+                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
+            }
+        }
+    }
+
     It 'accepts the legacy version-check opt-out without warning' {
         InModuleScope 'Avm.Authoring' {
             Mock Find-PSResource
@@ -159,6 +242,29 @@ Describe 'avm version (dispatcher)' {
 
             $warnings.Count | Should -Be 0
             Should -Invoke Find-PSResource -Times 0 -Exactly
+        }
+    }
+
+    It 'warns about an explicit opt-out and still returns the version' {
+        InModuleScope 'Avm.Authoring' {
+            $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+            $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = '0'
+            try {
+                $script:AvmModuleVersionSkipWarningWritten = $false
+                Mock Find-PSResource
+
+                $records = @(Invoke-Avm -SkipModuleVersionCheck version 3>&1)
+                $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+                $result = @($records | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+
+                $result.Count | Should -Be 1
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'version check was skipped'
+                Should -Invoke Find-PSResource -Times 0 -Exactly
+            }
+            finally {
+                $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
+            }
         }
     }
 

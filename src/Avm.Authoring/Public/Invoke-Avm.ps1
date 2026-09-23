@@ -63,10 +63,12 @@ function Invoke-Avm {
         }
 
         $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
         if (-not $isUpdateCommand) {
             Test-AvmModuleVersion `
                 -SkipModuleVersionCheck:$SkipModuleVersionCheck `
-                -RefreshLatestVersion
+                -RefreshLatestVersion `
+                -WarnOnly:$isVersionCommand
             $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
                 $PSDefaultParameterValues.Clone()
             }

@@ -747,11 +747,13 @@ Both call the same implementation. The dispatcher is generated from a single ver
   - `AvmProcessException` (`AVM1020`) — subprocess exited non-zero; includes captured stdout / stderr.
   - `AvmContextException` (`AVM1030`) — repo context resolver couldn't classify the path.
   - `AvmCommandException` (`AVM1040`) — a composite verb reported a failing status.
+  - `AvmModuleVersionException` (`AVM1050`) — the installed module is behind the published release.
   - `AvmManagedFilesVersionException` (`AVM1060`) — a new major managed-files release supersedes the repo's pin.
 - Exit codes from the dispatcher:
   - `0` — success.
   - `1` — user error (bad args, bad config, expected condition).
   - `2` — internal / unexpected error.
+  - `10` — the installed module is superseded and must be upgraded.
   - `11` — the managed-files pin is superseded by a major release.
   - `12–19` — reserved for the `tool` verb tree.
   - `20–29` — reserved for the `test` verb tree.
@@ -881,6 +883,12 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 
 ## 20. Release and versioning
 
+- Normal commands compare the running module against the latest PowerShell
+  Gallery release and stop with upgrade guidance when outdated. `avm version`
+  and `Get-AvmVersion` instead return the running version with an update warning.
+  `avm update` bypasses the guard so it can install the newer version.
+  `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
+  checkouts; Gallery lookup failures warn and allow the command to continue.
 - SemVer 2.0.0. Pre-release labels: `-preview.N`, `-rc.N`.
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.

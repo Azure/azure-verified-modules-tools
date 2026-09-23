@@ -6,8 +6,8 @@ function Get-AvmVersion {
     .DESCRIPTION
         Emits a single pscustomobject covering the module identity, the running
         PowerShell version and edition, the detected OS, and the process
-        architecture. Used by `avm version` and by the test harness to confirm
-        that the module under test is the one on disk.
+        architecture. Warns when a newer module version is available without
+        preventing version reporting.
 
     .EXAMPLE
         PS> Get-AvmVersion
@@ -21,7 +21,7 @@ function Get-AvmVersion {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck -WarnOnly
 
     $module = Get-Module -Name 'Avm.Authoring' |
         Sort-Object Version -Descending |

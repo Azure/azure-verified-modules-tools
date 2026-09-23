@@ -92,6 +92,7 @@ BeforeAll {
             [Parameter(Mandatory)][string] $Body,
             [ValidateSet('File', 'Command')][string] $Mode = 'File',
             [switch] $CaptureTypedError,
+            [switch] $RejectOutdatedModule,
             [switch] $RunnerDebug,
             [string] $Invocation
         )
@@ -114,6 +115,20 @@ try {
             $invoke = 'avm spec-verb | Out-Null'
         }
 
+        $guardOverride = if ($RejectOutdatedModule) {
+            @'
+function script:Test-AvmModuleVersion {
+    throw [AvmModuleVersionException]::new(
+        [version]'0.16.0',
+        [version]'0.17.1',
+        "A newer version of Avm.Authoring is required. Run 'avm update' to upgrade.")
+}
+'@
+        }
+        else {
+            ''
+        }
+
         $scriptText = @"
 `$ErrorActionPreference = 'Stop'
 `$PSStyle.OutputRendering = 'PlainText'
@@ -124,6 +139,7 @@ Import-Module '$manifest' -Force
         [pscustomobject]@{ Path = [string[]]@('spec-verb'); Cmdlet = 'Invoke-AvmSpecVerb'; Summary = 'test verb' }
     }
     function script:Invoke-AvmSpecVerb { $Body }
+    $guardOverride
 }
 $invoke
 "@
@@ -180,6 +196,19 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
     It 'exits non-zero when a verb reports error' {
         (Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'error' }").ExitCode |
             Should -Not -Be 0
+    }
+
+    It 'rejects an outdated module with upgrade guidance before running the verb' {
+        $result = Invoke-AvmChildVerb `
+            -Mode File `
+            -Body "[pscustomobject]@{ Status = 'pass' }" `
+            -RejectOutdatedModule
+
+        $result.ExitCode | Should -Not -Be 0
+        $result.Output | Should -Match 'AVM upgrade required'
+        $result.Output | Should -Match "Run 'avm update' to upgrade"
+        $result.Output | Should -Not -Match 'avm spec-verb: pass'
+        $result.Output | Should -Not -Match '\.ps1:\d+'
     }
 
     It 'exits zero when a verb reports pass' {

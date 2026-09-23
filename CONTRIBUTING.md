@@ -52,12 +52,16 @@ The simplest dev loop. No install, no copy, no symlink — point `Import-Module`
 ```pwsh
 Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
 Get-Command -Module Avm.Authoring        # every exported verb + the `avm` alias
-avm version                              # or: Get-AvmVersion
-avm doctor                               # environment diagnosis
+avm version                              # reports the source version and warns about updates
+avm -SkipModuleVersionCheck doctor       # source builds need an explicit opt-out
 Remove-Module Avm.Authoring -Force
 ```
 
 Re-run `Import-Module … -Force` after any change to `src/Avm.Authoring/*.ps*`.
+
+Source builds identify themselves as version `0.0.0`. Pass
+`-SkipModuleVersionCheck` for other local source commands; installed releases
+check PowerShell Gallery for updates by default.
 
 `Remove-Module` before the next `-Force` import is good hygiene — it surfaces leaks (orphaned background jobs, registered event handlers, etc.) earlier.
 
