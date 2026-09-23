@@ -25,6 +25,10 @@ initialization, and the module catalog unchanged.
 `git diff --check` passed. The repository-sync input contract and component
 tests reject the retired metadata options while preserving ordinary sync.
 
+After merging `origin/main` at `55b6f03`, the retired backfill-only test remained
+deleted. The newer bot identity configuration and module-version upgrade retry
+were preserved. `./build.ps1 pre-commit` passed again (5 tasks, 0 errors).
+
 ## Blockers or dependencies
 
 None.

@@ -77,11 +77,12 @@ section when cutting a release.
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team
   descriptions; authored metadata continues to use handle strings.
-- Commands no longer query PowerShell Gallery or require the latest
-  `Avm.Authoring` version before running. Use `avm update` to explicitly check
-  for and install an update. Source builds identify themselves with the
-  non-release manifest version `0.0.0`; release packaging stamps the tag
-  version into the distributed manifest.
+- Normal commands again require the latest `Avm.Authoring` version from
+  PowerShell Gallery. `avm version` returns the running version with a warning
+  rather than failing when an update exists; `avm update` remains available to
+  install it. Automation can explicitly pass `-SkipModuleVersionCheck`. Source
+  builds identify themselves with manifest version `0.0.0`; release packaging
+  stamps the tag version into the distributed manifest.
 - Retired the completed AzAPI request-header cleanup from the Mapotf common
   profile, reducing work performed for every root, local-module, and example
   transform.

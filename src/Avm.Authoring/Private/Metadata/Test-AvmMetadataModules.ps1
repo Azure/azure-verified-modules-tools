@@ -1,4 +1,5 @@
 function Test-AvmMetadataModules {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The pre-commit and PR-check registries use this stable multi-module step name.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -46,11 +47,11 @@ function Test-AvmMetadataModules {
         }
     }
     return [pscustomobject]@{
-        Engine = $Context.Ecosystem
-        Tool = 'module-metadata/1'
-        ToolPath = $null
+        Engine     = $Context.Ecosystem
+        Tool       = 'module-metadata/1'
+        ToolPath   = $null
         ToolSource = 'builtin'
-        Status = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0) { 'fail' } else { 'pass' }
-        Issues = $issues.ToArray()
+        Status     = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0) { 'fail' } else { 'pass' }
+        Issues     = $issues.ToArray()
     }
 }

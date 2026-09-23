@@ -328,9 +328,9 @@ function Get-AvmTflintInlineIgnoreWarning {
             -ErrorAction SilentlyContinue |
             Where-Object {
                 @(($_.FullName.Substring($rootFull.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)) -split '[\\/]' |
-                    Where-Object { $_ -eq '.terraform' }).Count -eq 0
-            } |
-            Sort-Object FullName
+                        Where-Object { $_ -eq '.terraform' }).Count -eq 0
+                } |
+                Sort-Object FullName
     )
 
     $pattern = '(?i)^(?:#|//)\s*tflint-ignore\s*:\s*(?<rules>[A-Za-z0-9_.-][A-Za-z0-9_.,\s-]*)'

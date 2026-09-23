@@ -10,6 +10,27 @@ function Assert-RepositorySyncActor {
     }
 }
 
+function Get-RepositorySyncConfiguredBotActor {
+    Set-StrictMode -Version 3.0
+
+    $login = [string]$env:AVM_APP_BOT_LOGIN
+    if ([string]::IsNullOrWhiteSpace($login)) {
+        throw [System.InvalidOperationException]::new('AVM_APP_BOT_LOGIN must be configured with the AVM app bot login.')
+    }
+    $login = $login.Trim()
+    if ($login -cmatch '[\x00-\x1F\x7F]') {
+        throw [System.InvalidOperationException]::new('AVM_APP_BOT_LOGIN must not contain control characters.')
+    }
+
+    $idText = [string]$env:AVM_APP_BOT_USER_ID
+    $id = 0L
+    if ([string]::IsNullOrWhiteSpace($idText) -or -not [long]::TryParse($idText.Trim(), [ref]$id) -or $id -le 0) {
+        throw [System.InvalidOperationException]::new('AVM_APP_BOT_USER_ID must be configured with the positive numeric AVM app bot user database ID.')
+    }
+
+    [pscustomobject]@{ login = $login; id = $id; type = 'Bot' }
+}
+
 function Assert-RepositorySyncFileScope {
     param([AllowEmptyCollection()] [string[]] $Paths, [string[]] $AllowedPaths, [string[]] $ExpectedPaths)
 
@@ -255,8 +276,9 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             }
             if (-not $reuseHead) {
                 $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', '-b', $branch)
-                $author = 'azure-verified-modules[bot]'
-                $email = if ($ExpectedActor) { "$($ExpectedActor.id)+$($ExpectedActor.login)@users.noreply.github.com" } else { '1049636+azure-verified-modules[bot]@users.noreply.github.com' }
+                $commitActor = if ($ExpectedActor) { $ExpectedActor } else { Get-RepositorySyncConfiguredBotActor }
+                $author = $commitActor.login
+                $email = "$($commitActor.id)+$($commitActor.login)@users.noreply.github.com"
                 $identity = @('-c', "user.name=$author", '-c', "user.email=$email")
                 $message = if ($CommitMessage) { $CommitMessage } else { $Title }
                 if ($oldHead) {

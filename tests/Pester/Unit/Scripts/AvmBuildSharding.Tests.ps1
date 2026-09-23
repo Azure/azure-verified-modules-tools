@@ -86,6 +86,36 @@ Describe 'Get-AvmComponentShardCount' {
         }
     }
 
+    Describe 'Pester log isolation' {
+        BeforeEach {
+            $script:previousActions = $env:GITHUB_ACTIONS
+        }
+
+        AfterEach {
+            $env:GITHUB_ACTIONS = $script:previousActions
+        }
+
+        It 'emits paired workflow-command delimiters when Actions is active' {
+            $env:GITHUB_ACTIONS = 'true'
+
+            $started = @(Start-AvmPesterLogIsolation 6>&1)
+            $token = [string]$started[-1]
+            $stopped = @(Stop-AvmPesterLogIsolation -Token $token 6>&1)
+
+            $token | Should -Match '^[0-9a-f]{32}$'
+            @($started | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                    ForEach-Object { [string]$_.MessageData }) | Should -Contain "::stop-commands::$token"
+            @($stopped | ForEach-Object { [string]$_.MessageData }) | Should -Contain "::$token::"
+        }
+
+        It 'emits no workflow commands outside Actions' {
+            $env:GITHUB_ACTIONS = ''
+
+            @(Start-AvmPesterLogIsolation 6>&1).Count | Should -Be 0
+            @(Stop-AvmPesterLogIsolation -Token $null 6>&1).Count | Should -Be 0
+        }
+    }
+
     It 'uses a positive default capped at six' {
         Remove-Item Env:AVM_COMPONENT_SHARD_COUNT -ErrorAction SilentlyContinue
 

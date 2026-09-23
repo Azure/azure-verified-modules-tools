@@ -60,10 +60,10 @@ function Test-AvmRuleFileMustExist {
                     $textInfo.ToTitleCase($_.ToLowerInvariant())
                 }) -join ' ')
         $content = $fixContentTemplate.
-            Replace('{DirectoryName}', $directoryName).
-            Replace('{DirectoryTitle}', $directoryTitle).
-            Replace("`r`n", "`n").
-            Replace("`r", "`n")
+        Replace('{DirectoryName}', $directoryName).
+        Replace('{DirectoryTitle}', $directoryTitle).
+        Replace("`r`n", "`n").
+        Replace("`r", "`n")
         if (-not $content.EndsWith("`n")) {
             $content += "`n"
         }

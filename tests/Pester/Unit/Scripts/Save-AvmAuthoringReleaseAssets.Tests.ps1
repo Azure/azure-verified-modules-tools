@@ -57,7 +57,7 @@ Describe 'Save-AvmAuthoringReleaseAssets.ps1' {
 
     AfterEach {
         if ($null -eq $script:previousToken) {
-            Remove-Item Env:GH_TOKEN
+            Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
         }
         else {
             $env:GH_TOKEN = $script:previousToken

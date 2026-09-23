@@ -150,25 +150,31 @@ missing files with `avm metadata initialize` before rerunning either check.
 
 ## Local smoke test
 
+The source manifest has version `0.0.0`. For local source commands other than
+`avm version` and `avm update`, pass `-SkipModuleVersionCheck` immediately after
+`avm`; installed releases enforce the latest Gallery version by default.
+`avm version` still returns the running version and warns when an update is
+available.
+
 From the repo root:
 
 ```pwsh
 Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
 
-avm                 # dispatcher help (writes via Information stream)
+avm -SkipModuleVersionCheck  # dispatcher help (writes via Information stream)
 avm version         # Get-AvmVersion
 avm update          # Update-AvmAuthoring
-avm doctor          # Invoke-AvmDoctor
-avm doctor --json   # GNU-style flag translates to -Json
-avm context         # Get-AvmModuleContext (current working directory)
-avm tool list       # Get-AvmTool (lists all tools in the bundled lock)
-avm format          # Invoke-AvmFormat (engine resolved from module context)
-avm lint            # Invoke-AvmLint   (bicep lint; scoped AVM TFLint rulesets for terraform)
-avm test            # Invoke-AvmTest   (bicep build --stdout; terraform validate -json per example)
-avm test --no-init  # Use initialized examples; module coverage is not assessed
-avm docs            # Invoke-AvmDocs   (terraform-docs inject; bicep walker pending)
-avm pre-commit      # terraform: metadata -> sync -> check convention -> transform -> format -> docs
-avm pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
+avm -SkipModuleVersionCheck doctor          # Invoke-AvmDoctor
+avm -SkipModuleVersionCheck doctor --json   # GNU-style flag translates to -Json
+avm -SkipModuleVersionCheck context         # Get-AvmModuleContext (current working directory)
+avm -SkipModuleVersionCheck tool list       # Get-AvmTool (lists all tools in the bundled lock)
+avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved from module context)
+avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
+avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
+avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
+avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; bicep walker pending)
+avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> sync -> check convention -> transform -> format -> docs
+avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring
 ```

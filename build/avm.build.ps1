@@ -22,8 +22,9 @@
                     modified.
       clean       - Remove ./out.
       pre-commit  - Composite: layout + lint + test + component. The recommended local gate.
-      ci          - Composite invoked by the CI workflow: layout + lint + coverage + component.
-                    Workflow-definition tests are split into their own CI job.
+      ci          - Full local CI gate: layout + lint + coverage + component.
+      ci-tests    - Matrix CI gate: layout + coverage + component. CI lints once
+                    in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
     file per tier under out/test-results/. The CI workflows upload it as an
@@ -93,10 +94,15 @@ function script:Invoke-AvmPester {
     }
     $previousTestRunId = $env:AVM_TEST_RUN_ID
     $previousTestSkip = $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK
+    $previousActions = $env:GITHUB_ACTIONS
+    $previousStepSummary = $env:GITHUB_STEP_SUMMARY
     $testRunId = [guid]::NewGuid().ToString()
+    $logToken = script:Start-AvmPesterLogIsolation
     try {
         $env:AVM_TEST_RUN_ID = $testRunId
         $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $testRunId
+        $env:GITHUB_ACTIONS = ''
+        $env:GITHUB_STEP_SUMMARY = ''
         $result = Invoke-Pester -Configuration $Configuration
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
@@ -116,6 +122,9 @@ function script:Invoke-AvmPester {
         else {
             $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip
         }
+        $env:GITHUB_ACTIONS = $previousActions
+        $env:GITHUB_STEP_SUMMARY = $previousStepSummary
+        script:Stop-AvmPesterLogIsolation -Token $logToken
     }
 }
 
@@ -151,7 +160,7 @@ function script:Invoke-ScriptAnalyzerWithRetry {
                 $ex = $ex.InnerException
             }
             if (-not $isNre -or $attempt -eq $max) { throw }
-            Write-Warning ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max)
+            Write-Information ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max) -InformationAction Continue
             Start-Sleep -Milliseconds (500 * $attempt)
         }
     }
@@ -290,12 +299,16 @@ task lint {
 
     $errors   = @($results | Where-Object { $_.Severity -in @('Error', 'ParseError') })
     $warnings = @($results | Where-Object { $_.Severity -eq 'Warning' })
+    $information = @($results | Where-Object { $_.Severity -eq 'Information' })
 
     if ($errors.Count -gt 0) {
         throw "PSScriptAnalyzer reported $($errors.Count) error(s)."
     }
     if ($warnings.Count -gt 0) {
-        Write-Warning "PSScriptAnalyzer reported $($warnings.Count) warning(s)."
+        throw "PSScriptAnalyzer reported $($warnings.Count) warning(s)."
+    }
+    if ($information.Count -gt 0) {
+        throw "PSScriptAnalyzer reported $($information.Count) informational finding(s)."
     }
 }
 
@@ -656,15 +669,11 @@ task integration {
 
 task 'pre-commit' layout, lint, test, component
 
-# CI runs layout + lint + coverage + component. Coverage runs the Avm.Authoring
-# Unit tier with CodeCoverage enabled (so we get the spec section 18 70% floor)
-# and `component` runs the real-subprocess (stub-binary) tier separately.
-# Workflow-definition tests are split into a dedicated Ubuntu-only job because
-# the checked workflows only run on Ubuntu. The real `integration` tier (REAL
-# NETWORK + real binaries) is NOT part of the ci task -- it runs as a separate
-# `integration` job in the ci workflow on PR / on-demand. `pre-commit` (the local
-# gate) skips coverage and integration to stay fast, but runs `component` so a
-# green local gate predicts a green CI run.
+# The CI matrix runs layout + coverage + component; lint and workflow tests run
+# in dedicated Ubuntu jobs. The full local ci task includes lint. Integration
+# remains a separate real-network job, and pre-commit runs unit tests without
+# coverage while retaining the component tier.
+task 'ci-tests' layout, coverage, component
 task ci layout, lint, coverage, component
 
 task . layout

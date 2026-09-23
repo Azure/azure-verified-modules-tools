@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
 
         [Parameter(Mandatory)]
         [ValidateSet('common', 'module', 'root', 'example')]
-        [string] $Profile,
+        [string] $ProfileName,
 
         [switch] $Optional
     )
@@ -48,13 +48,13 @@ function Resolve-AvmMapotfConfigDir {
     $candidates = New-Object System.Collections.Generic.List[string]
 
     if ($env:AVM_MPTF_CONFIG_DIR) {
-        $candidates.Add((Join-Path $env:AVM_MPTF_CONFIG_DIR $Profile))
+        $candidates.Add((Join-Path $env:AVM_MPTF_CONFIG_DIR $ProfileName))
     }
 
-    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' $Profile))))
+    $candidates.Add((Join-Path $Root (Join-Path 'config' (Join-Path 'mapotf' $ProfileName))))
 
     $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' $Profile))))
+    $candidates.Add((Join-Path $moduleRoot (Join-Path 'Resources' (Join-Path 'mapotf' $ProfileName))))
 
     foreach ($candidate in $candidates) {
         if (-not $candidate) { continue }
@@ -70,9 +70,9 @@ function Resolve-AvmMapotfConfigDir {
     }
 
     throw [AvmConfigurationException]::new(
-        ("Cannot resolve the mapotf '{0}' config profile (looked in: {1}). " -f $Profile, ($candidates -join '; ')) +
-        ("The profile normally ships inside the module under Resources/mapotf/{0}; " -f $Profile) +
-        ("set AVM_MPTF_CONFIG_DIR or add config/mapotf/{0}/*.mptf.hcl to override it." -f $Profile))
+        ("Cannot resolve the mapotf '{0}' config profile (looked in: {1}). " -f $ProfileName, ($candidates -join '; ')) +
+        ("The profile normally ships inside the module under Resources/mapotf/{0}; " -f $ProfileName) +
+        ("set AVM_MPTF_CONFIG_DIR or add config/mapotf/{0}/*.mptf.hcl to override it." -f $ProfileName))
 }
 
 function Get-AvmTerraformFile {
@@ -181,7 +181,7 @@ function Test-AvmMapotfTransientProviderError {
 
     $normalized = $Output `
         -replace '\x1B\[[0-?]*[ -/]*[@-~]', '' `
-        -replace '[\r\n│]+', ' ' `
+        -replace '[\r\n\u2502]+', ' ' `
         -replace '\s+', ' '
 
     $patterns = @(
@@ -213,18 +213,18 @@ function Invoke-AvmMapotfTransformTarget {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $args = New-Object System.Collections.Generic.List[string]
-    $args.Add('transform')
-    foreach ($profile in $Target.Profiles) {
-        $profileDir = $Options.ProfileDirs[$profile]
+    $transformArguments = New-Object System.Collections.Generic.List[string]
+    $transformArguments.Add('transform')
+    foreach ($profileName in $Target.Profiles) {
+        $profileDir = $Options.ProfileDirs[$profileName]
         if (-not $profileDir) {
             continue
         }
-        $args.Add('--mptf-dir')
-        $args.Add($profileDir)
+        $transformArguments.Add('--mptf-dir')
+        $transformArguments.Add($profileDir)
     }
-    $args.Add('--tf-dir')
-    $args.Add($Target.Path)
+    $transformArguments.Add('--tf-dir')
+    $transformArguments.Add($Target.Path)
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $maxRetries = 2
@@ -232,7 +232,7 @@ function Invoke-AvmMapotfTransformTarget {
     do {
         $transform = Invoke-AvmProcess `
             -FilePath $Options.ToolPath `
-            -ArgumentList $args.ToArray() `
+            -ArgumentList $transformArguments.ToArray() `
             -WorkingDirectory $Target.Path `
             -EnvVars $Options.EnvVars `
             -IgnoreExitCode
@@ -378,10 +378,10 @@ function Invoke-AvmTerraformTransform {
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
-        common = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'common'
-        module = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'module'
-        root = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'root'
-        example = Resolve-AvmMapotfConfigDir -Root $Context.Root -Profile 'example'
+        common  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
+        module  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
+        root    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
+        example = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
     }
     $targets = @(Get-AvmTerraformTransformTarget -Root $Context.Root)
     Write-AvmLog ("transform: discovered {0} target(s)" -f $targets.Count) -Level Verbose | Out-Null
@@ -446,8 +446,8 @@ function Invoke-AvmTerraformTransform {
             ProfileDirs = $profileDirs
             EnvVars     = $mapotfEnv
         }
-        $moduleTargets = @($targets | Where-Object Scope -ne 'example')
-        $exampleTargets = @($targets | Where-Object Scope -eq 'example')
+        $moduleTargets = @($targets | Where-Object { $_.Scope -ne 'example' })
+        $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
         Invoke-AvmParallel `
             -InputObject $moduleTargets `
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `

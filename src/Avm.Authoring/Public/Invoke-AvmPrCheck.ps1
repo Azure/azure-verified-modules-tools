@@ -127,10 +127,10 @@ function Invoke-AvmPrCheck {
 
     $stepDefs = @(
         [pscustomobject]@{
-            Name = 'metadata'
-            Cmdlet = 'Test-AvmMetadataModules'
+            Name        = 'metadata'
+            Cmdlet      = 'Test-AvmMetadataModules'
             ContextOnly = $true
-            ExtraArgs = @{ Context = $context }
+            ExtraArgs   = @{ Context = $context }
         }
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
@@ -173,8 +173,8 @@ function Invoke-AvmPrCheck {
             $stepParameters = @{}
             if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
                 $stepParameters = @{
-                    Path = $context.Root
-                    Ecosystem = $context.Ecosystem
+                    Path              = $context.Root
+                    Ecosystem         = $context.Ecosystem
                     AllowPathFallback = $AllowPathFallback
                 }
             }

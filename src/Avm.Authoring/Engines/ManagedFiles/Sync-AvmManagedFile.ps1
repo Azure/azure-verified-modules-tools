@@ -515,17 +515,17 @@ function Resolve-AvmManagedFilesSetting {
     $repoIdValue = & $pick $RepoId 'AVM_MANAGED_FILES_REPO_ID' 'repoId' ''
 
     return @{
-        ManagedFilesRepo         = $repo
-        ManagedFilesRef          = $ref
-        ManagedFilesRefSource    = $refSource
-        ManagedFilesVersionPin   = $versionPin
-        ManagedFilesPath         = $path
-        ManagedFilesLocalPath    = $localPath
-        ConfigRepo               = $configRepoValue
-        ConfigRef                = $configRefValue
-        ConfigPath               = $configPathValue
-        ConfigLocalPath          = $configLocalPath
-        RepoId                   = $repoIdValue
+        ManagedFilesRepo       = $repo
+        ManagedFilesRef        = $ref
+        ManagedFilesRefSource  = $refSource
+        ManagedFilesVersionPin = $versionPin
+        ManagedFilesPath       = $path
+        ManagedFilesLocalPath  = $localPath
+        ConfigRepo             = $configRepoValue
+        ConfigRef              = $configRefValue
+        ConfigPath             = $configPathValue
+        ConfigLocalPath        = $configLocalPath
+        RepoId                 = $repoIdValue
     }
 }
 
@@ -1323,8 +1323,11 @@ function Resolve-AvmManagedFilesRepositorySetting {
     $repositoryGroups = @()
     if ($RepositoryConfig.PSObject.Properties.Name -contains 'repositoryGroups' -and $RepositoryConfig.repositoryGroups) {
         $repositoryGroups = @(
-            $RepositoryConfig.repositoryGroups |
-                Where-Object { $_.repositories -contains '*' -or $_.repositories -contains $RepoId }
+            foreach ($group in $RepositoryConfig.repositoryGroups) {
+                if ($group.repositories -contains '*' -or $group.repositories -contains $RepoId) {
+                    $group
+                }
+            }
         )
     }
 

@@ -3,6 +3,7 @@ function New-AvmToolPathEnvironment {
     .SYNOPSIS
         Build a child-process PATH containing only the resolved copy of a tool.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Returns an environment override hashtable without changing process state.')]
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(

@@ -207,11 +207,11 @@ function Invoke-AvmPreCommit {
     }
 
     $stepDefs = @([pscustomobject]@{
-        Name = 'metadata'
-        Cmdlet = 'Test-AvmMetadataModules'
-        ContextOnly = $true
-        ExtraArgs = @{ Context = $context }
-    }) + $stepDefs
+            Name        = 'metadata'
+            Cmdlet      = 'Test-AvmMetadataModules'
+            ContextOnly = $true
+            ExtraArgs   = @{ Context = $context }
+        }) + $stepDefs
 
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = 'pass'

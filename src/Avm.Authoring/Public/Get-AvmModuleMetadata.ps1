@@ -22,6 +22,7 @@ function Get-AvmModuleMetadata {
     .OUTPUTS
         A result with Status, Issues, and the decoded Metadata.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Metadata is the shared metadata.json contract name.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(

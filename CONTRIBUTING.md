@@ -52,12 +52,16 @@ The simplest dev loop. No install, no copy, no symlink — point `Import-Module`
 ```pwsh
 Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
 Get-Command -Module Avm.Authoring        # every exported verb + the `avm` alias
-avm version                              # or: Get-AvmVersion
-avm doctor                               # environment diagnosis
+avm version                              # reports the source version and warns about updates
+avm -SkipModuleVersionCheck doctor       # source builds need an explicit opt-out
 Remove-Module Avm.Authoring -Force
 ```
 
 Re-run `Import-Module … -Force` after any change to `src/Avm.Authoring/*.ps*`.
+
+Source builds identify themselves as version `0.0.0`. Pass
+`-SkipModuleVersionCheck` for other local source commands; installed releases
+check PowerShell Gallery for updates by default.
 
 `Remove-Module` before the next `-Force` import is good hygiene — it surfaces leaks (orphaned background jobs, registered event handlers, etc.) earlier.
 
@@ -139,8 +143,9 @@ If either throws a casing error, the on-disk folder, file, or manifest casing ha
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
-./build.ps1 pre-commit        # layout + lint + unit tests — the local gate
-./build.ps1 ci                # layout + lint + coverage + component (what CI runs)
+./build.ps1 pre-commit        # layout + lint + unit + component tests — the local gate
+./build.ps1 ci                # full local CI gate: layout + lint + coverage + component
+./build.ps1 ci-tests          # CI matrix: layout + coverage + component (lint runs once on Ubuntu)
 
 # Individual tasks
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
