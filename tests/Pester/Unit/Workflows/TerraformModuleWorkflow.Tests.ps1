@@ -104,7 +104,7 @@ Describe 'CI workflow' {
         $globalEnvironment.Groups['body'].Value |
             Should -Match "(?m)^  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'\r?$"
         ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
-        $script:ci | Should -Match 'run: \./build\.ps1 ci'
+        $script:ci | Should -Match 'run: \./build\.ps1 ci-tests'
         $script:ci | Should -Match 'run: \./build\.ps1 test-workflows'
         $script:ci | Should -Match 'run: \./build\.ps1 integration'
     }
@@ -126,11 +126,25 @@ Describe 'CI workflow' {
         $script:ci | Should -Match 'GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}'
     }
 
+    It 'runs lint once in a dedicated Ubuntu job while retaining the three-OS test matrix' {
+        $lint = [regex]::Match($script:ci, '(?ms)^  lint:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $build = [regex]::Match($script:ci, '(?ms)^  build:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $lint.Success | Should -BeTrue
+        $build.Success | Should -BeTrue
+        $lint.Value | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
+        $lint.Value | Should -Not -Match 'matrix:'
+        $lint.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+        $lint.Value | Should -Match 'run: \./build\.ps1 lint'
+        ([regex]::Matches($script:ci, '(?m)run: \./build\.ps1 lint\r?$')).Count | Should -Be 1
+        $build.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
+        $build.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+        $build.Value | Should -Match 'run: \./build\.ps1 ci-tests'
+    }
+
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 3
-        $script:ci | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 4
     }
 }
 

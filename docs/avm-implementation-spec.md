@@ -653,6 +653,13 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
+During Pester runs, the build harness temporarily clears `GITHUB_ACTIONS` and
+`GITHUB_STEP_SUMMARY`, and pauses workflow-command parsing while tests
+deliberately exercise GitHub
+annotations. Their diagnostics remain in the job log, but do not appear as
+real run annotations or write to the run's step summary. Normal commands
+retain native GitHub annotations.
+
 Warnings and errors that carry a file and line position preserve it as
 `message (path, line N[, column N])` in ordinary terminal output. GitHub Actions
 keeps using native workflow annotations without duplicating the position in
@@ -871,7 +878,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 
 > See also: [`quality-standards.md`](quality-standards.md) § 5 for the `AvmAvoidStringThrow` custom rule, the transient `NullReferenceException` mitigation and retry wrapper, the cross-platform `@(...)` consumer wrap, and the known PSSA rule conflicts.
 
-- PSScriptAnalyzer settings in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. CI runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path>` and treats `Warning` and above as fixable, `Error` as blocking.
+- PSScriptAnalyzer settings live in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. A dedicated Ubuntu CI job runs lint once; warnings, errors, and parse errors fail the gate. Informational findings remain advisory.
 - A `pre-commit` Pester suite runs:
   - Manifest layout (`Test-AvmModuleLayout`).
   - Encoding check (no BOM, LF line endings).

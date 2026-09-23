@@ -1,11 +1,11 @@
 name: CI
 
-# Pull-request gate for the Avm.Authoring module. Runs three test tiers on every
-# PR to `main` (and on demand via workflow_dispatch); neither tier runs on
-# merge / push to `main`:
+# Avm.Authoring CI runs on changes to main, pull requests, and manual dispatch.
+# Lint runs once; the three test tiers retain their platform coverage:
 #
-#   * build       -- the fast Avm.Authoring offline gate (`./build.ps1 ci`:
-#                    layout, lint, coverage, component) across three OSes.
+#   * lint        -- PSScriptAnalyzer once on Ubuntu.
+#   * build       -- the Avm.Authoring offline test gate (`./build.ps1
+#                    ci-tests`: layout, coverage, component) across three OSes.
 #   * workflows   -- workflow-definition unit tests (`./build.ps1
 #                    test-workflows`) on Ubuntu, matching the workflow runner
 #                    OS they validate.
@@ -19,11 +19,8 @@ name: CI
 #                    and Azure OIDC, so it is slower than the build gate and runs
 #                    as its own 3 OS x 2 fixture job matrix here.
 #
-# A single `report` job aggregates every leg of all tiers into one pull-request
-# test-results report. Keeping every tier in one workflow (one check suite) means
-# that report renders as a single "Test results" check, instead of the two tiers
-# fighting over check-suite attribution when they ran as separate workflows on
-# the same commit.
+# A single `report` job aggregates every test tier into one test-results
+# report. Lint is a separate check and has no test artifact.
 
 on:
   push:
@@ -44,6 +41,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  lint:
+    name: lint (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
+
+      - name: Run lint
+        shell: pwsh
+        run: ./build.ps1 lint
+
   build:
     name: ci (${{ matrix.os }})
     strategy:
@@ -61,6 +76,7 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
+        # The matrix still tests our custom analyzer rule on every OS.
         run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
 
       - name: PowerShell environment
@@ -70,9 +86,9 @@ jobs:
           Get-Module -ListAvailable -Name InvokeBuild, Pester, PSScriptAnalyzer |
               Select-Object Name, Version | Format-Table
 
-      - name: Run ci task
+      - name: Run CI tests
         shell: pwsh
-        run: ./build.ps1 ci
+        run: ./build.ps1 ci-tests
 
       - name: Upload test results
         # Upload the NUnit result XML even when the ci task fails, so the results

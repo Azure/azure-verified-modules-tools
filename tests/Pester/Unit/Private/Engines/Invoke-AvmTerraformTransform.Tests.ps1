@@ -51,7 +51,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTransform -Context $C
         }
@@ -95,7 +95,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name"
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
 
             Invoke-AvmTerraformTransform -Context $C | Out-Null
@@ -127,7 +127,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     Source = 'cache'; Path = "/fake/$Name"
                 }
             }
-            Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
             Mock Get-AvmTerraformTransformTarget {
                 @(
                     [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
@@ -164,7 +164,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                         Source = 'cache'; Path = "/fake/$Name"
                     }
                 }
-                Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
@@ -430,7 +430,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                         Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name"
                     }
                 }
-                Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
                 Mock Invoke-AvmProcess {
                     if ($ArgumentList[0] -eq 'transform' -and $WorkingDirectory -eq $Example) {
                         Set-Content -LiteralPath (Join-Path $Example 'variables.tf') `
@@ -612,7 +612,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
-                Mock Resolve-AvmMapotfConfigDir { "/fake/$Profile" }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
@@ -808,7 +808,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; Profile = $Profile } {
             param($R, $Profile)
-            Resolve-AvmMapotfConfigDir -Root $R -Profile $Profile
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName $Profile
         }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $override).ProviderPath)
     }
@@ -825,7 +825,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; Profile = $Profile } {
             param($R, $Profile)
-            Resolve-AvmMapotfConfigDir -Root $R -Profile $Profile
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName $Profile
         }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
     }
@@ -844,7 +844,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; Profile = $Profile } {
             param($R, $Profile)
-            Resolve-AvmMapotfConfigDir -Root $R -Profile $Profile
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName $Profile
         }
         $resolved | Should -Be ((Resolve-Path -LiteralPath $consumer).ProviderPath)
     }
@@ -856,7 +856,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
             param($R)
-            Resolve-AvmMapotfConfigDir -Root $R -Profile common
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName common
         }
         $resolved | Should -Not -BeNullOrEmpty
         (Split-Path -Leaf $resolved) | Should -Be 'common'
@@ -871,7 +871,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
 
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
             param($R)
-            Resolve-AvmMapotfConfigDir -Root $R -Profile example
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName example
         }
         $resolved | Should -Not -BeNullOrEmpty
         $resolved | Should -BeExactly (Join-Path $script:moduleRoot 'Resources' 'mapotf' 'example')
@@ -886,7 +886,7 @@ Describe 'Resolve-AvmMapotfConfigDir' {
         $resolved = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
             param($R)
             Mock Test-Path { $false }
-            Resolve-AvmMapotfConfigDir -Root $R -Profile example -Optional
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName example -Optional
         }
         $resolved | Should -BeNullOrEmpty
     }

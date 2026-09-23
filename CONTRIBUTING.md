@@ -143,8 +143,9 @@ If either throws a casing error, the on-disk folder, file, or manifest casing ha
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
-./build.ps1 pre-commit        # layout + lint + unit tests — the local gate
-./build.ps1 ci                # layout + lint + coverage + component (what CI runs)
+./build.ps1 pre-commit        # layout + lint + unit + component tests — the local gate
+./build.ps1 ci                # full local CI gate: layout + lint + coverage + component
+./build.ps1 ci-tests          # CI matrix: layout + coverage + component (lint runs once on Ubuntu)
 
 # Individual tasks
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)

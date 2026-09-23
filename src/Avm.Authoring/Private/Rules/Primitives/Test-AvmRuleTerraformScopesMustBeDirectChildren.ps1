@@ -27,6 +27,7 @@ function Test-AvmRuleTerraformScopesMustBeDirectChildren {
     .OUTPUTS
         [pscustomobject] with Status, Issues, FilesChanged.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function name matches the registered convention rule identifier.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
