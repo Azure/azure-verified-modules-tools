@@ -176,21 +176,73 @@ function Resolve-AvmIssueOwnerRouting {
     $assigneesToRemove = @($existingAssignees | Where-Object {
             $moduleExists -and $manuallyAssignedByHuman -notcontains $_ -and ($isOrphaned -or $ownerLogins -notcontains $_)
         })
+    $manuallyUnassignedOwners = @($ownerLogins | Where-Object { $existingAssignees -notcontains $_ -and $manuallyUnassigned -contains $_ })
 
     return @{
-        Skip              = $false
-        ModuleName        = $reference.ModuleName
-        ModuleExists      = $moduleExists
-        IsOrphaned        = $isOrphaned
-        NewLabels         = $newLabels
-        NewComment        = $newComment
-        AssigneesToAdd    = $assigneesToAdd
-        AssigneesToRemove = $assigneesToRemove
+        Skip                     = $false
+        ModuleName               = $reference.ModuleName
+        ModuleExists             = $moduleExists
+        IsOrphaned               = $isOrphaned
+        Owners                   = $ownerMentions
+        NewLabels                = $newLabels
+        NewComment               = $newComment
+        AssigneesToAdd           = $assigneesToAdd
+        AssigneesToRemove        = $assigneesToRemove
+        ManuallyUnassignedOwners = $manuallyUnassignedOwners
+    }
+}
+
+function Write-AvmIssueOwnerRoutingPlan {
+    <#
+    .SYNOPSIS
+    Logs the module an issue is about, its owners, and the assignee, label
+    and comment changes about to be made.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object] $Issue,
+        [Parameter(Mandatory)] [hashtable] $Routing
+    )
+
+    $ownership = if (-not $Routing.ModuleExists) {
+        'which does not exist yet'
+    }
+    elseif ($Routing.IsOrphaned) {
+        'which declares no owners (orphaned)'
+    }
+    else {
+        "owned by $(Format-AvmRunSummaryList -Values $Routing.Owners)"
+    }
+    Write-Host "Issue [$($Issue.url)] is about module [$($Routing.ModuleName)], $ownership."
+    if ($Routing.AssigneesToAdd.Count -gt 0) {
+        Write-Host "Assigning: $($Routing.AssigneesToAdd -join ', ')"
+    }
+    if ($Routing.ManuallyUnassignedOwners.Count -gt 0) {
+        Write-Host "Not assigning, because they were removed from this issue earlier: $($Routing.ManuallyUnassignedOwners -join ', ')"
+    }
+    if ($Routing.AssigneesToRemove.Count -gt 0) {
+        Write-Host "Unassigning, because they are not module owners: $($Routing.AssigneesToRemove -join ', ')"
+    }
+    if ($Routing.NewLabels.Count -gt 0) {
+        Write-Host "Adding labels: $($Routing.NewLabels -join ', ')"
+    }
+    if ($Routing.NewComment) {
+        Write-Host 'Posting the owner notification comment.'
     }
 }
 
 function Set-AvmIssueOwnerRoutingForIssue {
+    <#
+    .SYNOPSIS
+    Routes one module issue and returns its outcome for the run summary.
+
+    .OUTPUTS
+    An ordered dictionary with Url, Number, Status (Skipped, AlreadyRouted,
+    Updated or WouldUpdate), ModuleName, AssigneesAdded, AssigneesRemoved,
+    LabelsAdded and Commented.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)] [object] $Issue,
         [Parameter(Mandatory)] [string] $Repository,
@@ -198,41 +250,130 @@ function Set-AvmIssueOwnerRoutingForIssue {
         [Parameter(Mandatory)] [string] $DefaultRef
     )
 
+    $outcome = [ordered]@{
+        Url              = [string]$Issue.url
+        Number           = $Issue.number
+        Status           = $null
+        ModuleName       = $null
+        AssigneesAdded   = @()
+        AssigneesRemoved = @()
+        LabelsAdded      = @()
+        Commented        = $false
+    }
+
     $timelineEvents = @(Get-AvmIssueOwnerRoutingTimeline -Repository $Repository -Number $Issue.number)
     $routing = Resolve-AvmIssueOwnerRouting -Issue $Issue -Repository $Repository -CatalogIndex $CatalogIndex `
         -DefaultRef $DefaultRef -TimelineEvents $timelineEvents
 
     if ($routing.Skip) {
-        Write-Verbose "Skipping issue [$($Issue.url)]: not a module issue with a recognized module reference."
-        return
+        Write-Host "Issue [$($Issue.url)] is not a module issue with a recognized module reference. Skipping."
+        $outcome.Status = 'Skipped'
+        return $outcome
     }
+    $outcome.ModuleName = $routing.ModuleName
 
     # As with PR routing, only write when something actually changes so a reprocessed issue
     # is not touched again and does not keep re-entering the scheduled lookback window.
     if ($routing.NewLabels.Count -eq 0 -and $null -eq $routing.NewComment -and
         $routing.AssigneesToAdd.Count -eq 0 -and $routing.AssigneesToRemove.Count -eq 0) {
-        Write-Verbose "Issue [$($Issue.url)] is already routed. Skipping."
-        return
+        Write-Host "Issue [$($Issue.url)] is already routed. Nothing to change."
+        $outcome.Status = 'AlreadyRouted'
+        return $outcome
     }
+
+    Write-AvmIssueOwnerRoutingPlan -Issue $Issue -Routing $routing
+    $applied = $false
 
     if ($routing.NewLabels.Count -gt 0 -and $PSCmdlet.ShouldProcess("Labels [$($routing.NewLabels -join ', ')] on issue [$($Issue.url)]", 'Add')) {
         $editArguments = @('issue', 'edit', $Issue.url, '--repo', $Repository)
         foreach ($label in $routing.NewLabels) { $editArguments += @('--add-label', $label) }
         $null = Invoke-RepositoryGitHub -Arguments $editArguments
+        $applied = $true
     }
     if ($routing.NewComment -and $PSCmdlet.ShouldProcess("Comment on issue [$($Issue.url)]", 'Add')) {
         $null = Invoke-RepositoryGitHub -Arguments @('issue', 'comment', $Issue.url, '--repo', $Repository, '--body', $routing.NewComment)
+        $applied = $true
     }
     foreach ($assignee in $routing.AssigneesToAdd) {
         if ($PSCmdlet.ShouldProcess("Module owner [$assignee] to issue [$($Issue.url)]", 'Assign')) {
             $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $Issue.url, '--repo', $Repository, '--add-assignee', $assignee)
+            $applied = $true
         }
     }
     foreach ($assignee in $routing.AssigneesToRemove) {
         if ($PSCmdlet.ShouldProcess("Excess assignee [$assignee] from issue [$($Issue.url)]", 'Remove')) {
             $null = Invoke-RepositoryGitHub -Arguments @('issue', 'edit', $Issue.url, '--repo', $Repository, '--remove-assignee', $assignee)
+            $applied = $true
         }
     }
+
+    $outcome.Status = if ($applied) { 'Updated' } else { 'WouldUpdate' }
+    $outcome.AssigneesAdded = $routing.AssigneesToAdd
+    $outcome.AssigneesRemoved = $routing.AssigneesToRemove
+    $outcome.LabelsAdded = $routing.NewLabels
+    $outcome.Commented = [bool]$routing.NewComment
+    return $outcome
+}
+
+function Write-AvmIssueOwnerRoutingSummary {
+    <#
+    .SYNOPSIS
+    Summarizes an issue routing sweep: totals, and the owners assigned to
+    each updated issue.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Outcomes,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Failures,
+        [switch] $DryRun
+    )
+
+    $changed = @($Outcomes | Where-Object { $_.Status -in @('Updated', 'WouldUpdate') })
+    $changedLabel = if ($DryRun) { 'would be updated' } else { 'updated' }
+    $overview = "$($Outcomes.Count + $Failures.Count) module issue(s) checked in [$Repository]: " +
+        "$($changed.Count) $changedLabel, " +
+        "$(@($Outcomes | Where-Object { $_.Status -ceq 'AlreadyRouted' }).Count) already routed, " +
+        "$(@($Outcomes | Where-Object { $_.Status -ceq 'Skipped' }).Count) without a module reference, " +
+        "$($Failures.Count) failed."
+
+    $logLines = [System.Collections.Generic.List[string]]::new()
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $verb = if ($DryRun) {
+        @{ Assign = 'would assign'; Unassign = 'would unassign'; Label = 'would add labels'; Comment = 'would post the owner notification comment' }
+    }
+    else {
+        @{ Assign = 'assigned'; Unassign = 'unassigned'; Label = 'added labels'; Comment = 'posted the owner notification comment' }
+    }
+    foreach ($outcome in $changed) {
+        $changes = [System.Collections.Generic.List[string]]::new()
+        $markdownChanges = [System.Collections.Generic.List[string]]::new()
+        if ($outcome.AssigneesAdded.Count -gt 0) {
+            $changes.Add("$($verb.Assign) $(Format-AvmRunSummaryList -Values $outcome.AssigneesAdded)")
+            $markdownChanges.Add("$($verb.Assign) $(Format-AvmRunSummaryList -Values $outcome.AssigneesAdded -AsCode)")
+        }
+        if ($outcome.AssigneesRemoved.Count -gt 0) {
+            $changes.Add("$($verb.Unassign) $(Format-AvmRunSummaryList -Values $outcome.AssigneesRemoved)")
+            $markdownChanges.Add("$($verb.Unassign) $(Format-AvmRunSummaryList -Values $outcome.AssigneesRemoved -AsCode)")
+        }
+        if ($outcome.LabelsAdded.Count -gt 0) {
+            $changes.Add("$($verb.Label) $(Format-AvmRunSummaryList -Values $outcome.LabelsAdded)")
+            $markdownChanges.Add("$($verb.Label) $(Format-AvmRunSummaryList -Values $outcome.LabelsAdded -AsCode)")
+        }
+        if ($outcome.Commented) {
+            $changes.Add($verb.Comment)
+            $markdownChanges.Add($verb.Comment)
+        }
+        $logLines.Add("$($outcome.Url) ($($outcome.ModuleName)): $($changes -join '; ')")
+        $rows.Add([string[]]@(
+                "[#$($outcome.Number)]($($outcome.Url))",
+                (Format-AvmRunSummaryList -Values @($outcome.ModuleName) -AsCode),
+                ($markdownChanges -join '<br>')
+            ))
+    }
+
+    Write-AvmRunSummary -Title 'Issue owner routing' -Overview $overview -LogLines $logLines `
+        -TableHeaders @('Issue', 'Module', 'Changes') -TableRows $rows.ToArray() -Failures $Failures -DryRun:$DryRun
 }
 
 function Invoke-AvmIssueOwnerRouting {
@@ -259,6 +400,7 @@ function Invoke-AvmIssueOwnerRouting {
         throw
     }
 
+    $outcomes = [System.Collections.Generic.List[object]]::new()
     $failures = [System.Collections.Generic.List[string]]::new()
     $total = $issues.Count
     $index = 0
@@ -269,7 +411,8 @@ function Invoke-AvmIssueOwnerRouting {
         # item in the log, independent of gh's own argument echo.
         Write-Verbose "[$index/$total] Routing issue [$($issue.url)]." -Verbose
         try {
-            Set-AvmIssueOwnerRoutingForIssue -Issue $issue -Repository $Repository -CatalogIndex $catalogIndex -DefaultRef $DefaultRef -WhatIf:$WhatIfPreference
+            $outcome = Set-AvmIssueOwnerRoutingForIssue -Issue $issue -Repository $Repository -CatalogIndex $catalogIndex -DefaultRef $DefaultRef -WhatIf:$WhatIfPreference
+            $outcomes.Add($outcome)
         }
         catch {
             # A single unroutable issue must not stop the remaining ones on a scheduled run.
@@ -277,6 +420,8 @@ function Invoke-AvmIssueOwnerRouting {
             Write-Warning "Failed to route issue [$($issue.url)]. $($_.Exception.Message)"
         }
     }
+
+    Write-AvmIssueOwnerRoutingSummary -Repository $Repository -Outcomes $outcomes.ToArray() -Failures $failures.ToArray() -DryRun:$WhatIfPreference
 
     if ($failures.Count -gt 0) {
         throw [System.AggregateException]::new(($failures -join [System.Environment]::NewLine))

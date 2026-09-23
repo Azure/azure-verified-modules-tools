@@ -21,6 +21,7 @@ $sharedLibDir = Join-Path $repositoryRoot 'repository-management' 'repository-sy
 $reviewerRoutingLibDir = Join-Path $repositoryRoot 'repository-management' 'reviewer-routing' 'scripts' 'lib'
 . (Join-Path $reviewerRoutingLibDir 'RepositoryFileAccess.ps1')
 . (Join-Path $reviewerRoutingLibDir 'ModuleOwners.ps1')
+. (Join-Path $reviewerRoutingLibDir 'RunSummary.ps1')
 
 $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'WorkflowFailureIssues.ps1')
