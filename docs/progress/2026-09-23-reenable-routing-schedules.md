@@ -34,6 +34,31 @@ evaluates to an empty string, and each work step already computes
 `$whatIf = $env:WHAT_IF -eq 'true'`, which is `false` for an empty string, so
 scheduled runs take the live path (not a no-op) without any further change.
 
+### Lookback-window bug found and fixed before activation
+
+The pr-reviewer-routing and issue-owner-routing workflows also read a
+`updated_within_minutes` lookback from `inputs.updated_within_minutes`. On a
+`schedule` trigger there are no `inputs`, so that env var is an empty string;
+`[int]''` casts to `0`, and the candidate-fetch functions only apply the
+lookback filter when `-gt 0`. Left as-is, every 15-minute cadence run would
+silently become a full open-PR/open-issue sweep instead of only the intended
+daily backstop cron. Fixed by passing `github.event_name` and
+`github.event.schedule` into the run step via `env:` (not interpolated into
+the `run:` body) and mapping explicitly:
+
+| Workflow | Cadence cron -> lookback | Backstop cron -> lookback |
+| --- | --- | --- |
+| `repository-management-pr-reviewer-routing.yml` | `7,22,37,52 * * * *` -> 60 min | `13 3 * * *` -> 0 (full sweep) |
+| `repository-management-issue-owner-routing.yml` | `9,24,39,54 * * * *` -> 60 min | `17 3 * * *` -> 0 (full sweep) |
+
+`workflow_dispatch` still uses `inputs.updated_within_minutes` unchanged
+(default `'60'`, `0` for an explicit full sweep). An unrecognized event or
+schedule value throws explicitly rather than silently defaulting to a full
+sweep. The 60-minute cadence lookback matches the original 4x-cadence design
+decision for a 15-minute cron. `workflow-failure-issues` and
+`module-list-sync` have no `updated_within_minutes` input, so they were not
+affected by this bug.
+
 ## Checklist
 
 - [x] Confirm no existing open PR/branch in `Azure/azure-verified-modules-tools`
@@ -47,6 +72,9 @@ scheduled runs take the live path (not a no-op) without any further change.
 - [x] Update the four `*.Tests.ps1` "workflow safety" contexts to assert
       `schedule` + `workflow_dispatch` (not `workflow_dispatch`-only) and to
       match the crons as `- cron: '...'` list entries.
+- [x] Fix the schedule-vs-dispatch lookback-window bug in
+      pr-reviewer-routing and issue-owner-routing (found on review) and add
+      a regression test pinning the cron-to-lookback mapping for each.
 - [x] Leave Terraform repository sync and every other workflow untouched.
 - [x] Run targeted Pester for the four affected test files.
 - [x] Run `./build.ps1 pre-commit`.
@@ -54,8 +82,8 @@ scheduled runs take the live path (not a no-op) without any further change.
 ## Validation
 
 - Targeted Pester (`ReviewerRouting.Tests.ps1`, `IssueOwnerRouting.Tests.ps1`,
-  `WorkflowFailureIssues.Tests.ps1`, `ModuleListSync.Tests.ps1`): 119 passed,
-  0 failed.
+  `WorkflowFailureIssues.Tests.ps1`, `ModuleListSync.Tests.ps1`): 121 passed,
+  0 failed (after the lookback-window fix and its regression tests).
 - `./build.ps1 pre-commit`: see commit for full counts.
 
 ## Notes for the reviewer

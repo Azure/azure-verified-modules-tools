@@ -84,6 +84,8 @@ jobs:
       - name: '[AVM] Route pull request reviewers and labels'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
           PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
           UPDATED_WITHIN_MINUTES: ${{ inputs.updated_within_minutes }}
           WHAT_IF: ${{ inputs.what_if }}
@@ -91,7 +93,24 @@ jobs:
           Import-Module Avm.Authoring -Force -ErrorAction Stop
 
           $whatIf = $env:WHAT_IF -eq 'true'
-          $updatedWithinMinutes = [int]$env:UPDATED_WITHIN_MINUTES
+
+          # workflow_dispatch has no `github.event.schedule`, so the lookback
+          # comes from the dispatch input there. A `schedule` trigger has no
+          # inputs (an empty UPDATED_WITHIN_MINUTES would otherwise cast to
+          # 0, turning every cadence run into a full sweep) so the lookback
+          # is mapped explicitly from the cron that fired, failing fast on
+          # an unrecognized cron rather than silently defaulting.
+          $updatedWithinMinutes = switch ($env:EVENT_NAME) {
+            'workflow_dispatch' { [int]$env:UPDATED_WITHIN_MINUTES }
+            'schedule' {
+              switch ($env:EVENT_SCHEDULE) {
+                '7,22,37,52 * * * *' { 60 }
+                '13 3 * * *' { 0 }
+                default { throw "Unexpected schedule '$($env:EVENT_SCHEDULE)' for the PR reviewer routing workflow." }
+              }
+            }
+            default { throw "Unexpected event '$($env:EVENT_NAME)' triggered the PR reviewer routing workflow." }
+          }
 
           Write-Output "Pull request URL override: $($env:PULL_REQUEST_URL)"
           Write-Output "Updated within minutes: $updatedWithinMinutes"

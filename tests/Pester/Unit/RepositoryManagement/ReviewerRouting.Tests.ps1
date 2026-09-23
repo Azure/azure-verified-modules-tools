@@ -348,10 +348,11 @@ Describe 'Reviewer routing workflow safety' {
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
     }
 
-    It 'runs the offset crons without schedule-dependent expressions' {
+    It 'runs the offset crons and passes the triggering event to the run step via env, not the run body' {
         $script:workflowText | Should -Match "- cron:\s*'7,22,37,52 \* \* \* \*'"
         $script:workflowText | Should -Match "- cron:\s*'13 3 \* \* \*'"
-        $script:workflowText | Should -Not -Match 'github\.event\.schedule'
+        $script:workflowText | Should -Match '(?m)^\s{10}EVENT_NAME:\s*\$\{\{\s*github\.event_name\s*\}\}\s*$'
+        $script:workflowText | Should -Match '(?m)^\s{10}EVENT_SCHEDULE:\s*\$\{\{\s*github\.event\.schedule\s*\}\}\s*$'
     }
 
     It 'maps dispatch inputs directly and preserves full-sweep values' {
@@ -360,6 +361,23 @@ Describe 'Reviewer routing workflow safety' {
         $script:workflowText | Should -Match '(?m)^\s{10}WHAT_IF:\s*\$\{\{\s*inputs\.what_if\s*\}\}\s*$'
         $script:workflowText | Should -Match "\`$whatIf\s*=\s*\`$env:WHAT_IF\s*-eq\s*'true'"
         ([int]'') | Should -Be 0
+    }
+
+    It 'maps each scheduled cron to an explicit non-empty lookback, using the dispatch input only for workflow_dispatch' {
+        # Regression: on a schedule trigger, inputs.updated_within_minutes is an empty
+        # string and [int]'' casts to 0, which the candidate filter treats as "sweep
+        # everything". Without an explicit per-cron mapping, every 15-minute cadence
+        # run would silently become a full sweep instead of only the daily backstop.
+        $workRunBlocks = @($script:runBlocks | Where-Object {
+                $_.Groups['body'].Value -match '(?m)^\s*\./repository-management/.+\.ps1\b'
+            })
+        $workRunBlocks.Count | Should -Be 1
+        $runBody = $workRunBlocks[0].Groups['body'].Value
+        $runBody | Should -Match "'workflow_dispatch'\s*\{\s*\[int\]\`$env:UPDATED_WITHIN_MINUTES\s*\}"
+        $runBody | Should -Match "'7,22,37,52 \* \* \* \*'\s*\{\s*60\s*\}"
+        $runBody | Should -Match "'13 3 \* \* \*'\s*\{\s*0\s*\}"
+        $runBody | Should -Match '(?s)default\s*\{\s*throw.*?Unexpected schedule'
+        $runBody | Should -Match '(?s)default\s*\{\s*throw.*?Unexpected event'
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {
