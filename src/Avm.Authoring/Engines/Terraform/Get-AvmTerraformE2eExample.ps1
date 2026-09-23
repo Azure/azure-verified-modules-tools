@@ -28,22 +28,20 @@ function Get-AvmTerraformE2eExample {
 
     $examplesRoot = Join-Path $Root 'examples'
     if (-not (Test-Path -LiteralPath $examplesRoot)) {
-        return @()
+        return
     }
 
     $dirs = @(Get-ChildItem -LiteralPath $examplesRoot -Directory -ErrorAction SilentlyContinue | Sort-Object -Property Name)
 
-    return @(
-        foreach ($dir in $dirs) {
-            $hasTf = @(Get-ChildItem -LiteralPath $dir.FullName -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count -gt 0
-            if (-not $hasTf) { continue }
-            [pscustomobject][ordered]@{
-                Name    = $dir.Name
-                Path    = $dir.FullName
-                Ignored = [bool](Test-Path -LiteralPath (Join-Path $dir.FullName '.e2eignore'))
-            }
+    foreach ($dir in $dirs) {
+        $hasTf = @(Get-ChildItem -LiteralPath $dir.FullName -File -Filter '*.tf' -ErrorAction SilentlyContinue).Count -gt 0
+        if (-not $hasTf) { continue }
+        [pscustomobject][ordered]@{
+            Name    = $dir.Name
+            Path    = $dir.FullName
+            Ignored = [bool](Test-Path -LiteralPath (Join-Path $dir.FullName '.e2eignore'))
         }
-    )
+    }
 }
 
 function Select-AvmTerraformE2eExample {
@@ -88,7 +86,10 @@ function Select-AvmTerraformE2eExample {
     $requested = @($Selector | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
     if ($requested.Count -eq 0) {
-        return $runnable
+        foreach ($item in $runnable) {
+            $item
+        }
+        return
     }
 
     $valid = ($runnable | ForEach-Object { $_.Name }) -join ', '

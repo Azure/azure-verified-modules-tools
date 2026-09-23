@@ -878,7 +878,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 
 > See also: [`quality-standards.md`](quality-standards.md) § 5 for the `AvmAvoidStringThrow` custom rule, the transient `NullReferenceException` mitigation and retry wrapper, the cross-platform `@(...)` consumer wrap, and the known PSSA rule conflicts.
 
-- PSScriptAnalyzer settings live in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. A dedicated Ubuntu CI job runs lint once; warnings, errors, and parse errors fail the gate. Informational findings remain advisory.
+- PSScriptAnalyzer settings live in `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. A dedicated Ubuntu CI job runs lint once; informational findings, warnings, errors, and parse errors fail the gate.
 - A `pre-commit` Pester suite runs:
   - Manifest layout (`Test-AvmModuleLayout`).
   - Encoding check (no BOM, LF line endings).

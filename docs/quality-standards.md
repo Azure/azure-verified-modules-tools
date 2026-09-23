@@ -127,7 +127,7 @@ Drop `SupportsShouldProcess` on read-only cmdlets. Keep `Set-StrictMode -Version
 
 ## 5. PSScriptAnalyzer
 
-**Settings.** `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. The `lint` Invoke-Build task runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path> -CustomRulePath <path>`. Warnings, errors, and parse errors fail lint; informational findings do not. GitHub Actions runs this job once on Ubuntu, while the full local `ci` and `pre-commit` tasks retain lint.
+**Settings.** `src/Avm.Authoring/Resources/PSScriptAnalyzerSettings.psd1`. The `lint` Invoke-Build task runs `Invoke-ScriptAnalyzer -Path src/ -Settings <path> -CustomRulePath <path>`. Informational findings, warnings, errors, and parse errors all fail lint. GitHub Actions runs this job once on Ubuntu, while the full local `ci` and `pre-commit` tasks retain lint.
 
 **Custom rule: `AvmAvoidStringThrow`.** Lives at `src/Avm.Authoring/Resources/CustomRules/AvmAvoidStringThrow.psm1`. Flags `throw 'literal'` and `throw "expandable $var"` at `Warning` severity. Allows the canonical `throw [Type]::new(...)`, bare `throw` re-throws, and variable throws (`throw $_`, `throw $exception`).
 

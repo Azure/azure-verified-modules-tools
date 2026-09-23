@@ -299,12 +299,16 @@ task lint {
 
     $errors   = @($results | Where-Object { $_.Severity -in @('Error', 'ParseError') })
     $warnings = @($results | Where-Object { $_.Severity -eq 'Warning' })
+    $information = @($results | Where-Object { $_.Severity -eq 'Information' })
 
     if ($errors.Count -gt 0) {
         throw "PSScriptAnalyzer reported $($errors.Count) error(s)."
     }
     if ($warnings.Count -gt 0) {
         throw "PSScriptAnalyzer reported $($warnings.Count) warning(s)."
+    }
+    if ($information.Count -gt 0) {
+        throw "PSScriptAnalyzer reported $($information.Count) informational finding(s)."
     }
 }
 
