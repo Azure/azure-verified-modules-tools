@@ -77,6 +77,8 @@ jobs:
       - name: '[AVM] Sync module dropdown list'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
+          AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           WHAT_IF: ${{ inputs.what_if }}
         run: |
           Import-Module Avm.Authoring -Force -ErrorAction Stop

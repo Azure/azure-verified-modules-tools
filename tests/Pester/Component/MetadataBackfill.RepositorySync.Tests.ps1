@@ -4,6 +4,8 @@
 BeforeAll {
     $script:repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))
     $script:originalModulePath = $env:PSModulePath
+    $script:originalBotLogin = $env:AVM_APP_BOT_LOGIN
+    $script:originalBotUserId = $env:AVM_APP_BOT_USER_ID
     $env:PSModulePath = @((Join-Path $script:repoRoot 'src'), (Join-Path $PSHOME 'Modules')) -join [System.IO.Path]::PathSeparator
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     $script:shared = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
@@ -14,7 +16,11 @@ BeforeAll {
             ConvertFrom-Json).'$id'
 }
 
-AfterAll { $env:PSModulePath = $script:originalModulePath }
+AfterAll {
+    $env:PSModulePath = $script:originalModulePath
+    $env:AVM_APP_BOT_LOGIN = $script:originalBotLogin
+    $env:AVM_APP_BOT_USER_ID = $script:originalBotUserId
+}
 
 Describe 'Component: Terraform metadata workflow scope' -Tag Component {
     It 'keeps one default-off manual input without a separate setup or publication lane' {
@@ -72,6 +78,8 @@ Describe 'Component: metadata preparation through normal repository sync' -Tag C
     BeforeEach {
         $script:originalEvent = $env:GITHUB_EVENT_NAME
         $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:AVM_APP_BOT_LOGIN = 'azure-verified-modules[bot]'
+        $env:AVM_APP_BOT_USER_ID = '187664033'
         $script:state = @{
             Events = [System.Collections.Generic.List[string]]::new()
             GitCalls = [System.Collections.Generic.List[object]]::new()

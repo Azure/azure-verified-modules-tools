@@ -183,6 +183,14 @@ engineering-only. Initial backfill uses only the existing AVM App's authorized
 pull-request bypass. Neither the template nor its generation grants or broadens
 that bypass; authorized operators must verify these prerequisites before rollout.
 
+Repository groups may set `pullRequestBypassTeams` to a list of configured team
+slugs. Terraform resolves their team IDs and grants a pull-request-only bypass
+of the main branch ruleset alongside the existing AVM App. Only
+`canary-ring-0` sets this list, to
+`azure-verified-modules-engineering-owners`, so only
+`avm-ptn-example-repo` gets the team bypass. It covers all pull-request rules,
+not just approvals; it does not allow direct pushes or bypass tag rulesets.
+
 The generated file replaces stale content or creates a missing file after
 `avm pre-commit` succeeds, in the same temporary checkout and publication flow.
 Plan-only runs show local drift without publishing. Edit the configuration or

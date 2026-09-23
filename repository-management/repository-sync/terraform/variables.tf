@@ -128,6 +128,12 @@ Map of GitHub teams to be created or managed.
 DESCRIPTION
 }
 
+variable "pull_request_bypass_teams" {
+  type        = list(string)
+  description = "GitHub team slugs allowed to bypass the main ruleset on pull requests."
+  default     = []
+}
+
 variable "location" {
   type        = string
   description = "Location of the resources."
