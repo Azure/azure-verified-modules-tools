@@ -225,6 +225,7 @@ $terraformVariables = @{
     identity_resource_group_name = $identityResourceGroupName
     is_protected_repo = $true
     github_teams = $githubTeams
+    pull_request_bypass_teams = $settings.PullRequestBypassTeams
     topics = $settings.Topics
 }
 

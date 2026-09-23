@@ -31,6 +31,7 @@ module "github" {
   is_protected_repo                                   = var.is_protected_repo
   bypass_ruleset_for_approval_enabled                 = true
   github_teams                                        = var.github_teams
+  pull_request_bypass_teams                           = var.pull_request_bypass_teams
   github_avm_app_id                                   = var.github_avm_app_id
   labels                                              = local.labels
   arm_client_id                                       = local.test_settings.client_id

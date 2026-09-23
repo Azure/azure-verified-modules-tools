@@ -51,6 +51,9 @@
       "name": "canary-ring-0",
       "order": 20,
       "testTenant": "bami",
+      "pullRequestBypassTeams": [
+        "azure-verified-modules-engineering-owners"
+      ],
       "managedFiles": [
         "canary-ring-0"
       ],
