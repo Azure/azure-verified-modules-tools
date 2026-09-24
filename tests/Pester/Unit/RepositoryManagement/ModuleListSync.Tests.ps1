@@ -25,7 +25,6 @@ body:
         - ""
         - "avm/ptn/foo/bar"
         - "avm/ptn/foo/baz"
-        # - "avm/ptn/hidden/one"
         - "avm/res/aaa/bbb"
         - "avm/res/ccc/ddd"
         - "avm/utl/types/avm-common-types"
@@ -101,9 +100,29 @@ Describe 'Resolve-AvmModuleDropdownSync' {
         $result.Removed | Should -HaveCount 0
     }
 
-    It 'preserves commented-out lines untouched' {
-        $result = Resolve-AvmModuleDropdownSync -Content $script:content -DesiredModulePaths $script:desired
-        $result.Content | Should -Match '# - "avm/ptn/hidden/one"'
+    It 'removes commented module options, preserves other YAML, and is idempotent' {
+        $obsolete = @(
+            '        # - "avm/ptn/avd-lza/legacy-one"'
+            '        # - "avm/ptn/avd-lza/legacy-two"'
+            '        # - "avm/ptn/avd-lza/legacy-three"'
+            '        # - "avm/ptn/avd-lza/legacy-four"'
+        ) -join "`n"
+        $expected = $script:content.Replace('body:', "# Keep this form note.`nbody:").
+            Replace('    validations:', "    # Keep this dropdown note.`n    validations:")
+        $withComments = $expected.Replace(
+            '        - "avm/res/aaa/bbb"',
+            "$obsolete`n        - `"avm/res/aaa/bbb`"")
+        $withComments | Should -Not -BeExactly $expected
+
+        $result = Resolve-AvmModuleDropdownSync -Content $withComments -DesiredModulePaths $script:desired
+        $result.Changed | Should -BeTrue
+        $result.Added | Should -HaveCount 0
+        $result.Removed | Should -HaveCount 0
+        $result.Content | Should -BeExactly $expected
+
+        $again = Resolve-AvmModuleDropdownSync -Content $result.Content -DesiredModulePaths $script:desired
+        $again.Changed | Should -BeFalse
+        $again.Content | Should -BeExactly $result.Content
     }
 
     It 'detects a module missing from the dropdown' {
@@ -171,6 +190,21 @@ Describe 'Invoke-AvmModuleListSync' {
         $result = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules'
         $result.HasChanges | Should -BeFalse
         Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
+    It 'synchronizes when only obsolete commented module options differ' {
+        Mock Get-AvmRepositoryFileAtRef {
+            $content = (New-ModuleDropdownFixtureContent).Replace(
+                '        - "avm/res/aaa/bbb"',
+                "        # - `"avm/ptn/avd-lza/legacy`"`n        - `"avm/res/aaa/bbb`"")
+            [pscustomobject]@{ Content = $content; Sha = 'deadbeef' }
+        }
+        $result = Invoke-AvmModuleListSync -Repository 'Azure/bicep-registry-modules'
+        $result.HasChanges | Should -BeTrue
+        Should -Invoke Invoke-RepositoryFileSync -Times 1 -ParameterFilter {
+            $PlanHasChanges -and
+            $GeneratedFiles['.github/ISSUE_TEMPLATE/avm_module_issue.yml'] -ceq (New-ModuleDropdownFixtureContent)
+        }
     }
 
     It 'opens and auto-merges a pull request through the shared sync engine when drift is found' {
