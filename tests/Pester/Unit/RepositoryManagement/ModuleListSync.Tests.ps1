@@ -326,15 +326,17 @@ Describe 'Module dropdown sync workflow safety' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by schedule and workflow_dispatch, never pull_request(_target), issues, or workflow_run' {
+    It 'is triggered only by its four-daily schedule, manual dispatch and guarded reusable call' {
         $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
                 $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
             ForEach-Object { $_.Groups[1].Value })
-        $triggerNames.Count | Should -Be 2
+        $triggerNames.Count | Should -Be 3
         $triggerNames | Should -Contain 'workflow_dispatch'
         $triggerNames | Should -Contain 'schedule'
+        $triggerNames | Should -Contain 'workflow_call'
         $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_dispatch:'
         $script:triggerBlock | Should -Match '(?m)^\s{2}schedule:'
+        $script:triggerBlock | Should -Match '(?m)^\s{2}workflow_call:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}issues:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
@@ -342,14 +344,33 @@ Describe 'Module dropdown sync workflow safety' {
     }
 
     It 'runs the offset cron without schedule-dependent expressions' {
-        $script:workflowText | Should -Match "- cron:\s*'13 6 \* \* \*'"
+        $crons = @([regex]::Matches($script:triggerBlock, "(?m)^    - cron: '([^']+)'$") |
+            ForEach-Object { $_.Groups[1].Value })
+        $crons | Should -HaveCount 1
+        $crons[0] | Should -BeExactly '13 */6 * * *'
         $script:workflowText | Should -Not -Match 'github\.event\.schedule'
     }
 
     It 'maps the what-if input directly' {
-        $script:triggerBlock | Should -Match '(?ms)^      what_if:\r?\n.*?^        default:\s*true\s*$'
+        [regex]::Matches($script:triggerBlock, '(?ms)^      what_if:\r?\n.*?^        default:\s*true\s*$').Count |
+            Should -Be 2
         $script:workflowText | Should -Match '(?m)^\s{10}WHAT_IF:\s*\$\{\{\s*inputs\.what_if\s*\}\}\s*$'
         $script:workflowText | Should -Match "\`$whatIf\s*=\s*\`$env:WHAT_IF\s*-eq\s*'true'"
+    }
+
+    It 'runs only from trusted main-branch workflows with the existing BRM-scoped token' {
+        $guard = [regex]::Match($script:workflowText,
+            '(?ms)^  sync:\r?\n    name: [^\r\n]+\r?\n    if: >-\r?\n(?<body>.*?)(?=^    runs-on:)')
+        $guard.Success | Should -BeTrue
+        ($guard.Groups['body'].Value.Trim() -replace '\s+', ' ') | Should -BeExactly (
+            "github.repository == 'Azure/azure-verified-modules-tools' && " +
+            "github.ref == 'refs/heads/main' && " +
+            "(github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-module-list-sync.yml@refs/heads/main' || " +
+            "github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/module-metadata-sync.yml@refs/heads/main')")
+        $script:workflowText | Should -Match '(?m)^permissions:\r?\n  contents: read$'
+        $script:workflowText | Should -Match '(?m)^    environment: avm$'
+        $script:workflowText | Should -Match '(?ms)repositories: bicep-registry-modules\s+permission-contents: write\s+permission-pull-requests: write'
+        $script:workflowText | Should -Not -Match 'secrets: inherit'
     }
 
     It 'never interpolates ${{ }} expressions directly into a run: body' {
