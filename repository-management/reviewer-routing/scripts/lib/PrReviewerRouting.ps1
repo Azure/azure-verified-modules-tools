@@ -55,6 +55,7 @@ function Get-AvmPrReviewerRoutingCandidates {
         'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
         '--json', "$($script:AvmPrReviewerRoutingFields),updatedAt"
     ))
+    $pullRequests = @($pullRequests | Where-Object { -not $_.isDraft })
     if ($UpdatedWithinMinutes -gt 0) {
         $cutoff = (Get-Date).ToUniversalTime().AddMinutes(-$UpdatedWithinMinutes)
         $pullRequests = @($pullRequests | Where-Object { $_.updatedAt -and ([datetime]$_.updatedAt).ToUniversalTime() -ge $cutoff })
