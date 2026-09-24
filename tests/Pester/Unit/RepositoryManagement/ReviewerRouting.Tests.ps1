@@ -107,6 +107,49 @@ Describe 'Get-AvmModuleOwners' {
     }
 }
 
+Describe 'Get-AvmPrReviewerRoutingCandidates' {
+    BeforeEach {
+        $script:ready = [pscustomobject]@{
+            number = 1
+            isDraft = $false
+            updatedAt = [datetime]::UtcNow.AddMinutes(-5).ToString('o')
+        }
+        $script:draft = [pscustomobject]@{
+            number = 2
+            isDraft = $true
+            updatedAt = [datetime]::UtcNow.AddMinutes(-5).ToString('o')
+        }
+        $script:olderReady = [pscustomobject]@{
+            number = 3
+            isDraft = $false
+            updatedAt = [datetime]::UtcNow.AddMinutes(-120).ToString('o')
+        }
+        Mock Invoke-RepositoryGitHub { @($script:ready, $script:draft, $script:olderReady) }
+    }
+
+    It 'excludes drafts and older ready pull requests from the scheduled lookback' {
+        $candidates = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 60)
+        $candidates.Count | Should -Be 1
+        $candidates[0].number | Should -Be 1
+    }
+
+    It 'includes a draft once it becomes ready and its updated timestamp is recent' {
+        $before = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 60)
+        $before.number | Should -Not -Contain 2
+
+        $script:draft.isDraft = $false
+        $script:draft.updatedAt = [datetime]::UtcNow.ToString('o')
+
+        $after = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 60)
+        $after.number | Should -Contain 2
+    }
+
+    It 'excludes drafts even in the daily full sweep' {
+        $candidates = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules')
+        $candidates.number | Should -Be @(1, 3)
+    }
+}
+
 Describe 'Resolve-AvmPrReviewerRouting' {
     BeforeEach {
         $script:catalogIndex = @{
