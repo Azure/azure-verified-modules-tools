@@ -4,6 +4,7 @@ module "test" {
   location                 = "westus3"
   create_example_resources = false
   enable_telemetry         = var.enable_telemetry
+  telemetry_location       = var.telemetry_location
 }
 
 output "resource_ids" {

@@ -209,6 +209,51 @@ module "example" {
         Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
     }
 
+    It 'forwards an overridable telemetry location when <Name>' -TestCases @(
+        @{ Name = 'the example has a location'; Location = $true; Expected = 'var\.telemetry_location != null \? var\.telemetry_location : var\.location'; Default = 'null' }
+        @{ Name = 'the example has no location'; Location = $false; Expected = 'var\.telemetry_location'; Default = '"westus2"' }
+    ) {
+        param($Name, $Location, $Expected, $Default)
+
+        Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "telemetry_location" {
+  type    = string
+  default = null
+}
+'@
+        $locationDeclaration = if ($Location) {
+            @'
+variable "location" {
+  type    = string
+  default = "eastus"
+}
+'@
+        }
+        else {
+            ''
+        }
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
+$locationDeclaration
+module "example" {
+  source = "../../modules/support"
+
+  enable_telemetry   = true
+  telemetry_location = "old" # keep this comment
+}
+"@
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match ('(?m)^\s*telemetry_location\s*=\s*' + $Expected + ' # keep this comment')
+        $declaration = Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw
+        $declaration | Should -Match ('(?s)variable "telemetry_location" \{\s*type\s*=\s*string\s*default\s*=\s*' + $Default)
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+        Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw | Should -BeExactly $declaration
+    }
+
     It 'leaves an already-correct reference and true-default declaration byte-identical' {
         Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -NoNewline -Value @'
 module "example" {
@@ -663,7 +708,33 @@ module "dependency" {
   enable_telemetry = true
 }
 '@
+        Set-Content -LiteralPath (Join-Path $script:root 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Telemetry parent",
+  "moduleDescription": "Fixture for example ordering.",
+  "canonicalType": "Microsoft.Resources/resourceGroups",
+  "telemetryIdPrefix": "46d3xtrf.res.example-test",
+  "owners": []
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:source 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Support helper",
+  "moduleDescription": "Helper without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Set-Content -LiteralPath (Join-Path $wrapper 'terraform.tf') -Encoding utf8NoBOM -Value 'terraform {}'
+        Set-Content -LiteralPath (Join-Path $wrapper 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Wrapper helper",
+  "moduleDescription": "Helper without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
 module "dependency" {
   source           = "../support"

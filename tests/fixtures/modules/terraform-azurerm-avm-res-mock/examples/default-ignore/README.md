@@ -10,8 +10,9 @@ provider "azurerm" {
 module "test" {
   source = "../../"
 
-  location         = "westus3"
-  enable_telemetry = var.enable_telemetry
+  location           = "westus3"
+  enable_telemetry   = var.enable_telemetry
+  telemetry_location = var.telemetry_location
 }
 ```
 
@@ -46,6 +47,14 @@ If it is set to false, then no telemetry will be collected.
 Type: `bool`
 
 Default: `true`
+
+### <a name="input_telemetry_location"></a> [telemetry\_location](#input\_telemetry\_location)
+
+Description: Optional. Location for subscription-scoped AVM telemetry. Defaults to westus2; override it for another region or cloud.
+
+Type: `string`
+
+Default: `"westus2"`
 
 ## Outputs
 

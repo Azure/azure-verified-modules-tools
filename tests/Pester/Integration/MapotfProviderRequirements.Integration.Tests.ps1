@@ -165,6 +165,16 @@ locals {
     BeforeEach {
         $script:target = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:target
+        Set-Content -LiteralPath (Join-Path $script:target 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Provider requirements fixture",
+  "moduleDescription": "Fixture for provider requirement transforms.",
+  "canonicalType": "Microsoft.Resources/resourceGroups",
+  "telemetryIdPrefix": "46d3xtrf.res.provider-test",
+  "owners": []
+}
+'@
         Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Encoding utf8NoBOM -Value @'
 terraform {
   required_version = "~> 1.9"
@@ -440,6 +450,14 @@ terraform {
     It 'keeps provider-free local helpers lint-clean and drift-free with the full profile chain' {
         $helper = Join-Path $script:target 'modules' 'site_config_helpers'
         $null = New-Item -ItemType Directory -Path $helper -Force
+        Set-Content -LiteralPath (Join-Path $helper 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Provider-free helper",
+  "moduleDescription": "Helper fixture without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Copy-Item -LiteralPath (Join-Path $script:target 'terraform.tf') -Destination $helper
         Set-Content -LiteralPath (Join-Path $helper 'main.tf') -Encoding utf8NoBOM -Value @'
 variable "name" {

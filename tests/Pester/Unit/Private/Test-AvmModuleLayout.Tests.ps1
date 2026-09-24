@@ -181,11 +181,18 @@ Describe 'Module Resources packaging' {
                 'sort_outputs.mptf.hcl'
                 'sort_variables.mptf.hcl'
             )
+            'module-call' = @(
+                'propagate_telemetry.mptf.hcl'
+            )
             root = @(
                 'main_telemetry_tf.mptf.hcl'
             )
             example = @(
                 'disable_telemetry.mptf.hcl'
+                'telemetry_location.mptf.hcl'
+            )
+            test = @(
+                'remove_modtm_provider.mptf.hcl'
             )
         }
 

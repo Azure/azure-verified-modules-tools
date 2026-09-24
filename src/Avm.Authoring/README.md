@@ -141,7 +141,10 @@ CSV indexes or infers missing values from source.
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
 telemetry prefix; a helper without a prefix leaves source unchanged.
 Terraform rejects `-UpdateSource` before writes and never
-generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
+generates `main.metadata.tf`; MaPoTF generates the empty AzAPI deployment
+telemetry from the module's metadata for prefixed roots and children. Its
+optional `telemetry_location` defaults to `null` with `var.location`, otherwise
+to `westus2`; `enable_telemetry = false` still opts out.
 Existing authored source files are preserved. Metadata-only initialization
 does not rewrite source. Pre-commit and PR checks require valid metadata on
 every module root and child. Required tools resolve first; metadata validation
