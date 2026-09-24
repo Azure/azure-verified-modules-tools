@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string] $BundlePath,
     [switch] $Publish,
     [switch] $Force,
-    [string] $DiagnosticsPath
+    [string] $DiagnosticsPath,
+    [string] $GitHubOutputPath
 )
 
 Set-StrictMode -Version 3.0
@@ -18,6 +19,7 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.Publication.ps1')
 
 $configuration = Read-AvmCatalogConfiguration
+$docsJsonPath = 'docs/static/module-indexes/v1/modules.json'
 Write-AvmCatalogProgress 'Validating the catalog publication bundle.'
 $plan = Test-AvmCatalogPublicationBundle -Path $BundlePath -Configuration $configuration -Force:$Force -DiagnosticsPath $DiagnosticsPath
 if (-not $Publish) {
@@ -62,6 +64,7 @@ $processEnvironment = @{
     GIT_CONFIG_KEY_6 = 'core.autocrlf'; GIT_CONFIG_VALUE_6 = 'false'
 }
 $prepared = [System.Collections.Generic.List[object]]::new()
+$docsJsonPublished = $false
 $heldBackSourceFiles = Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $BundlePath -Configuration $configuration
 $heldBack = Get-AvmCatalogHeldBackOutput -Configuration $configuration -SourceFile $heldBackSourceFiles
 if ($heldBack.Count -gt 0) {
@@ -148,10 +151,15 @@ try {
             }
             $candidate = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('diff', '--name-only', 'origin/main', 'HEAD') `
                 -WorkingDirectory $root -EnvVars $processEnvironment
-            if (@($candidate.StdOut -split '\r?\n' | Where-Object { $_ -and $_ -cnotin $allowed }).Count -gt 0) {
+            $candidatePaths = @($candidate.StdOut -split '\r?\n' | Where-Object { $_ })
+            if (@($candidatePaths | Where-Object { $_ -cnotin $allowed }).Count -gt 0) {
                 throw [System.Security.SecurityException]::new('Catalog merge candidate contains changes outside the publication allow-list.')
             }
-            $prepared.Add([pscustomobject]@{ Repository = $repository; Root = $root; Branch = $branch; Existing = $existing; HeadSha = $headSha })
+            $prepared.Add([pscustomobject]@{
+                    Repository = $repository; Root = $root; Branch = $branch; Existing = $existing; HeadSha = $headSha
+                    DocsJsonChanged = $repository -ceq $configuration.repositories.docs -and
+                        $candidatePaths -ccontains $docsJsonPath
+                })
         }
     }
     foreach ($target in $prepared) {
@@ -189,7 +197,28 @@ try {
         if ($merged.merged -ne $true -or $merged.head.sha -cne $target.HeadSha) {
             throw [System.InvalidOperationException]::new("Catalog update was not merged at the expected head: $($pullRequest.html_url)")
         }
+        if ($target.DocsJsonChanged) {
+            $mergeSha = [string]$merged.merge_commit_sha
+            if ($mergeSha -cnotmatch '^[0-9a-f]{40}$') {
+                throw [System.IO.InvalidDataException]::new("Catalog merge has no valid merged commit: $($pullRequest.html_url)")
+            }
+            $response = Invoke-AvmCatalogProcess -FilePath $gh `
+                -ArgumentList @('api', '--method', 'GET', "repos/$($target.Repository)/commits/$mergeSha") `
+                -WorkingDirectory $target.Root -EnvVars $processEnvironment
+            $mergedCommit = ConvertFrom-Json -InputObject $response.StdOut -AsHashtable -Depth 100
+            if ($mergedCommit -isnot [System.Collections.IDictionary] -or
+                $mergedCommit['sha'] -cne $mergeSha -or $mergedCommit['files'] -isnot [array]) {
+                throw [System.IO.InvalidDataException]::new("Catalog merge has invalid commit file evidence: $($pullRequest.html_url)")
+            }
+            $docsJsonPublished = @($mergedCommit['files'] | Where-Object {
+                    $_ -is [System.Collections.IDictionary] -and $_['filename'] -ceq $docsJsonPath
+                }).Count -gt 0
+        }
         Write-AvmCatalogProgress ("Merged catalog update: {0}" -f $pullRequest.html_url)
+    }
+    if ($GitHubOutputPath) {
+        $result = $docsJsonPublished.ToString().ToLowerInvariant()
+        [System.IO.File]::AppendAllText($GitHubOutputPath, "docs_json_published=$result`n", [System.Text.UTF8Encoding]::new($false))
     }
 }
 finally {

@@ -337,6 +337,13 @@ Catalog publication opens and squash-merges updates only in the public docs
 repository through the existing AVM App and verifies the merged head. It does
 not publish tools repository settings or tier changes.
 
+Only a verified merge commit that changes
+`docs/static/module-indexes/v1/modules.json` calls the separate module dropdown
+sync; plan-only runs, held-back JSON and CSV-only merges do not. That workflow
+uses its own Bicep-repository-scoped App token, reconciles at
+`13 */6 * * *` (00:13, 06:13, 12:13 and 18:13 UTC), and defaults manual runs
+to a dry run.
+
 ## Canonical CSV cutover
 
 The manifest now uses matching `file` and `sourceFile` names for the six CSVs.

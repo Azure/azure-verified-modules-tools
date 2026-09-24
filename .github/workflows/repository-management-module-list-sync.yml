@@ -2,10 +2,9 @@
 name: 'Repos: Module List Sync'
 
 # Design invariants -- do not regress these without a very good reason:
-#  - schedule + workflow_dispatch only. This opens pull requests with a
-#    privileged cross-repo app token.
-#  - Offset cron ('13 6 * * *') rather than a round-minute mark, because
-#    schedule runs are best-effort and can be delayed or skipped.
+#  - schedule + workflow_dispatch + guarded workflow_call. This opens pull
+#    requests with a scoped cross-repo app token.
+#  - Four offset six-hour reconciliation runs ('13 */6 * * *').
 #  - The generated pull request is auto-merged (squash) through the same
 #    VerifyCandidate/ExpectedActor-gated path the terraform pre-commit flow
 #    uses, once verification of the actor/branch/tree state passes.
@@ -13,8 +12,16 @@ name: 'Repos: Module List Sync'
 #    (avm-bot/sync-module-dropdown) so repeated runs update the same PR instead of
 #    opening a new one every day the catalog stays ahead of the template.
 on:
+  workflow_call:
+    inputs:
+      what_if:
+        type: boolean
+        default: true
+    secrets:
+      AVM_APP_PRIVATE_KEY:
+        required: false
   schedule:
-    - cron: '13 6 * * *'
+    - cron: '13 */6 * * *'
   workflow_dispatch:
     inputs:
       what_if:
@@ -35,7 +42,11 @@ defaults:
 jobs:
   sync:
     name: Sync module dropdown list
-    if: github.repository == 'Azure/azure-verified-modules-tools'
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main' &&
+      (github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-module-list-sync.yml@refs/heads/main' ||
+       github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/module-metadata-sync.yml@refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: avm

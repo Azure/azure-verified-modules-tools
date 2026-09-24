@@ -135,6 +135,8 @@ jobs:
       github.repository == 'Azure/azure-verified-modules-tools' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.plan_only == false))
+    outputs:
+      docs_json_published: ${{ steps.publish.outputs.docs_json_published }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: avm
@@ -188,6 +190,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Create or update and merge catalog changes
+        id: publish
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           AVM_APP_SLUG: ${{ steps.writer.outputs.app-slug }}
@@ -195,7 +198,8 @@ jobs:
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Publish-ModuleCatalog.ps1'
           & $script -BundlePath (Join-Path $env:RUNNER_TEMP 'module-catalog') -Publish `
-            -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) -Confirm:$false
+            -Force:([bool]::Parse($env:FORCE_CSV_ROW_REMOVALS)) `
+            -GitHubOutputPath $env:GITHUB_OUTPUT -Confirm:$false
 
   report:
     name: Report held-back catalog outputs
@@ -220,3 +224,18 @@ jobs:
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE 'tools' 'repository-management' 'module-catalog' 'scripts' 'Assert-ModuleCatalogPublication.ps1'
           & $script -DiagnosticsPath (Join-Path $env:RUNNER_TEMP 'catalog-diagnostics')
+
+  sync-module-dropdown:
+    name: Sync module dropdown after catalog publication
+    needs: publish
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      needs.publish.result == 'success' &&
+      needs.publish.outputs.docs_json_published == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/repository-management-module-list-sync.yml
+    with:
+      what_if: false
+    secrets:
+      AVM_APP_PRIVATE_KEY: ${{ secrets.AVM_APP_PRIVATE_KEY }}
