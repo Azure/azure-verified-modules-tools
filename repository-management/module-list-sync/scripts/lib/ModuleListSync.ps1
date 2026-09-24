@@ -49,9 +49,8 @@ function Resolve-AvmModuleDropdownSync {
     against the desired catalog module list.
 
     .DESCRIPTION
-    Only the active (uncommented) dropdown lines are added, removed, or
-    re-sorted; commented-out lines are preserved verbatim and left in place,
-    matching the original script's behaviour of never touching them.
+    Active dropdown lines are reconciled with the catalog; obsolete
+    commented-out module options are removed. Other YAML content is preserved.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -75,15 +74,13 @@ function Resolve-AvmModuleDropdownSync {
     $indent = $Matches['indent']
     $byCategory = @{}
     foreach ($category in $script:AvmModuleListSyncCategoryOrder) {
-        $byCategory[$category] = @{ Active = [System.Collections.Generic.List[string]]::new(); Comments = [System.Collections.Generic.List[string]]::new() }
+        $byCategory[$category] = [System.Collections.Generic.List[string]]::new()
     }
     for ($i = $startIndex; $i -le $endIndex; $i++) {
         if ($lines[$i] -notmatch $script:AvmModuleListSyncLineRegex) { continue }
-        $category = ($Matches['path'] -split '/')[1]
-        if ($Matches['comment']) {
-            $byCategory[$category].Comments.Add($lines[$i])
-        } else {
-            $byCategory[$category].Active.Add($Matches['path'])
+        if (-not $Matches['comment']) {
+            $category = ($Matches['path'] -split '/')[1]
+            $byCategory[$category].Add($Matches['path'])
         }
     }
 
@@ -91,12 +88,11 @@ function Resolve-AvmModuleDropdownSync {
     $removed = [System.Collections.Generic.List[string]]::new()
     $newBlock = [System.Collections.Generic.List[string]]::new()
     foreach ($category in $script:AvmModuleListSyncCategoryOrder) {
-        $existing = @($byCategory[$category].Active)
+        $existing = @($byCategory[$category])
         $desired = @($DesiredModulePaths[$category])
         foreach ($path in $desired) { if ($existing -notcontains $path) { $added.Add($path) } }
         foreach ($path in $existing) { if ($desired -notcontains $path) { $removed.Add($path) } }
         foreach ($path in $desired) { $newBlock.Add("$indent- `"$path`"") }
-        foreach ($comment in $byCategory[$category].Comments) { $newBlock.Add($comment) }
     }
 
     $newLines = [System.Collections.Generic.List[string]]::new()
@@ -183,7 +179,7 @@ function Invoke-AvmModuleListSync {
 
     Write-Host "$Repository module dropdown is out of sync: $($plan.Added.Count) added, $($plan.Removed.Count) removed." -ForegroundColor Yellow
     if ($plan.Added.Count -eq 0 -and $plan.Removed.Count -eq 0) {
-        Write-Host '  Only the order of the entries changes.'
+        Write-Host '  Active options are unchanged; correcting ordering or removing obsolete comments.'
     }
     else {
         Write-Host "  Added: $(Format-AvmRunSummaryList -Values $plan.Added)"
