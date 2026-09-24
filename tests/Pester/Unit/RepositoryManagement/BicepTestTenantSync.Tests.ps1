@@ -101,6 +101,9 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $script:onRead = $null
         $script:beforeWrite = $null
         $script:afterWrite = $null
+        $script:waits = [System.Collections.Generic.List[int]]::new()
+        Mock Start-Sleep { param($Seconds) $script:waits.Add($Seconds) }
+        Mock Write-Information {}
         Mock ConvertTo-AvmBicepModulePaths { $script:desiredSelector }
         Mock Get-AvmBicepTestTenantSnapshot {
             $script:reads++
@@ -244,6 +247,146 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $first.Status | Should -BeExactly 'Published'
         $second.Status | Should -BeExactly 'NoChange'
         $script:attempts | Should -HaveCount 6
+    }
+
+    Context 'Acknowledged write readback visibility' {
+        BeforeEach {
+            Initialize-BicepSyncTestCandidate -Selector $script:legacySelector
+            $script:visibilityName = 'TEST_BAMI_SUBSCRIPTION_IDS'
+            $script:consumer[$script:visibilityName] = $null
+            $script:visibilityBefore = $null
+            $script:visibilityReads = 0
+            $script:staleReads = 1
+            $script:beforeWrite = {
+                param($Name)
+                if ($Name -ceq $script:visibilityName) {
+                    $script:visibilityBefore = Copy-BicepSyncTestSnapshot -Snapshot $script:consumer
+                }
+            }
+            Mock Get-AvmBicepTestTenantSnapshot {
+                $script:reads++
+                $script:events.Add("read:$script:reads")
+                if ($script:onRead) { & $script:onRead $script:reads }
+                if ($null -ne $script:visibilityBefore -and $script:attempts[-1].Name -ceq $script:visibilityName) {
+                    $script:visibilityReads++
+                    if ($script:visibilityReads -le $script:staleReads) {
+                        return Copy-BicepSyncTestSnapshot -Snapshot $script:visibilityBefore
+                    }
+                }
+                Copy-BicepSyncTestSnapshot -Snapshot $script:consumer
+            }
+        }
+
+        It 'waits only for GET visibility after <Method>, settling after <StaleReads> stale reads' -ForEach @(
+            @{ Method = 'POST'; StaleReads = 1 }
+            @{ Method = 'POST'; StaleReads = 3 }
+            @{ Method = 'PATCH'; StaleReads = 1 }
+            @{ Method = 'PATCH'; StaleReads = 3 }
+        ) {
+            if ($Method -ceq 'PATCH') {
+                Set-BicepSyncTestValue -Name $script:visibilityName -Value 'old-pool'
+            }
+            $script:staleReads = $StaleReads
+            $expected = Copy-BicepSyncTestSnapshot -Snapshot $script:consumer
+            $result = Set-AvmBicepTestTenantVariable -Expected $expected -Name $script:visibilityName `
+                -Value $script:projection[$script:visibilityName]
+            $result[$script:visibilityName].Value | Should -BeExactly $script:projection[$script:visibilityName]
+            $result[$script:selectorName].Value | Should -BeExactly $script:legacySelector
+            $script:attempts | Should -HaveCount 1
+            $script:attempts[0].Method | Should -BeExactly $Method
+            $script:waits | Should -Be @(1..$StaleReads | ForEach-Object { 5 * $_ })
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly ($StaleReads + 2)
+            Should -Invoke Write-Information -Exactly $StaleReads -ParameterFilter {
+                $MessageData -clike '*readback visibility of TEST_BAMI_SUBSCRIPTION_IDS; retrying only the GET, not the acknowledged write.'
+            }
+        }
+
+        It 'stops after four stale readbacks and 30 seconds of waits without publishing the selector or rolling back' {
+            $script:staleReads = 4
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
+                Should -Throw '*Readback mismatch after writing TEST_BAMI_SUBSCRIPTION_IDS*after 4 readback attempt*'
+            $script:waits | Should -Be @(5, 10, 15)
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 6
+            @($script:attempts.Name) | Should -Be @($script:visibilityName)
+            $script:consumer[$script:visibilityName].Value | Should -BeExactly $script:projection[$script:visibilityName]
+            $script:consumer[$script:selectorName].Value | Should -BeExactly $script:legacySelector
+        }
+
+        It 'stops on a changed <Name> during a later readback without waiting again' -ForEach @(
+            @{ Name = 'TEST_BAMI_TENANT_ID' }
+            @{ Name = 'TEST_BAMI_MODULE_PATHS' }
+            @{ Name = 'TEST_BAMI_SUBSCRIPTION_IDS' }
+        ) {
+            $script:driftName = $Name
+            $script:onRead = {
+                param($Read)
+                if ($Read -eq 4) {
+                    Set-BicepSyncTestValue -Name $script:driftName -Value 'outside-value' -Revision 'outside'
+                }
+            }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
+                Should -Throw "*Readback mismatch after writing*${Name}*"
+            $script:waits | Should -Be @(5)
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 4
+            @($script:attempts.Name) | Should -Be @($script:visibilityName)
+            $script:consumer[$Name].Value | Should -BeExactly 'outside-value'
+        }
+
+        It 'does not treat the old written value with changed <Field> as stale visibility' -ForEach @(
+            @{ Field = 'CreatedAt' }
+            @{ Field = 'UpdatedAt' }
+        ) {
+            Set-BicepSyncTestValue -Name $script:visibilityName -Value 'old-pool'
+            $script:changedField = $Field
+            $script:afterWrite = {
+                $script:visibilityBefore[$script:visibilityName].($script:changedField) = 'outside'
+            }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
+                Should -Throw '*Readback mismatch after writing*'
+            Should -Invoke Start-Sleep -Exactly 0
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 3
+            $script:attempts | Should -HaveCount 1
+        }
+
+        It 'fails immediately if a later visibility GET fails' {
+            $script:onRead = {
+                param($Read)
+                if ($Read -eq 4) { throw [System.IO.IOException]::new('Readback unavailable.') }
+            }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
+                Should -Throw '*was acknowledged, and consumer readback failed*outcome is unverified*'
+            $script:waits | Should -Be @(5)
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 4
+            $script:attempts | Should -HaveCount 1
+            $script:consumer[$script:selectorName].Value | Should -BeExactly $script:legacySelector
+        }
+
+        It 'never waits or retries an unacknowledged write with <StaleReads> stale reads' -ForEach @(
+            @{ StaleReads = 0 }
+            @{ StaleReads = 1 }
+        ) {
+            $script:staleReads = $StaleReads
+            $script:afterWrite = { throw [System.TimeoutException]::new('Response lost.') }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply } |
+                Should -Throw '*was not acknowledged*No write retry or rollback was attempted*'
+            Should -Invoke Start-Sleep -Exactly 0
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 3
+            $script:attempts | Should -HaveCount 1
+            $script:consumer[$script:selectorName].Value | Should -BeExactly $script:legacySelector
+        }
+
+        It 'verifies the complete bundle after an acknowledged selector becomes visible' {
+            Initialize-BicepSyncTestCandidate -Selector $script:legacySelector
+            $script:visibilityName = $script:selectorName
+            $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Configuration $script:configuration -Apply
+            $result.Status | Should -BeExactly 'Published'
+            $script:waits | Should -Be @(5)
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 6
+            @($script:attempts.Name) | Should -Be @($script:selectorName)
+            foreach ($name in $script:projection.Keys) {
+                $script:consumer[$name].Value | Should -BeExactly $script:projection[$name]
+            }
+        }
     }
 
     It 'refuses each changed active execution value until a separate deactivation: <Name>' -ForEach @(
@@ -509,6 +652,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $script:attempts | Should -HaveCount 1
         $script:consumer.TEST_BAMI_TENANT_ID.CreatedAt | Should -BeExactly 'outside-recreation'
         $script:consumer[$script:selectorName].Value | Should -BeExactly $script:legacySelector
+        Should -Invoke Start-Sleep -Exactly 0
     }
 
     It 'does not clobber an outside selector edit after its own selector write' {
@@ -734,26 +878,32 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:entry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1') -Raw
     }
 
-    It 'no longer schedules or manages Bicep CODEOWNERS from this workflow' {
-        $script:workflow | Should -Not -Match '(?m)^  sync:$'
-        $script:workflow | Should -Not -Match '(?m)^\s+schedule:$'
+    It 'runs only the variable job and never restores Bicep CODEOWNERS publication' {
+        $jobs = @([regex]::Matches($script:workflow, '(?m)^  ([a-z][a-z-]+):\n    name:') |
+            ForEach-Object { $_.Groups[1].Value })
+        $jobs | Should -Be @('sync-test-tenant-variables')
         $script:workflow | Should -Not -Match 'BicepCodeownersSync|bicep-codeowners-sync|Generate and synchronize CODEOWNERS'
         Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'bicep-codeowners-sync') | Should -BeFalse
     }
 
-    It 'keeps manual operation and plan defaults without a global activation gate' {
-        $script:workflow | Should -Match '(?s)enable_test_tenant_sync:\n\s+description:.*?\n\s+default: false\n\s+type: boolean'
-        $script:workflow | Should -Match '(?s)plan_only:\n\s+description:.*?\n\s+default: true\n\s+type: boolean'
+    It 'restores the previous schedule and input-free dispatch without activation or preview flags' {
+        $triggers = [regex]::Match($script:workflow, '(?ms)^on:\n(.*?)(?=^\S)').Groups[1].Value.TrimEnd()
+        $triggers | Should -BeExactly (@(
+            '  schedule:'
+            "    - cron: '33 2-23/4 * * *'"
+            '  workflow_dispatch:'
+        ) -join "`n")
+        $script:workflow | Should -Not -Match 'inputs[.:]|enable_test_tenant_sync|plan_only|PlanOnly|WhatIf|AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
+    }
+
+    It 'requires trusted Tools main for every job, excluding forks, other repositories and non-main refs' {
         $script:variablesJob | Should -Not -BeNullOrEmpty
         $condition = [regex]::Match($script:variablesJob, '(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
         [regex]::Replace($condition, '\s+', ' ').Trim() | Should -BeExactly (@(
             "github.repository == 'Azure/azure-verified-modules-tools'",
-            "github.ref == 'refs/heads/main'",
-            "github.event_name == 'workflow_dispatch'",
-            'inputs.enable_test_tenant_sync == true'
+            "github.ref == 'refs/heads/main'"
         ) -join ' && ')
-        $script:workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
-        $script:variablesJob | Should -Not -Match "github\.event_name == 'schedule'|\|\|"
+        @([regex]::Matches($script:workflow, '(?m)^\s+if:')) | Should -HaveCount 1
     }
 
     It 'uses a separate target-only Variables token in avm without broadening default permissions' {
@@ -802,14 +952,11 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:entry | Should -Not -Match 'Get-ChildItem\s+Env:|GetEnvironmentVariables|Get-Content\s+Env:'
     }
 
-    It 'passes dispatch inputs only through env and selects the explicit apply switch only for plan false' {
-        $script:variablesJob | Should -Match 'PLAN_ONLY: \$\{\{ inputs\.plan_only \}\}'
+    It 'calls Apply directly without dispatch input interpolation and retains standalone previews' {
         $run = [regex]::Match($script:variablesJob, '(?s)        run: \|\n(.*)$').Groups[1].Value
         $run | Should -Not -BeNullOrEmpty
         $run | Should -Not -Match '\$\{\{'
-        $run | Should -Match '\$env:PLAN_ONLY -cnotin @\(''true'', ''false''\)'
-        $run | Should -Match '\$env:PLAN_ONLY -ceq ''false''.*Apply = \$true.*PlanOnly = \$true'
-        $run | Should -Match "'Invoke-BicepTestTenantSync.ps1'\) @options"
+        $run | Should -Match "'Invoke-BicepTestTenantSync.ps1'\) -Apply\s*$"
         $script:entry | Should -Match '\[switch\] \$PlanOnly = \$true'
         $script:entry | Should -Match "Parameter\(Mandatory, ParameterSetName = 'Apply'\)"
     }

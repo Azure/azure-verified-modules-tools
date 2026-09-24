@@ -110,12 +110,10 @@ authentication prerequisite.
 ### Bicep variable publication
 
 The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
-Tools `main` and manual dispatch with `enable_test_tenant_sync=true` (default
-false). That input selects the publication operation, not which modules use
-BAMI; only the central module groups select those paths. There is no global
-activation variable. These execution controls also apply to planning.
-`plan_only=true` is the default and never
-writes variables; publication additionally requires `plan_only=false`.
+Tools `main`. Scheduled runs use `33 2-23/4 * * *` (02:33, 06:33, 10:33,
+14:33, 18:33 and 22:33 UTC); manual dispatch has no inputs. Both call the
+entry point with `-Apply` and publish the centrally selected module paths.
+There is no workflow enable flag, preview flag or global activation variable.
 The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
 workflow, or pull-request write permission.
@@ -125,13 +123,9 @@ Its manifest omits this input, so an undeclared-input warning can occur; the
 runner still passes it to the action. Do not use `permission-variables` or omit
 the explicit scope.
 
-The existing CODEOWNERS job still runs on manual dispatch. Setting
-`plan_only=false` also permits that job's existing merge behavior; review both
-effects before dispatching. No workflow is enabled by changing the central
-canary configuration alone. Scheduled Bicep Sync continues to run CODEOWNERS
-only; it does not publish test-tenant variables. In contrast, selected Terraform
-canaries attempt BAMI preparation during their normal sync, including scheduled
-applies, subject to the candidate validation prerequisites.
+The retired Bicep CODEOWNERS job and its merge behavior are not part of this
+workflow. Selected Terraform canaries also attempt BAMI preparation during
+normal sync, including scheduled applies, subject to their existing prerequisites.
 
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
 defaults to a read-only plan. Standalone publication requires an explicit,
@@ -155,6 +149,12 @@ Failures never trigger write retries or rollback. Even a matching readback
 after a lost response is reported as an error, so a failed run may already have
 published the selector. Inspect the consumer before retrying. `Published`
 means verified variable contents, not working Azure authentication.
+
+After an acknowledged write, an unchanged pre-write snapshot permits at most
+three additional GETs after 5, 10 and 15 seconds. Other observed changes,
+unexpected values or timestamps, failed reads and unacknowledged writes still
+stop immediately. Every read retains the same strict comparison; this bounded
+wait does not retry writes or bypass selector-last verification.
 
 ## Terraform CODEOWNERS
 
