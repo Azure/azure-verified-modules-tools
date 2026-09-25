@@ -1,6 +1,6 @@
 # Provider-free telemetry migration regression
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-25
 **Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -24,7 +24,7 @@ and enforce the tag rule on ordinary AzAPI resources.
 - [x] Suppress only the generated telemetry ignore warning; cover other
       inline ignores and ordinary resource-tag linting.
 - [x] Run focused integration and the local pre-commit gate.
-- [ ] Commit and push to the existing feature branch and verify its checks.
+- [x] Commit and push to the existing feature branch and verify its checks.
 
 ## Validation
 
@@ -46,6 +46,11 @@ and still flags ordinary AzAPI resources with nonstandard tags.
 `./build.ps1 pre-commit` passed with 1,837 unit tests, 9 platform skips,
 803 component tests, and no errors; 50 existing warning-level diagnostics
 were emitted.
+The implementation passed [Authoring: CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36150636440)
+on Windows, macOS, and Ubuntu, including all six fixture integration jobs.
+The Windows test job initially hit its 15-minute limit during the component
+tier; rerunning that failed job completed in 8 minutes 42 seconds with no
+code change. All 19 review checks are green.
 
 ## Blockers or dependencies
 
