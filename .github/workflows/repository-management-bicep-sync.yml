@@ -2,16 +2,9 @@
 name: 'Repos: Bicep Sync'
 
 on:
+  schedule:
+    - cron: '33 2-23/4 * * *'
   workflow_dispatch:
-    inputs:
-      plan_only:
-        description: 'Dry run only: inspect changes without changing test-tenant variables.'
-        default: true
-        type: boolean
-      enable_test_tenant_sync:
-        description: 'Run nonsecret BAMI variable sync for the centrally selected module paths.'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -25,9 +18,7 @@ jobs:
     name: Sync test tenant variables
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.enable_test_tenant_sync == true
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20
@@ -48,12 +39,11 @@ jobs:
           repositories: bicep-registry-modules
           permission-actions-variables: write
 
-      - name: Plan or publish nonsecret Bicep test tenant variables
+      - name: Publish nonsecret Bicep test tenant variables
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.variables-token.outputs.token }}
           AVM_APP_SLUG: ${{ steps.variables-token.outputs.app-slug }}
-          PLAN_ONLY: ${{ inputs.plan_only }}
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
@@ -66,8 +56,4 @@ jobs:
           if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
             throw 'The configured GitHub App is not azure-verified-modules.'
           }
-          if ($env:PLAN_ONLY -cnotin @('true', 'false')) {
-            throw 'PLAN_ONLY must be true or false.'
-          }
-          $options = if ($env:PLAN_ONLY -ceq 'false') { @{ Apply = $true } } else { @{ PlanOnly = $true } }
-          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') @options
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') -Apply
