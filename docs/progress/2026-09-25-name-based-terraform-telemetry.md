@@ -33,6 +33,8 @@ truncating data.
 - [x] Align tooling documentation and the existing published-spec review.
 - [x] Run focused local integration and metadata coverage.
 - [x] Run `./build.ps1 pre-commit`.
+- [x] Correct the native Terraform metadata integration fixture to use
+      seven-hex identifiers for both root and child modules.
 - [ ] Commit and push the change to the existing feature branches; verify CI.
 
 ## Validation
@@ -52,6 +54,13 @@ changed.
 803 component tests, and no errors. The first gate run exposed a catalog
 fixture that still authored descriptive Terraform prefixes; updating that
 one shared fixture made the complete component tier pass.
+The first pushed CI run exposed another descriptive Terraform prefix in
+the native metadata-reader integration fixture. All six fixture integration
+jobs failed at that same test. Updating its root and child seeds and keeping
+the unsupported source-update assertion on a valid changed prefix restored
+both native integration tests locally with
+`./build.ps1 integration -TestName 'Integration: module metadata*'`.
+The post-fix `./build.ps1 pre-commit` gate also passed with no errors.
 
 ## Blockers or dependencies
 
