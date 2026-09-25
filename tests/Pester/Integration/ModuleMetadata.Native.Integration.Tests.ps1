@@ -35,16 +35,18 @@ Describe 'Integration: module metadata native readers' -Tag Integration -Skip:($
         function New-NativeMetadataSeed {
             param([string] $Ecosystem, [switch] $ChildModule)
             $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
+            $rootId = if ($Ecosystem -eq 'bicep') { 'storage-storageaccount' } else { 'a1b2c3d' }
             $seed = [ordered]@{
                 '$schema'         = $script:schemaId
                 moduleDisplayName = 'Storage Accounts'
                 moduleDescription = 'Deploys a Storage Account.'
                 canonicalType     = 'Microsoft.Storage/storageAccounts'
-                telemetryIdPrefix = "$marker.res.storage-storageaccount"
+                telemetryIdPrefix = "$marker.res.$rootId"
             }
             if ($ChildModule) {
                 $seed.canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
-                $seed.telemetryIdPrefix = "$marker.res.storage-blobservice"
+                $childId = if ($Ecosystem -eq 'bicep') { 'storage-blobservice' } else { 'c4d5e6f' }
+                $seed.telemetryIdPrefix = "$marker.res.$childId"
             }
             else {
                 $seed.owners = @('original-owner')
@@ -185,7 +187,7 @@ output "source_value" {
 
         $seed.owners = @('new-owner', '@Azure/new-team')
         $seed.canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
-        $seed.telemetryIdPrefix += '-v2'
+        $seed.telemetryIdPrefix = '46d3xtrf.res.7654321'
         [System.IO.File]::WriteAllText((Join-Path $root 'metadata.json'), ($seed | ConvertTo-Json -Depth 20))
         { Initialize-AvmModuleMetadata -Path $root -InputObject $seed -Ecosystem terraform `
                 -ModuleType resource -UpdateSource -SkipModuleVersionCheck } | Should -Throw '*not supported*'

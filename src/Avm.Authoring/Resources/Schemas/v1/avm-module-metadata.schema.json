@@ -33,10 +33,23 @@
     },
     "telemetryIdPrefix": {
       "type": "string",
-      "description": "Stable telemetry prefix. The ecosystem and module kind must also match the containing module.",
+      "description": "Stable telemetry prefix. Terraform prefixes end in seven lowercase hexadecimal characters; the ecosystem and module kind must match the containing module.",
       "anyOf": [
-        { "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "pattern": "^46d3xbcp\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "pattern": "^46d3xtrf\\.(res|ptn|utl)\\.[0-9a-f]{7}$" },
         { "const": "46d3xbcp.resourcegraph-query", "description": "Preserve the existing published Resource Graph identifier without rewriting telemetry." }
+      ],
+      "if": { "pattern": "^46d3xbcp\\." },
+      "then": { "maxLength": 50 },
+      "else": { "maxLength": 20 }
+    },
+    "historicalTelemetryIdPrefix": {
+      "type": "string",
+      "description": "Previous telemetry identifier; Terraform alternatives may retain descriptive segments that predate the seven-hex format.",
+      "anyOf": [
+        { "pattern": "^46d3xbcp\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "pattern": "^46d3xtrf\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "const": "46d3xbcp.resourcegraph-query" }
       ],
       "if": { "pattern": "^46d3xbcp\\." },
       "then": { "maxLength": 50 },
@@ -46,7 +59,7 @@
       "type": "array",
       "description": "Previous telemetry prefixes retained when a module's current prefix changes.",
       "uniqueItems": true,
-      "items": { "$ref": "#/definitions/telemetryIdPrefix" }
+      "items": { "$ref": "#/definitions/historicalTelemetryIdPrefix" }
     },
     "owners": {
       "type": "array",

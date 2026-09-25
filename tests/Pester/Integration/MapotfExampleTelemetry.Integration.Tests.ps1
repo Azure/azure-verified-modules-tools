@@ -209,6 +209,102 @@ module "example" {
         Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
     }
 
+    It 'migrates the obsolete telemetry location when <Name>' -TestCases @(
+        @{ Name = 'the example already has a location'; Location = $true }
+        @{ Name = 'the example needs a location'; Location = $false }
+    ) {
+        param($Name, $Location)
+
+        Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type = string
+}
+'@
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        Set-Content -LiteralPath $exampleVariables -Encoding utf8NoBOM -Value @'
+variable "example_name" {
+  type    = string
+  default = "example"
+}
+
+variable "telemetry_location" {
+  type    = string
+  default = null
+}
+'@
+        $locationDeclaration = if ($Location) {
+            @'
+variable "location" {
+  type    = string
+  default = "eastus"
+}
+'@
+        }
+        else {
+            ''
+        }
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @"
+$locationDeclaration
+module "example" {
+  source = "../../modules/support"
+
+  enable_telemetry   = true
+  telemetry_location = "old" # keep this comment
+}
+"@
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        $first | Should -Not -Match 'telemetry_location'
+        $declaration = Get-Content -LiteralPath $exampleVariables -Raw
+        $declaration | Should -Not -Match 'variable "telemetry_location"'
+        if ($Location) {
+            $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*"eastus"'
+            $declaration | Should -Not -Match 'variable "location"'
+        }
+        else {
+            $declaration | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+            $locationBody = [regex]::Match($declaration, '(?s)variable "location" \{(?<body>[^}]*)\}').Groups['body'].Value
+            $locationBody | Should -Not -Match 'default\s*='
+        }
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
+    }
+
+    It 'keeps an authored per-item location in an example module call' {
+        Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type = string
+}
+'@
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+variable "hub_location" {
+  type    = string
+  default = "eastus"
+}
+
+module "example" {
+  source   = "../../modules/support"
+  location = var.hub_location
+}
+'@
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?m)^\s*location\s*=\s*var\.hub_location'
+        $first | Should -Not -Match 'variable "location"'
+        (Join-Path $script:target 'variables.tf') | Should -Exist
+        Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw |
+            Should -Not -Match 'variable "location"'
+        Assert-TelemetryExampleValid -Root $script:target
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+    }
+
     It 'leaves an already-correct reference and true-default declaration byte-identical' {
         Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -NoNewline -Value @'
 module "example" {
@@ -638,32 +734,46 @@ output "single_file_output" {
     }
 
     It 'sees newly generated root inputs, preserves module calls, and restores drift checks' {
-        $rootProfile = Join-Path $script:root 'config' 'mapotf' 'root'
         $wrapper = Join-Path $script:root 'modules' 'wrapper'
-        $null = New-Item -ItemType Directory -Path $rootProfile, $wrapper -Force
-        Set-Content -LiteralPath (Join-Path $rootProfile 'telemetry.mptf.hcl') -Encoding utf8NoBOM -Value @'
-data "variable" "telemetry" {
-  name = "enable_telemetry"
-}
-
-transform "new_block" "telemetry" {
-  for_each       = contains(keys(data.variable.telemetry.result), "enable_telemetry") ? toset([]) : toset([1])
-  new_block_type = "variable"
-  labels         = ["enable_telemetry"]
-  filename       = "variables.tf"
-  asraw {
-    type    = bool
-    default = true
-  }
-}
-'@
+        $null = New-Item -ItemType Directory -Path $wrapper -Force
         Set-Content -LiteralPath (Join-Path $script:root 'main.tf') -Encoding utf8NoBOM -Value @'
 module "dependency" {
   source           = "./modules/support"
   enable_telemetry = true
 }
 '@
+        Set-Content -LiteralPath (Join-Path $script:root 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = ">= 1.9"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:root 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Telemetry parent",
+  "moduleDescription": "Fixture for example ordering.",
+  "canonicalType": "Microsoft.Resources/resourceGroups",
+  "telemetryIdPrefix": "46d3xtrf.res.e1a2b3c",
+  "owners": []
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:source 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Support helper",
+  "moduleDescription": "Helper without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Set-Content -LiteralPath (Join-Path $wrapper 'terraform.tf') -Encoding utf8NoBOM -Value 'terraform {}'
+        Set-Content -LiteralPath (Join-Path $wrapper 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Wrapper helper",
+  "moduleDescription": "Helper without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
 module "dependency" {
   source           = "../support"
@@ -695,6 +805,7 @@ module "wrapper" {
 
         $drift = Invoke-TelemetryEngine -Root $script:root -CheckDrift
         $drift.Status | Should -Be 'fail'
+        @($drift.Issues | Where-Object { $_.File -eq 'main.telemetry.tf' -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         @($drift.Issues | Where-Object { $_.File -eq $examplePath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         @($drift.Issues | Where-Object { $_.File -eq $exampleVariablesPath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         $restored = @(Get-ChildItem -LiteralPath $script:root -Recurse -Filter '*.tf' -File)
@@ -703,6 +814,7 @@ module "wrapper" {
             (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $before[$file.FullName]
         }
         (Join-Path $script:root 'variables.tf') | Should -Not -Exist
+        (Join-Path $script:root 'main.telemetry.tf') | Should -Not -Exist
         (Join-Path $script:root $exampleVariablesPath) | Should -Not -Exist
 
         $result = Invoke-TelemetryEngine -Root $script:root
@@ -711,11 +823,17 @@ module "wrapper" {
         $result.Changed | Should -Contain $exampleVariablesPath
         $example = Get-Content -LiteralPath $script:main -Raw
         $example | Should -Match '(?ms)^module "example" \{[^}]*enable_telemetry\s*=\s*var\.enable_telemetry'
+        $example | Should -Match '(?ms)^module "example" \{[^}]*location\s*=\s*var\.location'
+        $example | Should -Not -Match 'telemetry_location'
         $example | Should -Match '(?ms)^module "wrapper" \{\s*source\s*=\s*"\.\./\.\./modules/wrapper"\s*\}'
         Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
+        Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
+            Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
         Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
+        Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
+            Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
         foreach ($module in @($script:root, $wrapper)) {
             Get-Content -LiteralPath (Join-Path $module 'main.tf') -Raw |
                 Should -Match '(?m)^\s+enable_telemetry\s*=\s*true\s*$'

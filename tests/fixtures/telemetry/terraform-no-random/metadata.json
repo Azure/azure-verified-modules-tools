@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
-  "moduleDisplayName": "Mock resource",
-  "moduleDescription": "Resource fixture for authoring checks.",
+  "moduleDisplayName": "Provider-free telemetry fixture",
+  "moduleDescription": "Exercises Terraform telemetry without a random provider.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.a1b2c3d",
+  "telemetryIdPrefix": "46d3xtrf.res.0a1b2c3",
   "owners": []
 }

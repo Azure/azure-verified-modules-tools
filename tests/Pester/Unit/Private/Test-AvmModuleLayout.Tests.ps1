@@ -134,6 +134,7 @@ Describe 'Module Resources packaging' {
             $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
         }
 
+        $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(
                 'avm_terraform_literal_heredoc_disallowed',
@@ -176,16 +177,24 @@ Describe 'Module Resources packaging' {
                 'order_variable_attrs.mptf.hcl'
             )
             module = @(
+                'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
                 'sort_outputs.mptf.hcl'
                 'sort_variables.mptf.hcl'
+            )
+            'module-call' = @(
+                'propagate_telemetry.mptf.hcl'
             )
             root = @(
                 'main_telemetry_tf.mptf.hcl'
             )
             example = @(
                 'disable_telemetry.mptf.hcl'
+                'location.mptf.hcl'
+            )
+            test = @(
+                'remove_modtm_provider.mptf.hcl'
             )
         }
 

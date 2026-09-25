@@ -186,16 +186,45 @@ creates a missing `_header.md` with a folder-derived heading, and creates
 missing `terraform.tf` or an `examples/` folder without an example subdirectory,
 remain strict `avm check convention` / `avm pr-check` failures.
 
-The transform sets `enable_telemetry = var.enable_telemetry` on example module
-calls only when the called module declares that input. It adds missing arguments
-and replaces other values while preserving comments and correct references.
-Existing example variables stay in their original file with their metadata, but
-their default is set to `true` (added for required inputs). If the variable is
-absent, a bool input with a true default is appended to `variables.tf`, creating
-that file if needed. Unsupported modules and examples without relevant calls
-are unchanged. Root/submodule call sites and source-module defaults are unchanged.
-Other example files retain their layout; drift checking reports and restores
-changes, including newly created `variables.tf` files.
+The transform instruments a root or child that has `telemetryIdPrefix` in
+`metadata.json` with an empty, subscription-scoped AzAPI ARM deployment. It
+removes generated `modtm` resources and provider requirements, preserving
+legacy state through `removed` blocks with `destroy = false`. Existing state
+requires a one-time Terraform initialization with the old `modtm` and random
+providers still available; after the removal is applied, new plans do not
+need `modtm` or a telemetry-only random provider. Modules using other
+`random_*` resources or data sources retain their random provider. Standard
+empty `modtm` test mocks, test-module provider requirements, and references to
+the retired resource are migrated. Custom
+non-empty mocks and other author-owned `modtm` blocks fail with a
+file-specific error for manual review.
+
+All Terraform roots except utilities without Azure resources now expose
+`var.location`. Local submodules that deploy Azure resources expose it too,
+even when they do not have their own telemetry prefix. MaPoTF adds a required,
+non-nullable string input with no default when one is missing and removes the
+old `telemetry_location` input. Supply a region even for globally scoped
+modules, because their subscription-scoped telemetry deployment needs one;
+choose a location supported by the target cloud. Local child module calls
+receive `var.location` when no location argument exists; authored per-item
+locations for multi-region modules are retained. Instrumented children also
+receive the parent's `enable_telemetry`. Supported example calls expose and
+forward missing inputs while leaving existing declarations and per-item
+locations intact. The new deployment writes one
+empty-template output update per normal plan, leaving its reporting name
+stable. That name is
+`<46d3xtrf.kind.seven-hex-prefix>.<full-version-with-hyphens-or-0-0-0>.<t|o|g|x>.<four-hex-instance>`.
+The one-letter token identifies Terraform Registry, OpenTofu Registry, Git,
+or other distribution sources respectively; neither a raw source path nor
+resource tags are reported. The deployment requires
+`Microsoft.Resources/deployments/read`,
+`Microsoft.Resources/deployments/write`, and
+`Microsoft.Resources/deployments/delete` at the active subscription scope.
+The generated tagless deployment carries a narrowly scoped TFLint ignore
+directive; lint does not warn about that exact generated exception, while
+other inline ignores still warn and the tag rule still applies to ordinary
+AzAPI resources. See <https://aka.ms/avm/telemetry>. Drift checking reports
+and restores both Terraform source and `.tftest.hcl` changes.
 
 Run commands from the Terraform module root, or pass that root explicitly with
 `-Path`. Direct `*.tf` source is sufficient for both automatic and explicit
@@ -342,7 +371,7 @@ exactly this status today.
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): PowerShell hooks → `init -upgrade` → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. `pre.sh` and `post.sh` are rejected with PowerShell migration guidance. Requires provider credentials for planning. |
-| `avm transform`       | `mapotf`                | root: `root,module,common`; each `modules/**/terraform.tf`: `module,common`; each direct `examples/*`: `example,common`; then `clean-backup` per target |   ✅   | Repeated `--mptf-dir` values compose scoped profiles. Root/submodule transforms finish before examples inspect their inputs. Supported example calls use `var.enable_telemetry`, with a true-default example variable reused in place or added to `variables.tf`. Module file-layout rules never reach examples. Pr-check snapshots and restores source files, including new variable files, while reporting transform drift. |
+| `avm transform`       | `mapotf`                | instrumented root/children: `root,module,common`; other children: `module,common`; then `module-call,common` on all modules from deepest to root, `example,common` on direct examples, `test` on Terraform test modules, and `clean-backup` |   ✅   | Metadata-backed roots and children get AzAPI deployment telemetry and use `var.location`; Azure-resource children without telemetry get a required location input too. Local child and supported example calls forward missing location and the opt-out without overwriting authored per-item locations. Standard `modtm` test mocks and references are migrated. Pr-check snapshots and restores both `.tf` and `.tftest.hcl` files when reporting transform drift. |
 | `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
 The pinned tool versions live in

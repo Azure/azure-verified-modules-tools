@@ -10,12 +10,15 @@ function Invoke-AvmTransform {
           - terraform  -> Invoke-AvmTerraformTransform  (mapotf transform + clean-backup)
 
         The Terraform engine is wired against the pinned mapotf binary and
-        scoped config profiles under Resources/mapotf/{common,module,root,example}.
-        Examples set enable_telemetry=var.enable_telemetry only when the called
-        module declares that input. The example's input defaults to true,
-        preserving an existing declaration's location and metadata or adding
-        a missing declaration to variables.tf. Source-module defaults remain
-        unchanged.
+        scoped config profiles under Resources/mapotf/. Instrumented roots
+        and children get metadata-backed AzAPI deployment telemetry using
+        var.location. Missing required location inputs are generated for
+        roots and Azure-resource children. Local module calls forward missing
+        location inputs and the parent's telemetry opt-out; supported example
+        calls expose and forward the same controls. Test-module requirements and
+        standard empty modtm test mocks are migrated. Existing authored
+        variables keep their location and metadata when their defaults change.
+        -WhatIf previews the Terraform transformation without changing files.
         A consumer repository can override a profile under
         config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
         The Bicep engine remains intentionally stubbed in
@@ -45,7 +48,7 @@ function Invoke-AvmTransform {
         run pre-commit. Ignored by the Bicep engine.
 
     .PARAMETER ThrottleLimit
-        Maximum number of independent Terraform root, module, or example
+        Maximum number of independent Terraform root, module, example, or test
         targets to transform at once. Defaults to four. Ignored by Bicep.
 
     .OUTPUTS
@@ -58,7 +61,7 @@ function Invoke-AvmTransform {
     .EXAMPLE
         Invoke-AvmTransform -Path C:\repos\my-tf-module -Ecosystem terraform
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Position = 0)]
@@ -89,11 +92,14 @@ function Invoke-AvmTransform {
             Invoke-AvmBicepTransform -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
+            $apply = $PSCmdlet.ShouldProcess($context.Root, 'Apply Terraform mapotf transforms')
             Invoke-AvmTerraformTransform `
                 -Context $context `
                 -AllowPathFallback:$AllowPathFallback `
                 -CheckDrift:$CheckDrift `
-                -ThrottleLimit $ThrottleLimit
+                -ThrottleLimit $ThrottleLimit `
+                -WhatIf:(-not $apply) `
+                -Confirm:$false
         }
         default {
             throw [AvmContextException]::new(

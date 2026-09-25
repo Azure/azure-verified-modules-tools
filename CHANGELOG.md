@@ -73,6 +73,25 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform MaPoTF now replaces `modtm` telemetry with an empty
+  subscription-scoped AzAPI deployment for metadata-backed roots and children.
+  The separate `telemetry_location` input is removed. All roots except
+  utilities without Azure resources, and all Azure-resource children, receive
+  a required `var.location` when absent. Telemetry uses that location directly;
+  child and example calls forward it when missing without overwriting
+  authored per-item locations. The deployment name reports the seven-hex prefix,
+  full version (or `0-0-0`), one-character distribution source, and stable
+  instance suffix; no resource tags or raw source paths are sent. A changing
+  empty-template output forces a write on every normal apply. Legacy telemetry
+  state is forgotten without destroying it, though existing state needs the
+  former provider installed for one final initialization. Standard `modtm`
+  test mocks, provider requirements, and resource references in instrumented
+  modules migrate too; custom `modtm` use is reported as an error. Packaged
+  TFLint disables only its retired `modtm` requirement and exempts only the
+  generated tagless telemetry deployment from the generic customer-tags rule.
+  The unused random provider declaration is removed when telemetry was its
+  only use, and the generated TFLint ignore no longer produces an author
+  warning; other inline ignores still warn.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team

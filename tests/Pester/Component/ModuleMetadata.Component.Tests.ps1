@@ -28,7 +28,7 @@ BeforeAll {
             moduleDisplayName = 'Storage Accounts'
             moduleDescription = 'Deploys a Storage Account.'
             canonicalType     = $canonical
-            telemetryIdPrefix = "$marker.$kind.storage-storageaccount"
+            telemetryIdPrefix = if ($Ecosystem -eq 'terraform') { "$marker.$kind.a1b2c3d" } else { "$marker.$kind.storage-storageaccount" }
         }
         if (-not $ChildModule) {
             $data.owners = @('azure-owner')
@@ -102,7 +102,7 @@ Describe 'Component: child helper metadata' -Tag Component {
         $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule
         $fixture.Data.canonicalType = 'helper'
         if ($Telemetry) {
-            $limit = if ($Ecosystem -eq 'bicep') { 50 } else { 59 }
+            $limit = if ($Ecosystem -eq 'bicep') { 50 } else { 20 }
             $fixture.Data.telemetryIdPrefix = $fixture.Data.telemetryIdPrefix.PadRight($limit, '_')
         }
         else {
@@ -285,7 +285,7 @@ Describe 'Component: Oracle metadata compatibility' -Tag Component {
         @{ Case = 'nested owners'; Property = 'owners'; Value = @{ individuals = @() }; Code = 'AVM_METADATA_SCHEMA' }
         @{ Case = 'duplicate owner casing'; Property = 'owners'; Value = @('owner', 'OWNER'); Code = 'AVM_METADATA_OWNER' }
         @{ Case = 'missing telemetry'; Property = 'telemetryIdPrefix'; Remove = $true; Code = 'AVM_METADATA_SCHEMA' }
-        @{ Case = 'pattern telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.oracle'; Code = 'AVM_METADATA_TELEMETRY' }
+        @{ Case = 'pattern telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.abcdef0'; Code = 'AVM_METADATA_TELEMETRY' }
         @{ Case = 'Bicep telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.oracle'; Code = 'AVM_METADATA_TELEMETRY' }
         @{ Case = 'legacy Resource Graph telemetry'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.resourcegraph-query'; Code = 'AVM_METADATA_SCHEMA' }
         @{ Case = 'authored tier'; Property = 'tier'; Value = 'core'; Code = 'AVM_METADATA_SCHEMA' }
@@ -496,6 +496,29 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
     }
 
+    It 'accepts descriptive Terraform history without relaxing the current seven-hex prefix' {
+        $fixture = New-MetadataFixture
+        $parameters = $fixture.Parameters
+        $currentPrefix = $fixture.Data.telemetryIdPrefix
+        $fixture.Data.alternativeTelemetryIdPrefixes = @(
+            '46d3xtrf.res.previous_module-name',
+            ('46d3xtrf.res.' + ('a' * 46))
+        )
+
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+
+        $fixture.Data.telemetryIdPrefix = '46d3xtrf.res.previous_module-name'
+        $invalidCurrent = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $invalidCurrent.Status | Should -Be 'fail'
+        $invalidCurrent.Issues.Code | Should -Contain 'AVM_METADATA_SCHEMA'
+
+        $fixture.Data.telemetryIdPrefix = $currentPrefix
+        $fixture.Data.alternativeTelemetryIdPrefixes = @(('46d3xtrf.res.' + ('a' * 47)))
+        $invalidHistory = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $invalidHistory.Status | Should -Be 'fail'
+        $invalidHistory.Issues.Code | Should -Contain 'AVM_METADATA_SCHEMA'
+    }
+
     It 'rejects invalid historical telemetry values without rejecting absent or empty arrays' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         $parameters = $fixture.Parameters
@@ -551,7 +574,7 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         @{ Case = 'single non-resource canonical'; Property = 'canonicalType'; Value = 'naming' }
         @{ Case = 'invalid canonical'; Property = 'canonicalType'; Value = 'Microsoft.Storage' }
         @{ Case = 'wrong ecosystem'; Property = 'telemetryIdPrefix'; Value = '46d3xbcp.res.storage-storageaccount' }
-        @{ Case = 'wrong telemetry kind'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.storage-storageaccount' }
+        @{ Case = 'wrong telemetry kind'; Property = 'telemetryIdPrefix'; Value = '46d3xtrf.ptn.abcdef0' }
         @{ Case = 'missing telemetry'; Property = 'telemetryIdPrefix'; Remove = $true }
         @{ Case = 'missing owners'; Property = 'owners'; Remove = $true }
         @{ Case = 'legacy nested owners'; Property = 'owners'; Value = @{ individuals = @(@{ githubHandle = 'owner' }); team = '@Azure/team' } }
@@ -645,8 +668,8 @@ Describe 'Component: shared module metadata schema' -Tag Component {
     It 'enforces each transport limit at the exact boundary: <Ecosystem> length <Length>' -TestCases @(
         @{ Ecosystem = 'bicep'; Length = 50; Status = 'pass' }
         @{ Ecosystem = 'bicep'; Length = 51; Status = 'fail' }
-        @{ Ecosystem = 'terraform'; Length = 59; Status = 'pass' }
-        @{ Ecosystem = 'terraform'; Length = 60; Status = 'fail' }
+        @{ Ecosystem = 'terraform'; Length = 20; Status = 'pass' }
+        @{ Ecosystem = 'terraform'; Length = 21; Status = 'fail' }
     ) {
         param($Ecosystem, $Length, $Status)
         $fixture = New-MetadataFixture -Ecosystem $Ecosystem
@@ -654,6 +677,20 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
         (Test-AvmModuleMetadata @parameters).Status | Should -Be $Status
+    }
+
+    It 'rejects a noncanonical Terraform identity suffix: <Prefix>' -TestCases @(
+        @{ Prefix = '46d3xtrf.res.abcdeF0' }
+        @{ Prefix = '46d3xtrf.res.abcdefg' }
+        @{ Prefix = '46d3xtrf.res.abcdef' }
+        @{ Prefix = '46d3xtrf.res.abcdef00' }
+    ) {
+        param($Prefix)
+        $fixture = New-MetadataFixture -Ecosystem terraform
+        $fixture.Data.telemetryIdPrefix = $Prefix
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
     It 'requires telemetry for patterns but permits a utility without telemetry' {
