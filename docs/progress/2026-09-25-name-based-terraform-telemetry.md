@@ -1,6 +1,6 @@
 # Name-based Terraform telemetry
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-25
 **Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -35,7 +35,7 @@ truncating data.
 - [x] Run `./build.ps1 pre-commit`.
 - [x] Correct the native Terraform metadata integration fixture to use
       seven-hex identifiers for both root and child modules.
-- [ ] Commit and push the change to the existing feature branches; verify CI.
+- [x] Commit and push the change to the existing feature branches; verify CI.
 
 ## Validation
 
@@ -61,9 +61,17 @@ the unsupported source-update assertion on a valid changed prefix restored
 both native integration tests locally with
 `./build.ps1 integration -TestName 'Integration: module metadata*'`.
 The post-fix `./build.ps1 pre-commit` gate also passed with no errors.
+The corrected implementation passed
+[Authoring: CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36143764912)
+on Windows, macOS, and Ubuntu, including all six fixture integration jobs.
+[Repository configuration tests](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36143764927)
+also passed. The [published Terraform specification](https://github.com/Azure/Azure-Verified-Modules/pull/2980)
+passed its Hugo build, lint, and link checks.
 
 ## Blockers or dependencies
 
 No production or canary deployment is authorized by this slice. Grafana
 name parsing, OpenTofu compatibility, sovereign-cloud location overrides,
-and subscription-scope permissions remain release gates.
+and subscription-scope permissions remain release gates. The earlier private
+proposal still describes the superseded tag contract and needs reconciliation
+before rollout.
