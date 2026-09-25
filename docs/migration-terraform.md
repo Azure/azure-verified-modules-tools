@@ -192,8 +192,10 @@ removes generated `modtm` resources and provider requirements, preserving
 legacy state through `removed` blocks with `destroy = false`. Existing state
 requires a one-time Terraform initialization with the old `modtm` and random
 providers still available; after the removal is applied, new plans do not
-need `modtm`. Standard empty `modtm` test mocks, test-module provider
-requirements, and references to the retired resource are migrated. Custom
+need `modtm` or a telemetry-only random provider. Modules using other
+`random_*` resources or data sources retain their random provider. Standard
+empty `modtm` test mocks, test-module provider requirements, and references to
+the retired resource are migrated. Custom
 non-empty mocks and other author-owned `modtm` blocks fail with a
 file-specific error for manual review.
 
@@ -215,8 +217,11 @@ resource tags are reported. The deployment requires
 `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/write`, and
 `Microsoft.Resources/deployments/delete` at the active subscription scope.
-See <https://aka.ms/avm/telemetry>. Drift checking
-reports and restores both Terraform source and `.tftest.hcl` changes.
+The generated tagless deployment carries a narrowly scoped TFLint ignore
+directive; lint does not warn about that exact generated exception, while
+other inline ignores still warn and the tag rule still applies to ordinary
+AzAPI resources. See <https://aka.ms/avm/telemetry>. Drift checking reports
+and restores both Terraform source and `.tftest.hcl` changes.
 
 Run commands from the Terraform module root, or pass that root explicitly with
 `-Path`. Direct `*.tf` source is sufficient for both automatic and explicit

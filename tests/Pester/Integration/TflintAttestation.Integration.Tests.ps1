@@ -85,6 +85,8 @@ output "deprecated_lock" {
   value = var.lock
 }
 '@ | Add-Content -LiteralPath (Join-Path $deprecatedRoot 'variables.tf') -Encoding utf8NoBOM
+        '# tflint-ignore: terraform_unused_declarations' |
+            Set-Content -LiteralPath (Join-Path $deprecatedRoot 'manual-ignore.tf') -Encoding utf8NoBOM
 
         $run = InModuleScope 'Avm.Authoring' -Parameters @{
             BadTags    = $badTagsRoot
@@ -220,18 +222,17 @@ output "deprecated_lock" {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
             }).Count | Should -Be 1
         @($run.DeprecatedWarnings | Where-Object {
-                $_ -match 'TFLint inline ignore comment found for rule\(s\): avm_azapi_resource_tags_required\. \(main\.telemetry\.tf, line \d+\)'
+                $_ -match 'TFLint inline ignore comment found for rule\(s\): terraform_unused_declarations\. \(manual-ignore\.tf, line 1\)'
             }).Count | Should -Be 1
+        ($run.DeprecatedWarnings -join "`n") | Should -Not -Match 'main\.telemetry\.tf'
         ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|v0\.19\.0 migration window'
 
         $run.CanonicalResult.Status | Should -Be 'pass'
-        @($run.CanonicalWarnings).Count | Should -Be 2
+        @($run.CanonicalWarnings).Count | Should -Be 1
         @($run.CanonicalWarnings | Where-Object {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
             }).Count | Should -Be 1
-        @($run.CanonicalWarnings | Where-Object {
-                $_ -match 'TFLint inline ignore comment found for rule\(s\): avm_azapi_resource_tags_required\. \(main\.telemetry\.tf, line \d+\)'
-            }).Count | Should -Be 1
+        ($run.CanonicalWarnings -join "`n") | Should -Not -Match 'main\.telemetry\.tf'
         @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty
     }

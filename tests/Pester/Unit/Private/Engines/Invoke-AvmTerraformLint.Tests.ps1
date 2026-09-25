@@ -422,6 +422,119 @@ EOT
         $warnings[2].Line | Should -Be 5
         $warnings[2].Rules | Should -Be @('terraform_documented_variables')
     }
+
+    It 'omits the generated tagless telemetry directive at root and child scopes' {
+        $root = Join-Path $TestDrive 'generated-ignore-root'
+        $child = Join-Path $root 'modules' 'network'
+        New-Item -ItemType Directory -Path $child -Force | Out-Null
+        $telemetry = @'
+# tflint-ignore: avm_azapi_resource_tags_required
+resource "azapi_resource" "telemetry" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+  body = {}
+}
+# tflint-ignore: terraform_unused_declarations
+output "name" { value = "test" }
+'@
+        Set-Content -LiteralPath @(
+            (Join-Path $root 'main.telemetry.tf'),
+            (Join-Path $child 'main.telemetry.tf')
+        ) -Value $telemetry -Encoding utf8NoBOM
+
+        $warnings = @(InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+                param($R)
+                Get-AvmTflintInlineIgnoreWarning -Root $R
+            })
+
+        $warnings | Should -HaveCount 2
+        $warnings[0].File | Should -Be 'main.telemetry.tf'
+        $warnings[1].File | Should -Be 'modules/network/main.telemetry.tf'
+        foreach ($warning in $warnings) {
+            $warning.Line | Should -Be 6
+            $warning.Rules | Should -Be @('terraform_unused_declarations')
+        }
+    }
+
+    It 'still warns for <Scenario> in the telemetry ignore audit' -TestCases @(
+        @{
+            Scenario = 'the same directive in another file'
+            RelativePath = 'main.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = ''
+        }
+        @{
+            Scenario = 'the same directive in an example'
+            RelativePath = 'examples\default\main.telemetry.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = ''
+        }
+        @{
+            Scenario = 'additional ignored rules'
+            RelativePath = 'main.telemetry.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required, avm_other_rule'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = ''
+        }
+        @{
+            Scenario = 'another resource name'
+            RelativePath = 'main.telemetry.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'example'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = ''
+        }
+        @{
+            Scenario = 'a different resource type'
+            RelativePath = 'main.telemetry.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Example/widgets@2024-01-01'
+            ExtraLine = ''
+        }
+        @{
+            Scenario = 'a tagged deployment'
+            RelativePath = 'main.telemetry.tf'
+            Directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = '  tags = var.tags'
+        }
+        @{
+            Scenario = 'an alternate comment form'
+            RelativePath = 'main.telemetry.tf'
+            Directive = '// tflint-ignore: avm_azapi_resource_tags_required'
+            ResourceName = 'telemetry'
+            ResourceType = 'Microsoft.Resources/deployments@2025-04-01'
+            ExtraLine = ''
+        }
+    ) {
+        param($Scenario, $RelativePath, $Directive, $ResourceName, $ResourceType, $ExtraLine)
+
+        $root = Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))
+        $path = Join-Path $root $RelativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        @"
+$Directive
+resource "azapi_resource" "$ResourceName" {
+  type = "$ResourceType"
+$ExtraLine
+  body = {}
+}
+"@ | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+
+        $warnings = @(InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+                param($R)
+                Get-AvmTflintInlineIgnoreWarning -Root $R
+            })
+
+        $warnings | Should -HaveCount 1
+        $warnings[0].Rules | Should -Contain 'avm_azapi_resource_tags_required'
+    }
 }
 
 Describe 'Invoke-AvmTerraformLint' {

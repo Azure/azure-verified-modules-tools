@@ -652,10 +652,36 @@ run "source" {
         $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
     }
 
-    It 'forgets legacy state after one-time provider installation without destroying it' {
+    It 'migrates a module with no random provider after forgetting legacy state without destruction' {
+        $source = Join-Path $script:repoRoot 'tests' 'fixtures' 'telemetry' 'terraform-no-random'
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        New-TelemetryModule -Root $root -WithLegacy
+        Copy-Item -LiteralPath $source -Destination $root -Recurse -Force
+        $providerPath = Join-Path $root 'terraform.tf'
+        $fixtureProviders = Get-Content -LiteralPath $providerPath -Raw
+        $fixtureProviders | Should -Match '(?m)^\s*azapi\s*='
+        $fixtureProviders | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
+
+        $legacyRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $legacyRoot -WithLegacy
+        foreach ($name in @('terraform.tf', 'main.telemetry.tf', 'outputs.tf')) {
+            Copy-Item -LiteralPath (Join-Path $legacyRoot $name) -Destination (Join-Path $root $name)
+        }
+        Get-Content -LiteralPath $providerPath -Raw | Should -Match '(?m)^\s*random\s*='
+        Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw |
+            Should -Match 'resource "random_uuid" "telemetry"'
+
         Invoke-TelemetryProfiles -Root $root
+        $providers = Get-Content -LiteralPath $providerPath -Raw
+        $providers | Should -Match '(?m)^\s*azapi\s*='
+        $providers | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        $telemetry | Should -Match 'resource "terraform_data" "telemetry"'
+        $telemetry | Should -Match 'resource "azapi_resource" "telemetry"'
+        $telemetry | Should -Match '(?s)removed \{\s*from\s*=\s*random_uuid\.telemetry\s*lifecycle \{\s*destroy\s*=\s*false'
+        $telemetry | Should -Match '(?s)removed \{\s*from\s*=\s*modtm_telemetry\.telemetry\s*lifecycle \{\s*destroy\s*=\s*false'
+        $telemetry | Should -Not -Match '(?m)^\s*tags\s*='
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath $providerPath -Raw | Should -BeExactly $providers
         Assert-TelemetryTerraformValid -Root $root
         $statePath = Join-Path $root 'legacy.tfstate'
         Set-Content -LiteralPath $statePath -Encoding utf8NoBOM -Value @'
@@ -705,6 +731,7 @@ run "source" {
         $legacyInit = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('init', '-backend=false', '-input=false', '-upgrade', '-no-color') -Root $root
         $legacyInit.StdOut | Should -Match 'Azure/modtm'
+        $legacyInit.StdOut | Should -Match 'hashicorp/random'
         $plan = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', '-var=enable_telemetry=false') -Root $root
         $plan.StdOut | Should -Match 'modtm_telemetry\.telemetry\[0\] will no longer be managed'
@@ -718,6 +745,10 @@ run "source" {
         $cleanInit = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('init', '-backend=false', '-input=false', '-upgrade', '-no-color') -Root $root
         $cleanInit.StdOut | Should -Not -Match 'Finding Azure/modtm versions'
+        $cleanInit.StdOut | Should -Not -Match 'Finding hashicorp/random versions'
+        $currentProviders = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('providers', '-no-color') -Root $root
+        $currentProviders.StdOut | Should -Not -Match 'Azure/modtm|hashicorp/random'
     }
 
     It 'keeps the <Name> fixture unit suite isolated from Azure after migration' -TestCases @(

@@ -87,6 +87,9 @@ section when cutting a release.
   modules migrate too; custom `modtm` use is reported as an error. Packaged
   TFLint disables only its retired `modtm` requirement and exempts only the
   generated tagless telemetry deployment from the generic customer-tags rule.
+  The unused random provider declaration is removed when telemetry was its
+  only use, and the generated TFLint ignore no longer produces an author
+  warning; other inline ignores still warn.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team

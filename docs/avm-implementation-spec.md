@@ -512,7 +512,9 @@ The deployment identity needs `Microsoft.Resources/deployments/read`,
 The generated AzAPI resource sets `response_export_values = []`. Only this
 tagless telemetry deployment receives a scoped inline TFLint exemption
 from the generic `tags = var.tags` rule; that rule remains enabled for every
-other AzAPI resource. The packaged root TFLint profile disables the retired
+other AzAPI resource. The lint warning audit skips only that exact directive
+above a tagless generated telemetry deployment; other inline ignores still
+warn. The packaged root TFLint profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
 
 The old `modtm_telemetry.telemetry` and `random_uuid.telemetry` instances are
@@ -520,7 +522,9 @@ retired through `removed` blocks with `destroy = false`, so upgrading does
 not delete their remote objects. Terraform must still install their former
 providers once when an existing state references them; after the state
 forgets those addresses, new installations do not require `modtm`. The
-transform also removes obsolete `modtm` provider declarations in standalone
+random provider requirement is removed only if no other random resources
+or data sources remain in the module. The transform also removes obsolete
+`modtm` provider declarations in standalone
 test modules, empty `modtm` test mocks, and standard references to the old
 telemetry resource. Non-empty test mocks and remaining author-owned `modtm`
 resources or data sources fail with actionable diagnostics instead of being
