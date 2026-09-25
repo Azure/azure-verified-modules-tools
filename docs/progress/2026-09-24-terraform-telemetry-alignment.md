@@ -2,7 +2,7 @@
 
 **Status**: complete
 **Started**: 2026-09-24
-**Updated**: 2026-09-24
+**Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -45,8 +45,9 @@ without a destroy. No live Azure resources were changed.
 
 ## Blockers or dependencies
 
-The published Terraform module specification is being updated in a separate
-repository session. The customer-facing
+The published Terraform module specification has a draft update in
+[Azure/Azure-Verified-Modules#2980](https://github.com/Azure/Azure-Verified-Modules/pull/2980).
+The customer-facing
 `Azure-Verified-Modules-Docs` guidance, Grafana tag visibility/correlation,
 OpenTofu compatibility, and subscription-scope permission-failure canary are
 release gates. No production or canary deployment has run.
