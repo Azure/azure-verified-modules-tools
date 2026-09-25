@@ -1,6 +1,6 @@
 # Terraform telemetry alignment
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-24
 **Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -61,19 +61,23 @@ AzAPI resource, including the generated four-tag telemetry deployment.
 - [x] Replace an example integration test's variable-only root override with
       the packaged root profile so it exercises the generated deployment.
 - [x] Pass the gate after the test correction.
-- [ ] Commit and push the test correction; confirm CI integration across all
+- [x] Commit and push the test correction; confirm CI integration across all
       three operating systems.
 
 The repaired gate passed with 1,824 unit tests (9 platform skips) and 799
 component tests, no errors. The real pinned TFLint attestation confirmed
 that generated telemetry passes while two ordinary AzAPI resources with
 nonstandard tags still fail. No live Azure resources were changed locally.
-The second CI run passed lint and the pinned-rule attestation, but all six
+The next CI run passed lint and the pinned-rule attestation, but all six
 integration legs failed the same example regression test because its
 variable-only root override could not create `main.telemetry.tf`. That test
 now uses the packaged root profile; its focused run passed.
 The subsequent local gate passed with 1,824 unit tests (9 platform skips)
 and 799 component tests.
+The latest [Authoring CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36124363737)
+completed successfully on the corrected branch: all six Terraform integration
+legs and all 17 checks passed for
+[tools#192](https://github.com/Azure/azure-verified-modules-tools/pull/192).
 
 ## Blockers or dependencies
 
