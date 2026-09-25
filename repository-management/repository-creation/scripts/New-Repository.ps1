@@ -72,8 +72,8 @@ if (!$skipRepoCreation) {
     TelemetryIdPrefix = if (-not [string]::IsNullOrWhiteSpace($telemetryIdPrefix)) { $telemetryIdPrefix }
     elseif ($moduleMatch.Groups[1].Value -ceq 'utl') { $telemetryIdPrefix }
     else {
-        New-AvmRepositoryTelemetryIdPrefix -Kind $moduleMatch.Groups[1].Value `
-            -KnownPrefix (Get-AvmRepositoryCatalogTelemetryPrefix)
+        & $authoringModule.ExportedCommands['New-AvmTelemetryIdPrefix'] -Ecosystem terraform -Kind $moduleMatch.Groups[1].Value `
+            -KnownPrefix (Get-AvmRepositoryCatalogTelemetryPrefix) -SkipModuleVersionCheck
     }
     OwnerGitHubHandles = @(
       if (-not [string]::IsNullOrEmpty($ownerPrimaryGitHubHandle)) { $ownerPrimaryGitHubHandle }

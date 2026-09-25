@@ -53,18 +53,37 @@ function Test-AvmMetadataContent {
                     -Message "canonicalType '$($metadata.canonicalType)' does not identify a $ModuleType module."))
     }
 
-    if ($metadata.Contains('telemetryIdPrefix')) {
-        $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
-        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
-        $legacyResourceGraph = $Ecosystem -eq 'bicep' -and $ModuleType -eq 'resource' -and
-        $metadata.canonicalType -ceq 'Microsoft.ResourceGraph/queries' -and
-        $metadata.telemetryIdPrefix -ceq '46d3xbcp.resourcegraph-query'
-        if (-not $legacyResourceGraph -and -not $metadata.telemetryIdPrefix.StartsWith("$marker.$kind.", [System.StringComparison]::Ordinal)) {
+    $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
+    $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+    $resourceGraphModule = $Ecosystem -eq 'bicep' -and $ModuleType -eq 'resource' -and $metadata.canonicalType -ceq 'Microsoft.ResourceGraph/queries'
+    $prefixes = @(
+        if ($metadata.Contains('telemetryIdPrefix')) {
+            [pscustomobject]@{ Field = 'telemetryIdPrefix'; Value = $metadata.telemetryIdPrefix }
+        }
+        if ($metadata.Contains('alternativeTelemetryIdPrefixes')) {
+            foreach ($prefix in $metadata.alternativeTelemetryIdPrefixes) {
+                [pscustomobject]@{ Field = 'alternativeTelemetryIdPrefixes'; Value = $prefix }
+            }
+        }
+    )
+    foreach ($prefix in $prefixes) {
+        if ($prefix.Field -eq 'alternativeTelemetryIdPrefixes' -and
+            $metadata.Contains('telemetryIdPrefix') -and $prefix.Value -ceq $metadata.telemetryIdPrefix) {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
-                        -Message "telemetryIdPrefix must start with '$marker.$kind.' for this module."))
+                        -Message 'alternativeTelemetryIdPrefixes cannot contain the current telemetryIdPrefix.'))
+        }
+        $legacyResourceGraph = $prefix.Value -ceq '46d3xbcp.resourcegraph-query'
+        if ($legacyResourceGraph -and -not $resourceGraphModule) {
+            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
+                        -Message "$($prefix.Field) cannot use the Resource Graph legacy identifier for this module."))
+        }
+        elseif (-not $legacyResourceGraph -and -not $prefix.Value.StartsWith("$marker.$kind.", [System.StringComparison]::Ordinal)) {
+            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
+                        -Message "$($prefix.Field) must start with '$marker.$kind.' for this module."))
         }
     }
-    elseif (-not $helper -and (($null -eq $TelemetryRequired -and $ModuleType -ne 'utility') -or $TelemetryRequired -eq $true)) {
+    if (-not $metadata.Contains('telemetryIdPrefix') -and -not $helper -and
+        (($null -eq $TelemetryRequired -and $ModuleType -ne 'utility') -or $TelemetryRequired -eq $true)) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                     -Message 'This module requires telemetryIdPrefix.'))
     }

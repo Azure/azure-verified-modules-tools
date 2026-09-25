@@ -42,6 +42,12 @@
       "then": { "maxLength": 50 },
       "else": { "maxLength": 59 }
     },
+    "alternativeTelemetryIdPrefixes": {
+      "type": "array",
+      "description": "Previous telemetry prefixes retained when a module's current prefix changes.",
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/telemetryIdPrefix" }
+    },
     "owners": {
       "type": "array",
       "description": "GitHub usernames or qualified @organization/team-slug handles, inherited by children. Empty arrays are valid; handles must be unique ignoring case.",
@@ -88,6 +94,7 @@
         },
         "owners": { "$ref": "#/definitions/owners" },
         "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
+        "alternativeTelemetryIdPrefixes": { "$ref": "#/definitions/alternativeTelemetryIdPrefixes" },
         "alternativeNames": {
           "type": "array",
           "uniqueItems": true,
@@ -110,7 +117,8 @@
         "moduleDisplayName": { "$ref": "#/definitions/displayName" },
         "moduleDescription": { "$ref": "#/definitions/description" },
         "canonicalType": { "$ref": "#/definitions/canonicalType" },
-        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" }
+        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
+        "alternativeTelemetryIdPrefixes": { "$ref": "#/definitions/alternativeTelemetryIdPrefixes" }
       }
     }
   }

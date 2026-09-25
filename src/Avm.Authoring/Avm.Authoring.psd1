@@ -15,6 +15,7 @@
         'Get-AvmVersion',
         'Initialize-AvmModuleMetadata',
         'Install-AvmTool',
+        'New-AvmTelemetryIdPrefix',
         'Invoke-Avm',
         'Invoke-AvmCheckConvention',
         'Invoke-AvmCheckPolicy',

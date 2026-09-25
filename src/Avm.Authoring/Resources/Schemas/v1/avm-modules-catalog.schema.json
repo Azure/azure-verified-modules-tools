@@ -169,6 +169,11 @@
         "comments": { "type": "string" },
         "owners": { "$ref": "#/definitions/owners" },
         "telemetryIdPrefix": { "$ref": "#/definitions/nullableText" },
+        "alternativeTelemetryIdPrefixes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "publicRegistryReference": { "type": "string", "minLength": 1 },
         "registry": { "$ref": "#/definitions/registry" }
       },

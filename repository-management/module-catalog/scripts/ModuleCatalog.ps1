@@ -373,6 +373,7 @@ function New-AvmCatalogRecord {
         comments                = [string]$Data.comments
         owners                  = @($Data.owners)
         telemetryIdPrefix       = $Data.telemetryIdPrefix
+        alternativeTelemetryIdPrefixes = @(if ($Data.Contains('alternativeTelemetryIdPrefixes')) { $Data.alternativeTelemetryIdPrefixes })
         publicRegistryReference = $Identity.Reference
         registry                = $null
     }
@@ -497,6 +498,7 @@ function Get-AvmCatalogInventory {
             comments = if ($rootMetadata.Contains('comments')) { [string]$rootMetadata.comments } else { '' }
             owners = @($rootMetadata.owners)
             telemetryIdPrefix = if ($metadata.Contains('telemetryIdPrefix')) { $metadata.telemetryIdPrefix } else { $null }
+            alternativeTelemetryIdPrefixes = @(if ($metadata.Contains('alternativeTelemetryIdPrefixes')) { $metadata.alternativeTelemetryIdPrefixes })
         }
         if ($existingRows.ContainsKey($source.Key)) {
             $existing = $existingRows[$source.Key]

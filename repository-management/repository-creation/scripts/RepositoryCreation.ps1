@@ -7,7 +7,7 @@ function Import-AvmRepositoryCreationModule {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
     $manifest = Join-Path $moduleRoot 'Avm.Authoring.psd1'
     $module = Import-Module -Name $manifest -Scope Local -Force -PassThru -ErrorAction Stop
-    foreach ($command in @('Initialize-AvmModuleMetadata', 'Test-AvmModuleMetadata')) {
+    foreach ($command in @('Initialize-AvmModuleMetadata', 'Test-AvmModuleMetadata', 'New-AvmTelemetryIdPrefix')) {
         if (-not $module.ExportedCommands.ContainsKey($command)) {
             throw [System.InvalidOperationException]::new("The checked-out Avm.Authoring module must export $command.")
         }
@@ -64,6 +64,13 @@ function Get-AvmRepositoryTelemetryPrefixFromCatalog {
             if ($node.Contains('telemetryIdPrefix') -and -not [string]::IsNullOrWhiteSpace([string]$node['telemetryIdPrefix'])) {
                 $prefixes.Add([string]$node['telemetryIdPrefix'])
             }
+            if ($node.Contains('alternativeTelemetryIdPrefixes')) {
+                foreach ($prefix in @($node['alternativeTelemetryIdPrefixes'])) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$prefix)) {
+                        $prefixes.Add([string]$prefix)
+                    }
+                }
+            }
             foreach ($key in @($node.Keys)) {
                 $pending.Enqueue($node[$key])
             }
@@ -75,34 +82,6 @@ function Get-AvmRepositoryTelemetryPrefixFromCatalog {
         }
     }
     return @($prefixes | Select-Object -Unique)
-}
-
-function New-AvmRepositoryTelemetryIdPrefix {
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateSet('res', 'ptn', 'utl')]
-        [string] $Kind,
-
-        [string[]] $KnownPrefix = @()
-    )
-
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-    $taken = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]@($KnownPrefix), [System.StringComparer]::Ordinal)
-    $bytes = [byte[]]::new(4)
-    for ($attempt = 0; $attempt -lt 100; $attempt++) {
-        [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-        $suffix = (($bytes | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 7)
-        $candidate = '46d3xtrf.{0}.{1}' -f $Kind, $suffix
-        if (-not $taken.Contains($candidate)) {
-            return $candidate
-        }
-    }
-    throw [System.InvalidOperationException]::new(
-        'Could not generate a telemetryIdPrefix that is unique against the catalog; supply -telemetryIdPrefix explicitly.')
 }
 
 function New-AvmRepositoryMetadataInput {
