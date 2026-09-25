@@ -194,6 +194,19 @@ Describe 'Component: repository creation metadata' -Tag Component {
         Should -Invoke Get-Command -Times 0 -Exactly -ParameterFilter { $Name -in @('git', 'gh') }
     }
 
+    It 'mints a Terraform prefix through Avm.Authoring when none is supplied' {
+        Mock Get-AvmRepositoryCatalogTelemetryPrefix { @('46d3xtrf.res.abcdef0') }
+        $parameters = New-CreationScriptArguments
+        $parameters.Remove('telemetryIdPrefix')
+
+        $result = & $creationScript @parameters -PlanOnly
+
+        $result.Metadata.telemetryIdPrefix | Should -MatchExactly '^46d3xtrf\.res\.[0-9a-f]{7}$'
+        $result.Metadata.telemetryIdPrefix | Should -Not -Be '46d3xtrf.res.abcdef0'
+        Should -Invoke Get-AvmRepositoryCatalogTelemetryPrefix -Exactly 1
+        Test-Path -LiteralPath $script:workRoot | Should -BeFalse
+    }
+
     It 'honors entry-point WhatIf without requiring GitHub authentication or an app request' {
         Mock Get-Command { throw 'WhatIf must not look for an external tool.' } -ParameterFilter { $Name -in @('git', 'gh') }
         $parameters = New-CreationScriptArguments

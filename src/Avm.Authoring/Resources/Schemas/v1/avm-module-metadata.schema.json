@@ -43,6 +43,24 @@
       "then": { "maxLength": 50 },
       "else": { "maxLength": 20 }
     },
+    "historicalTelemetryIdPrefix": {
+      "type": "string",
+      "description": "Previous telemetry identifier; Terraform alternatives may retain descriptive segments that predate the seven-hex format.",
+      "anyOf": [
+        { "pattern": "^46d3xbcp\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "pattern": "^46d3xtrf\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
+        { "const": "46d3xbcp.resourcegraph-query" }
+      ],
+      "if": { "pattern": "^46d3xbcp\\." },
+      "then": { "maxLength": 50 },
+      "else": { "maxLength": 59 }
+    },
+    "alternativeTelemetryIdPrefixes": {
+      "type": "array",
+      "description": "Previous telemetry prefixes retained when a module's current prefix changes.",
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/historicalTelemetryIdPrefix" }
+    },
     "owners": {
       "type": "array",
       "description": "GitHub usernames or qualified @organization/team-slug handles, inherited by children. Empty arrays are valid; handles must be unique ignoring case.",
@@ -89,6 +107,7 @@
         },
         "owners": { "$ref": "#/definitions/owners" },
         "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
+        "alternativeTelemetryIdPrefixes": { "$ref": "#/definitions/alternativeTelemetryIdPrefixes" },
         "alternativeNames": {
           "type": "array",
           "uniqueItems": true,
@@ -111,7 +130,8 @@
         "moduleDisplayName": { "$ref": "#/definitions/displayName" },
         "moduleDescription": { "$ref": "#/definitions/description" },
         "canonicalType": { "$ref": "#/definitions/canonicalType" },
-        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" }
+        "telemetryIdPrefix": { "$ref": "#/definitions/telemetryIdPrefix" },
+        "alternativeTelemetryIdPrefixes": { "$ref": "#/definitions/alternativeTelemetryIdPrefixes" }
       }
     }
   }

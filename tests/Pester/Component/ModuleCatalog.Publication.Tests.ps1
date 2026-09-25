@@ -193,6 +193,7 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
 
     It 'permits a trusted main-branch publication preview without an enable variable or remote calls' {
         $root = New-CatalogPublicationFixture
+        $outputPath = Join-Path $TestDrive 'preview-output'
         $environment = @{
             GITHUB_ACTIONS = 'true'
             GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
@@ -210,8 +211,11 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
                 $saved[$name] = [Environment]::GetEnvironmentVariable($name)
                 [Environment]::SetEnvironmentVariable($name, $environment[$name])
             }
-            { & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $root -Publish -WhatIf } |
+            & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $root -GitHubOutputPath $outputPath |
+                Should -BeExactly 'Catalog publication plan validated; no remote changes requested.'
+            { & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $root -Publish -WhatIf -GitHubOutputPath $outputPath } |
                 Should -Not -Throw
+            Test-Path -LiteralPath $outputPath | Should -BeFalse
             Should -Invoke Invoke-AvmCatalogProcess -Times 0 -Exactly
         }
         finally {
@@ -483,21 +487,26 @@ Describe 'Component: module catalog publication merging' -Tag Component {
     It 'publishes the intended tree and verifies the merge: <Case>' -TestCases @(
         @{ Case = 'new candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = '' }
         @{ Case = 'unchanged pending candidate'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = '' }
+        @{ Case = 'CSV-only candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; JsonUnchanged = $true }
+        @{ Case = 'pending CSV-only candidate'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = ''; JsonUnchanged = $true }
+        @{ Case = 'JSON already on main when merged'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; NoJsonInMerge = $true }
         @{ Case = 'removes previously added report'; Existing = $true; LegacyReport = $true; BaseReport = $false; Failure = '' }
         @{ Case = 'preserves report already on main'; Existing = $true; LegacyReport = $true; BaseReport = $true; Failure = '' }
         @{ Case = 'merge command fails'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = 'denied' }
         @{ Case = 'merge remains pending'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'pending' }
         @{ Case = 'merged head differs'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'head' }
+        @{ Case = 'merge commit missing'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = 'missing-commit' }
         @{ Case = 'no changes without a pending candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; NoChange = $true }
         @{ Case = 'human edits remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'human' }
         @{ Case = 'unrelated files remain protected'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = 'unrelated' }
         @{ Case = 'verified deprecated exclusion'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true }
         @{ Case = 'exclusion with unrelated held-back output'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true; HoldUnrelated = $true }
     ) {
-        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false, $Exclude = $false, $HoldUnrelated = $false)
+        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false, $Exclude = $false, $HoldUnrelated = $false, $JsonUnchanged = $false, $NoJsonInMerge = $false)
 
         $configuration = Read-AvmCatalogConfiguration
         $bundle = New-CatalogPublicationFixture
+        $outputPath = Join-Path $TestDrive ("catalog-output-$([guid]::NewGuid().ToString('N'))")
         Set-CatalogPublicationFixtureRows -Root $bundle -SourceRows @() -OutputRows @($sourceRow)
         $source = New-CatalogPublicationSourceFixture
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
@@ -530,6 +539,11 @@ Describe 'Component: module catalog publication merging' -Tag Component {
                         '$schema' = $catalogSchemaId; schemaVersion = 1
                         modules = @{ 'Microsoft.Storage/storageAccounts' = @{ bicep = @($excluded); terraform = @() } }
                     }))
+        }
+        if ($JsonUnchanged) {
+            $catalogTarget = Join-Path $source $paths.docs.files['docs/v1/modules.json']
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($catalogTarget))
+            [System.IO.File]::Copy((Join-Path $bundle 'docs/v1/modules.json'), $catalogTarget, $true)
         }
         if ($BaseReport) {
             $file = Join-Path $source $reportTarget
@@ -579,6 +593,7 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         $null = Invoke-CatalogFixtureGit $source @('clone', '--bare', $source, $remote)
         $state = @{
             Remote = $remote; Branch = $branch; Failure = $Failure; Existing = $Existing
+            NoJsonInMerge = $NoJsonInMerge; MergeSha = 'a' * 40
             ProcessCommand = $processCommand
             Head = ''; Calls = [System.Collections.Generic.List[string]]::new()
             PullRequest = @{
@@ -616,39 +631,64 @@ Describe 'Component: module catalog publication merging' -Tag Component {
                 $state.Calls.Add($ArgumentList[2])
                 $response = $state.PullRequest | ConvertTo-Json -Depth 10 -Compress
             }
+            elseif ($ArgumentList[0] -eq 'api' -and $ArgumentList[2] -eq 'GET' -and $ArgumentList[3] -match '/commits/') {
+                $state.Calls[-1] | Should -BeExactly 'verify'
+                $state.Calls.Add('verify-files')
+                $files = @(@{ filename = 'docs/static/module-indexes/BicepResourceModules.csv' })
+                if (-not $state.NoJsonInMerge) {
+                    $files += @{ filename = 'docs/static/module-indexes/v1/modules.json' }
+                }
+                $response = @{ sha = $state.MergeSha; files = $files } | ConvertTo-Json -Depth 10 -Compress
+            }
             elseif ($ArgumentList[0] -eq 'api' -and $ArgumentList[2] -eq 'GET') {
                 $state.Calls.Add('verify')
                 $response = @{
                     merged = $state.Failure -ne 'pending'
                     head = @{ sha = if ($state.Failure -eq 'head') { '0' * 40 } else { $state.Head } }
+                    merge_commit_sha = if ($state.Failure -eq 'missing-commit') { $null } else { $state.MergeSha }
                 } | ConvertTo-Json -Depth 10 -Compress
             }
             else { throw "Unexpected GitHub call: $ArgumentList" }
             return [pscustomobject]@{ ExitCode = 0; StdOut = $response; StdErr = '' }
         }.GetNewClosure())
 
-        $invoke = { & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $bundle -Publish -Confirm:$false }
+        $invoke = {
+            & (Join-Path $catalogScripts 'Publish-ModuleCatalog.ps1') -BundlePath $bundle -Publish `
+                -GitHubOutputPath $outputPath -Confirm:$false
+        }
         if ($Failure -in @('human', 'unrelated')) {
             $expectedError = if ($Failure -eq 'human') { '*contains human commits*' } else { '*outside the publication allow-list*' }
             $invoke | Should -Throw $expectedError
             $state.Calls | Should -Not -Contain 'push'
             $state.Calls | Should -Not -Contain 'merge'
+            Test-Path -LiteralPath $outputPath | Should -BeFalse
             return
         }
         if ($NoChange) {
             & $invoke
             $state.Calls | Should -HaveCount 0
+            Get-Content -LiteralPath $outputPath -Raw | Should -BeExactly "docs_json_published=false`n"
             return
         }
         if ($Failure -eq 'denied') {
             $invoke | Should -Throw '*fixture merge denied*'
+        }
+        elseif ($Failure -eq 'missing-commit') {
+            $invoke | Should -Throw '*no valid merged commit*'
         }
         elseif ($Failure) {
             $invoke | Should -Throw '*not merged at the expected head*'
         }
         else {
             & $invoke
-            $state.Calls[-1] | Should -BeExactly 'verify'
+            $state.Calls[-1] | Should -BeExactly $(if ($HoldUnrelated -or $JsonUnchanged) { 'verify' } else { 'verify-files' })
+        }
+        if ($Failure) {
+            Test-Path -LiteralPath $outputPath | Should -BeFalse
+        }
+        else {
+            $expected = if ($HoldUnrelated -or $JsonUnchanged -or $NoJsonInMerge) { 'false' } else { 'true' }
+            Get-Content -LiteralPath $outputPath -Raw | Should -BeExactly "docs_json_published=$expected`n"
         }
         $state.Calls | Should -Contain 'merge'
         $changes = Invoke-CatalogFixtureGit $remote @('diff', '--name-only', 'main', $branch)
@@ -660,8 +700,11 @@ Describe 'Component: module catalog publication merging' -Tag Component {
             (Invoke-CatalogFixtureGit $remote @('show', "${branch}:docs/static/module-indexes/v1/modules.json")).TrimEnd() |
                 Should -BeExactly ([System.IO.File]::ReadAllText($baseCatalog).TrimEnd())
         }
-        else {
+        elseif (-not $JsonUnchanged) {
             $changes | Should -Match 'v1/modules.json'
+        }
+        else {
+            $changes | Should -Not -Match 'v1/modules\.json'
         }
         foreach ($output in $configuration.outputs | Where-Object kind -eq 'csv') {
             $published = Invoke-CatalogFixtureGit $remote @('show', "${branch}:$($output.targetPath)")
@@ -676,7 +719,7 @@ Describe 'Component: module catalog publication merging' -Tag Component {
 
 Describe 'Component: module catalog workflow safety' -Tag Component {
     It 'uses pinned actions, read-only workflow permissions, protected app credentials and no persisted checkout token' {
-        $actions = [regex]::Matches($workflow, '(?m)^\s+uses:\s+([^\r\n]+)')
+        $actions = [regex]::Matches($workflow, '(?m)^        uses:\s+([^\r\n]+)')
         $actions.Count | Should -BeGreaterThan 0
         foreach ($action in $actions) {
             $action.Groups[1].Value | Should -Match '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@[0-9a-f]{40}\s+# v[0-9.]+$'
@@ -703,18 +746,18 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $workflow | Should -Not -Match 'azure-cloud-native/Azure-Verified-Modules-Docs'
     }
 
-    It 'keeps four-hour catalog starts distinct from the Terraform repository sync schedule without cancelling active runs' {
+    It 'keeps four-hour catalog starts distinct from Terraform and Bicep sync without cancelling active runs' {
         $workflow | Should -Match "(?m)^    - cron: '33 1-23/4 \* \* \*'$"
         $workflow | Should -Match "(?m)^concurrency:\n  group: module-metadata-sync\n  cancel-in-progress: false$"
         $terraform = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-sync.yml'))
         $terraform | Should -Match "(?m)^    - cron: '33 \*/4 \* \* 1-5'$"
         $bicep = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'repository-management-bicep-sync.yml'))
-        $bicep | Should -Not -Match '(?m)^\s+schedule:$'
+        $bicep | Should -Match "(?m)^    - cron: '33 2-23/4 \* \* \*'$"
     }
 
     It 'routes scheduled events directly to publication and merging independently of manual plan-only defaults' {
         $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
-        $condition = [regex]::Match($publication, '(?s)\n    if: >-\n(.*?)\n    runs-on:').Groups[1].Value
+        $condition = [regex]::Match($publication, '(?s)\n    if: >-\n(.*?)\n    outputs:').Groups[1].Value
         ($condition.Trim() -replace '\s+', ' ') | Should -BeExactly (
             "github.repository == 'Azure/azure-verified-modules-tools' && " +
             "github.ref == 'refs/heads/main' && " +
@@ -726,6 +769,26 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $step | Should -Match "'Publish-ModuleCatalog.ps1'"
         $step | Should -Match "-BundlePath \(Join-Path .* 'module-catalog'\) -Publish"
         $step | Should -Match '-Confirm:\$false'
+    }
+
+    It 'calls the separately credentialed dropdown workflow only after a verified docs JSON merge' {
+        $publication = [regex]::Match($workflow, '(?ms)^  publish:\r?\n(?<body>.*?)(?=^  report:\r?\n)')
+        $publication.Success | Should -BeTrue
+        $publication.Groups['body'].Value | Should -Match 'docs_json_published: \$\{\{ steps\.publish\.outputs\.docs_json_published \}\}'
+        $publication.Groups['body'].Value | Should -Match '(?m)^        id: publish$'
+        $publication.Groups['body'].Value | Should -Match '-GitHubOutputPath \$env:GITHUB_OUTPUT'
+
+        $sync = [regex]::Match($workflow, '(?ms)^  sync-module-dropdown:\r?\n(?<body>.*?)(?=^  [\w-]+:\r?\n|\z)')
+        $sync.Success | Should -BeTrue
+        $job = $sync.Groups['body'].Value
+        $job | Should -Match '(?m)^    needs: publish$'
+        $job | Should -Match "needs.publish.result == 'success'"
+        $job | Should -Match "needs.publish.outputs.docs_json_published == 'true'"
+        $job | Should -Match '(?m)^    permissions:\r?\n      contents: read$'
+        $job | Should -Match '(?m)^    uses: \./\.github/workflows/repository-management-module-list-sync\.yml$'
+        $job | Should -Match '(?m)^      what_if: false$'
+        $job | Should -Match '(?m)^    secrets:\r?\n      AVM_APP_PRIVATE_KEY: \$\{\{ secrets\.AVM_APP_PRIVATE_KEY \}\}$'
+        $job | Should -Not -Match 'secrets: inherit|permission-contents: write'
     }
 
     It 'publishes a complete CSV diff artifact and run summary only for manual plan-only runs' {

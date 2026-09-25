@@ -62,46 +62,53 @@ function Set-AvmBicepTestTenantVariable {
     catch {
         $writeError = $_.Exception
     }
-    try {
-        $after = Get-AvmBicepTestTenantSnapshot
-    }
-    catch {
-        $acknowledgement = if ($writeError) { 'was not acknowledged' } else { 'was acknowledged' }
-        $failure = [System.InvalidOperationException]::new(
-            "The write of $Name $acknowledgement, and consumer readback failed. Its outcome is unverified; inspect consumer values and routing before retrying.",
-            $_.Exception
-        )
-        if ($writeError) { $failure.Data['WriteError'] = $writeError }
-        throw $failure
-    }
+    for ($readbackAttempt = 0; $readbackAttempt -le 3; $readbackAttempt++) {
+        try {
+            $after = Get-AvmBicepTestTenantSnapshot
+        }
+        catch {
+            $acknowledgement = if ($writeError) { 'was not acknowledged' } else { 'was acknowledged' }
+            $failure = [System.InvalidOperationException]::new(
+                "The write of $Name $acknowledgement, and consumer readback failed. Its outcome is unverified; inspect consumer values and routing before retrying.",
+                $_.Exception
+            )
+            if ($writeError) { $failure.Data['WriteError'] = $writeError }
+            throw $failure
+        }
 
-    $anticipated = [ordered]@{}
-    foreach ($key in $Expected.Keys) { $anticipated[$key] = $Expected[$key] }
-    $anticipated[$Name] = [pscustomobject]@{
-        Name = $Name
-        Value = $Value
-        CreatedAt = if ($null -ne $before[$Name]) { $before[$Name].CreatedAt } elseif ($null -ne $after[$Name]) { $after[$Name].CreatedAt } else { '' }
-        UpdatedAt = if ($null -ne $after[$Name]) { $after[$Name].UpdatedAt } else { '' }
-    }
-    $differences = @(Get-AvmBicepTestTenantSnapshotDifference -Expected $anticipated -Actual $after)
-    if ($writeError) {
-        $observation = if ($differences.Count -gt 0) {
-            "Readback does not match the expected publication: $($differences -join ', ')."
+        $anticipated = [ordered]@{}
+        foreach ($key in $Expected.Keys) { $anticipated[$key] = $Expected[$key] }
+        $anticipated[$Name] = [pscustomobject]@{
+            Name = $Name
+            Value = $Value
+            CreatedAt = if ($null -ne $before[$Name]) { $before[$Name].CreatedAt } elseif ($null -ne $after[$Name]) { $after[$Name].CreatedAt } else { '' }
+            UpdatedAt = if ($null -ne $after[$Name]) { $after[$Name].UpdatedAt } else { '' }
         }
-        elseif ($Name -ceq 'TEST_BAMI_MODULE_PATHS') {
-            'Readback confirms the requested selector and unchanged execution values are present; routing may already be active.'
+        $differences = @(Get-AvmBicepTestTenantSnapshotDifference -Expected $anticipated -Actual $after)
+        if ($writeError) {
+            $observation = if ($differences.Count -gt 0) {
+                "Readback does not match the expected publication: $($differences -join ', ')."
+            }
+            elseif ($Name -ceq 'TEST_BAMI_MODULE_PATHS') {
+                'Readback confirms the requested selector and unchanged execution values are present; routing may already be active.'
+            }
+            else {
+                'Readback confirms the requested candidate value is present and the selector is unchanged.'
+            }
+            throw [System.InvalidOperationException]::new("The write of $Name was not acknowledged. $observation No write retry or rollback was attempted.", $writeError)
         }
-        else {
-            'Readback confirms the requested candidate value is present and the selector is unchanged.'
+        if ($differences.Count -eq 0) { return $after }
+        $unchanged = @(Get-AvmBicepTestTenantSnapshotDifference -Expected $before -Actual $after).Count -eq 0
+        if ($unchanged -and $readbackAttempt -lt 3) {
+            $retryDelay = 5 * ($readbackAttempt + 1)
+            Write-Information "Waiting $retryDelay seconds for readback visibility of $Name; retrying only the GET, not the acknowledged write." -InformationAction Continue
+            Start-Sleep -Seconds $retryDelay
+            continue
         }
-        throw [System.InvalidOperationException]::new("The write of $Name was not acknowledged. $observation No write retry or rollback was attempted.", $writeError)
-    }
-    if ($differences.Count -gt 0) {
         throw [System.InvalidOperationException]::new(
-            "Readback mismatch after writing ${Name}: $($differences -join ', '). The consumer may contain partial writes or outside edits."
+            "Readback mismatch after writing ${Name}: $($differences -join ', ') after $($readbackAttempt + 1) readback attempt(s). The consumer may contain partial writes or outside edits."
         )
     }
-    return $after
 }
 
 function Invoke-AvmBicepTestTenantSync {

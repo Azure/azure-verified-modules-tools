@@ -120,6 +120,12 @@ unique ignoring case. Children omit `owners` and inherit root ownership.
 Authored files have no `schemaVersion`, `tier`, or lifecycle status property;
 unknown properties are rejected.
 
+Use `New-AvmTelemetryIdPrefix -Ecosystem bicep -Kind res -KnownPrefix $existing`
+to mint a unique seven-character hexadecimal prefix. Include both current
+and historical prefixes in `$existing`. An optional
+`alternativeTelemetryIdPrefixes` array in metadata preserves previous
+identifiers; generated catalog JSON includes this array even when empty.
+
 Resource `canonicalType` values use full, case-sensitive `Microsoft.*` or
 `Oracle.Database` ARM types, such as `Oracle.Database/cloudVmClusters`.
 Pattern/utility taxonomy names such as `naming` and paths such as `lz/sub-vending`

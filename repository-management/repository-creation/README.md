@@ -45,8 +45,9 @@ Omit `telemetryIdPrefix` and creation mints one for a resource or pattern root a
 `46d3xtrf.<res|ptn>.<7 lowercase hex characters>`, matching the convention
 already used across the Terraform fleet. Utilities may be telemetry-free, so an
 omitted identifier stays omitted for `avm-utl-` modules. The suffix is random
-rather than derived from the module name, so it is checked against the published
-module catalog at
+rather than derived from the module name. Creation calls the checked-out
+Avm.Authoring `New-AvmTelemetryIdPrefix` cmdlet with the current and historical
+prefixes from the published module catalog at
 `https://raw.githubusercontent.com/Azure/Azure-Verified-Modules/main/docs/static/module-indexes/v1/modules.json`
 before it is used. `-CatalogUri` on `Get-AvmRepositoryCatalogTelemetryPrefix`
 also accepts a local path, which is useful when reviewing a catalog artifact

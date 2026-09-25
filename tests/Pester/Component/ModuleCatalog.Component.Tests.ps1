@@ -226,6 +226,39 @@ AfterAll {
 }
 
 Describe 'Component: module catalog helpers' -Tag Component {
+    It 'carries optional historical prefixes into the unchanged v1 catalog' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $bicep = @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'bicep' -and $_.ModuleType -eq 'resource' })[0]
+        $metadataPath = Join-Path $bicep.Directory 'metadata.json'
+        $metadata = Read-AvmCatalogJson -Path $metadataPath
+        $metadata.alternativeTelemetryIdPrefixes = @('46d3xbcp.res.previous-one', '46d3xbcp.res.previous-two')
+        Save-CatalogJson -Path $metadataPath -Data $metadata
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository $bicep.Repository `
+            -ModulePath "$($bicep.ModulePath)/child" -Canonical $bicep.Canonical -Child -Adopt
+        $childPath = Join-Path $child.Directory 'metadata.json'
+        $childMetadata = Read-AvmCatalogJson -Path $childPath
+        $childMetadata.alternativeTelemetryIdPrefixes = @('46d3xbcp.res.child-previous')
+        Save-CatalogJson -Path $childPath -Data $childMetadata
+
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture
+        $json = $bundle.Files['docs/v1/modules.json']
+        $catalog = ConvertFrom-Json -InputObject $json -AsHashtable
+        $entries = $catalog.modules['Microsoft.Storage/storageAccounts'].bicep
+        $rootRecord = @($entries | Where-Object modulePath -eq $bicep.ModulePath)[0]
+        $childRecord = @($entries | Where-Object modulePath -eq $child.ModulePath)[0]
+        $rootRecord.alternativeTelemetryIdPrefixes | Should -Be $metadata.alternativeTelemetryIdPrefixes
+        $childRecord.alternativeTelemetryIdPrefixes | Should -Be $childMetadata.alternativeTelemetryIdPrefixes
+        $terraformRecord = $catalog.modules['Microsoft.Storage/storageAccounts'].terraform[0]
+        $terraformRecord.Contains('alternativeTelemetryIdPrefixes') | Should -BeTrue
+        $terraformRecord.alternativeTelemetryIdPrefixes | Should -HaveCount 0
+        $catalog.schemaVersion | Should -Be 1
+
+        $schema = Join-Path $repoRoot (Get-AvmCatalogOutput -Configuration $bundle.Configuration -Kind catalog).schema
+        Test-Json -Json $json -SchemaFile $schema | Should -BeTrue
+        $rootRecord.Remove('alternativeTelemetryIdPrefixes')
+        Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema | Should -BeTrue
+    }
+
     It 'retains mixed helper inventories in JSON but not any <Destination> CSV' -TestCases @(
         @{ Destination = 'preview' }
         @{ Destination = 'canonical' }

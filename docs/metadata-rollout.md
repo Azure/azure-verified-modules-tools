@@ -80,8 +80,6 @@ so they can be restored deliberately. These workflow controls remain separate
 from the current metadata-only migration; that procedure does not dispatch
 full sync or perform repository/Azure management.
 
-- Confirm the merged Bicep governance tests and tools generator still accept
-  the same ownership rules before authorizing Bicep Sync to resume, if paused.
 - Disable Terraform Sync for the merge window if its automatic writes must
   pause. There is no pause variable; disabling also prevents manual dispatch.
   Re-enabling requires approval covering automatic applies as well as trials.
@@ -100,14 +98,13 @@ full sync or perform repository/Azure management.
 - Save the current public index files and repository configuration, and record
   the main-branch commits in tools, the public docs repository, and Bicep.
 
-The Bicep workflow no longer has `AVM_CODEOWNERS_SYNC_ENABLED`. Enabling that
-workflow permits its scheduled CODEOWNERS apply runs; it is not a preview-only
-switch. This change remains intentional; the required rollout pause uses
-GitHub's workflow disable control rather than restoring that variable.
+Bicep Sync publishes only nonsecret BAMI variables, not CODEOWNERS. Its
+`33 2-23/4 * * *` schedule and input-free manual dispatch both apply the existing
+central `testTenant` selections from trusted Tools `main`. There are no workflow
+enable or preview flags and no global activation variable. An approved pause
+uses GitHub's workflow disable control; re-enabling permits scheduled publication.
+Standalone script previews remain available through `-PlanOnly` or `-Apply -WhatIf`.
 
-BAMI routing uses the existing central `testTenant` selections without a global
-activation variable. Bicep variable propagation remains manual-only through
-`enable_test_tenant_sync`, with `plan_only=false` required for publication.
 Normal Terraform sync includes tenant parsing and identity/state operations.
 A BAMI-selected repository with an incomplete bundle, untrusted
 GitHub context, or pending identity validation stops before file preparation,
@@ -152,20 +149,9 @@ Metadata-only edits must not select module releases. Mixed source/version edits
 must still follow the normal release rules. Preserve the known budget and
 Resource Graph telemetry values; correcting those belongs to a normal release.
 
-If Bicep Sync is paused and the tools template, target CODEOWNERS and Bicep
-governance tests agree, obtain explicit approval to re-enable it. That approval
-must include scheduled applies, not just the next dry run.
-Then run its strict dry run:
-
-```powershell
-gh workflow run repository-management-bicep-sync.yml `
-    --repo Azure/azure-verified-modules-tools --ref main -f plan_only=true
-```
-
-Expect no change, or only the intended CODEOWNERS update. A plan never opens or
-merges a change. If an apply is needed, obtain approval and use
-`plan_only=false`; this ordinary CODEOWNERS apply may merge through the existing
-App bypass. It is not a Bicep metadata backfill.
+The former CODEOWNERS plan/apply commands no longer apply. Dispatching Bicep
+Sync now publishes variables, not repository files; see
+[Bicep variable publication](../repository-management/README.md#bicep-variable-publication).
 
 Resolve named-owner diagnostics before relying on successful synchronization.
 Do not remove people or loosen review rules to make the run pass.
@@ -336,6 +322,13 @@ Different start times do not guarantee non-overlapping runtimes.
 Catalog publication opens and squash-merges updates only in the public docs
 repository through the existing AVM App and verifies the merged head. It does
 not publish tools repository settings or tier changes.
+
+Only a verified merge commit that changes
+`docs/static/module-indexes/v1/modules.json` calls the separate module dropdown
+sync; plan-only runs, held-back JSON and CSV-only merges do not. That workflow
+uses its own Bicep-repository-scoped App token, reconciles at
+`13 */6 * * *` (00:13, 06:13, 12:13 and 18:13 UTC), and defaults manual runs
+to a dry run.
 
 ## Canonical CSV cutover
 
