@@ -75,9 +75,11 @@ section when cutting a release.
 
 - Terraform MaPoTF now replaces `modtm` telemetry with an empty
   subscription-scoped AzAPI deployment for metadata-backed roots and children.
-  An optional `telemetry_location` defaults to `var.location` where available
-  or `westus2` otherwise, and parent/example calls forward the opt-out and
-  location. The deployment name reports the fixed seven-hex metadata prefix,
+  The separate `telemetry_location` input is removed. All roots except
+  utilities without Azure resources, and all Azure-resource children, receive
+  a required `var.location` when absent. Telemetry uses that location directly;
+  child and example calls forward it when missing without overwriting
+  authored per-item locations. The deployment name reports the seven-hex prefix,
   full version (or `0-0-0`), one-character distribution source, and stable
   instance suffix; no resource tags or raw source paths are sent. A changing
   empty-template output forces a write on every normal apply. Legacy telemetry

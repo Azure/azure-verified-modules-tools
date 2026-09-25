@@ -474,16 +474,18 @@ The one-time source rewrite can change compiled Bicep output; subsequent
 owner/canonical metadata edits do not.
 
 MaPoTF instruments Terraform roots and children with a `telemetryIdPrefix`.
-Children without a prefix retain the module and common formatting profiles
-but do not create telemetry. Instrumented modules get an `enable_telemetry`
-input (default `true`) and an optional `telemetry_location` input. When a
-module declares `var.location`, `telemetry_location` defaults to `null` and
-the deployment uses a non-null override or else `var.location`. This
-comparison remains safe when both values are null and telemetry is disabled.
-Otherwise it defaults to `westus2` and the deployment uses that value.
-Callers in clouds without `westus2` must override it. Local module calls
-forward the parent's opt-out and resolved location; supported example calls
-expose and forward the same controls.
+Children without a prefix do not create telemetry, but those deploying Azure
+resources still require `var.location`. Every module root except a utility
+that deploys no Azure resources requires `var.location`; MaPoTF adds a required,
+non-nullable string input without a default when it is absent and preserves
+authored declarations. Instrumented modules also get `enable_telemetry`
+(default `true`). The separate `telemetry_location` input is removed; the
+deployment uses `var.location`, including in globally scoped modules. Choose
+a valid region for the target cloud. Local module calls forward the parent's
+location when the child needs it and no location was authored, preserving
+per-item locations in multi-region modules. Instrumented children also
+receive the parent's opt-out, and supported example calls expose and forward
+missing inputs.
 
 `main.telemetry.tf` reads `telemetryIdPrefix` from the module's own
 `metadata.json` at apply time. When telemetry is enabled, it creates an

@@ -479,8 +479,9 @@ function Invoke-AvmTerraformTransform {
 
         Metadata-backed roots and child modules with a telemetryIdPrefix run
         root, module, common. Children without a prefix run module, common.
-        Module calls then run module-call, common after every child has its
-        telemetry inputs, forwarding enable_telemetry and telemetry_location.
+        Module calls then run module-call, common from deepest to root after
+        every child has its inputs, forwarding location and enable_telemetry
+        where supported.
         Examples run example, common after the module calls have settled.
         Standalone test-module directories run the test profile, and empty
         modtm test mocks and telemetry resource references are migrated.
@@ -649,21 +650,23 @@ function Invoke-AvmTerraformTransform {
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `
             -Argument $transformOptions `
             -ThrottleLimit $effectiveThrottle
-        $moduleCallTargets = @($moduleTargets |
-                Where-Object { $_.Profiles -contains 'root' } |
-                ForEach-Object {
-                    [pscustomobject]@{
-                        Path     = $_.Path
-                        Scope    = $_.Scope
-                        Profiles = @('module-call', 'common')
-                    }
-                })
+        $moduleCallTargets = @($moduleTargets | ForEach-Object {
+                $relativePath = [System.IO.Path]::GetRelativePath($Context.Root, $_.Path)
+                [pscustomobject]@{
+                    Path     = $_.Path
+                    Scope    = $_.Scope
+                    Depth    = @($relativePath -split '[\\/]').Count
+                    Profiles = @('module-call', 'common')
+                }
+            })
         if ($moduleCallTargets.Count -gt 0) {
-            Invoke-AvmParallel `
-                -InputObject $moduleCallTargets `
-                -FunctionName 'Invoke-AvmMapotfTransformTarget' `
-                -Argument $transformOptions `
-                -ThrottleLimit $effectiveThrottle
+            foreach ($depthGroup in @($moduleCallTargets | Group-Object Depth | Sort-Object { [int]$_.Name } -Descending)) {
+                Invoke-AvmParallel `
+                    -InputObject @($depthGroup.Group) `
+                    -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+                    -Argument $transformOptions `
+                    -ThrottleLimit $effectiveThrottle
+            }
         }
         if ($exampleTargets.Count -gt 0) {
             Invoke-AvmParallel `

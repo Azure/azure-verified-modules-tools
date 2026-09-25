@@ -173,6 +173,30 @@ output "telemetry_count" {
 '@
             }
         }
+
+        function New-AzureResourceHelper {
+            param([string] $Root)
+
+            New-TelemetryModule -Root $Root -Child
+            Set-Content -LiteralPath (Join-Path $Root 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Azure helper",
+  "moduleDescription": "Deploys a resource without child telemetry.",
+  "canonicalType": "helper"
+}
+'@
+            Set-Content -LiteralPath (Join-Path $Root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "azapi_resource" "example" {
+  type                   = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name                   = "rg-location-test"
+  parent_id              = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location               = var.location
+  body                   = {}
+  response_export_values = []
+}
+'@
+        }
     }
 
     AfterAll {
@@ -210,12 +234,14 @@ output "telemetry_count" {
         $telemetry | Should -Not -Match '(?m)^\s*tags\s*='
         $telemetry | Should -Match 'length\(local\.avm_metadata\.telemetryIdPrefix\).*<= 64'
         $telemetry | Should -Match 'response_export_values\s*=\s*\[\]'
-        $telemetry | Should -Match 'var\.telemetry_location != null \? var\.telemetry_location : var\.location'
+        $telemetry | Should -Match '(?m)^\s*main_location\s*=\s*var\.location'
+        $telemetry | Should -Not -Match 'var\.telemetry_location'
         $providers | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
         $providers | Should -Match '(?m)^\s*azapi\s*='
         (Get-Content -LiteralPath (Join-Path $root 'outputs.tf') -Raw) |
             Should -Match 'length\(azapi_resource\.telemetry\)'
-        $variables | Should -Match '(?s)variable "telemetry_location" \{\s*type\s*=\s*string\s*default\s*=\s*null'
+        $variables | Should -Match 'variable "location"'
+        $variables | Should -Not -Match 'variable "telemetry_location"'
         @([regex]::Matches($telemetry, '(?m)^removed \{')) | Should -HaveCount 2
 
         Invoke-TelemetryProfiles -Root $root
@@ -225,7 +251,7 @@ output "telemetry_count" {
         Assert-TelemetryTerraformValid -Root $root
     }
 
-    It 'defaults a location-free module to westus2 without creating legacy providers' {
+    It 'creates a required location input for a module without one' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root
         Invoke-TelemetryProfiles -Root $root
@@ -233,9 +259,14 @@ output "telemetry_count" {
         $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
         $variables = Get-Content -LiteralPath (Join-Path $root 'variables.tf') -Raw
         $providers = Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw
-        $telemetry | Should -Match '(?m)^\s*main_location\s*=\s*var\.telemetry_location'
+        $telemetry | Should -Match '(?m)^\s*main_location\s*=\s*var\.location'
         $telemetry | Should -Not -Match '(?m)^removed \{'
-        $variables | Should -Match '(?s)variable "telemetry_location" \{\s*type\s*=\s*string\s*default\s*=\s*"westus2"'
+        $locationBlock = [regex]::Match($variables, '(?s)variable "location" \{(?<body>[^}]*)\}')
+        $locationBlock.Success | Should -BeTrue
+        $locationBlock.Groups['body'].Value | Should -Match 'type\s*=\s*string'
+        $locationBlock.Groups['body'].Value | Should -Match 'nullable\s*=\s*false'
+        $locationBlock.Groups['body'].Value | Should -Not -Match 'default\s*='
+        $variables | Should -Not -Match 'variable "telemetry_location"'
         $providers | Should -Match '(?m)^\s*azapi\s*='
         $providers | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
 
@@ -305,13 +336,16 @@ terraform {
         $result.Status | Should -Be 'pass'
         $rootMain = Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw
         $rootMain | Should -Match '(?m)^\s*enable_telemetry\s*=\s*var\.enable_telemetry # keep this comment\r?$'
-        $rootMain | Should -Match '(?m)^\s*telemetry_location\s*=\s*local\.main_location'
+        $rootMain | Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        $rootMain | Should -Not -Match 'telemetry_location'
         $rootMain | Should -Not -Match '(?s)module "helper" \{[^}]*enable_telemetry'
         (Join-Path $root 'main.telemetry.tf') | Should -Exist
         (Join-Path $child 'main.telemetry.tf') | Should -Exist
         (Join-Path $helper 'main.telemetry.tf') | Should -Not -Exist
         $childVariables = Get-Content -LiteralPath (Join-Path $child 'variables.tf') -Raw
-        $childVariables | Should -Match '(?s)variable "telemetry_location" \{\s*type\s*=\s*string\s*default\s*=\s*"westus2"'
+        $childVariables | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+        $childVariables | Should -Not -Match 'variable "telemetry_location"'
+        (Join-Path $helper 'variables.tf') | Should -Not -Exist
         Get-Content -LiteralPath $childTestFile -Raw | Should -Match 'can\(azapi_resource\.telemetry\)'
         Get-Content -LiteralPath $childTestFile -Raw | Should -Not -Match 'mock_provider "modtm"'
         Get-Content -LiteralPath (Join-Path $childWrapper 'terraform.tf') -Raw | Should -Not -Match 'modtm\s*='
@@ -328,7 +362,122 @@ terraform {
         Assert-TelemetryTerraformValid -Root $root
     }
 
-    It 'allows a disabled parent and child when their location input is null' {
+    It 'adds and forwards location for a child with Azure resources but no telemetry prefix' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'azure-helper'
+        New-TelemetryModule -Root $root -WithLocation
+        New-AzureResourceHelper -Root $child
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "azure_helper" {
+  source = "./modules/azure-helper"
+}
+'@
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $childVariables = Get-Content -LiteralPath (Join-Path $child 'variables.tf') -Raw
+        $childVariables | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+        $childVariables | Should -Not -Match 'variable "telemetry_location"'
+        (Join-Path $child 'main.telemetry.tf') | Should -Not -Exist
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
+            Should -Match '(?ms)^module "azure_helper" \{[^}]*location\s*=\s*var\.location'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'passes location from root through a nested Azure-resource helper' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $wrapper = Join-Path $root 'modules' 'group' 'wrapper'
+        $leaf = Join-Path $root 'modules' 'group' 'azure-leaf'
+        New-TelemetryModule -Root $root
+        New-AzureResourceHelper -Root $leaf
+        $null = New-Item -ItemType Directory -Path $wrapper -Force
+        Set-Content -LiteralPath (Join-Path $wrapper 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Wrapper helper",
+  "moduleDescription": "Forwards an Azure-resource child.",
+  "canonicalType": "helper"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
+module "azure_leaf" {
+  source = "../azure-leaf"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "wrapper" {
+  source = "./modules/group/wrapper"
+}
+'@
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        foreach ($path in @($root, $wrapper, $leaf)) {
+            Get-Content -LiteralPath (Join-Path $path 'variables.tf') -Raw |
+                Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+        }
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
+            Should -Match '(?ms)^module "wrapper" \{[^}]*location\s*=\s*var\.location'
+        Get-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Raw |
+            Should -Match '(?ms)^module "azure_leaf" \{[^}]*location\s*=\s*var\.location'
+        (Join-Path $wrapper 'main.telemetry.tf') | Should -Not -Exist
+        (Join-Path $leaf 'main.telemetry.tf') | Should -Not -Exist
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'keeps a local child call with an authored per-item location' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        New-TelemetryModule -Root $root -WithLocation
+        New-TelemetryModule -Root $child -Child
+        Add-Content -LiteralPath (Join-Path $root 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "hub_location" {
+  type    = string
+  default = "westus2"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "child" {
+  source   = "./modules/child"
+  location = var.hub_location
+}
+'@
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $call = Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw
+        $call | Should -Match '(?m)^\s*location\s*=\s*var\.hub_location'
+        $call | Should -Match '(?m)^\s*enable_telemetry\s*=\s*var\.enable_telemetry'
+        $call | Should -Not -Match 'telemetry_location'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'leaves a utility root without Azure resources free of location inputs' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
+        Set-Content -LiteralPath (Join-Path $root 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Utility",
+  "moduleDescription": "Does not deploy Azure resources.",
+  "canonicalType": "naming",
+  "owners": []
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+output "name" {
+  value = "utility"
+}
+'@
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        (Join-Path $root 'main.telemetry.tf') | Should -Not -Exist
+        (Join-Path $root 'variables.tf') | Should -Not -Exist
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'allows a disabled parent and child when a location is supplied' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'
         New-TelemetryModule -Root $root -WithLocation
@@ -348,7 +497,7 @@ module "child" {
         (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
         Assert-TelemetryTerraformValid -Root $root
         $plan = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('plan', '-input=false', '-no-color', '-var=enable_telemetry=false') -Root $root
+            -ArgumentList @('plan', '-input=false', '-no-color', '-var=enable_telemetry=false', '-var=location=eastus') -Root $root
         $plan.StdOut | Should -Match 'No changes'
     }
 
@@ -433,7 +582,7 @@ mock_provider "azapi" {
 run "enabled" {
   command = apply
   variables {
-    telemetry_location = "usgovvirginia"
+    location = "usgovvirginia"
   }
   assert {
     condition     = azapi_resource.telemetry[0].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000"
@@ -441,7 +590,7 @@ run "enabled" {
   }
   assert {
     condition     = azapi_resource.telemetry[0].location == "usgovvirginia"
-    error_message = "The explicit telemetry location must override var.location."
+    error_message = "The telemetry deployment must use var.location."
   }
   assert {
     condition = (
@@ -527,7 +676,7 @@ run "second" {
 }
 '@
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('test', '-no-color', '-verbose', '-test-directory=tests/unit') -Root $root
+            -ArgumentList @('test', '-no-color', '-verbose', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
         $result.StdOut | Should -Match 'azapi_resource\.telemetry\[0\] will be updated in-place'
     }
@@ -569,7 +718,7 @@ run "name" {
 }
 "@
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+            -ArgumentList @('test', '-no-color', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
         $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
     }
 
@@ -606,7 +755,7 @@ run "name" {
 '@
         {
             Invoke-TelemetryProcess -FilePath $script:terraformPath `
-                -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+                -ArgumentList @('test', '-no-color', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
         } | Should -Throw '*64-character limit*'
     }
 
@@ -648,7 +797,7 @@ run "source" {
 }
 "@
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+            -ArgumentList @('test', '-no-color', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
         $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
     }
 
@@ -733,11 +882,11 @@ run "source" {
         $legacyInit.StdOut | Should -Match 'Azure/modtm'
         $legacyInit.StdOut | Should -Match 'hashicorp/random'
         $plan = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', '-var=enable_telemetry=false') -Root $root
+            -ArgumentList @('plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', '-var=enable_telemetry=false', '-var=location=eastus') -Root $root
         $plan.StdOut | Should -Match 'modtm_telemetry\.telemetry\[0\] will no longer be managed'
         $plan.StdOut | Should -Match 'random_uuid\.telemetry\[0\] will no longer be managed'
         $apply = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('apply', '-refresh=false', '-input=false', '-auto-approve', '-no-color', '-var=enable_telemetry=false') -Root $root
+            -ArgumentList @('apply', '-refresh=false', '-input=false', '-auto-approve', '-no-color', '-var=enable_telemetry=false', '-var=location=eastus') -Root $root
         $apply.StdOut | Should -Match 'Apply complete! Resources: 0 added, 0 changed, 0 destroyed\.'
         $remaining = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('state', 'list') -Root $root

@@ -177,6 +177,7 @@ Describe 'Module Resources packaging' {
                 'order_variable_attrs.mptf.hcl'
             )
             module = @(
+                'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
                 'sort_outputs.mptf.hcl'
@@ -190,7 +191,7 @@ Describe 'Module Resources packaging' {
             )
             example = @(
                 'disable_telemetry.mptf.hcl'
-                'telemetry_location.mptf.hcl'
+                'location.mptf.hcl'
             )
             test = @(
                 'remove_modtm_provider.mptf.hcl'

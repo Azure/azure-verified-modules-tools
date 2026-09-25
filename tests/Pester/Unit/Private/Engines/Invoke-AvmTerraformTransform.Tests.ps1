@@ -127,7 +127,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'finishes module targets before scheduling examples with the requested throttle' {
+    It 'finishes module targets and forwards child inputs before parent and example scopes' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -157,7 +157,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $InputObject.Count -eq 2 -and
                 $ThrottleLimit -eq 4
             }
-            $script:transformBatches.ToArray() | Should -Be @('root,module', 'root', 'example,example')
+            $script:transformBatches.ToArray() | Should -Be @('root,module', 'module', 'root', 'example,example')
         }
     }
 

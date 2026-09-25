@@ -126,14 +126,6 @@ Type: `map(string)`
 
 Default: `null`
 
-### <a name="input_telemetry_location"></a> [telemetry\_location](#input\_telemetry\_location)
-
-Description: Optional. Location for the subscription-scoped AVM telemetry deployment. Defaults to the module location; override it for another region or cloud. See https://aka.ms/avm/telemetry.
-
-Type: `string`
-
-Default: `null`
-
 ### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
 
 Description: Controls operation timeouts for supported AzAPI resources.

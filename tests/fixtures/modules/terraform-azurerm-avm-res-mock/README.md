@@ -64,14 +64,6 @@ Type: `bool`
 
 Default: `true`
 
-### <a name="input_telemetry_location"></a> [telemetry\_location](#input\_telemetry\_location)
-
-Description: Optional. Location for the subscription-scoped AVM telemetry deployment. Defaults to the module location; override it for another region or cloud. See https://aka.ms/avm/telemetry.
-
-Type: `string`
-
-Default: `null`
-
 ## Outputs
 
 The following outputs are exported:

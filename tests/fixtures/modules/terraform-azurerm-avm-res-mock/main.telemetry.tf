@@ -1,5 +1,5 @@
 locals {
-  main_location = var.telemetry_location != null ? var.telemetry_location : var.location
+  main_location = var.location
 }
 
 data "azapi_client_config" "telemetry" {

@@ -11,10 +11,11 @@ function Invoke-AvmTransform {
 
         The Terraform engine is wired against the pinned mapotf binary and
         scoped config profiles under Resources/mapotf/. Instrumented roots
-        and children get metadata-backed AzAPI deployment telemetry and an
-        optional telemetry_location. Local module calls forward the parent's
-        telemetry opt-out and location; supported example calls expose and
-        forward the same controls. Test-module provider requirements and
+        and children get metadata-backed AzAPI deployment telemetry using
+        var.location. Missing required location inputs are generated for
+        roots and Azure-resource children. Local module calls forward missing
+        location inputs and the parent's telemetry opt-out; supported example
+        calls expose and forward the same controls. Test-module requirements and
         standard empty modtm test mocks are migrated. Existing authored
         variables keep their location and metadata when their defaults change.
         -WhatIf previews the Terraform transformation without changing files.

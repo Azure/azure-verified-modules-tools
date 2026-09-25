@@ -199,15 +199,18 @@ the retired resource are migrated. Custom
 non-empty mocks and other author-owned `modtm` blocks fail with a
 file-specific error for manual review.
 
-Instrumented modules expose optional `telemetry_location`. It defaults to
-`null` and uses `var.location` when that input exists; otherwise it defaults
-to `westus2`. Override it when the deployment must be stored in another
-region, especially in a sovereign cloud. Child module calls forward the
-parent's `enable_telemetry` and resolved location. Supported example calls
-also forward those controls; missing example variables are added to
-`variables.tf` while existing declarations retain their file and authored
-metadata. An example with `var.location` defaults its override to `null`;
-other examples default it to `westus2`. The new deployment writes one
+All Terraform roots except utilities without Azure resources now expose
+`var.location`. Local submodules that deploy Azure resources expose it too,
+even when they do not have their own telemetry prefix. MaPoTF adds a required,
+non-nullable string input with no default when one is missing and removes the
+old `telemetry_location` input. Supply a region even for globally scoped
+modules, because their subscription-scoped telemetry deployment needs one;
+choose a location supported by the target cloud. Local child module calls
+receive `var.location` when no location argument exists; authored per-item
+locations for multi-region modules are retained. Instrumented children also
+receive the parent's `enable_telemetry`. Supported example calls expose and
+forward missing inputs while leaving existing declarations and per-item
+locations intact. The new deployment writes one
 empty-template output update per normal plan, leaving its reporting name
 stable. That name is
 `<46d3xtrf.kind.seven-hex-prefix>.<full-version-with-hyphens-or-0-0-0>.<t|o|g|x>.<four-hex-instance>`.
@@ -368,7 +371,7 @@ exactly this status today.
 | `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): PowerShell hooks → `init -upgrade` → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. `pre.sh` and `post.sh` are rejected with PowerShell migration guidance. Requires provider credentials for planning. |
-| `avm transform`       | `mapotf`                | instrumented root/children: `root,module,common`; other children: `module,common`; then `module-call,common` on instrumented modules, `example,common` on direct examples, `test` on Terraform test modules, and `clean-backup` |   ✅   | Metadata-backed roots and children get AzAPI deployment telemetry and optional `telemetry_location`; local child and supported example calls forward the opt-out and location. Standard `modtm` test mocks and references are migrated. Pr-check snapshots and restores both `.tf` and `.tftest.hcl` files when reporting transform drift. |
+| `avm transform`       | `mapotf`                | instrumented root/children: `root,module,common`; other children: `module,common`; then `module-call,common` on all modules from deepest to root, `example,common` on direct examples, `test` on Terraform test modules, and `clean-backup` |   ✅   | Metadata-backed roots and children get AzAPI deployment telemetry and use `var.location`; Azure-resource children without telemetry get a required location input too. Local child and supported example calls forward missing location and the opt-out without overwriting authored per-item locations. Standard `modtm` test mocks and references are migrated. Pr-check snapshots and restores both `.tf` and `.tftest.hcl` files when reporting transform drift. |
 | `avm check convention`| _in-module `avm-rules`_ | walks 7 built-in `.psd1` rules under `src/Avm.Authoring/Resources/Rules/` + optional per-repo `<root>/.avm/rules/*.psd1`; aggregates issues |   ✅   | grept is replaced, not ported. Built-in set covers the 5 kept upstream grept policies per Slice B audit (file presence, name normalisation, dir scaffolding, `.gitignore` essentials). `-Fix` flag plumbed through. |
 
 The pinned tool versions live in

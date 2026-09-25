@@ -209,13 +209,24 @@ module "example" {
         Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
     }
 
-    It 'forwards an overridable telemetry location when <Name>' -TestCases @(
-        @{ Name = 'the example has a location'; Location = $true; Expected = 'var\.telemetry_location != null \? var\.telemetry_location : var\.location'; Default = 'null' }
-        @{ Name = 'the example has no location'; Location = $false; Expected = 'var\.telemetry_location'; Default = '"westus2"' }
+    It 'migrates the obsolete telemetry location when <Name>' -TestCases @(
+        @{ Name = 'the example already has a location'; Location = $true }
+        @{ Name = 'the example needs a location'; Location = $false }
     ) {
-        param($Name, $Location, $Expected, $Default)
+        param($Name, $Location)
 
         Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type = string
+}
+'@
+        $exampleVariables = Join-Path $script:target 'variables.tf'
+        Set-Content -LiteralPath $exampleVariables -Encoding utf8NoBOM -Value @'
+variable "example_name" {
+  type    = string
+  default = "example"
+}
+
 variable "telemetry_location" {
   type    = string
   default = null
@@ -244,14 +255,54 @@ module "example" {
 
         Invoke-TelemetryProfiles -Root $script:target
         $first = Get-Content -LiteralPath $script:main -Raw
-        $first | Should -Match ('(?m)^\s*telemetry_location\s*=\s*' + $Expected + ' # keep this comment')
-        $declaration = Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw
-        $declaration | Should -Match ('(?s)variable "telemetry_location" \{\s*type\s*=\s*string\s*default\s*=\s*' + $Default)
+        $first | Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        $first | Should -Not -Match 'telemetry_location'
+        $declaration = Get-Content -LiteralPath $exampleVariables -Raw
+        $declaration | Should -Not -Match 'variable "telemetry_location"'
+        if ($Location) {
+            $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*"eastus"'
+            $declaration | Should -Not -Match 'variable "location"'
+        }
+        else {
+            $declaration | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+            $locationBody = [regex]::Match($declaration, '(?s)variable "location" \{(?<body>[^}]*)\}').Groups['body'].Value
+            $locationBody | Should -Not -Match 'default\s*='
+        }
         Assert-TelemetryExampleValid -Root $script:target
 
         Invoke-TelemetryProfiles -Root $script:target
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
-        Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw | Should -BeExactly $declaration
+        Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
+    }
+
+    It 'keeps an authored per-item location in an example module call' {
+        Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type = string
+}
+'@
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+variable "hub_location" {
+  type    = string
+  default = "eastus"
+}
+
+module "example" {
+  source   = "../../modules/support"
+  location = var.hub_location
+}
+'@
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?m)^\s*location\s*=\s*var\.hub_location'
+        $first | Should -Not -Match 'variable "location"'
+        (Join-Path $script:target 'variables.tf') | Should -Exist
+        Get-Content -LiteralPath (Join-Path $script:target 'variables.tf') -Raw |
+            Should -Not -Match 'variable "location"'
+        Assert-TelemetryExampleValid -Root $script:target
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
     }
 
     It 'leaves an already-correct reference and true-default declaration byte-identical' {
@@ -772,14 +823,17 @@ module "wrapper" {
         $result.Changed | Should -Contain $exampleVariablesPath
         $example = Get-Content -LiteralPath $script:main -Raw
         $example | Should -Match '(?ms)^module "example" \{[^}]*enable_telemetry\s*=\s*var\.enable_telemetry'
-        $example | Should -Match '(?ms)^module "example" \{[^}]*telemetry_location\s*=\s*var\.telemetry_location'
+        $example | Should -Match '(?ms)^module "example" \{[^}]*location\s*=\s*var\.location'
+        $example | Should -Not -Match 'telemetry_location'
         $example | Should -Match '(?ms)^module "wrapper" \{\s*source\s*=\s*"\.\./\.\./modules/wrapper"\s*\}'
         Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
         Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
-            Should -Match '(?s)variable "telemetry_location" \{[^}]*default\s*=\s*"westus2"'
+            Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
         Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
+        Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
+            Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
         foreach ($module in @($script:root, $wrapper)) {
             Get-Content -LiteralPath (Join-Path $module 'main.tf') -Raw |
                 Should -Match '(?m)^\s+enable_telemetry\s*=\s*true\s*$'

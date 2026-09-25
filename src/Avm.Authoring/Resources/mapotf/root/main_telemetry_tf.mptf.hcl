@@ -6,10 +6,6 @@ data "variable" "telemetry_location" {
   name = "telemetry_location"
 }
 
-data "variable" "location" {
-  name = "location"
-}
-
 data "data" "azurerm_client_config" {
   data_source_type = "azurerm_client_config"
 }
@@ -61,12 +57,11 @@ data "local" "avm_telemetry_version_token" {
 locals {
   enable_telemetry_exists    = length(data.variable.enable_telemetry.result) == 1
   telemetry_location_exists  = length(data.variable.telemetry_location.result) == 1
-  location_exists            = length(data.variable.location.result) == 1
   main_location_exists       = length(data.local.main_location.result) == 1
   avm_metadata_exists        = length(data.local.avm_metadata.result) == 1
   module_source_type_exists  = length(data.local.avm_module_source_type.result) == 1
   version_token_exists       = length(data.local.avm_telemetry_version_token.result) == 1
-  main_location_expression   = local.location_exists ? "var.telemetry_location != null ? var.telemetry_location : var.location" : "var.telemetry_location"
+  main_location_expression   = "var.location"
   azurerm_client_exists      = try(data.data.azurerm_client_config.result["azurerm_client_config"].telemetry != null, false)
   azapi_client_exists        = try(data.data.azapi_client_config.result["azapi_client_config"].telemetry != null, false)
   modtm_module_source_exists = try(data.data.modtm_module_source.result["modtm_module_source"].telemetry != null, false)
@@ -144,55 +139,9 @@ DESCRIPTION
   }
 }
 
-transform "new_block" "new_telemetry_location_with_location" {
-  for_each       = !local.telemetry_location_exists && local.location_exists ? toset([1]) : toset([])
-  new_block_type = "variable"
-  labels         = ["telemetry_location"]
-  filename       = "variables.tf"
-  asraw {
-    type        = string
-    default     = null
-    description = "Optional. Location for the subscription-scoped AVM telemetry deployment. Defaults to the module location; override it for another region or cloud. See https://aka.ms/avm/telemetry."
-  }
-}
-
-transform "new_block" "new_telemetry_location_without_location" {
-  for_each       = !local.telemetry_location_exists && !local.location_exists ? toset([1]) : toset([])
-  new_block_type = "variable"
-  labels         = ["telemetry_location"]
-  filename       = "variables.tf"
-  asraw {
-    type        = string
-    default     = "westus2"
-    description = "Optional. Location for the subscription-scoped AVM telemetry deployment. Defaults to westus2; override it for another region or cloud. See https://aka.ms/avm/telemetry."
-    nullable    = false
-  }
-}
-
-transform "update_in_place" "telemetry_location_with_location" {
-  for_each             = local.telemetry_location_exists && local.location_exists ? toset([1]) : toset([])
+transform "remove_block" "telemetry_location" {
+  for_each             = local.telemetry_location_exists ? toset([1]) : toset([])
   target_block_address = "variable.telemetry_location"
-  asraw {
-    type    = string
-    default = null
-  }
-}
-
-transform "remove_block_element" "telemetry_location_nullable" {
-  for_each             = local.telemetry_location_exists && local.location_exists && try(data.variable.telemetry_location.result["telemetry_location"].nullable, null) == false ? toset([1]) : toset([])
-  target_block_address = "variable.telemetry_location"
-  paths                = ["nullable"]
-  depends_on           = [transform.update_in_place.telemetry_location_with_location]
-}
-
-transform "update_in_place" "telemetry_location_without_location" {
-  for_each             = local.telemetry_location_exists && !local.location_exists ? toset([1]) : toset([])
-  target_block_address = "variable.telemetry_location"
-  asraw {
-    type     = string
-    default  = "westus2"
-    nullable = false
-  }
 }
 
 transform "remove_block" "azurerm_client_config" {
