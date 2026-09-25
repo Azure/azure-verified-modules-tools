@@ -36,7 +36,7 @@
       "description": "Stable telemetry prefix. The ecosystem and module kind must also match the containing module.",
       "anyOf": [
         { "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
-        { "const": "46d3xbcp.resourcegraph-query", "description": "Preserve the existing published Resource Graph identifier without rewriting telemetry." }
+        { "const": "46d3xbcp.resourcegraph-query", "description": "Published Resource Graph prefix: valid as the current value in existing v1 metadata; when rotating to a new 46d3xbcp.res.<seven lowercase hexadecimal characters> prefix, retain this value in alternativeTelemetryIdPrefixes for Microsoft.ResourceGraph/queries only." }
       ],
       "if": { "pattern": "^46d3xbcp\\." },
       "then": { "maxLength": 50 },
