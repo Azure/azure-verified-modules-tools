@@ -16,8 +16,8 @@
 #   3. $env:AVM_HOME is pointed at a fresh TestDrive subdir so the
 #      managed-cache lookup inside Resolve-AvmTool misses, forcing
 #      -AllowPathFallback to take effect and the launchers to be used.
-#   4. A minimal terraform module (main.tf + tests/ + README.md with
-#      terraform-docs markers) is materialised under TestDrive/module.
+#   4. A minimal terraform module (main.tf + telemetry + tests/ + README.md
+#      with terraform-docs markers) is materialised under TestDrive/module.
 #   5. The pinned policy-library cache for avm-policy-aprl and
 #      avm-policy-avmsec is pre-staged under $env:AVM_HOME/cache/assets/
 #      (cache-hit fast-path) with AVM_POLICY_LIBRARY_REF/_SHA256 overriding
@@ -98,6 +98,14 @@ BeforeAll {
         '}'
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+    $script:telemetryStubContent = @'
+resource "azapi_resource" "telemetry" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+  # tflint-ignore: avm_azapi_resource_tags_required
+  tags = { avm_apply_id = plantimestamp() }
+}
+'@
+    Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'main.telemetry.tf') -Encoding utf8NoBOM -Value $script:telemetryStubContent
 
     $readme = @(
         '# Fixture',
@@ -269,6 +277,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $childMetadata = Get-Content -LiteralPath $metadataFixture -Raw | ConvertFrom-Json -AsHashtable
         $childMetadata.Remove('owners')
         $childMetadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $nestedModule 'metadata.json') -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $nestedModule 'main.telemetry.tf') -Value $script:telemetryStubContent -Encoding utf8NoBOM
 
         try {
             $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
@@ -293,6 +302,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         Copy-Item -LiteralPath $metadataFixture -Destination $bootstrapRoot
         Set-Content -LiteralPath (Join-Path $bootstrapRoot 'terraform.tf') -Value $terraformTf -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $bootstrapRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $bootstrapRoot 'main.telemetry.tf') -Value $script:telemetryStubContent -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value '# example' -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $bootstrapRoot 'README.md') -Value $readme -Encoding utf8NoBOM
 

@@ -1,6 +1,6 @@
 # Terraform telemetry alignment
 
-**Status**: complete
+**Status**: in-progress
 **Started**: 2026-09-24
 **Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -42,6 +42,28 @@ opt-out, and a maximum-length 64-character deployment name. Both fixture
 unit suites run with mocked providers. A local state upgrade proves the old
 provider must be installed once, then both legacy addresses are forgotten
 without a destroy. No live Azure resources were changed.
+
+## Follow-up — TFLint compatibility
+
+The first CI run passed unit, component, and workflow checks but failed all
+six Terraform integration legs. The pinned AVM TFLint plugin still requires
+`modtm` in the root config and enforces `tags = var.tags` on every taggable
+AzAPI resource, including the generated four-tag telemetry deployment.
+
+- [x] Disable the obsolete root `modtm` rule without disabling other AzAPI
+      tag checks.
+- [x] Add `response_export_values = []` to the generated telemetry resource
+      and a single-resource inline tag-rule exemption after mapotf writes it.
+- [x] Cover ordinary AzAPI tag enforcement, generated telemetry lint, and
+      the stubbed component chain with focused tests.
+- [x] Pass the final local gate and focused TFLint attestation.
+- [ ] Commit and push the fix; confirm CI integration across all three
+      operating systems.
+
+The repaired gate passed with 1,824 unit tests (9 platform skips) and 799
+component tests, no errors. The real pinned TFLint attestation confirmed
+that generated telemetry passes while two ordinary AzAPI resources with
+nonstandard tags still fail. No live Azure resources were changed locally.
 
 ## Blockers or dependencies
 

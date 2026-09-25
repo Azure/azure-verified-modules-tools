@@ -82,7 +82,9 @@ section when cutting a release.
   state is forgotten without destroying it, though existing state needs the
   former provider installed for one final initialization. Standard `modtm`
   test mocks, provider requirements, and resource references in instrumented
-  modules migrate too; custom `modtm` use is reported as an error.
+  modules migrate too; custom `modtm` use is reported as an error. Packaged
+  TFLint disables only its retired `modtm` requirement and exempts only the
+  generated telemetry tags from the generic customer-tags rule.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team

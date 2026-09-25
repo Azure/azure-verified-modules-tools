@@ -64,6 +64,12 @@ variable "ignore_body_changes" {
         $canonicalRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' 'terraform-azure-avm-res-mock'
         $deprecatedRoot = Join-Path $TestDrive 'deprecated-interface'
         Copy-Item -LiteralPath $canonicalRoot -Destination $deprecatedRoot -Recurse -Force
+        $badTagsRoot = Join-Path $TestDrive 'nonstandard-resource-tags'
+        Copy-Item -LiteralPath $canonicalRoot -Destination $badTagsRoot -Recurse -Force
+        $badTagsPath = Join-Path $badTagsRoot 'main.tf'
+        $badTagsContent = (Get-Content -LiteralPath $badTagsPath -Raw).
+            Replace('tags                   = var.tags', 'tags                   = {}')
+        Set-Content -LiteralPath $badTagsPath -Value $badTagsContent -Encoding utf8NoBOM -NoNewline
         @'
 
 variable "lock" {
@@ -81,12 +87,13 @@ output "deprecated_lock" {
 '@ | Add-Content -LiteralPath (Join-Path $deprecatedRoot 'variables.tf') -Encoding utf8NoBOM
 
         $run = InModuleScope 'Avm.Authoring' -Parameters @{
+            BadTags    = $badTagsRoot
             Canonical  = $canonicalRoot
             Config     = $script:configPath
             Deprecated = $deprecatedRoot
             Required   = $requiredRoot
         } {
-            param($Canonical, $Config, $Deprecated, $Required)
+            param($BadTags, $Canonical, $Config, $Deprecated, $Required)
 
             $tool = Resolve-AvmTool -Name 'tflint'
             $init = Invoke-AvmProcess `
@@ -113,6 +120,14 @@ output "deprecated_lock" {
                 -FilePath $tool.Path `
                 -ArgumentList @('--config', $Config, '--format=json', '--minimum-failure-severity=warning') `
                 -WorkingDirectory $Canonical `
+                -IgnoreExitCode
+            $badTagsLint = Invoke-AvmProcess `
+                -FilePath $tool.Path `
+                -ArgumentList @(
+                    '--config', $Config, '--format=json', '--minimum-failure-severity=warning',
+                    '--only=avm_azapi_resource_tags_required'
+                ) `
+                -WorkingDirectory $BadTags `
                 -IgnoreExitCode
             $deprecatedLint = Invoke-AvmProcess `
                 -FilePath $tool.Path `
@@ -153,6 +168,7 @@ output "deprecated_lock" {
             }
 
             [pscustomobject]@{
+                BadTagsLint         = $badTagsLint
                 CanonicalLint       = $canonicalLint
                 CanonicalResult     = $canonicalResult
                 CanonicalWarnings   = @($canonicalWarnings | ForEach-Object { [string]$_ })
@@ -183,6 +199,11 @@ output "deprecated_lock" {
         $requiredIssue.rule.severity | Should -Be 'info'
 
         $run.CanonicalLint.ExitCode | Should -Be 0 -Because "$($run.CanonicalLint.StdErr)`n$($run.CanonicalLint.StdOut)"
+        $run.BadTagsLint.ExitCode | Should -Be 2 -Because "$($run.BadTagsLint.StdErr)`n$($run.BadTagsLint.StdOut)"
+        $tagIssues = @(($run.BadTagsLint.StdOut | ConvertFrom-Json).issues |
+                Where-Object { $_.rule.name -eq 'avm_azapi_resource_tags_required' })
+        $tagIssues | Should -HaveCount 2
+        @($tagIssues | Where-Object { $_.range.filename -eq 'main.telemetry.tf' }) | Should -HaveCount 0
         $run.DeprecatedLint.ExitCode | Should -Be 0 -Because "$($run.DeprecatedLint.StdErr)`n$($run.DeprecatedLint.StdOut)"
         $run.DeprecatedResult.Status | Should -Be 'pass'
         $deprecatedIssue = $run.DeprecatedResult.Issues |
@@ -191,19 +212,25 @@ output "deprecated_lock" {
         $deprecatedIssue.Severity | Should -Be 'notice'
         $deprecatedIssue.File | Should -Be 'variables.tf'
         $deprecatedIssue.Message | Should -Match 'v0\.19\.0 migration window'
-        @($run.DeprecatedWarnings).Count | Should -Be 2
+        @($run.DeprecatedWarnings).Count | Should -Be 3
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -match '\[avm_interface_lock_deprecated\].*v0\.19\.0 migration window'
             }).Count | Should -Be 1
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
             }).Count | Should -Be 1
+        @($run.DeprecatedWarnings | Where-Object {
+                $_ -match 'TFLint inline ignore comment found for rule\(s\): avm_azapi_resource_tags_required\. \(main\.telemetry\.tf, line \d+\)'
+            }).Count | Should -Be 1
         ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|v0\.19\.0 migration window'
 
         $run.CanonicalResult.Status | Should -Be 'pass'
-        @($run.CanonicalWarnings).Count | Should -Be 1
+        @($run.CanonicalWarnings).Count | Should -Be 2
         @($run.CanonicalWarnings | Where-Object {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
+            }).Count | Should -Be 1
+        @($run.CanonicalWarnings | Where-Object {
+                $_ -match 'TFLint inline ignore comment found for rule\(s\): avm_azapi_resource_tags_required\. \(main\.telemetry\.tf, line \d+\)'
             }).Count | Should -Be 1
         @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty

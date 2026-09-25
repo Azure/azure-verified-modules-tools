@@ -23,6 +23,8 @@ resource "azapi_resource" "telemetry" {
       }
     }
   }
+  response_export_values = []
+  # tflint-ignore: avm_azapi_resource_tags_required
   tags = {
     avm_module_version        = local.avm_module_version
     avm_module_source_type    = local.avm_module_source_type

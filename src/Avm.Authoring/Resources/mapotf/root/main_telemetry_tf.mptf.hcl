@@ -328,6 +328,7 @@ transform "new_block" "azapi_resource" {
     name      = "${local.avm_metadata.telemetryIdPrefix}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
     parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
     location  = local.main_location
+    response_export_values = []
     tags = {
       avm_module_version        = local.avm_module_version
       avm_module_source_type    = local.avm_module_source_type
@@ -356,6 +357,7 @@ transform "update_in_place" "azapi_resource" {
     name      = "${local.avm_metadata.telemetryIdPrefix}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
     parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
     location  = local.main_location
+    response_export_values = []
     tags = {
       avm_module_version        = local.avm_module_version
       avm_module_source_type    = local.avm_module_source_type

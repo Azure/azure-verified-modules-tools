@@ -271,6 +271,49 @@ function Remove-AvmLegacyTelemetryTestMock {
     }
 }
 
+function Set-AvmTelemetryTagLintDirective {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][object[]] $Targets)
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    foreach ($target in $Targets | Where-Object { $_.Profiles -contains 'root' }) {
+        $path = Join-Path $target.Path 'main.telemetry.tf'
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw [AvmConfigurationException]::new("Instrumented Terraform module '$($target.Path)' has no main.telemetry.tf.")
+        }
+
+        $content = [System.IO.File]::ReadAllText($path)
+        $resources = [regex]::Matches(
+            $content,
+            '(?ms)^resource[ \t]+"azapi_resource"[ \t]+"telemetry"[ \t]*\{(?<body>.*?)^\}')
+        if ($resources.Count -ne 1) {
+            throw [AvmConfigurationException]::new("Expected one azapi_resource.telemetry block in '$path'.")
+        }
+
+        $body = $resources[0].Groups['body']
+        $tags = [regex]::Matches($body.Value, '(?m)^(?<indent>[ \t]*)tags[ \t]*=')
+        if ($tags.Count -ne 1) {
+            throw [AvmConfigurationException]::new("Expected one telemetry tags attribute in '$path'.")
+        }
+
+        $offset = $body.Index + $tags[0].Index
+        $indent = $tags[0].Groups['indent'].Value
+        $priorLines = @($content.Substring(0, $offset) -split '\r?\n')
+        if ($priorLines.Count -gt 1 -and $priorLines[-2] -ceq ($indent + $directive)) {
+            continue
+        }
+
+        $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+        if ($PSCmdlet.ShouldProcess($path, 'exempt generated telemetry tags from the standard resource-tag rule')) {
+            [System.IO.File]::WriteAllText($path, $content.Insert($offset, $indent + $directive + $lineEnding), $encoding)
+        }
+    }
+}
+
 function Get-AvmRemainingModtmIssue {
     [CmdletBinding()]
     [OutputType([pscustomobject[]])]
@@ -626,6 +669,7 @@ function Invoke-AvmTerraformTransform {
                 -ThrottleLimit $effectiveThrottle
         }
         Remove-AvmLegacyTelemetryTestMock -Root $Context.Root -ModuleTargets $moduleTargets
+        Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 
         foreach ($target in $targets) {

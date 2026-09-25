@@ -359,7 +359,12 @@ Currently vendored:
 
 - `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`,
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
-  (root / `modules/*` / `examples/*`).
+  (root / `modules/*` / `examples/*`). All three disable the external
+  plugin's obsolete `modtm` requirement. The AzAPI resource-tag rule remains
+  enabled for ordinary resources; only generated telemetry tags receive an
+  inline TFLint exception because their four-tag reporting contract cannot
+  use `var.tags`. Mapotf drops comments in `asraw` blocks, so the transform
+  engine inserts the exception after mapotf writes the resource.
 - `Resources/mapotf/{common,module,root,module-call,example,test}/*.mptf.hcl`
   - composed per target by `Invoke-AvmTerraformTransform`. Root and child
   modules with a telemetry prefix run `root,module,common`; children without

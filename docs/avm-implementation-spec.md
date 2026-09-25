@@ -496,6 +496,12 @@ tier tag. The deployment identity needs `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/delete` at the subscription scope; see
 <https://aka.ms/avm/telemetry>.
 
+The generated AzAPI resource sets `response_export_values = []`. Its four
+reporting tags receive a scoped inline TFLint exemption from the generic
+`tags = var.tags` rule; that rule remains enabled for every other AzAPI
+resource. The packaged root TFLint profile disables the retired `modtm`
+provider requirement, as the module and example profiles already do.
+
 The old `modtm_telemetry.telemetry` and `random_uuid.telemetry` instances are
 retired through `removed` blocks with `destroy = false`, so upgrading does
 not delete their remote objects. Terraform must still install their former

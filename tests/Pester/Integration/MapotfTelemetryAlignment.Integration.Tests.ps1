@@ -207,6 +207,7 @@ output "telemetry_count" {
         $telemetry | Should -Match 'avm_module_version\s*=\s*local\.avm_module_version'
         $telemetry | Should -Match 'avm_module_source_type\s*=\s*local\.avm_module_source_type'
         $telemetry | Should -Match 'avm_module_canonical_type\s*=\s*local\.avm_metadata\.canonicalType'
+        $telemetry | Should -Match 'response_export_values\s*=\s*\[\]'
         $telemetry | Should -Not -Match 'avm_module_tier'
         $telemetry | Should -Match 'var\.telemetry_location != null \? var\.telemetry_location : var\.location'
         $providers | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
@@ -387,6 +388,8 @@ run "telemetry" {
         $result = Invoke-TelemetryEngine -Root $root
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -Contain ([System.IO.Path]::Combine('tests', 'unit', 'telemetry.tftest.hcl'))
+        Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw |
+            Should -Match '(?m)^\s*# tflint-ignore: avm_azapi_resource_tags_required\r?\n\s*tags\s*='
         $testContent = Get-Content -LiteralPath $testPath -Raw
         $testContent | Should -Not -Match 'mock_provider "modtm"'
         $testContent | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'

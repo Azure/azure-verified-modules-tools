@@ -134,6 +134,7 @@ Describe 'Module Resources packaging' {
             $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
         }
 
+        $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(
                 'avm_terraform_literal_heredoc_disallowed',
