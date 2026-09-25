@@ -50,12 +50,22 @@ data "local" "avm_metadata" {
   name = "avm_metadata"
 }
 
+data "local" "avm_module_source_type" {
+  name = "avm_module_source_type"
+}
+
+data "local" "avm_telemetry_version_token" {
+  name = "avm_telemetry_version_token"
+}
+
 locals {
   enable_telemetry_exists    = length(data.variable.enable_telemetry.result) == 1
   telemetry_location_exists  = length(data.variable.telemetry_location.result) == 1
   location_exists            = length(data.variable.location.result) == 1
   main_location_exists       = length(data.local.main_location.result) == 1
   avm_metadata_exists        = length(data.local.avm_metadata.result) == 1
+  module_source_type_exists  = length(data.local.avm_module_source_type.result) == 1
+  version_token_exists       = length(data.local.avm_telemetry_version_token.result) == 1
   main_location_expression   = local.location_exists ? "var.telemetry_location != null ? var.telemetry_location : var.location" : "var.telemetry_location"
   azurerm_client_exists      = try(data.data.azurerm_client_config.result["azurerm_client_config"].telemetry != null, false)
   azapi_client_exists        = try(data.data.azapi_client_config.result["azapi_client_config"].telemetry != null, false)
@@ -91,6 +101,15 @@ locals {
       if startswith(data_type, "random_")
     ]
   ])
+
+  source_type_code_expression = <<-EOT
+    (
+      can(regex("^registry[.]terraform[.]io/", local.avm_module_source)) ? "t" :
+      can(regex("^registry[.]opentofu[.]org/", local.avm_module_source)) ? "o" :
+      can(regex("^git::", local.avm_module_source)) ? "g" :
+      "x"
+    )
+EOT
 }
 
 transform "new_block" "new_enable_telemetry" {
@@ -290,13 +309,31 @@ transform "new_block" "telemetry_locals" {
     avm_telemetry_module_entry  = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
     avm_module_version          = try(local.avm_telemetry_module_entry.Version, "")
     avm_module_source           = try(local.avm_telemetry_module_entry.Source, "")
-    avm_module_source_type = (
-      can(regex("^registry[.]terraform[.]io/", local.avm_module_source)) ? "terraform-registry" :
-      can(regex("^registry[.]opentofu[.]org/", local.avm_module_source)) ? "opentofu-registry" :
-      can(regex("^git::", local.avm_module_source)) ? "git" :
-      "other"
-    )
   }
+}
+
+transform "ensure_local" "avm_module_source_type" {
+  for_each           = !local.module_source_type_exists ? toset([1]) : toset([])
+  name               = "avm_module_source_type"
+  fallback_file_name = "main.telemetry.tf"
+  value_as_string    = trim(local.source_type_code_expression, "\r\n")
+  depends_on         = [transform.new_block.telemetry_locals]
+}
+
+transform "update_in_place" "avm_module_source_type" {
+  for_each             = local.module_source_type_exists ? toset([1]) : toset([])
+  target_block_address = "local.avm_module_source_type"
+  asstring {
+    avm_module_source_type = trim(local.source_type_code_expression, "\r\n")
+  }
+}
+
+transform "ensure_local" "avm_telemetry_version_token" {
+  for_each           = !local.version_token_exists ? toset([1]) : toset([])
+  name               = "avm_telemetry_version_token"
+  fallback_file_name = "main.telemetry.tf"
+  value_as_string    = "replace(coalesce(local.avm_module_version, \"0.0.0\"), \".\", \"-\")"
+  depends_on         = [transform.new_block.telemetry_locals]
 }
 
 transform "new_block" "terraform_data" {
@@ -325,16 +362,10 @@ transform "new_block" "azapi_resource" {
   asraw {
     count     = var.enable_telemetry ? 1 : 0
     type      = "Microsoft.Resources/deployments@2025-04-01"
-    name      = "${local.avm_metadata.telemetryIdPrefix}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
+    name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
     parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
     location  = local.main_location
     response_export_values = []
-    tags = {
-      avm_module_version        = local.avm_module_version
-      avm_module_source_type    = local.avm_module_source_type
-      avm_module_canonical_type = local.avm_metadata.canonicalType
-      avm_apply_id             = plantimestamp()
-    }
     body = {
       properties = {
         mode = "Incremental"
@@ -342,7 +373,23 @@ transform "new_block" "azapi_resource" {
           "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
           contentVersion = "1.0.0.0"
           resources      = []
+          outputs = {
+            telemetry = {
+              type  = "String"
+              value = "For more information, see https://aka.ms/avm/TelemetryInfo"
+            }
+            apply_id = {
+              type  = "String"
+              value = plantimestamp()
+            }
+          }
         }
+      }
+    }
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
       }
     }
   }
@@ -354,16 +401,10 @@ transform "update_in_place" "azapi_resource" {
   asraw {
     count     = var.enable_telemetry ? 1 : 0
     type      = "Microsoft.Resources/deployments@2025-04-01"
-    name      = "${local.avm_metadata.telemetryIdPrefix}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
+    name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
     parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
     location  = local.main_location
     response_export_values = []
-    tags = {
-      avm_module_version        = local.avm_module_version
-      avm_module_source_type    = local.avm_module_source_type
-      avm_module_canonical_type = local.avm_metadata.canonicalType
-      avm_apply_id             = plantimestamp()
-    }
     body = {
       properties = {
         mode = "Incremental"
@@ -371,8 +412,31 @@ transform "update_in_place" "azapi_resource" {
           "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
           contentVersion = "1.0.0.0"
           resources      = []
+          outputs = {
+            telemetry = {
+              type  = "String"
+              value = "For more information, see https://aka.ms/avm/TelemetryInfo"
+            }
+            apply_id = {
+              type  = "String"
+              value = plantimestamp()
+            }
+          }
         }
       }
     }
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
+      }
+    }
   }
+}
+
+transform "remove_block_element" "drop_legacy_telemetry_tags" {
+  for_each             = local.azapi_resource_exists && try(data.resource.azapi_resource.result["azapi_resource"].telemetry.tags != null, false) ? toset([1]) : toset([])
+  target_block_address = "resource.azapi_resource.telemetry"
+  paths                = ["tags"]
+  depends_on           = [transform.update_in_place.azapi_resource]
 }

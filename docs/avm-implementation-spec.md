@@ -437,8 +437,11 @@ prefixes are preserved and retain ecosystem, family-kind, format, and length
 validation. Non-helper resource/pattern roots and directly published children
 require telemetry.
 Uninstrumented Bicep children without a version file may omit the prefix under
-BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
-prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
+BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50
+characters. Terraform prefixes have the fixed 20-character form
+`46d3xtrf.<res|ptn|utl>.<seven lowercase hexadecimal characters>`.
+The generated Terraform name reserves space for the version, source token,
+and instance suffix within ARM's 64-character limit.
 Existing underscore identifiers and the exact historical Resource Graph
 identifier are preserved; file creation does not repair deployed telemetry.
 Empty owner lists are allowed. Deprecated, unpublished modules are excluded from
@@ -482,25 +485,35 @@ Callers in clouds without `westus2` must override it. Local module calls
 forward the parent's opt-out and resolved location; supported example calls
 expose and forward the same controls.
 
-`main.telemetry.tf` reads `telemetryIdPrefix` and `canonicalType` from the
-module's own `metadata.json` at apply time. When telemetry is enabled, it
-creates an empty `Microsoft.Resources/deployments@2025-04-01` deployment at
-the active subscription scope. Its name appends four hexadecimal characters
-derived from the stable ID of `terraform_data.telemetry`. Its only reporting
-tags are `avm_module_version` (from Terraform's module manifest),
-`avm_module_source_type` (`terraform-registry`, `opentofu-registry`, `git`, or
-`other`; never a source path), `avm_module_canonical_type` (from metadata),
-and `avm_apply_id` (`plantimestamp()` on every normal plan). There is no
-tier tag. The deployment identity needs `Microsoft.Resources/deployments/read`,
+`main.telemetry.tf` reads `telemetryIdPrefix` from the module's own
+`metadata.json` at apply time. When telemetry is enabled, it creates an
+empty `Microsoft.Resources/deployments@2025-04-01` deployment at the active
+subscription scope. Its reporting payload is solely the deployment name:
+`<telemetryIdPrefix>.<version>.<source>.<instance>`. The full version comes
+from the matching `path.module` entry in Terraform's modules manifest, with
+periods changed to hyphens; an unavailable version is `0-0-0`. The one-letter
+source token is `t` (Terraform Registry), `o` (OpenTofu Registry), `g` (Git),
+or `x` (other); the raw source path is never reported. The stable instance
+suffix is four hex characters derived from `terraform_data.telemetry`'s ID.
+The module catalog maps the metadata prefix to its canonical type. A
+precondition rejects a version with unsupported name characters or a
+combined name longer than 64 characters; neither is silently truncated.
+
+The empty template contains the Bicep-style information output and a
+non-reporting `apply_id` output set to `plantimestamp()`. This changes the
+resource body once per normal plan, forcing an in-place deployment PUT even
+on an otherwise no-op apply while leaving the name stable. Refresh-only
+plans do not write telemetry. No reporting tags or tier are sent.
+The deployment identity needs `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/write`, and
 `Microsoft.Resources/deployments/delete` at the subscription scope; see
 <https://aka.ms/avm/telemetry>.
 
-The generated AzAPI resource sets `response_export_values = []`. Its four
-reporting tags receive a scoped inline TFLint exemption from the generic
-`tags = var.tags` rule; that rule remains enabled for every other AzAPI
-resource. The packaged root TFLint profile disables the retired `modtm`
-provider requirement, as the module and example profiles already do.
+The generated AzAPI resource sets `response_export_values = []`. Only this
+tagless telemetry deployment receives a scoped inline TFLint exemption
+from the generic `tags = var.tags` rule; that rule remains enabled for every
+other AzAPI resource. The packaged root TFLint profile disables the retired
+`modtm` provider requirement, as the module and example profiles already do.
 
 The old `modtm_telemetry.telemetry` and `random_uuid.telemetry` instances are
 retired through `removed` blocks with `destroy = false`, so upgrading does

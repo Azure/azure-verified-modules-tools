@@ -27,7 +27,7 @@ BeforeAll {
         New-AvmRepositoryMetadataInput -AuthoringModule $script:authoringModule `
             -ModuleDisplayName 'Azure Storage' -ModuleDescription 'Creates a storage account.' `
             -CanonicalType 'Microsoft.Storage/storageAccounts' `
-            -TelemetryIdPrefix '46d3xtrf.res.storage-account' `
+            -TelemetryIdPrefix '46d3xtrf.res.a1b2c3d' `
             -OwnerGitHubHandles @('first-owner', 'second-owner', 'third-owner') `
             -OwnerTeam '@Azure/storage-owners' -AlternativeNames @('Storage', 'Storage account')
     }
@@ -38,7 +38,7 @@ BeforeAll {
             moduleDisplayName = 'Azure Storage'
             moduleDescription = 'Creates a storage account.'
             canonicalType = 'Microsoft.Storage/storageAccounts'
-            telemetryIdPrefix = '46d3xtrf.res.storage-account'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
             tempPath = $script:workRoot
         }
     }
@@ -55,7 +55,7 @@ Describe 'Component: repository creation metadata' -Tag Component {
         $script:templateMetadata = $null
         $script:templateMetadataName = 'metadata.json'
         $script:templateDisabled = $false
-        $script:templateSource = "locals { telemetry_prefix = `"46d3xtrf.res.storage-account`" }`r`n"
+        $script:templateSource = "locals { telemetry_prefix = `"46d3xtrf.res.a1b2c3d`" }`r`n"
         $script:metadataAtCreate = $null
         $script:sourceAtCreate = $null
         $script:clonePath = $null
@@ -267,9 +267,9 @@ Describe 'Component: repository creation metadata' -Tag Component {
     }
 
     It 'initializes explicit <Kind> metadata for <Canonical> with no invented owners' -TestCases @(
-        @{ Kind = 'ptn'; Name = 'example-module'; Canonical = 'networking/hub-spoke'; Prefix = '46d3xtrf.ptn.existing-prefix' }
+        @{ Kind = 'ptn'; Name = 'example-module'; Canonical = 'networking/hub-spoke'; Prefix = '46d3xtrf.ptn.abcdef0' }
         @{ Kind = 'utl'; Name = 'example-module'; Canonical = 'utilities/naming'; Prefix = '' }
-        @{ Kind = 'ptn'; Name = 'alz'; Canonical = 'alz'; Prefix = '46d3xtrf.ptn.alz' }
+        @{ Kind = 'ptn'; Name = 'alz'; Canonical = 'alz'; Prefix = '46d3xtrf.ptn.123abcd' }
         @{ Kind = 'utl'; Name = 'naming'; Canonical = 'naming'; Prefix = '' }
     ) {
         param($Kind, $Name, $Canonical, $Prefix)
@@ -312,12 +312,12 @@ Describe 'Component: repository creation metadata' -Tag Component {
     It 'preserves a valid existing metadata file byte-for-byte including its telemetry identifier' {
         $existing = New-CreationTestMetadata
         $existing.moduleDisplayName = 'Existing display name'
-        $existing.telemetryIdPrefix = '46d3xtrf.res.published-id'
+        $existing.telemetryIdPrefix = '46d3xtrf.res.deadbee'
         $script:templateMetadata = ($existing | ConvertTo-Json -Depth 20 -Compress) + "`n"
-        $script:templateSource = "locals { telemetry_prefix = `"46d3xtrf.res.published-id`" }`n"
+        $script:templateSource = "locals { telemetry_prefix = `"46d3xtrf.res.deadbee`" }`n"
         $result = New-AvmRepositoryContent @script:createArguments -Confirm:$false
         $result.Metadata.moduleDisplayName | Should -Be 'Existing display name'
-        $result.Metadata.telemetryIdPrefix | Should -Be '46d3xtrf.res.published-id'
+        $result.Metadata.telemetryIdPrefix | Should -Be '46d3xtrf.res.deadbee'
         $script:metadataAtCreate | Should -BeExactly $script:templateMetadata
         $script:sourceAtCreate | Should -BeExactly $script:templateSource
     }

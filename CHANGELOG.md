@@ -77,14 +77,16 @@ section when cutting a release.
   subscription-scoped AzAPI deployment for metadata-backed roots and children.
   An optional `telemetry_location` defaults to `var.location` where available
   or `westus2` otherwise, and parent/example calls forward the opt-out and
-  location. Only module version, source type, canonical type, and a
-  per-plan apply ID are tagged; no paths or tier are sent. Legacy telemetry
+  location. The deployment name reports the fixed seven-hex metadata prefix,
+  full version (or `0-0-0`), one-character distribution source, and stable
+  instance suffix; no resource tags or raw source paths are sent. A changing
+  empty-template output forces a write on every normal apply. Legacy telemetry
   state is forgotten without destroying it, though existing state needs the
   former provider installed for one final initialization. Standard `modtm`
   test mocks, provider requirements, and resource references in instrumented
   modules migrate too; custom `modtm` use is reported as an error. Packaged
   TFLint disables only its retired `modtm` requirement and exempts only the
-  generated telemetry tags from the generic customer-tags rule.
+  generated tagless telemetry deployment from the generic customer-tags rule.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team

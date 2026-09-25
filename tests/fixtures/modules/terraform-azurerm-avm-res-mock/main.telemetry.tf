@@ -6,11 +6,12 @@ data "azapi_client_config" "telemetry" {
   count = var.enable_telemetry ? 1 : 0
 }
 
+# tflint-ignore: avm_azapi_resource_tags_required
 resource "azapi_resource" "telemetry" {
   count = var.enable_telemetry ? 1 : 0
 
   location  = local.main_location
-  name      = "${local.avm_metadata.telemetryIdPrefix}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
+  name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
   parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
   type      = "Microsoft.Resources/deployments@2025-04-01"
   body = {
@@ -20,16 +21,26 @@ resource "azapi_resource" "telemetry" {
         "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
         contentVersion = "1.0.0.0"
         resources      = []
+        outputs = {
+          telemetry = {
+            type  = "String"
+            value = "For more information, see https://aka.ms/avm/TelemetryInfo"
+          }
+          apply_id = {
+            type  = "String"
+            value = plantimestamp()
+          }
+        }
       }
     }
   }
   response_export_values = []
-  # tflint-ignore: avm_azapi_resource_tags_required
-  tags = {
-    avm_module_version        = local.avm_module_version
-    avm_module_source_type    = local.avm_module_source_type
-    avm_module_canonical_type = local.avm_metadata.canonicalType
-    avm_apply_id              = plantimestamp()
+
+  lifecycle {
+    precondition {
+      error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
+      condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+    }
   }
 }
 
@@ -50,10 +61,10 @@ locals {
   avm_module_version         = try(local.avm_telemetry_module_entry.Version, "")
   avm_module_source          = try(local.avm_telemetry_module_entry.Source, "")
   avm_module_source_type = (
-    can(regex("^registry[.]terraform[.]io/", local.avm_module_source)) ? "terraform-registry" :
-    can(regex("^registry[.]opentofu[.]org/", local.avm_module_source)) ? "opentofu-registry" :
-    can(regex("^git::", local.avm_module_source)) ? "git" :
-    "other"
+    can(regex("^registry[.]terraform[.]io/", local.avm_module_source)) ? "t" :
+    can(regex("^registry[.]opentofu[.]org/", local.avm_module_source)) ? "o" :
+    can(regex("^git::", local.avm_module_source)) ? "g" :
+    "x"
   )
   avm_metadata                = jsondecode(file("${path.module}/metadata.json"))
   avm_telemetry_manifest_path = "${path.root}/.terraform/modules/modules.json"
@@ -64,4 +75,8 @@ removed {
   lifecycle {
     destroy = false
   }
+}
+
+locals {
+  avm_telemetry_version_token = replace(coalesce(local.avm_module_version, "0.0.0"), ".", "-")
 }

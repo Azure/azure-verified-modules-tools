@@ -109,7 +109,7 @@ select the authored format:
   "moduleDisplayName": "Storage Accounts",
   "moduleDescription": "Deploys a Storage Account.",
   "canonicalType": "Microsoft.Storage/storageAccounts",
-  "telemetryIdPrefix": "46d3xtrf.res.storage-storageaccount",
+  "telemetryIdPrefix": "46d3xtrf.res.a1b2c3d",
   "owners": ["owner-one", "@Azure/team-name"]
 }
 ```
@@ -144,7 +144,9 @@ Terraform rejects `-UpdateSource` before writes and never
 generates `main.metadata.tf`; MaPoTF generates the empty AzAPI deployment
 telemetry from the module's metadata for prefixed roots and children. Its
 optional `telemetry_location` defaults to `null` with `var.location`, otherwise
-to `westus2`; `enable_telemetry = false` still opts out.
+to `westus2`; `enable_telemetry = false` still opts out. Terraform prefixes
+end in seven lowercase hex characters, and deployment telemetry is reported
+by its versioned name rather than resource tags.
 Existing authored source files are preserved. Metadata-only initialization
 does not rewrite source. Pre-commit and PR checks require valid metadata on
 every module root and child. Required tools resolve first; metadata validation

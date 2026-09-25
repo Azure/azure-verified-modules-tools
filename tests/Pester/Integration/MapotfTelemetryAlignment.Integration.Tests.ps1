@@ -92,7 +92,7 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
   "moduleDisplayName": "Mock child resource",
   "moduleDescription": "Child resource fixture for telemetry alignment.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.mock-child"
+  "telemetryIdPrefix": "46d3xtrf.res.c1d2e3f"
 }
 '@
             }
@@ -103,7 +103,7 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
   "moduleDisplayName": "Mock resource",
   "moduleDescription": "Resource fixture for telemetry alignment.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.mock",
+  "telemetryIdPrefix": "46d3xtrf.res.a1b2c3d",
   "owners": []
 }
 '@
@@ -201,14 +201,15 @@ output "telemetry_count" {
         $telemetry | Should -Match '(?s)resource "terraform_data" "telemetry" \{\s*count\s*=\s*var\.enable_telemetry'
         $telemetry | Should -Match 'Microsoft.Resources/deployments@2025-04-01'
         $telemetry | Should -Match 'local\.avm_metadata\.telemetryIdPrefix'
+        $telemetry | Should -Match 'local\.avm_telemetry_version_token'
+        $telemetry | Should -Match 'local\.avm_module_source_type'
         $telemetry | Should -Match 'data\.azapi_client_config\.telemetry\)\.subscription_resource_id'
         $telemetry | Should -Match 'substr\(sha1\(terraform_data\.telemetry\[0\]\.id\), 0, 4\)'
-        $telemetry | Should -Match 'avm_apply_id\s*=\s*plantimestamp\(\)'
-        $telemetry | Should -Match 'avm_module_version\s*=\s*local\.avm_module_version'
-        $telemetry | Should -Match 'avm_module_source_type\s*=\s*local\.avm_module_source_type'
-        $telemetry | Should -Match 'avm_module_canonical_type\s*=\s*local\.avm_metadata\.canonicalType'
+        $telemetry | Should -Match '(?s)apply_id\s*=\s*\{\s*type\s*=\s*"String"\s*value\s*=\s*plantimestamp\(\)'
+        $telemetry | Should -Match 'avm_telemetry_version_token\s*=\s*replace\(coalesce\(local\.avm_module_version,\s*"0\.0\.0"\),\s*"\.",\s*"-"\)'
+        $telemetry | Should -Not -Match '(?m)^\s*tags\s*='
+        $telemetry | Should -Match 'length\(local\.avm_metadata\.telemetryIdPrefix\).*<= 64'
         $telemetry | Should -Match 'response_export_values\s*=\s*\[\]'
-        $telemetry | Should -Not -Match 'avm_module_tier'
         $telemetry | Should -Match 'var\.telemetry_location != null \? var\.telemetry_location : var\.location'
         $providers | Should -Not -Match '(?m)^\s*(modtm|random)\s*='
         $providers | Should -Match '(?m)^\s*azapi\s*='
@@ -389,7 +390,7 @@ run "telemetry" {
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -Contain ([System.IO.Path]::Combine('tests', 'unit', 'telemetry.tftest.hcl'))
         Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw |
-            Should -Match '(?m)^\s*# tflint-ignore: avm_azapi_resource_tags_required\r?\n\s*tags\s*='
+            Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
         $testContent = Get-Content -LiteralPath $testPath -Raw
         $testContent | Should -Not -Match 'mock_provider "modtm"'
         $testContent | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'
@@ -404,10 +405,13 @@ run "telemetry" {
         Assert-TelemetryTerraformValid -Root $root
     }
 
-    It 'emits exactly four safe tags, a stable instance name, and no deployment when disabled' {
+    It 'encodes an unversioned local module in the name and creates no deployment when disabled' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLocation
         Invoke-TelemetryProfiles -Root $root
+        $generated = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        $generated | Should -Not -Match '(?m)^\s*tags\s*='
+        $generated | Should -Match '(?m)^\s*value\s*=\s*plantimestamp\(\)'
         Assert-TelemetryTerraformValid -Root $root
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
@@ -440,18 +444,11 @@ run "enabled" {
     error_message = "The explicit telemetry location must override var.location."
   }
   assert {
-    condition     = can(regex("^46d3xtrf[.]res[.]mock[.][0-9a-f]{4}$", azapi_resource.telemetry[0].name))
-    error_message = "The name must use metadata and a stable four-character instance suffix."
-  }
-  assert {
     condition = (
-      length(azapi_resource.telemetry[0].tags) == 4 &&
-      azapi_resource.telemetry[0].tags.avm_module_canonical_type == "Microsoft.Resources/resourceGroups" &&
-      azapi_resource.telemetry[0].tags.avm_module_version == "" &&
-      azapi_resource.telemetry[0].tags.avm_module_source_type == "other" &&
-      can(formatdate("YYYY-MM-DD", azapi_resource.telemetry[0].tags.avm_apply_id))
+      can(regex("^46d3xtrf[.]res[.]a1b2c3d[.]0-0-0[.]x[.][0-9a-f]{4}$", azapi_resource.telemetry[0].name)) &&
+      can(formatdate("YYYY-MM-DD", azapi_resource.telemetry[0].body.properties.template.outputs.apply_id.value))
     )
-    error_message = "Telemetry must send only the four approved reporting tags."
+    error_message = "Telemetry must report an unversioned local module in the name and update its empty template."
   }
 }
 
@@ -472,16 +469,83 @@ run "disabled" {
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
     }
 
-    It 'keeps a maximum-length telemetry prefix within the 64-character Azure name limit' {
+    It 'plans an in-place telemetry update on a subsequent normal apply without changing its name' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root
-        $prefixBase = '46d3xtrf.res.'
-        $prefix = $prefixBase + ('x' * (59 - $prefixBase.Length))
-        $metadataPath = Join-Path $root 'metadata.json'
-        $metadata = (Get-Content -LiteralPath $metadataPath -Raw).Replace('46d3xtrf.res.mock', $prefix)
-        Set-Content -LiteralPath $metadataPath -Encoding utf8NoBOM -Value $metadata
+        Invoke-TelemetryProfiles -Root $root
+        Set-Content -LiteralPath (Join-Path $root 'outputs.tf') -Encoding utf8NoBOM -Value @'
+output "telemetry_name" {
+  value = one(azapi_resource.telemetry).name
+}
+
+output "telemetry_apply_id" {
+  value = one(azapi_resource.telemetry).body.properties.template.outputs.apply_id.value
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'delay.tf') -Encoding utf8NoBOM -Value @'
+resource "terraform_data" "delay" {
+  provisioner "local-exec" {
+    interpreter = ["pwsh", "-NoProfile", "-Command"]
+    command     = "Start-Sleep -Seconds 2"
+  }
+}
+'@
+        Assert-TelemetryTerraformValid -Root $root
+        $testDirectory = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDirectory -Force
+        Set-Content -LiteralPath (Join-Path $testDirectory 'repeat.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "azapi" {
+  mock_resource "azapi_resource" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources/deployments/telemetry"
+    }
+  }
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+
+run "first" {
+  command = apply
+  assert {
+    condition     = length(azapi_resource.telemetry) == 1
+    error_message = "The first apply must create one telemetry deployment."
+  }
+}
+
+run "second" {
+  command = plan
+  assert {
+    condition = (
+      output.telemetry_name == run.first.telemetry_name &&
+      output.telemetry_apply_id != run.first.telemetry_apply_id
+    )
+    error_message = "The next normal plan must update telemetry without changing its name."
+  }
+}
+'@
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', '-verbose', '-test-directory=tests/unit') -Root $root
+        $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
+        $result.StdOut | Should -Match 'azapi_resource\.telemetry\[0\] will be updated in-place'
+    }
+
+    It 'accepts a 36-character version at the 64-character Azure name limit' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
         Invoke-TelemetryProfiles -Root $root
         Assert-TelemetryTerraformValid -Root $root
+        $version = ('1' * 12) + '.' + ('2' * 11) + '.' + ('3' * 11)
+        $versionToken = $version.Replace('.', '-')
+        $versionToken.Length | Should -Be 36
+        $prefix = '46d3xtrf.res.a1b2c3d'
+        $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $manifestPath) -Force
+        @{ Modules = @(@{ Dir = '.'; Version = $version; Source = 'C:/private/customer/module' }) } |
+            ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
         Set-Content -LiteralPath (Join-Path $testDirectory 'name.tftest.hcl') -Encoding utf8NoBOM -Value @"
@@ -498,7 +562,7 @@ run "name" {
   assert {
     condition = (
       length(azapi_resource.telemetry[0].name) == 64 &&
-      substr(azapi_resource.telemetry[0].name, 0, 59) == "$prefix"
+      startswith(azapi_resource.telemetry[0].name, "${prefix}.${versionToken}.x.")
     )
     error_message = "Telemetry names must fit Azure's 64-character limit."
   }
@@ -509,11 +573,48 @@ run "name" {
         $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
     }
 
+    It 'rejects a 37-character version before creating an overlong deployment' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
+        Invoke-TelemetryProfiles -Root $root
+        Assert-TelemetryTerraformValid -Root $root
+        $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $manifestPath) -Force
+        $overlongVersion = ('1' * 18) + '.' + ('2' * 16) + '.1'
+        $overlongVersion.Length | Should -Be 37
+        @{ Modules = @(@{ Dir = '.'; Version = $overlongVersion; Source = 'C:/private/customer/module' }) } |
+            ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+        $testDirectory = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDirectory -Force
+        Set-Content -LiteralPath (Join-Path $testDirectory 'name.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+
+run "name" {
+  command = plan
+  assert {
+    condition     = length(azapi_resource.telemetry) == 1
+    error_message = "The plan should be rejected by the telemetry name precondition."
+  }
+}
+'@
+        {
+            Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+        } | Should -Throw '*64-character limit*'
+    }
+
     It 'classifies <Name> module sources without sending their raw paths' -TestCases @(
-        @{ Name = 'Terraform registry'; Source = 'registry.terraform.io/Azure/avm-res-mock/azurerm'; Expected = 'terraform-registry' }
-        @{ Name = 'OpenTofu registry'; Source = 'registry.opentofu.org/Azure/avm-res-mock/azurerm'; Expected = 'opentofu-registry' }
-        @{ Name = 'Git'; Source = 'git::https://example.com/Azure/mock.git'; Expected = 'git' }
-        @{ Name = 'local path'; Source = 'C:/private/customer/module'; Expected = 'other' }
+        @{ Name = 'Terraform registry'; Source = 'registry.terraform.io/Azure/avm-res-mock/azurerm'; Expected = 't' }
+        @{ Name = 'OpenTofu registry'; Source = 'registry.opentofu.org/Azure/avm-res-mock/azurerm'; Expected = 'o' }
+        @{ Name = 'Git'; Source = 'git::https://example.com/Azure/mock.git'; Expected = 'g' }
+        @{ Name = 'local path'; Source = 'C:/private/customer/module'; Expected = 'x' }
     ) {
         param($Name, $Source, $Expected)
 
@@ -524,7 +625,7 @@ run "name" {
         $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $manifestPath) -Force
         $manifest = @{
-            Modules = @(@{ Dir = '.'; Version = '1.2.3'; Source = $Source })
+            Modules = @(@{ Dir = '.'; Version = '10.12.3'; Source = $Source })
         } | ConvertTo-Json -Depth 5
         Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM -Value $manifest
         $testDirectory = Join-Path $root 'tests' 'unit'
@@ -541,11 +642,8 @@ mock_provider "azapi" {
 run "source" {
   command = apply
   assert {
-    condition = (
-      azapi_resource.telemetry[0].tags.avm_module_version == "1.2.3" &&
-      azapi_resource.telemetry[0].tags.avm_module_source_type == "$Expected"
-    )
-    error_message = "Telemetry must classify the module source without sending the source path."
+    condition     = can(regex("^46d3xtrf[.]res[.]a1b2c3d[.]10-12-3[.]${Expected}[.][0-9a-f]{4}$", azapi_resource.telemetry[0].name))
+    error_message = "The name must encode the full version and only the source-type token, never the source path."
   }
 }
 "@

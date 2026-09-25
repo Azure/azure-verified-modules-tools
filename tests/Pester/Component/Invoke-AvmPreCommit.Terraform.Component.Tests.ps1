@@ -99,10 +99,25 @@ BeforeAll {
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
     $script:telemetryStubContent = @'
+# tflint-ignore: avm_azapi_resource_tags_required
 resource "azapi_resource" "telemetry" {
   type = "Microsoft.Resources/deployments@2025-04-01"
-  # tflint-ignore: avm_azapi_resource_tags_required
-  tags = { avm_apply_id = plantimestamp() }
+  body = {
+    properties = {
+      mode = "Incremental"
+      template = {
+        "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
+        contentVersion = "1.0.0.0"
+        resources      = []
+        outputs = {
+          apply_id = {
+            type  = "String"
+            value = plantimestamp()
+          }
+        }
+      }
+    }
+  }
 }
 '@
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'main.telemetry.tf') -Encoding utf8NoBOM -Value $script:telemetryStubContent

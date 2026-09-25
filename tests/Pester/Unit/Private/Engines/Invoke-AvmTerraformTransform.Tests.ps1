@@ -4,7 +4,7 @@
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
-    $script:terraformMetadata = '{"canonicalType":"Microsoft.Resources/resourceGroups","telemetryIdPrefix":"46d3xtrf.res.mock"}'
+    $script:terraformMetadata = '{"canonicalType":"Microsoft.Resources/resourceGroups","telemetryIdPrefix":"46d3xtrf.res.a1b2c3d"}'
 }
 
 AfterAll {
@@ -879,6 +879,7 @@ resource "azapi_resource" "other" {
 
 resource "azapi_resource" "telemetry" {
   type = "Microsoft.Resources/deployments@2025-04-01"
+  # tflint-ignore: avm_azapi_resource_tags_required
   tags = {
     avm_apply_id = plantimestamp()
   }
@@ -887,7 +888,7 @@ resource "azapi_resource" "telemetry" {
         $script:lintTarget = [pscustomobject]@{ Path = $script:lintRoot; Profiles = @('root') }
     }
 
-    It 'adds exactly one directive to telemetry tags and preserves other resources' {
+    It 'moves the legacy tag directive to the telemetry resource and preserves other resources' {
         $before = Get-Content -LiteralPath $script:lintFile -Raw
         InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
             param($Target)
@@ -900,7 +901,8 @@ resource "azapi_resource" "telemetry" {
             Set-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         $after = Get-Content -LiteralPath $script:lintFile -Raw
-        $after | Should -Match '(?m)^\s*# tflint-ignore: avm_azapi_resource_tags_required\r?\n\s*tags\s*='
+        $after | Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
+        $after | Should -Not -Match '(?m)^  # tflint-ignore: avm_azapi_resource_tags_required'
         $after | Should -Match '(?s)resource "azapi_resource" "other" \{\s*tags\s*=\s*var\.tags'
         @([regex]::Matches($after, 'tflint-ignore: avm_azapi_resource_tags_required')) | Should -HaveCount 1
 
@@ -909,6 +911,22 @@ resource "azapi_resource" "telemetry" {
             Set-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $after
+    }
+
+    It 'annotates a tagless telemetry deployment' {
+        Set-Content -LiteralPath $script:lintFile -Encoding utf8NoBOM -Value @'
+resource "azapi_resource" "telemetry" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+  body = { properties = { mode = "Incremental" } }
+}
+'@
+        InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
+            param($Target)
+            Set-AvmTelemetryTagLintDirective -Targets @($Target)
+        }
+        $content = Get-Content -LiteralPath $script:lintFile -Raw
+        $content | Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
+        $content | Should -Not -Match '(?m)^\s*tags\s*='
     }
 
     It 'does not silently accept a missing telemetry resource' {
@@ -980,6 +998,31 @@ Describe 'Get-AvmTerraformTransformTarget' {
         catch { $exception = $_.Exception }
         $exception.GetType().Name | Should -Be 'AvmConfigurationException'
         $exception.Message | Should -Match 'Cannot read Terraform module metadata'
+    }
+
+    It 'rejects a noncanonical Terraform telemetry prefix: <Prefix>' -TestCases @(
+        @{ Prefix = '46d3xtrf.res.mock' }
+        @{ Prefix = '46d3xtrf.res.abcdefg' }
+        @{ Prefix = '46d3xtrf.res.abcdeF0' }
+        @{ Prefix = '46d3xtrf.res.abcdef00' }
+    ) {
+        param($Prefix)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $root -Force
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value 'output "id" { value = "mock" }'
+        Set-Content -LiteralPath (Join-Path $root 'metadata.json') -Encoding utf8NoBOM `
+            -Value ('{"telemetryIdPrefix":"' + $Prefix + '"}')
+
+        $caught = $null
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+                param($R)
+                Get-AvmTerraformTransformTarget -Root $R
+            }
+        }
+        catch { $caught = $_.Exception }
+        $caught.GetType().Name | Should -Be 'AvmConfigurationException'
+        $caught.Message | Should -Match 'seven lowercase hexadecimal characters'
     }
 
     It 'does not instrument a valid prefix-free utility root' {

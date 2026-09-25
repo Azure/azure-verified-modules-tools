@@ -171,7 +171,7 @@ locals {
   "moduleDisplayName": "Provider requirements fixture",
   "moduleDescription": "Fixture for provider requirement transforms.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.provider-test",
+  "telemetryIdPrefix": "46d3xtrf.res.d4e5f6a",
   "owners": []
 }
 '@

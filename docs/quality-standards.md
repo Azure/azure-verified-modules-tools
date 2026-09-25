@@ -361,10 +361,10 @@ Currently vendored:
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
   (root / `modules/*` / `examples/*`). All three disable the external
   plugin's obsolete `modtm` requirement. The AzAPI resource-tag rule remains
-  enabled for ordinary resources; only generated telemetry tags receive an
-  inline TFLint exception because their four-tag reporting contract cannot
-  use `var.tags`. Mapotf drops comments in `asraw` blocks, so the transform
-  engine inserts the exception after mapotf writes the resource.
+  enabled for ordinary resources; only the generated tagless telemetry
+  deployment receives a block-scoped TFLint exception. Mapotf drops comments
+  in `asraw` blocks, so the transform engine inserts the exception after
+  mapotf writes the resource.
 - `Resources/mapotf/{common,module,root,module-call,example,test}/*.mptf.hcl`
   - composed per target by `Invoke-AvmTerraformTransform`. Root and child
   modules with a telemetry prefix run `root,module,common`; children without
@@ -583,6 +583,16 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
+> **UPDATE 2026-09-25 - name-based Terraform telemetry.** The reporting
+> source is Azure deployment events, which expose the deployment name but do
+> not guarantee resource tags in the event. The Terraform name now encodes
+> its fixed seven-hex metadata prefix, full hyphenated version (or `0-0-0`),
+> source type (`t`, `o`, `g`, `x`), and stable four-hex instance suffix. A
+> changing empty-template output forces an in-place write per normal plan;
+> it is not a reporting field. No telemetry tags are emitted. This
+> supersedes the 2026-09-24 four-tag approach recorded below; retain that
+> entry as historical context.
+>
 > **UPDATE 2026-09-24 - Terraform deployment telemetry.** `root` now
 > instruments metadata-backed roots and children with a subscription-scoped
 > empty AzAPI deployment and a stable `terraform_data` instance ID. It emits

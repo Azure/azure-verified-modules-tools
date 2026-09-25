@@ -37,7 +37,7 @@ Describe 'Component: repository creation entry point' -Tag Component {
             moduleDescription = 'Creates a storage account.'
             resourceProviderNamespace = 'Microsoft.Storage'
             resourceType = 'storageAccounts'
-            telemetryIdPrefix = '46d3xtrf.res.storage-account'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
             ownerPrimaryGitHubHandle = 'first-owner'
             ownerSecondaryGitHubHandle = 'second-owner'
             ownerGitHubHandles = @('third-owner', 'fourth-owner')

@@ -164,6 +164,10 @@ function Get-AvmTerraformTransformTarget {
             throw [AvmConfigurationException]::new(
                 "Terraform module metadata '$metadataPath' has an empty telemetryIdPrefix.")
         }
+        if ($prefix -and $prefix -cnotmatch '^46d3xtrf\.(res|ptn|utl)\.[0-9a-f]{7}$') {
+            throw [AvmConfigurationException]::new(
+                "Terraform module metadata '$metadataPath' telemetryIdPrefix must end in seven lowercase hexadecimal characters.")
+        }
         $profiles = if ($prefix) {
             @('root', 'module', 'common')
         }
@@ -286,7 +290,8 @@ function Set-AvmTelemetryTagLintDirective {
             throw [AvmConfigurationException]::new("Instrumented Terraform module '$($target.Path)' has no main.telemetry.tf.")
         }
 
-        $content = [System.IO.File]::ReadAllText($path)
+        $original = [System.IO.File]::ReadAllText($path)
+        $content = $original
         $resources = [regex]::Matches(
             $content,
             '(?ms)^resource[ \t]+"azapi_resource"[ \t]+"telemetry"[ \t]*\{(?<body>.*?)^\}')
@@ -295,21 +300,27 @@ function Set-AvmTelemetryTagLintDirective {
         }
 
         $body = $resources[0].Groups['body']
-        $tags = [regex]::Matches($body.Value, '(?m)^(?<indent>[ \t]*)tags[ \t]*=')
-        if ($tags.Count -ne 1) {
-            throw [AvmConfigurationException]::new("Expected one telemetry tags attribute in '$path'.")
+        $cleanBody = [regex]::Replace(
+            $body.Value,
+            '(?m)^[ \t]*# tflint-ignore: avm_azapi_resource_tags_required\r?\n',
+            '')
+        if ($cleanBody -cne $body.Value) {
+            $content = $content.Remove($body.Index, $body.Length).Insert($body.Index, $cleanBody)
+            $resources = [regex]::Matches(
+                $content,
+                '(?ms)^resource[ \t]+"azapi_resource"[ \t]+"telemetry"[ \t]*\{(?<body>.*?)^\}')
         }
 
-        $offset = $body.Index + $tags[0].Index
-        $indent = $tags[0].Groups['indent'].Value
+        $offset = $resources[0].Index
         $priorLines = @($content.Substring(0, $offset) -split '\r?\n')
-        if ($priorLines.Count -gt 1 -and $priorLines[-2] -ceq ($indent + $directive)) {
-            continue
+        if ($priorLines.Count -lt 2 -or $priorLines[-2] -cne $directive) {
+            $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+            $content = $content.Insert($offset, $directive + $lineEnding)
         }
 
-        $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
-        if ($PSCmdlet.ShouldProcess($path, 'exempt generated telemetry tags from the standard resource-tag rule')) {
-            [System.IO.File]::WriteAllText($path, $content.Insert($offset, $indent + $directive + $lineEnding), $encoding)
+        if ($content -cne $original -and
+            $PSCmdlet.ShouldProcess($path, 'exempt generated telemetry deployment from the standard resource-tag rule')) {
+            [System.IO.File]::WriteAllText($path, $content, $encoding)
         }
     }
 }

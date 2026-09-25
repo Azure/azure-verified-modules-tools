@@ -206,7 +206,12 @@ also forward those controls; missing example variables are added to
 `variables.tf` while existing declarations retain their file and authored
 metadata. An example with `var.location` defaults its override to `null`;
 other examples default it to `westus2`. The new deployment writes one
-`avm_apply_id` tag update per normal plan and requires
+empty-template output update per normal plan, leaving its reporting name
+stable. That name is
+`<46d3xtrf.kind.seven-hex-prefix>.<full-version-with-hyphens-or-0-0-0>.<t|o|g|x>.<four-hex-instance>`.
+The one-letter token identifies Terraform Registry, OpenTofu Registry, Git,
+or other distribution sources respectively; neither a raw source path nor
+resource tags are reported. The deployment requires
 `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/write`, and
 `Microsoft.Resources/deployments/delete` at the active subscription scope.

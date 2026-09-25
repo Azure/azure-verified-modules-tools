@@ -87,7 +87,7 @@ Describe 'Metadata owner uniqueness' {
             Mock Test-Json { $true }
             $json = @{
                 canonicalType = 'Microsoft.Storage/storageAccounts'
-                telemetryIdPrefix = '46d3xtrf.res.storage-account'
+                telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
                 owners = $Owners
             } | ConvertTo-Json -Depth 20
 
@@ -103,7 +103,7 @@ Describe 'Metadata owner uniqueness' {
         InModuleScope Avm.Authoring {
             Mock Get-Content { '{"oneOf":[]}' }
             Mock Test-Json { $true }
-            $json = '{"canonicalType":"Microsoft.Storage/storageAccounts/a","telemetryIdPrefix":"46d3xtrf.res.storage-child"}'
+            $json = '{"canonicalType":"Microsoft.Storage/storageAccounts/a","telemetryIdPrefix":"46d3xtrf.res.c1d2e3f"}'
             $result = Test-AvmMetadataContent -Json $json -Ecosystem terraform -ModuleType resource -ChildModule
             $result.Issues | Should -HaveCount 0
             $result.Metadata.Contains('owners') | Should -BeFalse
@@ -220,15 +220,17 @@ Describe 'Metadata module identity' {
             $otherKind = if ($ModuleType -eq 'resource') { 'ptn' } else { 'res' }
             $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
             $context = [pscustomobject]@{ Root = Join-Path $TestDrive 'renamed'; Ecosystem = $Ecosystem }
+            $suffix = if ($Ecosystem -eq 'bicep') { 'root' } else { 'a1b2c3d' }
+            $childSuffix = if ($Ecosystem -eq 'bicep') { 'child' } else { 'c1d2e3f' }
             $rootJson = @{
                 canonicalType = if ($ModuleType -eq 'resource') { 'Microsoft.Storage/storageAccounts' } else { 'example/module' }
-                telemetryIdPrefix = "$marker.$kind.root"
+                telemetryIdPrefix = "$marker.$kind.$suffix"
             } | ConvertTo-Json
             Mock Test-Path { $LiteralPath -ceq (Join-Path $context.Root 'metadata.json') }
             Mock Read-AvmMetadataJson { $rootJson }
             Mock Invoke-AvmProcess { throw 'Family inference must not fetch anything.' }
             Get-AvmMetadataModuleType -Context $context -Path (Join-Path $context.Root 'child') `
-                -Metadata @{ canonicalType = 'helper'; telemetryIdPrefix = "$marker.$otherKind.child" } |
+                -Metadata @{ canonicalType = 'helper'; telemetryIdPrefix = "$marker.$otherKind.$childSuffix" } |
                 Should -Be $ModuleType
             Should -Invoke Read-AvmMetadataJson -Exactly 1 -ParameterFilter { $Path -ceq (Join-Path $context.Root 'metadata.json') }
             Should -Invoke Invoke-AvmProcess -Exactly 0

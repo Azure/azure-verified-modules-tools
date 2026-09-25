@@ -702,7 +702,7 @@ terraform {
   "moduleDisplayName": "Telemetry parent",
   "moduleDescription": "Fixture for example ordering.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.example-test",
+  "telemetryIdPrefix": "46d3xtrf.res.e1a2b3c",
   "owners": []
 }
 '@
