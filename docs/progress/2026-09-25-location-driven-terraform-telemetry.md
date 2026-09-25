@@ -24,7 +24,7 @@ existing four distinct location choices reach those renamed child inputs.
       resource children, and examples; remove legacy telemetry-only input.
 - [x] Update fixture modules, regression tests, and tooling documentation.
 - [x] Update the existing published Terraform specification draft.
-- [ ] Open the six module location-input reviews and the management-plane
+- [x] Open the six module location-input reviews and the management-plane
       compatibility review, reusing relevant existing branches or reviews.
 - [x] Run focused real-tool integration and the local pre-commit gate.
 - [ ] Commit and push the slice; verify the resulting checks.
@@ -34,18 +34,38 @@ existing four distinct location choices reach those renamed child inputs.
 Real-mapotf and Terraform integration passed all 20 telemetry tests, including
 required location creation, direct and nested Azure-resource children,
 per-item location preservation, utility exemption, and local-state migration
-with telemetry disabled. All 31 provider-requirement cases passed. Of the
-44 example cases, 42 passed before fixture regeneration; the two deliberate
-fixture-drift failures passed after transforming and regenerating both mock
-modules and their READMEs. Repeated transforms and drift checks stayed clean.
+with telemetry disabled. All 31 provider-requirement and 44 example cases
+passed after regenerating both mock modules and their READMEs. Repeated
+transforms and drift checks stayed clean.
 `./build.ps1 pre-commit` passed with 1,837 unit tests, 9 platform skips,
 803 component tests, and no errors. The updated
 [published Terraform specification](https://github.com/Azure/Azure-Verified-Modules/pull/2980)
 passed all seven checks.
+The latest implementation commit passed a manually dispatched
+[Authoring CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36162678139)
+on all three operating systems and all six fixture integration legs; no
+production deployment ran. GitHub did not schedule its usual pull-request
+workflow for that push, so the manual run covered the same commit.
+
+The related draft reviews are
+[application group](https://github.com/Azure/terraform-azurerm-avm-res-desktopvirtualization-applicationgroup/pull/182),
+[host pool](https://github.com/Azure/terraform-azurerm-avm-res-desktopvirtualization-hostpool/pull/161),
+[scaling plan](https://github.com/Azure/terraform-azurerm-avm-res-desktopvirtualization-scalingplan/pull/174),
+[workspace](https://github.com/Azure/terraform-azurerm-avm-res-desktopvirtualization-workspace/pull/183),
+[Windows agent](https://github.com/Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent/pull/150),
+[AVD insights](https://github.com/Azure/terraform-azurerm-avm-ptn-avd-lza-insights/pull/176),
+and [AVD management plane](https://github.com/Azure/terraform-azurerm-avm-ptn-avd-lza-managementplane/pull/191).
+Non-deploying validation passed in the six single-input modules. The
+management-plane tests await child releases compatible with the renamed
+input, while its independent per-resource location mappings passed review.
 
 ## Blockers or dependencies
 
 No production or live Azure deployment is authorized. Module callers may
 need to supply a location after this change. The management-plane consumer
 review depends on the renamed child inputs being released before it can
-switch its module sources without compatibility aliases.
+switch its module sources without compatibility aliases or version-floor
+updates.
+The existing [implementation review](https://github.com/Azure/azure-verified-modules-tools/pull/192)
+currently conflicts with newer `main`; merge and resolve that base before
+marking this slice complete, then rerun its checks.
