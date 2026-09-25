@@ -57,13 +57,23 @@ AzAPI resource, including the generated four-tag telemetry deployment.
 - [x] Cover ordinary AzAPI tag enforcement, generated telemetry lint, and
       the stubbed component chain with focused tests.
 - [x] Pass the final local gate and focused TFLint attestation.
-- [ ] Commit and push the fix; confirm CI integration across all three
-      operating systems.
+- [x] Commit and push the scoped TFLint fix.
+- [x] Replace an example integration test's variable-only root override with
+      the packaged root profile so it exercises the generated deployment.
+- [x] Pass the gate after the test correction.
+- [ ] Commit and push the test correction; confirm CI integration across all
+      three operating systems.
 
 The repaired gate passed with 1,824 unit tests (9 platform skips) and 799
 component tests, no errors. The real pinned TFLint attestation confirmed
 that generated telemetry passes while two ordinary AzAPI resources with
 nonstandard tags still fail. No live Azure resources were changed locally.
+The second CI run passed lint and the pinned-rule attestation, but all six
+integration legs failed the same example regression test because its
+variable-only root override could not create `main.telemetry.tf`. That test
+now uses the packaged root profile; its focused run passed.
+The subsequent local gate passed with 1,824 unit tests (9 platform skips)
+and 799 component tests.
 
 ## Blockers or dependencies
 

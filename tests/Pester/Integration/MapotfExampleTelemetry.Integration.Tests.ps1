@@ -683,29 +683,17 @@ output "single_file_output" {
     }
 
     It 'sees newly generated root inputs, preserves module calls, and restores drift checks' {
-        $rootProfile = Join-Path $script:root 'config' 'mapotf' 'root'
         $wrapper = Join-Path $script:root 'modules' 'wrapper'
-        $null = New-Item -ItemType Directory -Path $rootProfile, $wrapper -Force
-        Set-Content -LiteralPath (Join-Path $rootProfile 'telemetry.mptf.hcl') -Encoding utf8NoBOM -Value @'
-data "variable" "telemetry" {
-  name = "enable_telemetry"
-}
-
-transform "new_block" "telemetry" {
-  for_each       = contains(keys(data.variable.telemetry.result), "enable_telemetry") ? toset([]) : toset([1])
-  new_block_type = "variable"
-  labels         = ["enable_telemetry"]
-  filename       = "variables.tf"
-  asraw {
-    type    = bool
-    default = true
-  }
-}
-'@
+        $null = New-Item -ItemType Directory -Path $wrapper -Force
         Set-Content -LiteralPath (Join-Path $script:root 'main.tf') -Encoding utf8NoBOM -Value @'
 module "dependency" {
   source           = "./modules/support"
   enable_telemetry = true
+}
+'@
+        Set-Content -LiteralPath (Join-Path $script:root 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = ">= 1.9"
 }
 '@
         Set-Content -LiteralPath (Join-Path $script:root 'metadata.json') -Encoding utf8NoBOM -Value @'
@@ -766,6 +754,7 @@ module "wrapper" {
 
         $drift = Invoke-TelemetryEngine -Root $script:root -CheckDrift
         $drift.Status | Should -Be 'fail'
+        @($drift.Issues | Where-Object { $_.File -eq 'main.telemetry.tf' -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         @($drift.Issues | Where-Object { $_.File -eq $examplePath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         @($drift.Issues | Where-Object { $_.File -eq $exampleVariablesPath -and $_.Code -eq 'avm.tf.mapotf-drift' }) | Should -HaveCount 1
         $restored = @(Get-ChildItem -LiteralPath $script:root -Recurse -Filter '*.tf' -File)
@@ -774,6 +763,7 @@ module "wrapper" {
             (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $before[$file.FullName]
         }
         (Join-Path $script:root 'variables.tf') | Should -Not -Exist
+        (Join-Path $script:root 'main.telemetry.tf') | Should -Not -Exist
         (Join-Path $script:root $exampleVariablesPath) | Should -Not -Exist
 
         $result = Invoke-TelemetryEngine -Root $script:root
@@ -782,9 +772,12 @@ module "wrapper" {
         $result.Changed | Should -Contain $exampleVariablesPath
         $example = Get-Content -LiteralPath $script:main -Raw
         $example | Should -Match '(?ms)^module "example" \{[^}]*enable_telemetry\s*=\s*var\.enable_telemetry'
+        $example | Should -Match '(?ms)^module "example" \{[^}]*telemetry_location\s*=\s*var\.telemetry_location'
         $example | Should -Match '(?ms)^module "wrapper" \{\s*source\s*=\s*"\.\./\.\./modules/wrapper"\s*\}'
         Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
+        Get-Content -LiteralPath (Join-Path $script:root $exampleVariablesPath) -Raw |
+            Should -Match '(?s)variable "telemetry_location" \{[^}]*default\s*=\s*"westus2"'
         Get-Content -LiteralPath (Join-Path $script:root 'variables.tf') -Raw |
             Should -Match '(?s)variable "enable_telemetry" \{[^}]*default\s*=\s*true'
         foreach ($module in @($script:root, $wrapper)) {
