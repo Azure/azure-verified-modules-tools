@@ -77,45 +77,33 @@ Describe 'Repository creation telemetry identifiers' {
         . (Join-Path $creationRoot 'repository-management' 'repository-creation' 'scripts' 'RepositoryCreation.ps1')
     }
 
-    It 'generates a prefix matching the fleet convention for <Kind>' -TestCases @(
-        @{ Kind = 'res' }
-        @{ Kind = 'ptn' }
-        @{ Kind = 'utl' }
-    ) {
-        param($Kind)
-        New-AvmRepositoryTelemetryIdPrefix -Kind $Kind |
-            Should -MatchExactly "^46d3xtrf\.$Kind\.[0-9a-f]{7}$"
-    }
-
-    It 'never returns a prefix that the catalog already uses' {
-        $taken = @(1..64 | ForEach-Object { New-AvmRepositoryTelemetryIdPrefix -Kind 'ptn' })
-        New-AvmRepositoryTelemetryIdPrefix -Kind 'ptn' -KnownPrefix $taken |
-            Should -Not -BeIn $taken
-    }
-
-    It 'produces distinct prefixes across repeated calls' {
-        $generated = @(1..50 | ForEach-Object { New-AvmRepositoryTelemetryIdPrefix -Kind 'res' })
-        @($generated | Select-Object -Unique).Count | Should -Be $generated.Count
-    }
-
-    It 'collects every telemetry prefix nested in a catalog document' {
+    It 'collects current and historical prefixes nested in a catalog document' {
         $catalog = @{
             modules = @{
                 'Microsoft.Storage/storageAccounts' = @{
                     terraform = @{
                         telemetryIdPrefix = '46d3xtrf.res.aaaaaaa'
+                        alternativeTelemetryIdPrefixes = @('46d3xtrf.res.ddddddd')
                         children = @(
-                            @{ telemetryIdPrefix = '46d3xtrf.res.bbbbbbb' }
+                            @{
+                                telemetryIdPrefix = '46d3xtrf.res.bbbbbbb'
+                                alternativeTelemetryIdPrefixes = @('46d3xtrf.res.eeeeeee')
+                            }
                             @{ telemetryIdPrefix = '' }
                         )
                     }
-                    bicep = @{ telemetryIdPrefix = '46d3xbcp.res.ccccccc' }
+                    bicep = @{
+                        telemetryIdPrefix = '46d3xbcp.res.ccccccc'
+                        alternativeTelemetryIdPrefixes = @('46d3xbcp.res.fffffff')
+                    }
                 }
             }
         }
         $prefixes = Get-AvmRepositoryTelemetryPrefixFromCatalog -Catalog $catalog
-        $prefixes | Should -HaveCount 3
+        $prefixes | Should -HaveCount 6
         $prefixes | Should -Contain '46d3xtrf.res.bbbbbbb'
+        $prefixes | Should -Contain '46d3xtrf.res.eeeeeee'
+        $prefixes | Should -Contain '46d3xbcp.res.fffffff'
         $prefixes | Should -Not -Contain ''
     }
 
@@ -141,8 +129,12 @@ Describe 'Repository creation telemetry identifiers' {
     }
 
     It 'mints a prefix from the entry point when the operator supplies none' {
-        $script:creationScript | Should -Match 'New-AvmRepositoryTelemetryIdPrefix -Kind'
+        $script:creationHelper | Should -Match "'New-AvmTelemetryIdPrefix'"
+        $script:creationHelper | Should -Match 'ExportedCommands.ContainsKey\(\$command\)'
+        $script:creationScript | Should -Match "ExportedCommands\['New-AvmTelemetryIdPrefix'\] -Ecosystem terraform -Kind"
         $script:creationScript | Should -Match 'Get-AvmRepositoryCatalogTelemetryPrefix'
+        $script:creationScript | Should -Match '\-SkipModuleVersionCheck'
+        $script:creationHelper | Should -Not -Match 'RandomNumberGenerator'
     }
 
     It 'leaves telemetry-free utilities without a generated identifier' {

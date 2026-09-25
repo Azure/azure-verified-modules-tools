@@ -473,6 +473,67 @@ Describe 'Component: shared module metadata schema' -Tag Component {
             Should -Be @('first-owner', '@Azure/team-one', 'second-owner', 'third-owner', '@Azure/team-two', 'fourth-owner')
     }
 
+    It 'preserves optional historical identifiers for <Ecosystem> child=<Child>' -TestCases @(
+        foreach ($ecosystem in @('bicep', 'terraform')) {
+            foreach ($child in @($false, $true)) {
+                @{ Ecosystem = $ecosystem; Child = $child }
+            }
+        }
+    ) {
+        param($Ecosystem, $Child)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ChildModule:$Child
+        $marker = if ($Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
+        $previous = @("$marker.res.previous-one", "$marker.res.previous-two")
+        $fixture.Data.alternativeTelemetryIdPrefixes = $previous
+        $parameters = $fixture.Parameters
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data
+
+        $result.Metadata.alternativeTelemetryIdPrefixes | Should -Be $previous
+        $onDisk = Get-Content -LiteralPath $fixture.MetadataPath -Raw | ConvertFrom-Json -AsHashtable
+        $onDisk.alternativeTelemetryIdPrefixes | Should -Be $previous
+        $onDisk.Contains('schemaVersion') | Should -BeFalse
+        (Test-AvmModuleMetadata @parameters).Status | Should -Be 'pass'
+    }
+
+    It 'rejects invalid historical telemetry values without rejecting absent or empty arrays' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+        $fixture.Data.alternativeTelemetryIdPrefixes = @()
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+
+        foreach ($case in @(
+                @{ Name = 'scalar'; Value = '46d3xbcp.res.previous'; Code = 'AVM_METADATA_SCHEMA' }
+                @{ Name = 'null'; Value = $null; Code = 'AVM_METADATA_SCHEMA' }
+                @{ Name = 'duplicate'; Value = @('46d3xbcp.res.previous', '46d3xbcp.res.previous'); Code = 'AVM_METADATA_SCHEMA' }
+                @{ Name = 'empty'; Value = @(''); Code = 'AVM_METADATA_SCHEMA' }
+                @{ Name = 'wrong ecosystem'; Value = @('46d3xtrf.res.previous'); Code = 'AVM_METADATA_TELEMETRY' }
+                @{ Name = 'wrong kind'; Value = @('46d3xbcp.ptn.previous'); Code = 'AVM_METADATA_TELEMETRY' }
+                @{ Name = 'overlong'; Value = @(('46d3xbcp.res.' + ('a' * 38))); Code = 'AVM_METADATA_SCHEMA' }
+                @{ Name = 'current prefix'; Value = @($fixture.Data.telemetryIdPrefix); Code = 'AVM_METADATA_TELEMETRY' }
+            )) {
+            $fixture.Data.alternativeTelemetryIdPrefixes = $case.Value
+            $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+            $result.Status | Should -Be 'fail' -Because $case.Name
+            $result.Issues.Code | Should -Contain $case.Code
+        }
+    }
+
+    It 'retains the exact historical Resource Graph prefix only for the Resource Graph module' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.telemetryIdPrefix = '46d3xbcp.res.123abcd'
+        $fixture.Data.canonicalType = 'Microsoft.ResourceGraph/queries'
+        $fixture.Data.alternativeTelemetryIdPrefixes = @('46d3xbcp.resourcegraph-query')
+        $parameters = $fixture.Parameters
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'pass'
+
+        $fixture.Data.canonicalType = 'Microsoft.Storage/storageAccounts'
+        $result = Test-AvmModuleMetadata @parameters -InputObject $fixture.Data
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'AVM_METADATA_TELEMETRY'
+    }
+
     It 'rejects invalid authored fields: <Case>' -TestCases @(
         @{ Case = 'removed tier'; Property = 'tier'; Value = 'core' }
         @{ Case = 'removed maintained tier'; Property = 'tier'; Value = 'maintained' }

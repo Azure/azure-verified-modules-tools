@@ -71,6 +71,8 @@ literals. Reduced children require family-root
 metadata and inherit owners. The JSON catalog also includes the
 family's alternative names and comments; child CSV cells for those two fields
 stay unchanged, including blanks. Newly discovered child rows leave them blank.
+Every JSON record includes `alternativeTelemetryIdPrefixes`, copied from that
+module's metadata or `[]` when no previous telemetry prefix was authored.
 
 The six CSVs retain their existing column order and matched-row compatibility
 fields; `CanonicalType` is not added. Missing metadata is reported but never

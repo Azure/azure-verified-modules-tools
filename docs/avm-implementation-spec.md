@@ -426,8 +426,9 @@ This does not change repository naming or grouped Bicep module-path conventions.
 Root metadata owns a flat `owners` string array: bare GitHub usernames and
 qualified `@organization/team-slug` handles. Empty arrays are permitted and
 case-insensitive duplicates are rejected. Tier is not part of this contract.
-Children carry only their own identity, description, and optional telemetry
-prefix; catalog generation inherits ownership from the family root.
+Children carry only their own identity, description, optional telemetry prefix,
+and optional array of previous telemetry prefixes; catalog generation inherits
+ownership from the family root.
 Generated catalog records enrich each inherited handle into a strict
 `{ handle, type, displayName }` object. `type` distinguishes GitHub users from
 teams; user display names are profile names and team display names are team
@@ -439,8 +440,15 @@ require telemetry.
 Uninstrumented Bicep children without a version file may omit the prefix under
 BCPFR4, as may telemetry-free utilities. Bicep prefixes are limited to 50 characters and Terraform
 prefixes to 59, reserving the respective transport suffix within ARM's 64 limit.
-Existing underscore identifiers and the exact historical Resource Graph
-identifier are preserved; file creation does not repair deployed telemetry.
+The optional `alternativeTelemetryIdPrefixes` array retains previous identifiers
+for a module when its primary prefix changes. Entries must be distinct from the
+current prefix and satisfy the same ecosystem, kind, and length rules; the exact
+historical Resource Graph identifier remains valid only for Resource Graph.
+Generated catalog JSON always includes the array, empty when absent from
+metadata, without changing the v1 schema references or schema version.
+New Bicep and Terraform prefixes end in seven lowercase hexadecimal characters.
+Existing underscore identifiers remain valid as historical values; metadata
+initialization does not repair deployed telemetry.
 Empty owner lists are allowed. Deprecated, unpublished modules are excluded from
 generated CSV indexes and catalog JSON after full validation; published deprecated
 modules remain Deprecated. Otherwise, unpublished modules are Proposed regardless
