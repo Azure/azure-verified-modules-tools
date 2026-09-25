@@ -25,8 +25,9 @@
 # %LOCALAPPDATA%\Avm\IntegrationTests rather than %TEMP% to reduce Defender ML
 # false positives against unsigned mapotf; Linux and macOS continue using temp.
 #
-# The integration workflow provides Azure OIDC credentials because pr-check
-# policy evaluation now creates a plan for every runnable example.
+# PR-check policy evaluation uses Terraform provider mocks and must not require
+# Azure credentials. Credentialled provider behavior belongs to the separate
+# integration and end-to-end module tiers.
 
 Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
 
