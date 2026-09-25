@@ -1,6 +1,6 @@
 # Location-driven Terraform telemetry
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-25
 **Updated**: 2026-09-25
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -27,7 +27,7 @@ existing four distinct location choices reach those renamed child inputs.
 - [x] Open the six module location-input reviews and the management-plane
       compatibility review, reusing relevant existing branches or reviews.
 - [x] Run focused real-tool integration and the local pre-commit gate.
-- [ ] Commit and push the slice; verify the resulting checks.
+- [x] Commit and push the slice; verify the resulting checks.
 
 ## Validation
 
@@ -46,6 +46,16 @@ The latest implementation commit passed a manually dispatched
 on all three operating systems and all six fixture integration legs; no
 production deployment ran. GitHub did not schedule its usual pull-request
 workflow for that push, so the manual run covered the same commit.
+After merging the newer `main`, the combined metadata schema retained the
+fixed seven-hex primary Terraform prefix while accepting descriptive
+historical alternatives. Five focused metadata cases and the full
+`./build.ps1 pre-commit` gate passed: 1,857 unit tests, 9 platform skips,
+828 component tests, and no errors. The new
+[automatic CI run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36165661226)
+passed on the conflict-free merge commit, including all six integration legs
+and all 19 review checks. Its first Windows AzAPI-fixture attempt could not
+download a pinned tool because the asset endpoint returned HTTP 500; rerunning
+that leg passed without a code change.
 
 The related draft reviews are
 [application group](https://github.com/Azure/terraform-azurerm-avm-res-desktopvirtualization-applicationgroup/pull/182),
@@ -66,6 +76,7 @@ need to supply a location after this change. The management-plane consumer
 review depends on the renamed child inputs being released before it can
 switch its module sources without compatibility aliases or version-floor
 updates.
-The existing [implementation review](https://github.com/Azure/azure-verified-modules-tools/pull/192)
-currently conflicts with newer `main`; merge and resolve that base before
-marking this slice complete, then rerun its checks.
+The [implementation review](https://github.com/Azure/azure-verified-modules-tools/pull/192)
+includes the newer `main` without a conflict and has green checks. The
+management-plane caller still needs compatible child-module releases before
+its own module tests can pass.
