@@ -511,6 +511,9 @@ children. Missing or invalid metadata fails and stops either chain before
 other steps, without changing module files or reading indexes. `avm pr-check`
 also requires a clean worktree before tool resolution. `-Verbose` logs the
 discovered module count, each validated metadata path, and any issues.
+For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
+the original source bytes and never rewrites the working copy. `avm pre-commit`
+still formats in place.
 Explicit `avm metadata validate` and `show` still fail for missing files.
 Discovered helper children are validated; existing test, example, and
 internal-only source-directory exclusions remain unchanged.

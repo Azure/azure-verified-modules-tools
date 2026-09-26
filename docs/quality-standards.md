@@ -1577,6 +1577,12 @@ Prefer **snapshot and restore over a tool-native check flag**:
   against the snapshot — restoring only the files you knew about up front will
   leave new ones behind.
 
+A formatter that emits its complete output to stdout is different from a
+check-only exit flag: Bicep `format --stdout` yields the same UTF-8 bytes as
+in-place formatting for `.bicep` and `.bicepparam` while leaving inputs
+untouched. Compare raw bytes to detect newline and BOM drift; let CLI failures
+throw instead of treating an empty result as formatted output.
+
 The inverse matters just as much: the auto-fixing chain (`pre-commit`) must
 *not* inherit the switch. Gating a developer's commit hook on drift it is meant
 to remove breaks the loop that makes the hook worth having. Pin that inverse
