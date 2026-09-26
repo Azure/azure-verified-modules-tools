@@ -470,11 +470,38 @@ independent and are not required to match.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
-`avm metadata initialize` writes supplied metadata values, never overwrites
-existing files, and supports `-WhatIf`. `-UpdateSource` adds a scoped Bicep telemetry
-load without replacing telemetry transport. Terraform rejects `-UpdateSource`
-before writes; initialization never generates `main.metadata.tf` or removes
-existing authored source. Terraform telemetry wiring is deferred to MaPoTF.
+`avm init` is the one-time local entry point. Callers supply
+`-Ecosystem`, `-ModuleType`, and `-Path`; `-Proposed` is Bicep-only and creates
+only `metadata.json`, even when the module and provider directories do not
+exist yet. Terraform initialization likewise creates only local metadata and
+its containing directory, never a remote repository. Full Bicep source
+scaffolding is deferred until the one-time upstream templates are migrated;
+without `-Proposed`, Bicep initialization fails explicitly. The direct
+`avm metadata initialize` command remains available for scripted callers;
+it does not create a missing Terraform directory unless explicitly requested.
+
+For new metadata, initialization supplies the bundled `$schema` URI and, when
+required, generates a Bicep telemetry prefix against current and historical
+identifiers in the published catalog and local monorepo metadata. A catalog
+lookup failure warns and still checks local identifiers; invalid local
+metadata fails instead of being skipped. Already supplied values remain
+unchanged and are validated before prompting for missing required fields.
+Interactive terminals prompt for missing identity, description, canonical
+type, and root owners (including an empty owner list); noninteractive runs
+fail with the missing field names. An existing metadata file is validated and
+preserved without prompting or a catalog lookup. `-WhatIf` plans without
+creating directories or files.
+
+`avm metadata initialize` never overwrites existing files. `-UpdateSource`
+adds a scoped Bicep telemetry load without replacing telemetry transport.
+When source wiring is requested and no prefix is supplied, initialization
+retains the single, valid prefix already authored in main.bicep, excluding
+that module's own published catalog record from duplicate checks. A prefix
+used by another local or published module, or an explicit value conflicting
+with the authored prefix, fails before either file changes.
+Terraform rejects `-UpdateSource` before writes; initialization never
+generates `main.metadata.tf` or removes existing authored source. Terraform
+telemetry wiring is deferred to MaPoTF.
 The one-time source rewrite can change compiled Bicep output; subsequent
 owner/canonical metadata edits do not.
 
@@ -484,6 +511,9 @@ children. Missing or invalid metadata fails and stops either chain before
 other steps, without changing module files or reading indexes. `avm pr-check`
 also requires a clean worktree before tool resolution. `-Verbose` logs the
 discovered module count, each validated metadata path, and any issues.
+For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
+the original source bytes and never rewrites the working copy. `avm pre-commit`
+still formats in place.
 Explicit `avm metadata validate` and `show` still fail for missing files.
 Discovered helper children are validated; existing test, example, and
 internal-only source-directory exclusions remain unchanged.

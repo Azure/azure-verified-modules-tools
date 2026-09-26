@@ -35,6 +35,11 @@ Describe 'Terraform init upgrade guard' {
                     $container = $container.Parent
                 }
 
+                if ($container -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $container.Name -eq 'Get-AvmVerbRegistry') {
+                    continue
+                }
+
                 $hasUpgrade = if ($container -is [System.Management.Automation.Language.ArrayLiteralAst]) {
                     @($container.FindAll({
                                 param($node)

@@ -127,7 +127,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 
 | Verb                          | Bicep behaviour                                                          | Terraform behaviour                                                        |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `avm new`                     | Scaffold new resource/pattern/utility module (replaces `Set-ModuleFileAndFolderSetup.ps1`) | Scaffold new module from `tfmod-scaffold` template                         |
+| `avm init`                    | One-time local module setup: `-Proposed` writes only metadata.json before source exists; full source scaffolding awaits upstream template migration | One-time local metadata.json creation; source is added separately and no remote repository is created |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
 | `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init -upgrade` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
@@ -153,6 +153,14 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm update`                  | Update Avm.Authoring to the latest PowerShell Gallery version in the CurrentUser scope | Same                                                        |
 
 Global flags: `--ecosystem bicep|terraform|auto` (default `auto`), `--module <path>`, `--json` (machine output), `--verbose`, `--dry-run`, `--auto-install` / `AVM_AUTO_INSTALL=1` (install any missing managed tool without prompting).
+
+Initialization is an explicit-path exception to context autodetection: a
+proposed module has no source to classify, so `avm init` takes
+`-Ecosystem`, `-ModuleType`, and `-Path`. Missing metadata is prompted for only
+in an interactive terminal; scripted callers can supply `-InputObject`.
+Existing metadata is never overwritten. Bicep `-Proposed` creates only
+metadata.json and any missing directories after validation; Terraform
+initialization is metadata-only, with no repository creation or publishing.
 
 Both authoring chains require valid root and child `metadata.json` files.
 Required tools are resolved before the metadata step. Metadata failure then

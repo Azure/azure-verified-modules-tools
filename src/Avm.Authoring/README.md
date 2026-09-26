@@ -16,9 +16,11 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
+| `Public/Initialize-AvmModule.ps1`                 | `avm init` -> one-time local metadata setup; Bicep `-Proposed` creates only metadata.json. |
 | `Public/Test-AvmModuleMetadata.ps1`                | `avm metadata validate` -> validate root or child metadata using the packaged schema. |
 | `Public/Get-AvmModuleMetadata.ps1`                 | `avm metadata show` -> read and validate an existing metadata.json file. |
 | `Public/Initialize-AvmModuleMetadata.ps1`          | `avm metadata initialize` -> create metadata.json without overwriting an existing file. |
+| `Public/Get-AvmCatalogTelemetryPrefix.ps1`       | Read published current and historical telemetry identifiers for initialization and repository creation. |
 | `Public/Get-AvmTool.ps1`                          | `avm tool list` / `avm tool which` -> inspect locked tools and cache/PATH state.   |
 | `Public/Install-AvmTool.ps1`                      | `avm tool install` -> download, SHA256-verify, and cache a locked tool.            |
 | `Public/Invoke-AvmFormat.ps1`                     | `avm format` -> route to the bicep / terraform engine and format module sources.   |
@@ -140,9 +142,34 @@ and length validation. Catalog JSON includes helpers under `helper`, with null
 
 `Get-AvmModuleMetadata` reads existing files only and fails when a file is
 missing. `Test-AvmModuleMetadata -InputObject` validates supplied values without
-reading `metadata.json`. `Initialize-AvmModuleMetadata` requires explicit values,
-preserves existing files, and supports `-WhatIf`. None of these commands reads
-CSV indexes or infers missing values from source.
+reading `metadata.json`. `Initialize-AvmModuleMetadata` accepts partial
+metadata, supplies the bundled `$schema` URI and any required Bicep telemetry
+prefix, and preserves existing files. It prompts for missing fields only in an
+interactive terminal; noninteractive callers get a list of required fields.
+The prefix is generated against published catalog IDs and local Bicep module
+metadata, including historical alternatives. Catalog failures warn while
+local metadata remains mandatory and validated. No CSV index is used to
+infer values; metadata-only initialization does not read source.
+If `Initialize-AvmModuleMetadata -UpdateSource` is explicitly requested,
+an omitted prefix instead preserves the single valid value already authored
+in main.bicep; conflicting values or duplicates from other modules fail
+before writing. Metadata-only initialization does not inspect or modify source.
+
+For a proposed Bicep module, install or update Avm.Authoring yourself, import
+it, then initialize its metadata without creating `main.bicep` or other files:
+
+```pwsh
+avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
+```
+
+The missing module and provider directories are created after validation.
+Provide `-InputObject` for scripted use, or answer prompts for the module
+display name, description, canonical type, and owners (empty is allowed).
+`avm init -Ecosystem terraform -ModuleType resource -Path <directory>`
+creates local metadata.json only, never a remote repository or source files.
+Full Bicep source scaffolding is not yet available; use `-Proposed` until its
+one-time templates are migrated. Both commands support `-WhatIf` and leave
+existing metadata unchanged.
 
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
 telemetry prefix; a helper without a prefix leaves source unchanged.
@@ -174,6 +201,7 @@ avm update          # Update-AvmAuthoring
 avm -SkipModuleVersionCheck doctor          # Invoke-AvmDoctor
 avm -SkipModuleVersionCheck doctor --json   # GNU-style flag translates to -Json
 avm -SkipModuleVersionCheck context         # Get-AvmModuleContext (current working directory)
+avm -SkipModuleVersionCheck init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
 avm -SkipModuleVersionCheck tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved from module context)
 avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)

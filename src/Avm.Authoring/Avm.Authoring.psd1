@@ -10,9 +10,11 @@
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
         'Get-AvmAuthoringPlaceholder',
+        'Get-AvmCatalogTelemetryPrefix',
         'Get-AvmModuleContext',
         'Get-AvmTool',
         'Get-AvmVersion',
+        'Initialize-AvmModule',
         'Initialize-AvmModuleMetadata',
         'Install-AvmTool',
         'New-AvmTelemetryIdPrefix',

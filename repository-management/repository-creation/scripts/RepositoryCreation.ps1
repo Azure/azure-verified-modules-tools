@@ -7,7 +7,7 @@ function Import-AvmRepositoryCreationModule {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
     $manifest = Join-Path $moduleRoot 'Avm.Authoring.psd1'
     $module = Import-Module -Name $manifest -Scope Local -Force -PassThru -ErrorAction Stop
-    foreach ($command in @('Initialize-AvmModuleMetadata', 'Test-AvmModuleMetadata', 'New-AvmTelemetryIdPrefix')) {
+    foreach ($command in @('Initialize-AvmModuleMetadata', 'Test-AvmModuleMetadata', 'New-AvmTelemetryIdPrefix', 'Get-AvmCatalogTelemetryPrefix')) {
         if (-not $module.ExportedCommands.ContainsKey($command)) {
             throw [System.InvalidOperationException]::new("The checked-out Avm.Authoring module must export $command.")
         }
@@ -19,30 +19,16 @@ function Get-AvmRepositoryCatalogTelemetryPrefix {
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
-        [string] $CatalogUri = 'https://raw.githubusercontent.com/Azure/Azure-Verified-Modules/main/docs/static/module-indexes/v1/modules.json'
+        [string] $CatalogUri = 'https://raw.githubusercontent.com/Azure/Azure-Verified-Modules/main/docs/static/module-indexes/v1/modules.json',
+
+        [System.Management.Automation.PSModuleInfo] $AuthoringModule
     )
 
     Set-StrictMode -Version 3.0
-    $catalog = $null
-    try {
-        $json = if ([uri]::IsWellFormedUriString($CatalogUri, [System.UriKind]::Absolute) -and
-            $CatalogUri -cmatch '^https?://') {
-            $response = Invoke-WebRequest -Uri $CatalogUri -UseBasicParsing -ErrorAction Stop
-            if ($response.Content -is [byte[]]) {
-                [System.Text.Encoding]::UTF8.GetString($response.Content)
-            }
-            else { [string]$response.Content }
-        }
-        else {
-            Get-Content -LiteralPath $CatalogUri -Raw -ErrorAction Stop
-        }
-        $catalog = $json | ConvertFrom-Json -AsHashtable
+    if ($null -eq $AuthoringModule) {
+        $AuthoringModule = Import-AvmRepositoryCreationModule
     }
-    catch {
-        Write-Warning ("Could not resolve the module catalog at {0}; a generated telemetryIdPrefix cannot be checked for uniqueness. {1}" -f $CatalogUri, $_.Exception.Message)
-        return @()
-    }
-    return Get-AvmRepositoryTelemetryPrefixFromCatalog -Catalog $catalog
+    return & $AuthoringModule.ExportedCommands['Get-AvmCatalogTelemetryPrefix'] -CatalogUri $CatalogUri -SkipModuleVersionCheck
 }
 
 function Get-AvmRepositoryTelemetryPrefixFromCatalog {
@@ -51,37 +37,16 @@ function Get-AvmRepositoryTelemetryPrefixFromCatalog {
     param(
         [Parameter(Mandatory)]
         [AllowNull()]
-        [object] $Catalog
+        [object] $Catalog,
+
+        [System.Management.Automation.PSModuleInfo] $AuthoringModule
     )
 
     Set-StrictMode -Version 3.0
-    $prefixes = [System.Collections.Generic.List[string]]::new()
-    $pending = [System.Collections.Generic.Queue[object]]::new()
-    $pending.Enqueue($Catalog)
-    while ($pending.Count -gt 0) {
-        $node = $pending.Dequeue()
-        if ($node -is [System.Collections.IDictionary]) {
-            if ($node.Contains('telemetryIdPrefix') -and -not [string]::IsNullOrWhiteSpace([string]$node['telemetryIdPrefix'])) {
-                $prefixes.Add([string]$node['telemetryIdPrefix'])
-            }
-            if ($node.Contains('alternativeTelemetryIdPrefixes')) {
-                foreach ($prefix in @($node['alternativeTelemetryIdPrefixes'])) {
-                    if (-not [string]::IsNullOrWhiteSpace([string]$prefix)) {
-                        $prefixes.Add([string]$prefix)
-                    }
-                }
-            }
-            foreach ($key in @($node.Keys)) {
-                $pending.Enqueue($node[$key])
-            }
-        }
-        elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
-            foreach ($item in $node) {
-                $pending.Enqueue($item)
-            }
-        }
+    if ($null -eq $AuthoringModule) {
+        $AuthoringModule = Import-AvmRepositoryCreationModule
     }
-    return @($prefixes | Select-Object -Unique)
+    return & $AuthoringModule.ExportedCommands['Get-AvmCatalogTelemetryPrefix'] -Catalog $Catalog -SkipModuleVersionCheck
 }
 
 function New-AvmRepositoryMetadataInput {
