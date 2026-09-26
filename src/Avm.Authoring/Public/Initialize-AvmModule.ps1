@@ -68,9 +68,12 @@ function Initialize-AvmModule {
         CreateDirectory        = $Ecosystem -eq 'terraform'
         SkipModuleVersionCheck = $SkipModuleVersionCheck
         WhatIf                 = $WhatIfPreference
+        Confirm                = $false
     }
-    if ($PSBoundParameters.ContainsKey('Confirm')) {
-        $parameters.Confirm = $PSBoundParameters['Confirm']
+    if (-not $WhatIfPreference -and
+        -not (Test-Path -LiteralPath (Join-Path -Path $Path -ChildPath 'metadata.json')) -and
+        -not $PSCmdlet.ShouldProcess($Path, 'Initialize local module metadata')) {
+        return
     }
     return Initialize-AvmModuleMetadata @parameters
 }

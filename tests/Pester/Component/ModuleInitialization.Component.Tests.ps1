@@ -81,12 +81,33 @@ Describe 'Component: local avm init' -Tag Component {
         $fixture = New-InitializationFixture
         $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.explicit'
 
-        $result = Initialize-AvmModule -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
-            -InputObject $fixture.InputObject -Proposed -SkipModuleVersionCheck -WhatIf
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Target = $fixture.Path; Values = $fixture.InputObject } {
+            param($Target, $Values)
+            Mock Read-Host { throw [System.InvalidOperationException]::new('Must not prompt.') }
+            $preview = Initialize-AvmModule -Path $Target -Ecosystem bicep -ModuleType resource `
+                -InputObject $Values -Proposed -SkipModuleVersionCheck -WhatIf
+            Should -Invoke Read-Host -Exactly 0
+            return $preview
+        }
 
         $result.Changed | Should -BeFalse
         $result.PlannedFiles | Should -Be @('metadata.json')
         Test-Path -LiteralPath $fixture.Path | Should -BeFalse
+    }
+
+    It 'handles confirmation in the wrapper rather than prompting again in the metadata initializer' {
+        $fixture = New-InitializationFixture
+        $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.explicit'
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ Target = $fixture.Path; Values = $fixture.InputObject } {
+            param($Target, $Values)
+            Mock Initialize-AvmModuleMetadata { [pscustomobject]@{ Status = 'pass' } }
+            $null = Initialize-AvmModule -Path $Target -Ecosystem bicep -ModuleType resource `
+                -InputObject $Values -Proposed -SkipModuleVersionCheck -Confirm:$false
+            Should -Invoke Initialize-AvmModuleMetadata -Exactly 1 -ParameterFilter {
+                $Confirm -eq $false -and $WhatIf -eq $false
+            }
+        }
     }
 
     It 'creates a missing Bicep provider directory only after validation' {
