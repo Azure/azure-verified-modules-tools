@@ -330,6 +330,13 @@ Describe 'Component: Oracle metadata compatibility' -Tag Component {
             $result.Metadata.Contains('owners') | Should -BeFalse
             $result.Metadata.Contains('telemetryIdPrefix') | Should -BeFalse
         }
+        elseif ($Ecosystem -eq 'bicep') {
+            Mock Get-AvmCatalogTelemetryPrefix { @() } -ModuleName Avm.Authoring
+            $plan = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -WhatIf
+            $plan.Metadata.telemetryIdPrefix | Should -MatchExactly '^46d3xbcp\.res\.[0-9a-f]{7}$'
+            (Test-AvmModuleMetadata @parameters -InputObject $plan.Metadata).Status | Should -Be 'pass'
+            Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        }
         else {
             { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -WhatIf } | Should -Throw
         }
@@ -1041,14 +1048,44 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
     }
 
-    It 'fails a Bicep source mismatch before creating metadata' {
+    It 'fails a conflicting explicit Bicep prefix before creating metadata' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         $fixture.Data.telemetryIdPrefix = '46d3xbcp.res.different-prefix'
         $parameters = $fixture.Parameters
         $before = (Get-FileHash -LiteralPath $fixture.SourcePath).Hash
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } |
+            Should -Throw '*conflicts with existing main.bicep prefix*'
         Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
+    }
+
+    It 'preserves an authored Bicep prefix when metadata omits it and source wiring is requested' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $expectedPrefix = $fixture.Data.telemetryIdPrefix
+        $fixture.Data.Remove('telemetryIdPrefix')
+        $parameters = $fixture.Parameters
+        Mock Get-AvmCatalogTelemetryPrefix { @() } -ModuleName Avm.Authoring
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
+
+        $result.Metadata.telemetryIdPrefix | Should -BeExactly $expectedPrefix
+        [System.IO.File]::ReadAllText($fixture.SourcePath) |
+            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+    }
+
+    It 'rejects an authored prefix already used by another published module' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $duplicate = $fixture.Data.telemetryIdPrefix
+        $fixture.Data.Remove('telemetryIdPrefix')
+        $parameters = $fixture.Parameters
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        Mock Get-AvmCatalogTelemetryPrefix { @($duplicate) } -ModuleName Avm.Authoring
+
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } |
+            Should -Throw '*already used by another module*'
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
     }
 
     It 'preserves comments while wiring the real Bicep deployment rather than a commented copy' {
@@ -1070,14 +1107,18 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $updated | Should -Match ([regex]::Escape("// deployment name`n  name: '" + '${avmTelemetryIdPrefix}'))
     }
 
-    It 'requires a telemetry prefix for a utility that actually emits telemetry' {
+    It 'reuses an authored telemetry prefix for an instrumented utility' {
         $fixture = New-MetadataFixture -Ecosystem bicep -ModuleType utility
+        $expectedPrefix = $fixture.Data.telemetryIdPrefix
         $fixture.Data.Remove('telemetryIdPrefix')
         $parameters = $fixture.Parameters
-        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } | Should -Throw '*requires telemetryIdPrefix*'
-        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
-        Save-MetadataFixture -Fixture $fixture
-        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'fail'
+        Mock Get-AvmCatalogTelemetryPrefix { @() } -ModuleName Avm.Authoring
+        (Test-AvmModuleMetadata @parameters -InputObject $fixture.Data).Status | Should -Be 'fail'
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
+
+        $result.Metadata.telemetryIdPrefix | Should -BeExactly $expectedPrefix
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
     }
 
     It 'initializes Terraform roots and children without generating source readers' {
