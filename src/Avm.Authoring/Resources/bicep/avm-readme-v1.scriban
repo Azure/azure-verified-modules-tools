@@ -164,7 +164,9 @@
 {{~ direct_values = null ~}}
 {{~ if parent == "" && compiled_parameters[item.name] ~}}{{~ direct_values = compiled_parameters[item.name].allowedValues ~}}{{~ end ~}}
 {{~ if parameter_info && parameter_info.AllowedValues.size == 0 ~}}{{~ allowed_values = [] ~}}{{~ end ~}}
-{{~ if parameter_info && parameter_info.AllowedValues.size > 0 && ((direct_values && direct_values.size > 0) || item.allowedValues.size > 0) ~}}{{~ allowed_values = parameter_info.AllowedValues ~}}{{~ end ~}}
+{{~ if parameter_info && parameter_info.AllowedValues.size > 0 && ((direct_values && direct_values.size > 0) || item.allowedValues.size > 0 || parameter_info.AllowedValuesFromReference) ~}}{{~ allowed_values = parameter_info.AllowedValues ~}}{{~ end ~}}
+{{~ allowed_header = "[" ~}}
+{{~ if parent != "" && (regex.match item.name `^\w+$`).size == 0 ~}}{{~ allowed_header = "'" + (string.replace item.name "'" `\'`) + "': [" ~}}{{~ end ~}}
 {{~ use_fenced_default = false ~}}
 {{~ role_list = null ~}}
 {{~ role_ambiguous = false ~}}
@@ -240,11 +242,11 @@
 {{ end }}{{ else }}{{ for line in (string.split default_value "\n") }}  {{ line }}
 {{ end }}{{ end }}  ```{{ if allowed_values.size > 0 || (renders_discriminator item full_name) }}{{ "\n" }}{{ else }}{{ "\n\n" }}{{ end }}{{ else }}- Default: `{{ default_value }}`{{ "\n" }}{{ end }}{{ end }}{{ if allowed_values.size > 0 }}- Allowed:
   ```Bicep
-  [
-{{ for value in allowed_values }}    {{ if (object.typeof value) == "string" && item.type != "int" && item.type != "bool" }}'{{ value }}'{{ else }}{{ value }}{{ end }}
+  {{ allowed_header }}
+{{ for value in allowed_values }}    {{ if (object.typeof value) == "string" && item.type != "int" && item.type != "bool" }}'{{ value }}'{{ else if (object.typeof value) == "object" || (object.typeof value) == "array" }}{{ compiled_default_text value "      " "    " }}{{ else }}{{ value }}{{ end }}
 {{ end }}  ]
   ```
-{{ end }}{{ min_value = item.minValue }}{{ max_value = item.maxValue }}{{ if parent == "" && compiled_parameters[item.name] }}{{ min_value = compiled_parameters[item.name].minValue }}{{ max_value = compiled_parameters[item.name].maxValue }}{{ end }}{{ if min_value != null }}- MinValue: {{ min_value }}
+{{ end }}{{ min_value = item.minValue }}{{ max_value = item.maxValue }}{{ if parent == "" && compiled_parameters[item.name] }}{{ min_value = compiled_parameters[item.name].minValue }}{{ max_value = compiled_parameters[item.name].maxValue }}{{ else if parameter_info }}{{ min_value = parameter_info.MinValue }}{{ max_value = parameter_info.MaxValue }}{{ end }}{{ if min_value != null }}- MinValue: {{ min_value }}
 {{ end }}{{ if max_value != null }}- MaxValue: {{ max_value }}
 {{ end }}{{ if parameter_info && parameter_info.Example != null }}{{~ example_raw = parameter_info.Example ~}}{{ if (object.typeof example_raw) == "object" }}- Example:
   ```Bicep

@@ -32,6 +32,37 @@ Describe 'Get-AvmBicepDocsCompiledParameter' {
                     type  = 'array'
                     items = @{ type = 'string'; allowedValues = @('AAD', 'Certificate') }
                 }
+                computeTypes = @{
+                    type  = 'array'
+                    items = @{ '$ref' = '#/definitions/computeType' }
+                }
+                resources = @{
+                    type       = 'object'
+                    properties = @{
+                        limits = @{ '$ref' = '#/definitions/resourceLimits' }
+                    }
+                }
+                database = @{
+                    type       = 'object'
+                    properties = @{
+                        port = @{ type = 'int'; nullable = $true; minValue = 10000; maxValue = 10000 }
+                    }
+                }
+                derivedModel = @{
+                    type     = 'object'
+                    metadata = @{ '__bicep_resource_derived_type!' = 'Microsoft.Example/models' }
+                }
+                derivedWithChildren = @{
+                    type       = 'object'
+                    metadata   = @{ '__bicep_resource_derived_type!' = 'Microsoft.Example/models' }
+                    properties = @{ child = @{ type = 'string' } }
+                }
+                constrainedPriority = @{ type = 'int'; minValue = 0; maxValue = 1000 }
+                tupleRules = @{
+                    type        = 'array'
+                    prefixItems = @(@{ type = 'object'; properties = @{ name = @{ type = 'string' } } })
+                    items       = $false
+                }
                 alert = @{ '$ref' = '#/definitions/alertType' }
                 secureAlert = @{ '$ref' = '#/definitions/secureAlertType' }
                 free = @{ nullable = $true }
@@ -63,6 +94,17 @@ Describe 'Get-AvmBicepDocsCompiledParameter' {
                 }
             }
             definitions = @{
+                computeType = @{
+                    type          = 'string'
+                    allowedValues = @('azure-container-app', 'azure-container-instance')
+                }
+                resourceLimits = @{
+                    type          = 'object'
+                    allowedValues = @(
+                        @{ cpu = '0.25'; memory = '0.5Gi' },
+                        @{ cpu = '0.5'; memory = '1Gi' }
+                    )
+                }
                 aliasedType = @{ '$ref' = '#/definitions/deepType' }
                 deepType = @{
                     type       = 'object'
@@ -147,6 +189,20 @@ Describe 'Get-AvmBicepDocsCompiledParameter' {
         $details['nullableMap'].Required | Should -BeFalse
         $details['nullableMap.>Any_other_property<'].Required | Should -BeTrue
         $details['vpnTypes'].AllowedValues.Count | Should -Be 0
+        $details['computeTypes'].AllowedValues | Should -Be @(
+            'azure-container-app', 'azure-container-instance')
+        $details['computeTypes'].AllowedValuesFromReference | Should -BeTrue
+        $details['resources.limits'].AllowedValues.Count | Should -Be 2
+        $details['resources.limits'].AllowedValuesFromReference | Should -BeTrue
+        $details['resources.limits'].AllowedValues[0].cpu | Should -BeExactly '0.25'
+        $details['database.port'].MinValue | Should -Be 10000
+        $details['database.port'].MaxValue | Should -Be 10000
+        $details['derivedModel'].IsResourceDerived | Should -BeTrue
+        $details['derivedModel'].DocumentChildren | Should -BeFalse
+        $details['derivedWithChildren'].DocumentChildren | Should -BeTrue
+        $details['constrainedPriority'].MinValue | Should -Be 0
+        $details['constrainedPriority'].MaxValue | Should -Be 1000
+        $details['tupleRules'].DocumentChildren | Should -BeFalse
         $details['alert'].VariantOrder | Should -Be @('Webtest', 'Single', 'Multiple')
         $details['secureAlert'].Type | Should -BeExactly 'secureObject'
         $details['secureAlert'].DocumentChildren | Should -BeTrue

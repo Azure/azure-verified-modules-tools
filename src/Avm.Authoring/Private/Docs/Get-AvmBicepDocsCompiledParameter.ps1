@@ -38,16 +38,19 @@ function Get-AvmBicepDocsCompiledParameter {
         if (-not $details.ContainsKey($entry.Path)) {
             $required = -not $schema.Contains('defaultValue') -and $schema['nullable'] -ne $true
             $details[$entry.Path] = [pscustomobject]@{
-                Type              = $null
-                LegacyType        = $null
-                DocumentChildren  = $true
-                Required          = $required
-                AllowedValues     = @()
-                Description       = $null
-                Example           = $null
-                IsResourceDerived = $false
-                HasDiscriminator  = $false
-                VariantOrder      = @()
+                Type                       = $null
+                LegacyType                 = $null
+                DocumentChildren           = $true
+                Required                   = $required
+                AllowedValues              = @()
+                AllowedValuesFromReference = $false
+                MinValue                   = $null
+                MaxValue                   = $null
+                Description                = $null
+                Example                    = $null
+                IsResourceDerived          = $false
+                HasDiscriminator           = $false
+                VariantOrder               = @()
             }
         }
         $current = $details[$entry.Path]
@@ -59,10 +62,17 @@ function Get-AvmBicepDocsCompiledParameter {
                 $current.Type = ''
             }
         }
+        if ($schema.Contains('minValue') -and $null -eq $current.MinValue) {
+            $current.MinValue = $schema['minValue']
+        }
+        if ($schema.Contains('maxValue') -and $null -eq $current.MaxValue) {
+            $current.MaxValue = $schema['maxValue']
+        }
         if ($schema['type'] -eq 'secureObject' -and $entry.ReferenceDepth -eq 0) {
             $current.DocumentChildren = $false
         }
-        if (-not $entry.FromArrayItem -and $schema['allowedValues'] -is [array] -and
+        if ((-not $entry.FromArrayItem -or $entry.ReferenceDepth -gt 0) -and
+            $schema['allowedValues'] -is [array] -and
             $schema['allowedValues'].Count -gt 0 -and
             $current.AllowedValues.Count -eq 0) {
             $values = @($schema['allowedValues'])
@@ -75,6 +85,7 @@ function Get-AvmBicepDocsCompiledParameter {
             else {
                 $current.AllowedValues = [object[]]$values
             }
+            $current.AllowedValuesFromReference = $entry.ReferenceDepth -gt 0
         }
         if ($schema['metadata'] -is [System.Collections.IDictionary]) {
             $metadata = $schema['metadata']
@@ -101,6 +112,17 @@ function Get-AvmBicepDocsCompiledParameter {
                         "Compiled Bicep example for '$($entry.Path)' must be a string, an object, or an array of strings in '$SourcePath'.")
                 }
             }
+        }
+        if ($schema['type'] -eq 'array' -and $schema['prefixItems'] -is [array] -and
+            $schema['items'] -is [bool] -and -not $schema['items']) {
+            $current.DocumentChildren = $false
+        }
+        if ($current.IsResourceDerived -and -not $schema.Contains('$ref') -and
+            $schema['properties'] -isnot [System.Collections.IDictionary] -and
+            $schema['additionalProperties'] -isnot [System.Collections.IDictionary] -and
+            $schema['items'] -isnot [System.Collections.IDictionary] -and
+            $schema['discriminator'] -isnot [System.Collections.IDictionary]) {
+            $current.DocumentChildren = $false
         }
 
         if ($schema.Contains('$ref')) {

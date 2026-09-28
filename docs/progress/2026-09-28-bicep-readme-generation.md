@@ -41,8 +41,7 @@ registry or retire its existing generator and CI in this slice.
 
 `./build.ps1 pre-commit` passed after the post-`8b2dfe99` generic fixes:
 layout, lint, 1,879 unit tests (nine skipped), and the component shards
-passed with zero errors and 49 existing test warnings. The subsequent
-array-object default change needs a new full gate. Focused parser/alias,
+passed with zero errors and 49 existing test warnings. Focused parser/alias,
 reference-based example placeholder, and role tests passed. A pinned-CLI
 integration test rendered two reassigned e2e examples in a scoped child and
 confirmed all three code formats without writing a README; its expanded
@@ -213,9 +212,57 @@ byte-for-byte, while their old-main baselines still fail. Both formerly
 extra-blank-line READMEs now match, and none of the previous exact
 controls regressed. `./build.ps1 pre-commit` passed on this candidate:
 five tasks, zero errors, 1,879 unit tests passed (nine skipped), and
-49 existing warnings. The independent full-registry gate is running;
-this focused comparison does **not** establish full parity or authorize
-cutover.
+49 existing warnings. The non-cutover renderer was committed and pushed
+as `eec697d`; the existing registry generator and CI remain active.
+
+The independent full comparison of that same frozen renderer accounted
+for all 577 READMEs: 574 source-backed selections, 573 rendered,
+552 source-backed byte-exact, three source-less byte-exact, five strict
+temporary approvals, 16 unexpected old-main byte mismatches, and one
+upstream BCP426 render failure. It supplied 53 Notes sidecars and made
+25 formerly failing paths exact compared with the prior full scan,
+without regressing a previously exact or approved path. Nevertheless,
+the already-failing CICD agents and runners README now loses two
+previously rendered Allowed blocks, including `computeTypes`; this
+within-file regression must be fixed rather than hidden by file totals.
+The IaaS object example and VM SKU content remain old-main failures
+but exactly match the corrected draft registry READMEs. Six other
+unexpected differences require source/test history review: the
+conversation-knowledge-mining usage tests pass names missing from their
+module and omit its required `azureAiServiceLocation`, so their newly
+rendered examples must not be published as valid. Three differences
+concern allowed values or limits, four expose extra nested child
+content, and one is a header blank line. Fix the generic renderer
+differences and repeat the full comparison before claiming parity.
+
+The next candidate retains array-item union constraints and
+allowed object values from compiled aliases instead of discarding them,
+uses compiled bounds on nested properties, quotes non-identifier keys
+in Allowed blocks, and omits synthesized resource-derived children
+without compiled fields and inline tuple-array children. These rules
+cover the missing CICD, Redis, and metric-alert content, extra
+security/cognitive/Mongo content, and the hybrid cluster's tuple child.
+Focused compiled-helper unit tests, all three real pinned-CLI scoped
+fixtures, 20 Bicep docs components, and lint pass. The independent
+frozen25 focused comparison rendered all 159 selected READMEs across
+42 module trees: 152 old-main byte-exact, two unchanged strict
+historical approvals, and five old-main failures. Six requested
+former mismatches (Redis, metric alert, security-center, two cognitive
+services files, and Mongo) are now exact, as are eight additional child
+READMEs. The previously lost CICD Allowed blocks are restored, and
+none of the 138 previously exact controls regressed. The remaining
+CICD difference is only a historically duplicated variant table.
+Hybrid's unsupported tuple child is gone; its remaining differences
+are three skipped-test notes and a connected-cluster cross-reference.
+Dev Center still differs by one header blank line, while IaaS and VM
+still match the corrected registry draft rather than old main. These
+five old-main failures have not been approved as comparator exceptions.
+The isolated Dev Center blank, CICD duplicate, and hybrid discrepancies
+need separate source or documentation decisions. This focused result
+is **not** a full 577-file gate; the latest full gate remains failed.
+`./build.ps1 pre-commit` passed on this generic correction: five tasks,
+zero errors, and 49 existing test warnings. Lint recovered from the
+known transient analyzer-engine exception.
 
 ## Blockers and dependencies
 
@@ -227,9 +274,16 @@ specific historical difference as a documented comparison exception, not
 altering the renderer or claiming the vault README is byte-identical. Every
 other byte and module remains subject to the full regression gate. The
 earlier 180-mismatch full scan included missing discriminated-union variants,
-which the current Scriban template renders. The latest `8b2dfe99` full
-scan still has 41 unexpected byte mismatches and two substantive regressions;
-subsequent fixes have not yet completed a full scan.
+which the current Scriban template renders. The latest frozen full comparison
+still has 16 unapproved differences and one upstream compile failure;
+the `computeTypes` and another Allowed block were also lost inside a
+previously failing file. Previous exact and approved paths must remain
+protected while those generic renderer gaps are fixed.
+Two conversation-knowledge-mining e2e tests reference undeclared
+parameter names and omit a required module parameter; the current
+native example reader formats them without compiling or validating
+their parameters. Invalid examples must be rejected or reported
+explicitly, with the upstream tests corrected before cutover.
 `avm/ptn/app/container-job-toolkit`
 has a genuine
 upstream Bicep BCP426 compile failure. Its source fix is in

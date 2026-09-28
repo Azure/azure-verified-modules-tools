@@ -802,6 +802,250 @@ output registrationToken string? = 'token'
         $withoutRootRoleMapScoped | Should -Not -Match 'Roles configurable by name:'
     }
 
+    It 'preserves compiled alias constraints and omits non-documentable native children' {
+        $root = Join-Path $TestDrive 'compiled-constraints'
+        $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'
+        $null = New-Item -ItemType Directory -Path $module -Force
+        Copy-Item -Path (Join-Path $script:fixtureRoot '*') -Destination $module -Recurse
+        [System.IO.File]::AppendAllText((Join-Path $module 'main.bicep'), @'
+
+@export()
+type computeTargetType = ('azure-container-app' | 'azure-container-instance')
+
+@description('Optional. Allowed compute targets.')
+param computeTargets computeTargetType[] = []
+
+@export()
+type resourceLimitsType =
+  | { cpu: '0.25', memory: '0.5Gi' }
+  | { cpu: '0.5', memory: '1Gi' }
+
+@description('Optional. Runner settings.')
+param runner {
+  @description('Optional. Container resources.')
+  resources: resourceLimitsType?
+} = {}
+
+@description('The database settings.')
+type databaseTypeForDocs = {
+  @minValue(10000)
+  @maxValue(10000)
+  @description('Optional. TCP port.')
+  port: int?
+}
+
+@description('Optional. Database settings.')
+param databaseSettings databaseTypeForDocs?
+
+type alertFirstType = {
+  @description('Required. The alert kind.')
+  'odata.type': 'First'
+}
+
+type alertSecondType = {
+  @description('Required. The alert kind.')
+  'odata.type': 'Second'
+}
+
+@discriminator('odata.type')
+type dottedCriteriaType = alertFirstType | alertSecondType
+
+@description('Optional. Dotted alert criteria.')
+param dottedCriteria dottedCriteriaType?
+
+@description('Optional. Provider model.')
+param providerModel {
+  @description('Optional. Provider model version.')
+  version: string?
+} = {}
+
+@description('Optional. Tuple settings.')
+param tupleSettings {
+  @description('Optional. Named rules.')
+  rules: [
+    {
+      @description('Required. Rule name.')
+      name: string
+    }
+  ]?
+} = {}
+
+@description('Optional. Provider rules.')
+param providerRules {
+  @minValue(0)
+  @maxValue(1000)
+  @description('Optional. Rule priority.')
+  rulePriority: int?
+} = {}
+'@)
+        $compiledPath = Join-Path $module 'main.json'
+        $compiled = [System.IO.File]::ReadAllText($compiledPath) | ConvertFrom-Json -AsHashtable
+        $compiled.parameters.computeTargets = @{
+            type         = 'array'
+            defaultValue = @()
+            items        = @{ '$ref' = '#/definitions/computeTargetType' }
+            metadata     = @{ description = 'Optional. Allowed compute targets.' }
+        }
+        $compiled.parameters.runner = @{
+            type         = 'object'
+            defaultValue = @{}
+            properties   = @{
+                resources = @{
+                    '$ref'   = '#/definitions/resourceLimitsType'
+                    nullable = $true
+                    metadata = @{ description = 'Optional. Container resources.' }
+                }
+            }
+        }
+        $compiled.parameters.databaseSettings = @{
+            '$ref'  = '#/definitions/databaseTypeForDocs'
+            nullable = $true
+        }
+        $compiled.parameters.dottedCriteria = @{
+            '$ref'  = '#/definitions/dottedCriteriaType'
+            nullable = $true
+        }
+        $compiled.parameters.providerModel = @{
+            type         = 'object'
+            defaultValue = @{}
+            metadata     = @{
+                description                      = 'Optional. Provider model.'
+                '__bicep_resource_derived_type!' = 'Microsoft.Example/models'
+            }
+        }
+        $compiled.parameters.tupleSettings = @{
+            type         = 'object'
+            defaultValue = @{}
+            properties   = @{
+                rules = @{
+                    type        = 'array'
+                    nullable    = $true
+                    prefixItems = @(@{
+                            type       = 'object'
+                            properties = @{ name = @{ type = 'string' } }
+                        })
+                    items       = $false
+                    metadata    = @{ description = 'Optional. Named rules.' }
+                }
+            }
+        }
+        $compiled.parameters.providerRules = @{
+            type         = 'object'
+            defaultValue = @{}
+            properties   = @{
+                rulePriority = @{
+                    type     = 'int'
+                    nullable = $true
+                    metadata = @{
+                        description                      = 'Optional. Rule priority.'
+                        '__bicep_resource_derived_type!' = 'Microsoft.Example/rules'
+                    }
+                }
+            }
+        }
+        $compiled.definitions = @{
+            computeTargetType = @{
+                type          = 'string'
+                allowedValues = @('azure-container-app', 'azure-container-instance')
+            }
+            resourceLimitsType = @{
+                type          = 'object'
+                allowedValues = @(
+                    @{ cpu = '0.25'; memory = '0.5Gi' },
+                    @{ cpu = '0.5'; memory = '1Gi' }
+                )
+            }
+            databaseTypeForDocs = @{
+                type       = 'object'
+                properties = @{
+                    port = @{
+                        type     = 'int'
+                        nullable = $true
+                        minValue = 10000
+                        maxValue = 10000
+                        metadata = @{ description = 'Optional. TCP port.' }
+                    }
+                }
+            }
+            dottedCriteriaType = @{
+                type          = 'object'
+                discriminator = @{
+                    propertyName = 'odata.type'
+                    mapping      = [ordered]@{
+                        First  = @{ '$ref' = '#/definitions/alertFirstType' }
+                        Second = @{ '$ref' = '#/definitions/alertSecondType' }
+                    }
+                }
+            }
+            alertFirstType = @{
+                type       = 'object'
+                properties = @{
+                    'odata.type' = @{
+                        type          = 'string'
+                        allowedValues = @('First')
+                        metadata      = @{ description = 'Required. The alert kind.' }
+                    }
+                }
+            }
+            alertSecondType = @{
+                type       = 'object'
+                properties = @{
+                    'odata.type' = @{
+                        type          = 'string'
+                        allowedValues = @('Second')
+                        metadata      = @{ description = 'Required. The alert kind.' }
+                    }
+                }
+            }
+        }
+        [System.IO.File]::WriteAllText(
+            $compiledPath, (ConvertTo-Json -InputObject $compiled -Depth 99),
+            [System.Text.UTF8Encoding]::new($false))
+
+        $template = Join-Path $root 'docs' 'templates' 'avm-readme-v1.scriban'
+        $null = New-Item -ItemType Directory -Path (Split-Path $template -Parent) -Force
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'avm-readme-v1.scriban') `
+            -Destination $template
+        [System.IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'), @'
+{
+  "documentation": {
+    "template": { "file": "docs/templates/avm-readme-v1.scriban" }
+  }
+}
+'@, [System.Text.UTF8Encoding]::new($false))
+
+        $result = Invoke-AvmDocs -Path $root -CheckDrift -IncludeRenderedContent -SkipModuleVersionCheck
+        $errors = @($result.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
+        $errors.Count | Should -Be 0 -Because (@($errors | ForEach-Object Message) -join '; ')
+        $content = @($result.GeneratedReadmes | Where-Object {
+                $_.Path -eq 'avm/res/storage/storage-account/README.md'
+            })[0].Content
+
+        $compute = [regex]::Match(
+            $content, '(?s)### Parameter: `computeTargets`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $compute.Success | Should -BeTrue
+        $compute.Groups['body'].Value |
+            Should -Match '- Allowed:\n  ```Bicep\n  \[\n    ''azure-container-app''\n    ''azure-container-instance''\n  \]\n  ```'
+        $resources = [regex]::Match(
+            $content, '(?s)### Parameter: `runner.resources`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $resources.Success | Should -BeTrue
+        $resources.Groups['body'].Value |
+            Should -Match '- Allowed:\n  ```Bicep\n  \[\n    \{\n      cpu: ''0\.25''\n      memory: ''0\.5Gi''\n    \}\n    \{\n      cpu: ''0\.5''\n      memory: ''1Gi''\n    \}\n  \]\n  ```'
+        $port = [regex]::Match(
+            $content, '(?s)### Parameter: `databaseSettings.port`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $port.Success | Should -BeTrue
+        $port.Groups['body'].Value | Should -Match '- MinValue: 10000\n- MaxValue: 10000'
+        @([regex]::Matches($content, '- Allowed:\n  ```Bicep\n  ''odata\.type'': \[')).Count |
+            Should -Be 2
+        $content | Should -Not -Match '### Parameter: `providerModel.version`'
+        $content | Should -Not -Match '### Parameter: `tupleSettings.rules.name`'
+        $priority = [regex]::Match(
+            $content, '(?s)### Parameter: `providerRules.rulePriority`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $priority.Success | Should -BeTrue
+        $priority.Groups['body'].Value | Should -Not -Match '- (Min|Max)Value:'
+        Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
+    }
+
     It 'renders native discriminated union variants and their nested parameters' {
         $root = Join-Path $TestDrive 'union-repository'
         $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'
@@ -1024,7 +1268,9 @@ param zoneEmpty int[] = []
         $content | Should -Match '(?s)### Parameter: `config`.*?- Discriminator: `kind`\n\n<h4>The available variants are:</h4>'
         $content | Should -Match '### Variant: `config.kind-basic`\nThe type of a basic configuration\.\n\nTo use this variant'
         $variantGap = [regex]::Match(
-            $content, '- Type: bool(?<gap>\s*)### Variant: `config.kind-premium`').Groups['gap'].Value
+            $content,
+            '(?s)### Variant: `config\.kind-[^`]+`.*?- Type: (?:bool|string)(?<gap>\n+)### Variant: `config\.kind-[^`]+`'
+        ).Groups['gap'].Value
         $variantGap.Length | Should -Be 2
         $nestedBoundary = [regex]::Match(
             $content,
