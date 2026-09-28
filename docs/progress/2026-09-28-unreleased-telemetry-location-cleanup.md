@@ -1,6 +1,6 @@
 # Unreleased telemetry location cleanup
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-28
 **Updated**: 2026-09-28
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -21,7 +21,7 @@ repositories, so no migration for that input is necessary.
 - [x] Correct current documentation and the existing draft review description
       to distinguish the unshipped proposal from a released input.
 - [x] Run focused real-mapotf checks and the local pre-commit gate.
-- [ ] Commit and push this slice to the active branch; verify its checks.
+- [x] Commit and push this slice to the active branch; verify its checks.
 
 ## Validation
 
@@ -37,6 +37,11 @@ location forwarding.
 828 component tests, and no errors. The draft
 [implementation review](https://github.com/Azure/azure-verified-modules-tools/pull/192)
 now says the unshipped input has no migration or deletion path.
+The new head passed
+[Authoring CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36399959188)
+on Windows, macOS, and Ubuntu, including all six fixture integration jobs;
+[repository configuration tests](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36399959191)
+also passed. All 19 review checks are green.
 
 ## Blockers or dependencies
 
