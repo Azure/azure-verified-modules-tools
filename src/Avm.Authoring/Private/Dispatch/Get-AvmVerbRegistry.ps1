@@ -117,7 +117,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('transform')
             Cmdlet  = 'Invoke-AvmTransform'
-            Summary = 'Apply the mapotf pre-commit transforms to the current module.'
+            Summary = 'Compile Bicep main.json or apply Terraform mapotf transforms to the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'policy')
@@ -132,7 +132,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, test, docs).'
+            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')

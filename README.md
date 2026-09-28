@@ -25,6 +25,10 @@ avm version
 
 > **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. Find active slice records through [docs/progress.md](docs/progress.md). To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+For Bicep modules with `main.bicep`, `avm pre-commit` writes the compiled
+`main.json`; `avm pr-check` reports missing or stale output without rewriting
+it. Metadata-only proposed modules do not require compiled JSON.
+
 ## Verify the signature
 
 Every `.ps1`, `.psm1` and `.psd1` in a released build is Authenticode-signed by Microsoft. To check what you installed:

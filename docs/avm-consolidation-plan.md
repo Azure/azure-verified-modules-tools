@@ -132,12 +132,12 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init -upgrade` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
 | `avm check convention`        | Compliance Pester suite (`module.tests.ps1`)                             | `grept run`                                                                |
-| `avm transform`               | Regenerate README + test scaffolding (`Set-AVMModule`)                   | `mapotf transform` + clean-backup                                          |
+| `avm transform`               | Compile root and child main.bicep into main.json; README + repeatable test regeneration (`Set-AVMModule`) follows in later slices | `mapotf transform` + clean-backup                                          |
 | `avm docs`                    | _Deferred (2026-05-26 pivot): the ARM-JSON walker spike was reverted; new design will shell out to a dedicated Bicep docs CLI when one is selected_ | `terraform-docs`                                                           |
 | `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
-| `avm pre-commit`              | `metadata` → `format` → `lint` → `validate` → `docs`                    | `metadata` → `sync` → `check convention` → `transform` → `format` → `docs` |
+| `avm pre-commit`              | `metadata` → `format` → `lint` → `validate` → `transform` → `docs`      | `metadata` → `sync` → `check convention` → `transform` → `format` → `docs` |
 | `avm pr-check`                | Requires a clean Git worktree, then composes `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |
 | `avm release`                 | Update version.json + changelog + open PR                                | Update changelog + tag + open PR                                           |

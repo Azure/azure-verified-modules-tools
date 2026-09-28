@@ -479,6 +479,10 @@ initialization scaffolds the root's metadata.json, main.bicep, version.json,
 CHANGELOG.md, and defaults/WAF-aligned tests/e2e sources; children receive
 only metadata.json and main.bicep. Neither mode creates main.json, README.md,
 a remote repository, or a deployment. Existing files remain unmodified.
+After source exists, `avm pre-commit` compiles each root and child
+`main.bicep` into `main.json` through the pinned Bicep CLI. It leaves
+unchanged output bytes and timestamps alone. A proposed module with only
+metadata.json needs no compiled artifact.
 The direct
 `avm metadata initialize` command remains available for scripted callers;
 it does not create a missing Terraform directory unless explicitly requested.
@@ -540,6 +544,14 @@ discovered module count, each validated metadata path, and any issues.
 For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
 the original source bytes and never rewrites the working copy. `avm pre-commit`
 still formats in place.
+The Bicep transform compares the exact bytes from `bicep build --stdout`
+with each module's main.json. Pre-commit writes missing or stale output only
+after all selected modules build successfully, with rollback on write failure;
+`avm pr-check` reports each missing or stale artifact with an `avm pre-commit`
+remedy and never changes repository files. Compilation requires a nonempty,
+valid ARM template and checks process exit codes even when diagnostics do not
+parse. Generated JSON is not part of one-time `avm init`; README generation
+remains a separate migration slice.
 Explicit `avm metadata validate` and `show` still fail for missing files.
 Discovered helper children are validated; existing test, example, and
 internal-only source-directory exclusions remain unchanged.

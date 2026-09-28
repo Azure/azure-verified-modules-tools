@@ -69,18 +69,23 @@ Describe 'Invoke-AvmTransform' {
         }
     }
 
-    It 'the bicep engine stub throws AvmNotSupportedException for its own ecosystem' {
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmBicepTransform -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
-                $null
+    It 'the Bicep engine accepts a source-free proposed module without generating JSON' {
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'metadata.json') -Value '{}' -Encoding utf8
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' }
             }
-            catch { $_.Exception }
+            Mock Invoke-AvmProcess { throw 'A proposed module must not be compiled.' }
+            Invoke-AvmBicepTransform -Context ([pscustomobject]@{
+                    Kind = 'bicep-module'; Ecosystem = 'bicep'; Root = $D
+                })
         }
-        $err                       | Should -Not -BeNullOrEmpty
-        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Bicep transform is not yet wired'
+        $result.Status | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 0
+        Test-Path -LiteralPath (Join-Path $dir 'main.json') | Should -BeFalse
     }
 
     It 'each engine rejects a mismatched ecosystem' {
