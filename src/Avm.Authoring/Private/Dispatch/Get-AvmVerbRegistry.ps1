@@ -110,6 +110,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Generate or refresh README docs via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('docs', 'export-notes')
+            Cmdlet  = 'Export-AvmReadmeNote'
+            Summary = 'Extract an existing Bicep README Notes section into README.notes.md once.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('sync')
             Cmdlet  = 'Invoke-AvmSync'
             Summary = 'Sync managed files from the AVM governance source (terraform).'

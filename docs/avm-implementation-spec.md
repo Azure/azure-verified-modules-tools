@@ -600,6 +600,34 @@ indexes. Existing repositories use owner-authored files or the reviewed one-off
 migration; ordinary authoring still uses the installed release. Bicep files
 were added directly to the module repository rather than through Bicep Sync.
 
+### Bicep documentation
+
+`avm docs -Ecosystem bicep -Path <repository>` renders root and child
+READMEs through the pinned `bicep docs generate --stdout` command. The
+nearest `bicepconfig.json` must set `documentation.template.file` to a
+relative, tracked copy of the packaged `avm-readme-v1.scriban`; a different
+template or hash fails before writing. Generated content comes from the
+native model, Bicep test sources, and compiled `main.json` (or a local build
+when it is absent), never from the existing README body.
+
+Authored Notes belong in `README.notes.md` next to the module source. Run
+`avm docs export-notes` once to extract an existing Notes body; it does not
+overwrite a sidecar. Documentation generation rejects an existing README
+with Notes but no sidecar and does not change source files. `-CheckDrift`
+compares raw UTF-8 bytes without writing. `-IncludeRenderedContent` requires
+drift mode and returns generated `{Path, Content}` values for an independent
+comparator. A Bicep compilation failure is reported per module in drift
+mode; a source-less README is explicitly identified rather than reported as
+generated.
+
+Do not replace the registry's existing generator or CI, bulk regenerate
+READMEs, or release this migration until an independent comparison shows
+exact bytes for every source-backed README, apart from eight JSON-example
+comment lines absent from the checked-in `avm/res/key-vault/vault/README.md`,
+and separately verifies all source-less README bytes. Report that historical
+exception explicitly; keep the comments in generated output, as the legacy
+generator emits them. Every other byte remains subject to the comparison.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

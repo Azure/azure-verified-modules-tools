@@ -9,6 +9,7 @@
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
+        'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
         'Get-AvmCatalogTelemetryPrefix',
         'Get-AvmModuleContext',

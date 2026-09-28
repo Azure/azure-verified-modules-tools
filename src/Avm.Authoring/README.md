@@ -27,19 +27,21 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmLint.ps1`                       | `avm lint` -> route to the bicep / terraform engine and run lint diagnostics.      |
 | `Public/Invoke-AvmTest.ps1`                       | `avm test` -> route to the bicep / terraform engine and run build-validation.      |
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
+| `Public/Export-AvmReadmeNote.ps1`                 | `avm docs export-notes` -> extract authored legacy Notes once without overwriting an existing sidecar. |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
 | `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
-| `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Placeholder for the ARM-JSON walker that replaces `Set-ModuleReadMe.ps1`.          |
+| `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Renders Bicep READMEs through the pinned CLI and a repository-selected Scriban template. |
 | `Engines/Terraform/Format-AvmTerraformModule.ps1` | Runs `terraform fmt -recursive` over the module root.                              |
 | `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |
 | `Engines/Terraform/Invoke-AvmTerraformTest.ps1`   | Validates examples and warns about uncovered local modules.                      |
 | `Engines/Terraform/Invoke-AvmTerraformDocs.ps1`   | Runs `terraform-docs markdown table` in inject mode against the module README.     |
 | `Private/`                                        | Module-internal helpers organised by feature. Dot-sourced but not exported.        |
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
+| `Private/Docs/`                                   | Bicep template, Notes, source-example, and compiled-resource documentation helpers. |
 | `Private/Dispatch/`                               | Verb registry + `.avm/.disable` sentinel.                                          |
 | `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations, spec section 14).  |
 | `Private/Folders/Get-AvmFolder.ps1`               | Cross-OS resolver for Config/Cache/Data/State/Tools/Logs/Temp folders.             |
@@ -57,6 +59,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Resources/PSScriptAnalyzerSettings.psd1`         | Lint rules consumed by `./build.ps1 lint`.                                         |
 | `Resources/Schemas/v1/`                           | Authoritative, packaged module metadata and catalog JSON schemas.                 |
 | `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
+| `Resources/bicep/avm-readme-v1.scriban`          | Versioned, model-driven Bicep README template; copy into the repository and select it in `bicepconfig.json`. |
 
 ### Exception taxonomy
 

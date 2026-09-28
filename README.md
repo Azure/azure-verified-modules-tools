@@ -28,6 +28,11 @@ avm version
 For Bicep modules with `main.bicep`, `avm pre-commit` writes the compiled
 `main.json`; `avm pr-check` reports missing or stale output without rewriting
 it. Metadata-only proposed modules do not require compiled JSON.
+The Bicep `avm docs` migration uses a tracked, repository-selected Scriban
+template and adjacent Notes sidecars. It remains experimental until all
+registry READMEs pass an independent raw-byte comparison, apart from eight
+historically missing JSON-example comment lines in the checked-in Key Vault
+README. The existing registry generator and CI stay in place.
 
 ## Verify the signature
 
