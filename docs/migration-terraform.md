@@ -202,10 +202,9 @@ file-specific error for manual review.
 All Terraform roots except utilities without Azure resources now expose
 `var.location`. Local submodules that deploy Azure resources expose it too,
 even when they do not have their own telemetry prefix. MaPoTF adds a required,
-non-nullable string input with no default when one is missing. No
-`telemetry_location` migration is needed because that proposed input was never
-released. Supply a region even for globally scoped
-modules, because their subscription-scoped telemetry deployment needs one;
+non-nullable string input with no default when one is missing. Supply a region
+even for globally scoped modules, because their subscription-scoped telemetry
+deployment needs one;
 choose a location supported by the target cloud. Local child module calls
 receive `var.location` when no location argument exists; authored per-item
 locations for multi-region modules are retained. Instrumented children also

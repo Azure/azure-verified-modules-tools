@@ -583,15 +583,12 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
-> **UPDATE 2026-09-25 - required Terraform location.** The proposed
-> `telemetry_location` input and `westus2` fallback were never released; no
-> migration removes them. Instrumented
-> modules use `var.location` for their subscription-scoped deployment.
+> **UPDATE 2026-09-25 - required Terraform location.** Instrumented modules
+> use `var.location` for their subscription-scoped deployment.
 > MaPoTF adds a missing required location on non-exempt roots and Azure-resource
 > children, forwards it through local calls and examples when absent, and
 > preserves authored per-item locations. Utility modules without Azure
-> resources stay exempt. The older location defaults below describe an
-> unshipped draft, not an existing module interface.
+> resources stay exempt.
 >
 > **UPDATE 2026-09-25 - name-based Terraform telemetry.** The reporting
 > source is Azure deployment events, which expose the deployment name but do
@@ -599,22 +596,10 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 > its fixed seven-hex metadata prefix, full hyphenated version (or `0-0-0`),
 > source type (`t`, `o`, `g`, `x`), and stable four-hex instance suffix. A
 > changing empty-template output forces an in-place write per normal plan;
-> it is not a reporting field. No telemetry tags are emitted. This
-> supersedes the 2026-09-24 four-tag approach recorded below; retain that
-> entry as historical context.
+> it is not a reporting field. No telemetry tags are emitted.
 >
-> **UPDATE 2026-09-24 - Terraform deployment telemetry.** `root` now
-> instruments metadata-backed roots and children with a subscription-scoped
-> empty AzAPI deployment and a stable `terraform_data` instance ID. It emits
-> four reporting tags: version, source type, canonical type, and per-plan apply
-> ID; the metadata contract has no tier. The optional `telemetry_location`
-> input defaults to `null` with `var.location`, otherwise `westus2`.
-> `module-call` forwards opt-out and the resolved location, and test cleanup
-> removes standard `modtm` mocks and requirements. `removed` blocks forget
-> legacy `modtm_telemetry` and `random_uuid` state without destroying them.
-> Existing state requires one last provider installation before that removal.
-> The historical `modtm` configuration analysis below is not the current
-> telemetry contract.
+> The earlier Mapotf analysis below describes design tradeoffs, not the
+> current telemetry contract.
 >
 > **UPDATE 2026-09-17 - example telemetry.** Examples run `example,common`.
 > The example profile sets `enable_telemetry = var.enable_telemetry` only when
