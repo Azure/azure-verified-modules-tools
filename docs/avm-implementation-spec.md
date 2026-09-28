@@ -490,7 +490,8 @@ resources still require `var.location`. Every module root except a utility
 that deploys no Azure resources requires `var.location`; MaPoTF adds a required,
 non-nullable string input without a default when it is absent and preserves
 authored declarations. Instrumented modules also get `enable_telemetry`
-(default `true`). The separate `telemetry_location` input is removed; the
+(default `true`). No separate `telemetry_location` input is generated: that
+proposal was never released, so no module-input migration is required. The
 deployment uses `var.location`, including in globally scoped modules. Choose
 a valid region for the target cloud. Local module calls forward the parent's
 location when the child needs it and no location was authored, preserving

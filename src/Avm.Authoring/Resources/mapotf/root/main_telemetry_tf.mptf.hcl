@@ -2,10 +2,6 @@ data "variable" "enable_telemetry" {
   name = "enable_telemetry"
 }
 
-data "variable" "telemetry_location" {
-  name = "telemetry_location"
-}
-
 data "data" "azurerm_client_config" {
   data_source_type = "azurerm_client_config"
 }
@@ -56,7 +52,6 @@ data "local" "avm_telemetry_version_token" {
 
 locals {
   enable_telemetry_exists    = length(data.variable.enable_telemetry.result) == 1
-  telemetry_location_exists  = length(data.variable.telemetry_location.result) == 1
   main_location_exists       = length(data.local.main_location.result) == 1
   avm_metadata_exists        = length(data.local.avm_metadata.result) == 1
   module_source_type_exists  = length(data.local.avm_module_source_type.result) == 1
@@ -137,11 +132,6 @@ If it is set to false, then no telemetry will be collected.
 DESCRIPTION
     nullable    = false
   }
-}
-
-transform "remove_block" "telemetry_location" {
-  for_each             = local.telemetry_location_exists ? toset([1]) : toset([])
-  target_block_address = "variable.telemetry_location"
 }
 
 transform "remove_block" "azurerm_client_config" {

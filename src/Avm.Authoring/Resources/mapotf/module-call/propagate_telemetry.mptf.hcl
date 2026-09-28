@@ -46,10 +46,6 @@ locals {
     for name, call in local.missing_location_calls : name => call
     if !contains(keys(local.telemetry_calls), name)
   }
-  legacy_telemetry_location_calls = {
-    for name, call in local.local_calls : name => call
-    if contains(keys(call), "telemetry_location")
-  }
 }
 
 transform "new_block" "parent_location" {
@@ -79,7 +75,7 @@ transform "new_block" "parent_enable_telemetry" {
 transform "reorder_attributes" "expand_inline_calls" {
   for_each = {
     for name, call in local.local_calls : name => call
-    if (contains(keys(local.location_calls), name) || contains(keys(local.legacy_telemetry_location_calls), name)) && call.mptf.range.start_line == call.mptf.range.end_line
+    if contains(keys(local.location_calls), name) && call.mptf.range.start_line == call.mptf.range.end_line
   }
   target_block_address     = "module.${each.key}"
   sort_body_alphabetically = false
@@ -119,18 +115,6 @@ transform "update_in_place" "propagate_location" {
   }
   depends_on = [
     transform.new_block.parent_location,
-    transform.reorder_attributes.expand_inline_calls,
-  ]
-}
-
-transform "remove_block_element" "legacy_telemetry_location" {
-  for_each             = local.legacy_telemetry_location_calls
-  target_block_address = "module.${each.key}"
-  paths                = ["telemetry_location"]
-  depends_on = [
-    transform.update_in_place.propagate_telemetry_and_location,
-    transform.update_in_place.propagate_telemetry,
-    transform.update_in_place.propagate_location,
     transform.reorder_attributes.expand_inline_calls,
   ]
 }

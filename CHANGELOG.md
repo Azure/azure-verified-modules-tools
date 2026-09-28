@@ -75,7 +75,8 @@ section when cutting a release.
 
 - Terraform MaPoTF now replaces `modtm` telemetry with an empty
   subscription-scoped AzAPI deployment for metadata-backed roots and children.
-  The separate `telemetry_location` input is removed. All roots except
+  The proposed `telemetry_location` input was never released, so there is no
+  migration to remove it. All roots except
   utilities without Azure resources, and all Azure-resource children, receive
   a required `var.location` when absent. Telemetry uses that location directly;
   child and example calls forward it when missing without overwriting

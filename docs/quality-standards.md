@@ -583,13 +583,15 @@ After dispositions above, Slice C needs to build exactly **four** primitives, no
 
 ## Appendix B. Decision: mapotf replacement strategy
 
-> **UPDATE 2026-09-25 - required Terraform location.** The separate
-> `telemetry_location` input and `westus2` fallback are retired. Instrumented
+> **UPDATE 2026-09-25 - required Terraform location.** The proposed
+> `telemetry_location` input and `westus2` fallback were never released; no
+> migration removes them. Instrumented
 > modules use `var.location` for their subscription-scoped deployment.
 > MaPoTF adds a missing required location on non-exempt roots and Azure-resource
 > children, forwards it through local calls and examples when absent, and
 > preserves authored per-item locations. Utility modules without Azure
-> resources stay exempt. The older location defaults below are historical.
+> resources stay exempt. The older location defaults below describe an
+> unshipped draft, not an existing module interface.
 >
 > **UPDATE 2026-09-25 - name-based Terraform telemetry.** The reporting
 > source is Azure deployment events, which expose the deployment name but do

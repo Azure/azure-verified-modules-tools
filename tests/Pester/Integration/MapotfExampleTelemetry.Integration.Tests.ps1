@@ -209,7 +209,7 @@ module "example" {
         Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
     }
 
-    It 'migrates the obsolete telemetry location when <Name>' -TestCases @(
+    It 'forwards location when <Name>' -TestCases @(
         @{ Name = 'the example already has a location'; Location = $true }
         @{ Name = 'the example needs a location'; Location = $false }
     ) {
@@ -225,11 +225,6 @@ variable "location" {
 variable "example_name" {
   type    = string
   default = "example"
-}
-
-variable "telemetry_location" {
-  type    = string
-  default = null
 }
 '@
         $locationDeclaration = if ($Location) {
@@ -248,17 +243,18 @@ $locationDeclaration
 module "example" {
   source = "../../modules/support"
 
-  enable_telemetry   = true
-  telemetry_location = "old" # keep this comment
+  enable_telemetry = true # keep this comment
 }
 "@
 
         Invoke-TelemetryProfiles -Root $script:target
         $first = Get-Content -LiteralPath $script:main -Raw
         $first | Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        $first | Should -Match '(?m)^\s*enable_telemetry\s*=\s*var\.enable_telemetry # keep this comment'
         $first | Should -Not -Match 'telemetry_location'
         $declaration = Get-Content -LiteralPath $exampleVariables -Raw
-        $declaration | Should -Not -Match 'variable "telemetry_location"'
+        $declaration | Should -Match 'variable "example_name"'
+        $declaration | Should -Not -Match 'telemetry_location'
         if ($Location) {
             $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*"eastus"'
             $declaration | Should -Not -Match 'variable "location"'
