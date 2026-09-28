@@ -16,7 +16,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
-| `Public/Initialize-AvmModule.ps1`                 | `avm init` -> one-time local metadata setup; Bicep `-Proposed` creates only metadata.json. |
+| `Public/Initialize-AvmModule.ps1`                 | `avm init` -> one-time local Bicep scaffolding or Terraform metadata setup; Bicep `-Proposed` creates only metadata.json. |
 | `Public/Test-AvmModuleMetadata.ps1`                | `avm metadata validate` -> validate root or child metadata using the packaged schema. |
 | `Public/Get-AvmModuleMetadata.ps1`                 | `avm metadata show` -> read and validate an existing metadata.json file. |
 | `Public/Initialize-AvmModuleMetadata.ps1`          | `avm metadata initialize` -> create metadata.json without overwriting an existing file. |
@@ -167,9 +167,49 @@ Provide `-InputObject` for scripted use, or answer prompts for the module
 display name, description, canonical type, and owners (empty is allowed).
 `avm init -Ecosystem terraform -ModuleType resource -Path <directory>`
 creates local metadata.json only, never a remote repository or source files.
-Full Bicep source scaffolding is not yet available; use `-Proposed` until its
-one-time templates are migrated. Both commands support `-WhatIf` and leave
-existing metadata unchanged.
+Without `-Proposed`, Bicep `avm init` writes `metadata.json`, `main.bicep`,
+`version.json`, `CHANGELOG.md`, and defaults and WAF-aligned
+`tests/e2e/*/main.test.bicep` for a new root. It neither generates
+`main.json`/`README.md` nor deploys or publishes anything. Existing files are
+validated and left unchanged; a proposed module can therefore be completed
+later without changing its metadata or telemetry prefix. New utilities
+without telemetry get a telemetry-free source template.
+
+For a nested Bicep module, pass `-ChildModule` and the target's metadata in
+`-InputObject`. Full initialization creates missing ancestors from the
+root through the target in one validated operation; root-only files stay
+at the root. Interactive users are prompted for required fields on every
+missing ancestor. For a noninteractive deep child, supply missing ancestor
+metadata through `-AncestorInputObject`:
+
+```pwsh
+$rootMetadata = @{
+    moduleDisplayName = 'Storage Accounts'
+    moduleDescription = 'Deploys a Storage Account.'
+    canonicalType = 'Microsoft.Storage/storageAccounts'
+    owners = @('module-owner')
+}
+$childMetadata = @{
+    moduleDisplayName = 'Blob Services'
+    moduleDescription = 'Deploys a blob service.'
+    canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
+}
+avm init -Ecosystem bicep -ModuleType resource `
+    -Path .\avm\res\storage\storage-account\blob-service `
+    -ChildModule -InputObject $childMetadata `
+    -AncestorInputObject @{ '.' = $rootMetadata }
+```
+
+Map keys are exact lowercase root-relative Bicep paths: `.` denotes the
+root, and `blob-service` or `blob-service/container` denotes an intermediate
+ancestor. Use `/` within keys on every OS. Values for existing ancestors
+are ignored; their files and prefixes remain unchanged. Without required
+metadata in CI, initialization names the missing ancestor and its fields
+rather than prompting. Newly scaffolded uninstrumented children do not
+invent telemetry prefixes. `-Proposed` remains metadata-only for a single
+target and does not accept ancestor metadata. Both modes support `-WhatIf`
+and validate the whole plan before creating files; partial writes are
+rolled back on failure.
 
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
 telemetry prefix; a helper without a prefix leaves source unchanged.

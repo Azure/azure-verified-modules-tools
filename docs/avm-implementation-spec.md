@@ -474,11 +474,37 @@ never derives values or reads CSV indexes.
 `-Ecosystem`, `-ModuleType`, and `-Path`; `-Proposed` is Bicep-only and creates
 only `metadata.json`, even when the module and provider directories do not
 exist yet. Terraform initialization likewise creates only local metadata and
-its containing directory, never a remote repository. Full Bicep source
-scaffolding is deferred until the one-time upstream templates are migrated;
-without `-Proposed`, Bicep initialization fails explicitly. The direct
+its containing directory, never a remote repository. Full Bicep
+initialization scaffolds the root's metadata.json, main.bicep, version.json,
+CHANGELOG.md, and defaults/WAF-aligned tests/e2e sources; children receive
+only metadata.json and main.bicep. Neither mode creates main.json, README.md,
+a remote repository, or a deployment. Existing files remain unmodified.
+The direct
 `avm metadata initialize` command remains available for scripted callers;
 it does not create a missing Terraform directory unless explicitly requested.
+
+For full Bicep `-ChildModule` initialization, `-Path` is the target in
+`avm/{res,ptn,utl}/<group>/<module>[/child...]`. The command validates and
+creates every missing root and intermediate child through that target in a
+single transaction, using root-only extras at the root. `-InputObject`
+provides target metadata. `-AncestorInputObject` optionally maps exact
+lowercase root-relative paths to metadata dictionaries for missing ancestors:
+`.` for the root, then `child`, `child/grandchild`, and so on, excluding
+the target itself. Lookup compares actual supplied keys with these canonical
+paths ordinally rather than relying on a PowerShell hashtable's
+case-insensitive indexing. Unknown, wrongly cased, escaping, and non-dictionary
+entries are errors. Existing ancestors' metadata inputs are ignored and
+their files are preserved. Interactive calls prompt for absent fields at
+each missing ancestor; noninteractive calls fail with the ancestor path and
+missing field names. `-Proposed` never cascades and does not accept an
+ancestor map. For new uninstrumented children without a version file,
+telemetry remains optional. New utility roots without telemetry use
+telemetry-free source. Source-authored literal prefixes are preserved when
+metadata is missing, without rewriting the source; conflicts fail.
+Validate metadata, exact path casing, source literals, templates, target
+files, and the whole root-to-child plan before confirmation or any write.
+`-WhatIf` validates and reports the same planned files without writing;
+writer failures roll back files and directories it created.
 
 For new metadata, initialization supplies the bundled `$schema` URI and, when
 required, generates a Bicep telemetry prefix against current and historical

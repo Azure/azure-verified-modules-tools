@@ -8,8 +8,10 @@ function Initialize-AvmModule {
         validated and left unchanged. Missing required metadata is prompted for
         only in an interactive terminal. Terraform initialization also creates
         only metadata.json and its containing directory; add Terraform source
-        manually afterward. Full Bicep source scaffolding is not yet available.
-        This command never creates a remote repository.
+        manually afterward. Full Bicep initialization creates local source,
+        version, changelog, and root e2e test files without overwriting
+        existing files. For nested child paths, it also initializes missing
+        ancestors. This command never creates a remote repository.
     .PARAMETER Path
         Module directory to initialize.
     .PARAMETER Ecosystem
@@ -17,7 +19,12 @@ function Initialize-AvmModule {
     .PARAMETER ModuleType
         Resource, pattern, or utility.
     .PARAMETER InputObject
-        Optional complete or partial metadata values.
+        Optional complete or partial metadata values for the target module.
+    .PARAMETER AncestorInputObject
+        Metadata for missing ancestors during full Bicep child initialization,
+        keyed by exact root-relative paths: '.' for the root and 'child/name'
+        for a nested parent. Existing ancestors ignore their supplied values.
+        Interactive users may omit entries and answer the metadata prompts.
     .PARAMETER ChildModule
         Initialize a child module without root ownership fields.
     .PARAMETER Proposed
@@ -26,6 +33,8 @@ function Initialize-AvmModule {
         Skip the installed-module version check for a trusted checkout.
     .EXAMPLE
         avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
+    .EXAMPLE
+        avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account/blob-service/container -ChildModule -InputObject $childMetadata -AncestorInputObject @{ '.' = $rootMetadata; 'blob-service' = $parentMetadata }
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
@@ -42,6 +51,8 @@ function Initialize-AvmModule {
 
         [System.Collections.IDictionary] $InputObject = @{},
 
+        [System.Collections.IDictionary] $AncestorInputObject = @{},
+
         [switch] $ChildModule,
 
         [switch] $Proposed,
@@ -55,8 +66,31 @@ function Initialize-AvmModule {
     if ($Proposed -and $Ecosystem -ne 'bicep') {
         throw [System.ArgumentException]::new('-Proposed is only supported for Bicep modules.')
     }
+    if (($Proposed -or $Ecosystem -ne 'bicep') -and $AncestorInputObject.Count -gt 0) {
+        throw [System.ArgumentException]::new('-AncestorInputObject is only supported for full Bicep child initialization.')
+    }
     if ($Ecosystem -eq 'bicep' -and -not $Proposed) {
-        throw [AvmNotSupportedException]::new('Full Bicep scaffolding is not yet available. Use -Proposed for metadata-only initialization.')
+        $initialization = Get-AvmBicepModuleInitializationPlan -Path $Path -ModuleType $ModuleType `
+            -InputObject $InputObject -AncestorInputObject $AncestorInputObject `
+            -ChildModule:$ChildModule -SkipModuleVersionCheck:$SkipModuleVersionCheck
+        $root = $initialization.Root
+        $plans = $initialization.Plans
+        Test-AvmModuleInitializationPlan -Root $root -Plan $plans
+        $changed = $false
+        if ($plans.Count -gt 0 -and $PSCmdlet.ShouldProcess($root, 'Initialize local Bicep module files')) {
+            $changed = Write-AvmModuleInitializationPlan -Root $root -Plan $plans -Confirm:$false
+        }
+        return [pscustomobject][ordered]@{
+            Engine       = $Ecosystem
+            Tool         = 'module-initialize/1'
+            ToolPath     = $null
+            ToolSource   = 'builtin'
+            Status       = 'pass'
+            Issues       = @()
+            Changed      = $changed
+            PlannedFiles = @($plans | ForEach-Object { [System.IO.Path]::GetRelativePath($root, $_.Path).Replace('\', '/') })
+            Metadata     = $initialization.Metadata
+        }
     }
 
     $parameters = @{

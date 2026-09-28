@@ -19,7 +19,13 @@ function New-AvmMetadataInputObject {
 
         [switch] $ChildModule,
 
-        [switch] $UpdateSource
+        [switch] $UpdateSource,
+
+        [switch] $PreserveSourcePrefix,
+
+        [string[]] $KnownPrefix = @(),
+
+        [Nullable[bool]] $TelemetryRequired = $null
     )
 
     Set-StrictMode -Version 3.0
@@ -39,8 +45,13 @@ function New-AvmMetadataInputObject {
     if (-not $ChildModule) {
         $required += 'owners'
     }
-    $telemetryRequired = Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem `
-        -ModuleType $ModuleType -ChildModule:$ChildModule
+    $telemetryRequired = if ($null -ne $TelemetryRequired) {
+        [bool]$TelemetryRequired
+    }
+    else {
+        Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem `
+            -ModuleType $ModuleType -ChildModule:$ChildModule
+    }
     $isHelper = $ChildModule -and $metadata.Contains('canonicalType') -and $metadata.canonicalType -ceq 'helper'
     if ($Ecosystem -eq 'terraform' -and $telemetryRequired -and -not $isHelper) {
         $required += 'telemetryIdPrefix'
@@ -113,7 +124,7 @@ function New-AvmMetadataInputObject {
 
     $isHelper = $ChildModule -and $metadata.canonicalType -ceq 'helper'
     $requiresBicepPrefix = $Ecosystem -eq 'bicep' -and -not $isHelper -and $telemetryRequired -and -not $metadata.Contains('telemetryIdPrefix')
-    if ($requiresBicepPrefix -and $UpdateSource) {
+    if ($requiresBicepPrefix -and ($UpdateSource -or $PreserveSourcePrefix)) {
         $authoredPrefix = Get-AvmBicepTelemetrySourcePrefix -Path $Path
         if ($authoredPrefix) {
             $metadata.telemetryIdPrefix = $authoredPrefix
@@ -124,7 +135,7 @@ function New-AvmMetadataInputObject {
             }
 
             $localKnown = @(Get-AvmLocalBicepTelemetryPrefix -Path $Path)
-            if ($localKnown -ccontains $authoredPrefix) {
+            if ($localKnown -ccontains $authoredPrefix -or $KnownPrefix -ccontains $authoredPrefix) {
                 throw [System.ArgumentException]::new(
                     "main.bicep telemetryIdPrefix '$authoredPrefix' is already used by another module. Resolve the collision before initializing metadata.")
             }
@@ -141,8 +152,16 @@ function New-AvmMetadataInputObject {
             return $metadata
         }
     }
+    if ($PreserveSourcePrefix -and $metadata.Contains('telemetryIdPrefix')) {
+        $authoredPrefix = Get-AvmBicepTelemetrySourcePrefix -Path $Path
+        if ($authoredPrefix -and $authoredPrefix -cne $metadata.telemetryIdPrefix) {
+            throw [System.ArgumentException]::new(
+                "metadata telemetryIdPrefix '$($metadata.telemetryIdPrefix)' conflicts with existing main.bicep prefix '$authoredPrefix'.")
+        }
+    }
     if ($requiresBicepPrefix) {
-        $known = @(Get-AvmLocalBicepTelemetryPrefix -Path $Path) + @(Get-AvmCatalogTelemetryPrefix -SkipModuleVersionCheck)
+        $known = @($KnownPrefix) + @(Get-AvmLocalBicepTelemetryPrefix -Path $Path) +
+        @(Get-AvmCatalogTelemetryPrefix -SkipModuleVersionCheck)
         $metadata.telemetryIdPrefix = New-AvmTelemetryIdPrefix -Ecosystem bicep -Kind $kind `
             -KnownPrefix $known -SkipModuleVersionCheck
     }

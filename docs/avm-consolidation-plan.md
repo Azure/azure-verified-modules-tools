@@ -127,7 +127,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 
 | Verb                          | Bicep behaviour                                                          | Terraform behaviour                                                        |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `avm init`                    | One-time local module setup: `-Proposed` writes only metadata.json before source exists; full source scaffolding awaits upstream template migration | One-time local metadata.json creation; source is added separately and no remote repository is created |
+| `avm init`                    | One-time local module setup: `-Proposed` writes only metadata.json; full initialization scaffolds root source, version, changelog and e2e tests, plus missing child modules through a requested target | One-time local metadata.json creation; source is added separately and no remote repository is created |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
 | `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init -upgrade` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
@@ -161,6 +161,13 @@ in an interactive terminal; scripted callers can supply `-InputObject`.
 Existing metadata is never overwritten. Bicep `-Proposed` creates only
 metadata.json and any missing directories after validation; Terraform
 initialization is metadata-only, with no repository creation or publishing.
+Full Bicep initialization adds root files and recursively creates missing
+child modules without touching existing authored files. The target's
+`-InputObject` and an optional `-AncestorInputObject` keyed by exact
+root-relative paths (`.` for the root) supply scripted metadata for a
+deep child; interactive users are prompted per missing ancestor.
+All planned files are validated before writing, and no initialization
+invokes deployment or remote repository creation.
 
 Both authoring chains require valid root and child `metadata.json` files.
 Required tools are resolved before the metadata step. Metadata failure then
