@@ -28,6 +28,15 @@ function Get-AvmBicepDocsExample {
     $directory = [System.IO.DirectoryInfo]::new(
         [System.IO.Path]::GetFullPath($ModulePath))
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
+    $relativeModule = [System.IO.Path]::GetRelativePath($root, $directory.FullName)
+    if ($relativeModule -eq '..' -or
+        $relativeModule.StartsWith(
+            "..$([System.IO.Path]::DirectorySeparatorChar)",
+            [System.StringComparison]::Ordinal) -or
+        [System.IO.Path]::IsPathRooted($relativeModule)) {
+        throw [AvmConfigurationException]::new(
+            "Bicep documentation module '$($directory.FullName)' is outside the repository root '$root'.")
+    }
     $pathComparer = if ($IsWindows) {
         [System.StringComparer]::OrdinalIgnoreCase
     }
@@ -43,7 +52,8 @@ function Get-AvmBicepDocsExample {
         Template = $CompiledTemplate
         Required = [string[]]$RequiredParameters
     }
-    while ($null -ne $directory -and $directory.FullName -ne $root) {
+    while ($null -ne $directory) {
+        $relative = [System.IO.Path]::GetRelativePath($root, $directory.FullName)
         $exampleRoot = Join-Path -Path $directory.FullName -ChildPath 'tests' `
             -AdditionalChildPath 'e2e'
         if ([System.IO.Directory]::Exists($exampleRoot)) {
@@ -234,7 +244,7 @@ function Get-AvmBicepDocsExample {
                 }
             }
         }
-        if ([System.IO.Path]::GetRelativePath($root, $directory.FullName) -match
+        if ($relative -eq '.' -or $relative -match
             '^avm[/\\](?:res|ptn|utl)[/\\][^/\\]+[/\\][^/\\]+$') {
             break
         }

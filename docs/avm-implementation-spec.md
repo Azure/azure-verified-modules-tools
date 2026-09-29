@@ -602,8 +602,10 @@ were added directly to the module repository rather than through Bicep Sync.
 
 ### Bicep documentation
 
-`avm docs -Ecosystem bicep -Path <repository>` renders root and child
-READMEs through the pinned `bicep docs generate --stdout` command. The
+`avm docs -Ecosystem bicep -Path <repository-or-module-root>` renders root
+and child READMEs through the pinned `bicep docs generate --stdout` command.
+Module-root runs include tests in that root's `tests/e2e` for its own and
+nested READMEs, but do not search above the selected root. The
 nearest `bicepconfig.json` must set `documentation.template.file` to a
 relative, tracked copy of the packaged `avm-readme-v1.scriban`; a different
 template or hash fails before writing. Generated content comes from the

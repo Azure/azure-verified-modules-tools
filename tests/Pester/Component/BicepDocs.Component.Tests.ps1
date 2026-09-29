@@ -483,6 +483,53 @@ import { lockType } from 'br/public:avm/utl/types/avm-common-types:0.3.0'
         Test-Path -LiteralPath (Join-Path $fixture.Module 'README.md') | Should -BeFalse
     }
 
+    It 'reads module-root tests for the root and nested scopes without scanning above the selected root' {
+        $fixture = New-BicepDocsFixture -Name 'example-module-boundary'
+        $child = Join-Path $fixture.Module 'rg-scope'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        Copy-Item -LiteralPath (Join-Path $fixture.Module 'child' 'main.bicep') `
+            -Destination (Join-Path $child 'main.bicep')
+        Copy-Item -LiteralPath (Join-Path $fixture.Module 'child' 'main.json') `
+            -Destination (Join-Path $child 'main.json')
+        $outside = Join-Path $fixture.Root 'tests' 'e2e' 'outside'
+        $null = New-Item -ItemType Directory -Path $outside -Force
+        Copy-Item -LiteralPath (Join-Path $fixture.Module 'tests' 'e2e' 'rg-scope.minimal' 'main.test.bicep') `
+            -Destination (Join-Path $outside 'main.test.bicep')
+
+        $examples = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture; Child = $child } {
+            param($F, $Child)
+            $rootTemplate = Get-Content -LiteralPath (Join-Path $F.Module 'main.json') `
+                -Raw | ConvertFrom-Json -AsHashtable
+            $childTemplate = Get-Content -LiteralPath (Join-Path $Child 'main.json') `
+                -Raw | ConvertFrom-Json -AsHashtable
+            $moduleRoot = Get-AvmBicepDocsExample -ModulePath $F.Module `
+                -RepositoryRoot $F.Module -ToolPath 'mock-bicep' `
+                -CompiledTemplate $rootTemplate -RequiredParameters @('name')
+            $nestedScope = Get-AvmBicepDocsExample -ModulePath $Child `
+                -RepositoryRoot $F.Module -ToolPath 'mock-bicep' `
+                -CompiledTemplate $childTemplate
+            $repositoryRoot = Get-AvmBicepDocsExample -ModulePath $Child `
+                -RepositoryRoot $F.Root -ToolPath 'mock-bicep' `
+                -CompiledTemplate $childTemplate
+            [pscustomobject]@{
+                ModuleRoot     = $moduleRoot
+                NestedScope    = $nestedScope
+                RepositoryRoot = $repositoryRoot
+            }
+        }
+        @($examples.ModuleRoot.Keys | Sort-Object) | Should -Be @(
+            'tests/e2e/rg-scope.max/main.test.bicep',
+            'tests/e2e/rg-scope.minimal/main.test.bicep'
+        )
+        @($examples.NestedScope.Keys | Sort-Object) |
+            Should -Be @($examples.RepositoryRoot.Keys | Sort-Object)
+        @($examples.NestedScope.Keys).Count | Should -Be 4
+        $examples.NestedScope['../tests/e2e/rg-scope.minimal/main.test.bicep'].InvalidReason |
+            Should -BeExactly ''
+        @($examples.NestedScope.Keys | Where-Object { $_ -match 'outside' }).Count |
+            Should -Be 0
+    }
+
     It 'identifies unknown and missing parameters in a referenced ancestor test' {
         $fixture = New-BicepDocsFixture -Name 'invalid-source-parameters'
         $child = Join-Path $fixture.Module 'rg-scope'
@@ -510,6 +557,41 @@ import { lockType } from 'br/public:avm/utl/types/avm-common-types:0.3.0'
         $invalid.JsonParameters | Should -BeExactly ''
         $examples['../tests/e2e/rg-scope.max/main.test.bicep'].InvalidReason |
             Should -BeExactly ''
+    }
+
+    It 'rejects invalid root test parameters when the module is the boundary' {
+        $fixture = New-BicepDocsFixture -Name 'invalid-root-test'
+        $testFile = [System.IO.Path]::Combine(
+            $fixture.Module, 'tests', 'e2e', 'rg-scope.minimal', 'main.test.bicep')
+        $source = [System.IO.File]::ReadAllText($testFile).Replace(
+            "name: 'avmdocs12345'", "wrongName: 'invalid'")
+        [System.IO.File]::WriteAllText(
+            $testFile, $source, [System.Text.UTF8Encoding]::new($false))
+
+        $examples = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            $template = Get-Content -LiteralPath (Join-Path $F.Module 'main.json') `
+                -Raw | ConvertFrom-Json -AsHashtable
+            Get-AvmBicepDocsExample -ModulePath $F.Module -RepositoryRoot $F.Module `
+                -ToolPath 'mock-bicep' -CompiledTemplate $template -RequiredParameters @('name')
+        }
+        $invalid = $examples['tests/e2e/rg-scope.minimal/main.test.bicep']
+        $invalid.InvalidReason |
+            Should -Match 'unknown parameters: wrongName; missing required parameters: name'
+        $invalid.BicepParameters | Should -BeExactly ''
+    }
+
+    It 'rejects example discovery outside the selected root' {
+        $fixture = New-BicepDocsFixture -Name 'example-outside-boundary'
+        InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            $template = Get-Content -LiteralPath (Join-Path $F.Module 'main.json') `
+                -Raw | ConvertFrom-Json -AsHashtable
+            { Get-AvmBicepDocsExample -ModulePath $F.Module `
+                    -RepositoryRoot (Join-Path $F.Module 'child') `
+                    -ToolPath 'mock-bicep' -CompiledTemplate $template } |
+                Should -Throw '*outside the repository root*'
+        }
     }
 
     It 'orders multi-scope child links for the parent usage section' {

@@ -623,6 +623,16 @@ output registrationToken string? = 'token'
             Should -Be 2
         @([regex]::Matches($scoped, '<summary>via Bicep parameters file</summary>')).Count |
             Should -Be 2
+        $moduleResult = Invoke-AvmDocs -Path $module -CheckDrift `
+            -IncludeRenderedContent -SkipModuleVersionCheck
+        $moduleResult.FilesSelected | Should -Be 3
+        $moduleResult.FilesProcessed | Should -Be 3
+        @($moduleResult.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed').Count |
+            Should -Be 0
+        $moduleScoped = @($moduleResult.GeneratedReadmes | Where-Object {
+                $_.Path -eq 'rg-scope/README.md'
+            })[0].Content
+        $moduleScoped | Should -BeExactly $scoped
         $scoped | Should -Match '```text\nRequires credentials\.\n```\n\n<details>'
         $scoped | Should -Match '## Parameters\n\n\*\*Required parameters\*\*'
         $scoped | Should -Match '(?s)### Parameter: `name`.*?- Type: string\n\n### Parameter: `a`'
@@ -814,6 +824,12 @@ output registrationToken string? = 'token'
         $invalidFailures = @($invalid.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
         $invalidFailures.Count | Should -Be 1
         $invalidFailures[0].Message |
+            Should -Match 'unknown parameters: wrongName; missing required parameters: name'
+        $invalidModule = Invoke-AvmDocs -Path $module -CheckDrift -SkipModuleVersionCheck
+        $invalidModule.FilesProcessed | Should -Be 2
+        $moduleFailures = @($invalidModule.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
+        $moduleFailures.Count | Should -Be 1
+        $moduleFailures[0].Message |
             Should -Match 'unknown parameters: wrongName; missing required parameters: name'
         @($invalid.GeneratedReadmes | Where-Object {
                 $_.Path -eq 'avm/res/storage/storage-account/rg-scope/README.md'

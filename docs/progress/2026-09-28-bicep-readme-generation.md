@@ -36,6 +36,9 @@ registry or retire its existing generator and CI in this slice.
       parameters against their actual target module without writing a README.
 - [x] Keep array-item type metadata examples off their containing array
       parameters while preserving explicit parameter and child examples.
+- [x] Discover tests at a selected Bicep module root for that root and
+      nested scopes without reading above the selected boundary; retain
+      invalid-test failures and repository-root output.
 - [x] Independently verify the corrected renderer against the toolkit README
       on pinned registry main, comparing the entire generated file as bytes.
 - [x] Update user-facing documentation and the implementation spec/plan.
@@ -364,6 +367,24 @@ independent raw-byte comparator verified these expected issues and
 found no others. This is a **GO for the combined candidate only**:
 the tracked old-main gate remains red, draft changes are unmerged,
 and no baseline re-pin, CI cutover, release, or registry write occurred.
+Real registry wiring then exposed a separate module-root invocation bug:
+`Invoke-AvmDocs -Path <module-root> -CheckDrift` could not resolve tests
+in that root's `tests/e2e` when rendering its own README or nested
+scope READMEs. The repository-root frozen27 run did not exercise this
+path. Before the fix, component tests returned no module-root examples
+and a pinned-Bicep integration run processed only two of three READMEs
+when the module was the selected root. Example discovery now visits that
+root exactly once, stops before its parent, rejects a module outside the
+selected root, and retains the existing top-level module stop for
+monorepo runs. Three targeted component tests and the real-CLI
+repository-root/module-root comparison pass: all three READMEs render
+in both contexts, the nested README text matches exactly, and both
+contexts still reject a test with an unknown and missing required
+parameter. `./build.ps1 pre-commit` passed layout, clean lint, 1,883
+unit tests (nine skipped), and 903 component tests with zero errors
+and 49 existing warnings. Frozen27 remains a pass only for its
+original immutable source and invocation; the changed source needs
+a fresh independent registry comparison before cutover.
 
 ## Blockers and dependencies
 
