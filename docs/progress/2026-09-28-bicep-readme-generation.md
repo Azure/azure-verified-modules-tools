@@ -2,7 +2,7 @@
 
 **Status**: in-progress
 **Started**: 2026-09-28
-**Updated**: 2026-09-28
+**Updated**: 2026-09-29
 **Branch**: `jaredfholgate-interactive-metadata-initialization`
 
 ## Outcome
@@ -274,9 +274,17 @@ within a docs invocation instead of rebuilding an ancestor for each
 child. Focused required-parameter unit tests (2/2), Bicep docs components
 (22/22), real pinned-CLI scoped integration tests (3/3), and lint pass.
 `./build.ps1 pre-commit` passed on this candidate: five tasks, zero
-errors, and 49 existing warnings. The independent registry comparison
-is pending; the known-invalid conversation-knowledge-mining tests must
-now fail until their source is corrected.
+errors, and 49 existing warnings. Committed and pushed as `cc46f78`.
+The independently frozen 190-file candidate rendered 159 of 160
+focused old-main source-backed READMEs. All 159 generated files are
+byte-identical to the preceding frozen candidate: 152 match old main,
+two retain the same strict historical approvals, and five retain the
+same old-main differences. The sole render failure is the invalid
+conversation-knowledge-mining sandbox test: it supplies undeclared
+`aiServiceLocation` and `usecase`, omits required
+`azureAiServiceLocation`, and produces no README. A full 577-path
+diagnostic has been requested to find any other invalid examples;
+the focused result does **not** establish full-registry parity.
 
 ## Blockers and dependencies
 
