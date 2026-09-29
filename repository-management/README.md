@@ -48,8 +48,9 @@ wins a tie. Missing settings retain `legacy`.
 
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
-only one behavioral setting: `testTenant`. Initially only
-`avm/res/dev-test-lab/lab` selects `bami`.
+only one behavioral setting: `testTenant`. The canary group selects
+Application Security Group, IP Group, and Route Table while retaining DevTest
+Lab. All other modules retain the `legacy` default.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -83,7 +84,12 @@ the repository variable `TEST_BAMI_MODULE_PATHS` from the central groups and
 publishes that JSON array last:
 
 ```json
-["avm/res/dev-test-lab/lab"]
+[
+  "avm/res/dev-test-lab/lab",
+  "avm/res/network/application-security-group",
+  "avm/res/network/ip-group",
+  "avm/res/network/route-table"
+]
 ```
 
 The array contains only canonical module paths whose resolved `testTenant` is

@@ -89,20 +89,38 @@ Describe 'Central test tenant group resolution' {
 }
 
 Describe 'Tools-owned Bicep configuration' {
+    BeforeAll {
+        $script:canaryPaths = @(
+            'avm/res/dev-test-lab/lab'
+            'avm/res/network/application-security-group'
+            'avm/res/network/ip-group'
+            'avm/res/network/route-table'
+        )
+        $script:canaryPathsJson = ConvertTo-Json -InputObject $script:canaryPaths -Compress
+    }
+
     BeforeEach {
         $script:bicep = Get-Content -Raw (Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json') |
             ConvertFrom-Json -AsHashtable
     }
 
-    It 'compiles only the lab canary as a JSON array' {
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:pathsJson
+    It 'compiles exactly Lab and the three fast canaries as a JSON array' {
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:canaryPathsJson
+    }
+
+    It 'keeps unrelated modules on the legacy tenant' -ForEach @(
+        'avm/res/network/virtual-network'
+        'avm/res/storage/storage-account'
+    ) {
+        Resolve-AvmGroupTestTenant -Groups $script:bicep.moduleGroups -SelectorProperty modules -Item $_ |
+            Should -BeExactly 'legacy'
     }
 
     It 'shares group order and declaration precedence' {
-        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = @('avm/res/dev-test-lab/lab'); testTenant = 'legacy' }
+        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = $script:canaryPaths; testTenant = 'legacy' }
         ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly '[]'
-        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = @('avm/res/dev-test-lab/lab'); testTenant = 'bami' }
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:pathsJson
+        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = $script:canaryPaths; testTenant = 'bami' }
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:canaryPathsJson
     }
 
     It 'deduplicates selected paths and omits every resolved legacy path' {
@@ -110,8 +128,9 @@ Describe 'Tools-owned Bicep configuration' {
             @{ name = 'more'; order = 10; modules = @('avm/res/storage/storage-account', 'avm/res/dev-test-lab/lab'); testTenant = 'bami' }
             @{ name = 'legacy'; modules = @('avm/res/network/virtual-network'); testTenant = 'legacy' }
         )
+        $expected = ConvertTo-Json -InputObject @($script:canaryPaths + 'avm/res/storage/storage-account') -Compress
         ConvertTo-AvmBicepModulePaths -Configuration $script:bicep |
-            Should -BeExactly '["avm/res/dev-test-lab/lab","avm/res/storage/storage-account"]'
+            Should -BeExactly $expected
     }
 
     It 'rejects additional settings and nested or wildcard canary selectors' {

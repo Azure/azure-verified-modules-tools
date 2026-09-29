@@ -6,6 +6,7 @@ BeforeAll {
     $run = [regex]::Match($workflow, '(?ms)^        run: \|\n(?<body>.*)\z')
     if (-not $run.Success) { throw 'The Bicep publication run script is missing.' }
     $script:workflowRun = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
+    $script:canarySelector = '["avm/res/dev-test-lab/lab","avm/res/network/application-security-group","avm/res/network/ip-group","avm/res/network/route-table"]'
     $script:sourceValues = [ordered]@{
         TEST_BAMI_TENANT_ID = '11111111-1111-4111-8111-111111111111'
         TEST_BAMI_CONTROLLER_CLIENT_ID = '22222222-2222-4222-8222-222222222222'
@@ -133,7 +134,7 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         $script:entryState.WriteNames | Should -HaveCount 6
         $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
-            Should -BeExactly '["avm/res/dev-test-lab/lab"]'
+            Should -BeExactly $script:canarySelector
         foreach ($variableName in @(
             'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID',
             'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
@@ -148,6 +149,18 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         $script:entryState.Variables.Contains('TEST_BAMI_ADMIN_SUBSCRIPTION_ID') | Should -BeFalse
         $script:entryState.Variables.Contains('TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME') | Should -BeFalse
         $result | ConvertTo-Json -Depth 5 | Should -Not -Match 'fixture-installation-token|11111111|22222222|33333333|rg-bami-test'
+    }
+
+    It 'adds the fast canaries to an active Lab selection without rewriting execution values' {
+        $null = & $script:entryPath -Apply
+        $script:entryState.WriteNames.Clear()
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = '["avm/res/dev-test-lab/lab"]'
+
+        $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'Published'
+        $result.ChangedNames | Should -Be @('TEST_BAMI_MODULE_PATHS')
+        @($script:entryState.WriteNames) | Should -Be @('TEST_BAMI_MODULE_PATHS')
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly $script:canarySelector
     }
 
     It 'publishes from the actual <EventName> workflow command with no inputs and retired flag <FlagState>' -ForEach @(
@@ -165,7 +178,7 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         $result.Target | Should -BeExactly 'Azure/bicep-registry-modules'
         $script:entryState.WriteNames | Should -HaveCount 6
         $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_PATHS'
-        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly '["avm/res/dev-test-lab/lab"]'
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly $script:canarySelector
         $script:entryState.Variables.ARM_TENANT_ID.value | Should -BeExactly 'legacy-value'
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 15 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
@@ -206,7 +219,7 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
             Should -Throw '*Readback confirms the requested selector and unchanged execution values are present*'
         $script:entryState.WriteNames | Should -HaveCount 6
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
-            Should -BeExactly '["avm/res/dev-test-lab/lab"]'
+            Should -BeExactly $script:canarySelector
     }
 }
 
