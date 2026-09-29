@@ -4,6 +4,32 @@
 . (Join-Path $PSScriptRoot 'RetryHelpers.ps1')
 . (Join-Path $PSScriptRoot 'TerraformOperations.ps1')
 
+function Resolve-AvmRepositorySyncFederationContext {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([AllowEmptyString()] [string] $RepositoryId = $env:GITHUB_REPOSITORY_ID)
+
+    if ($env:GITHUB_ACTIONS -cne 'true' -or
+        $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+        $env:GITHUB_REPOSITORY_ID -cnotmatch '^[1-9][0-9]*$' -or
+        $RepositoryId -cne $env:GITHUB_REPOSITORY_ID) {
+        throw [System.InvalidOperationException]::new('Validation federation requires the trusted tools repository and its positive GitHub Actions repository ID.')
+    }
+    $toolsRepository = Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/azure-verified-modules-tools'
+    if ($null -eq $toolsRepository -or
+        $toolsRepository.full_name -cne 'Azure/azure-verified-modules-tools' -or
+        $toolsRepository.fork -ne $false -or
+        $toolsRepository.owner.login -cne 'Azure' -or
+        [string]$toolsRepository.id -cne $RepositoryId -or
+        [string]$toolsRepository.owner.id -cnotmatch '^[1-9][0-9]*$') {
+        throw [System.InvalidOperationException]::new('GitHub did not confirm the trusted tools repository and its immutable ID.')
+    }
+    return [pscustomobject]@{
+        RepositoryId = $RepositoryId
+        OrganizationId = [string]$toolsRepository.owner.id
+    }
+}
+
 function Resolve-RepositoryTestTenantSettings {
     [CmdletBinding()]
     param(
@@ -58,9 +84,14 @@ function Assert-AvmBamiIdentityPlan {
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
-        [Parameter(Mandatory)] [string] $Repository
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $RepositoryOwnerId,
+        [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId
     )
 
+    if ($RepositoryOwnerId -cnotmatch '^[1-9][0-9]*$' -or $RepositorySyncRepositoryId -cnotmatch '^[1-9][0-9]*$') {
+        throw [System.ArgumentException]::new('Candidate validation federation requires positive GitHub organization and tools repository IDs.')
+    }
     if (($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
         $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
         throw [System.InvalidOperationException]::new('Candidate Terraform plan is incomplete or errored.')
@@ -112,7 +143,7 @@ function Assert-AvmBamiIdentityPlan {
             $credential['parent_id'] -cne "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name") -or
         $credentialProperties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
         $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
-        $credentialProperties['subject'] -cne 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation') {
+        $credentialProperties['subject'] -cne "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation") {
         throw [System.InvalidOperationException]::new('Candidate validation federation must target only the tools repository environment and the existing BAMI identity.')
     }
     $role = $roles[0]['values']
@@ -201,6 +232,7 @@ function Invoke-AvmBamiRepositoryIdentity {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $BamiValues,
         [Parameter(Mandatory)] [hashtable] $Backend,
         [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
         [string] $TemporaryRoot = [System.IO.Path]::GetTempPath(),
         [bool] $PlanOnly = $true
@@ -215,8 +247,13 @@ function Invoke-AvmBamiRepositoryIdentity {
     if ($Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
         throw [System.ArgumentException]::new('Candidate identities are limited to the selected Azure AVM repository.')
     }
+    if ($env:GITHUB_REF -cne 'refs/heads/main') {
+        throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
+    }
+    $toolsContext = Resolve-AvmRepositorySyncFederationContext -RepositoryId $RepositorySyncRepositoryId
     $repo = Invoke-RepositoryGitHubApi -Endpoint "repos/$Repository"
-    if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or $repo.owner.id -le 0 -or $repo.owner.login -cne 'Azure') {
+    if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or
+        [string]$repo.owner.id -cne $toolsContext.OrganizationId -or $repo.owner.login -cne 'Azure') {
         throw [System.InvalidOperationException]::new('GitHub returned an unexpected candidate repository identity.')
     }
     if (-not $PSCmdlet.ShouldProcess($Repository, 'Prepare an isolated BAMI identity plan')) {
@@ -237,6 +274,7 @@ function Invoke-AvmBamiRepositoryIdentity {
             github_repository_name = $repo.name
             github_organization_id = [string]$repo.owner.id
             github_repository_id = [string]$repo.id
+            repository_sync_repository_id = $toolsContext.RepositoryId
             github_job_workflow_ref = $JobWorkflowRef
         }
         [System.IO.File]::WriteAllText($variablesPath, (ConvertTo-Json -InputObject $variables -Depth 5), [System.Text.UTF8Encoding]::new($false))
@@ -278,7 +316,8 @@ function Invoke-AvmBamiRepositoryIdentity {
         ) -Root $Root -Environment $environment
         $planJson = Invoke-AvmBamiIdentityTerraform -Arguments @('show', '-json', $planPath) -Root $Root -Environment $environment
         $plan = ConvertFrom-Json -InputObject $planJson -AsHashtable -Depth 100
-        Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository
+        Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository `
+            -RepositoryOwnerId $toolsContext.OrganizationId -RepositorySyncRepositoryId $toolsContext.RepositoryId
         if ($PlanOnly -and @($plan['resource_changes'] | Where-Object {
                     $_ -and $_['address'] -ceq 'module.azure.azapi_resource.validation_federated_credential' -and
                     $_['change']['actions'] -notcontains 'no-op'

@@ -27,7 +27,9 @@ function New-AvmTestBamiIdentity {
 function New-AvmTestBamiPlan {
     param(
         [switch] $KnownClient,
-        [switch] $ValidationPending
+        [switch] $ValidationPending,
+        [string] $RepositoryOwnerId = '6844498',
+        [string] $RepositorySyncRepositoryId = '1239632211'
     )
 
     $condition = @'
@@ -100,7 +102,7 @@ AND
                 properties = @{
                     audiences = @('api://AzureADTokenExchange')
                     issuer = 'https://token.actions.githubusercontent.com'
-                    subject = 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation'
+                    subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
                 }
             }
         }

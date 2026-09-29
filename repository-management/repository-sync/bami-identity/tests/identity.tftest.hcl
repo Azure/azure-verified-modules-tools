@@ -32,16 +32,35 @@ override_resource {
 }
 
 variables {
-  tenant_id                    = "10000000-0000-4000-8000-000000000001"
-  controller_client_id         = "10000000-0000-4000-8000-000000000002"
-  subscription_id              = "10000000-0000-4000-8000-000000000003"
-  management_group_id          = "mg-bami-test"
-  identity_resource_group_name = "rg-bami-test"
-  github_repository_owner      = "Azure"
-  github_repository_name       = "terraform-azurerm-avm-ptn-example-repo"
-  github_organization_id       = "6844498"
-  github_repository_id         = "1234"
-  github_job_workflow_ref      = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
+  tenant_id                     = "10000000-0000-4000-8000-000000000001"
+  controller_client_id          = "10000000-0000-4000-8000-000000000002"
+  subscription_id               = "10000000-0000-4000-8000-000000000003"
+  management_group_id           = "mg-bami-test"
+  identity_resource_group_name  = "rg-bami-test"
+  github_repository_owner       = "Azure"
+  github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
+  github_organization_id        = "6844498"
+  github_repository_id          = "1234"
+  repository_sync_repository_id = "1239632211"
+  github_job_workflow_ref       = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
+}
+
+run "candidate_rejects_invalid_tools_repository_id" {
+  command = plan
+
+  variables {
+    repository_sync_repository_id = "0"
+  }
+  expect_failures = [var.repository_sync_repository_id]
+}
+
+run "candidate_rejects_absent_tools_repository_id" {
+  command = plan
+
+  variables {
+    repository_sync_repository_id = null
+  }
+  expect_failures = [var.repository_sync_repository_id]
 }
 
 run "candidate_plan_binds_the_expected_tenant" {

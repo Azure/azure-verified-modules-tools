@@ -28,13 +28,14 @@ override_resource {
 }
 
 variables {
-  management_group_id          = "legacy"
-  identity_resource_group_name = "legacy"
-  github_repository_name       = "terraform-azurerm-avm-ptn-example-repo"
-  github_teams                 = {}
-  module_id                    = "avm-ptn-example-repo"
-  module_name                  = "Example"
-  github_labels_source_path    = "tests/labels.csv"
+  management_group_id           = "legacy"
+  identity_resource_group_name  = "legacy"
+  github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
+  github_teams                  = {}
+  module_id                     = "avm-ptn-example-repo"
+  module_name                   = "Example"
+  repository_sync_repository_id = "1239632211"
+  github_labels_source_path     = "tests/labels.csv"
   test_subscription_ids = [{
     name = "legacy"
     id   = "20000000-0000-4000-8000-000000000003"
@@ -68,6 +69,7 @@ run "repository_creation_remains_independent" {
 
   variables {
     repository_creation_mode_enabled = true
+    repository_sync_repository_id    = null
   }
   assert {
     condition     = length(module.azure) == 0 && local.test_settings.client_id == "" && length(local.test_settings.test_subscription_ids) == 0

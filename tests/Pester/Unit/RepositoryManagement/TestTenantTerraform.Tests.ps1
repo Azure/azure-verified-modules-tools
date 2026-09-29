@@ -11,6 +11,79 @@ BeforeAll {
     }
 }
 
+Describe 'Tools repository federation context' {
+    BeforeEach {
+        $script:previousGitHubContext = @{}
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')) {
+            $script:previousGitHubContext[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_REPOSITORY_ID = '1239632211'
+        $script:toolsRepository = [pscustomobject]@{
+            full_name = 'Azure/azure-verified-modules-tools'
+            id = 1239632211
+            fork = $false
+            owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 }
+        }
+        Mock Invoke-RepositoryGitHubApi { $script:toolsRepository }
+    }
+
+    AfterEach {
+        foreach ($name in $script:previousGitHubContext.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $script:previousGitHubContext[$name])
+        }
+    }
+
+    It 'confirms the runner repository ID against the GitHub repository record' {
+        $context = Resolve-AvmRepositorySyncFederationContext -RepositoryId $env:GITHUB_REPOSITORY_ID
+        $context.RepositoryId | Should -BeExactly '1239632211'
+        $context.OrganizationId | Should -BeExactly '6844498'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 1 -ParameterFilter {
+            $Endpoint -ceq 'repos/Azure/azure-verified-modules-tools'
+        }
+    }
+
+    It 'rejects untrusted runner context: <Case>' -ForEach @(
+        @{ Case = 'not Actions'; Actions = ''; Repository = 'Azure/azure-verified-modules-tools'; Id = '1239632211'; Supplied = '1239632211' }
+        @{ Case = 'fork'; Actions = 'true'; Repository = 'fork/azure-verified-modules-tools'; Id = '1239632211'; Supplied = '1239632211' }
+        @{ Case = 'missing repository'; Actions = 'true'; Repository = ''; Id = '1239632211'; Supplied = '1239632211' }
+        @{ Case = 'missing ID'; Actions = 'true'; Repository = 'Azure/azure-verified-modules-tools'; Id = ''; Supplied = '' }
+        @{ Case = 'zero ID'; Actions = 'true'; Repository = 'Azure/azure-verified-modules-tools'; Id = '0'; Supplied = '0' }
+        @{ Case = 'leading zero'; Actions = 'true'; Repository = 'Azure/azure-verified-modules-tools'; Id = '0123'; Supplied = '0123' }
+        @{ Case = 'nonnumeric ID'; Actions = 'true'; Repository = 'Azure/azure-verified-modules-tools'; Id = '123abc'; Supplied = '123abc' }
+        @{ Case = 'swapped input'; Actions = 'true'; Repository = 'Azure/azure-verified-modules-tools'; Id = '1239632211'; Supplied = '987654321' }
+    ) {
+        param($Case, $Actions, $Repository, $Id, $Supplied)
+        $env:GITHUB_ACTIONS = $Actions
+        $env:GITHUB_REPOSITORY = $Repository
+        $env:GITHUB_REPOSITORY_ID = $Id
+        { Resolve-AvmRepositorySyncFederationContext -RepositoryId $Supplied } |
+            Should -Throw '*trusted tools repository*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+    }
+
+    It 'rejects mismatched or forked GitHub repository records' {
+        foreach ($change in @('id', 'name', 'fork', 'owner', 'ownerId')) {
+            $script:toolsRepository = [pscustomobject]@{
+                full_name = 'Azure/azure-verified-modules-tools'
+                id = 1239632211
+                fork = $false
+                owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 }
+            }
+            switch ($change) {
+                'id' { $script:toolsRepository.id = 1234 }
+                'name' { $script:toolsRepository.full_name = 'fork/azure-verified-modules-tools' }
+                'fork' { $script:toolsRepository.fork = $true }
+                'owner' { $script:toolsRepository.owner.login = 'Other' }
+                'ownerId' { $script:toolsRepository.owner.id = 0 }
+            }
+            { Resolve-AvmRepositorySyncFederationContext -RepositoryId $env:GITHUB_REPOSITORY_ID } |
+                Should -Throw '*GitHub did not confirm*'
+        }
+    }
+}
+
 Describe 'Terraform test tenant selection' {
     It 'keeps explicitly legacy selections on their normal path without candidate dependencies' {
         $result = Resolve-RepositoryTestTenantSettings -TestTenant legacy
@@ -53,10 +126,16 @@ Describe 'Candidate plan and output safety' {
     BeforeEach {
         $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
         $script:plan = New-AvmTestBamiPlan
+        $script:planArguments = @{
+            Settings = $script:settings
+            Repository = $script:repository.full_name
+            RepositoryOwnerId = '6844498'
+            RepositorySyncRepositoryId = '1239632211'
+        }
     }
 
     It 'accepts the bounded identity plan with all three delegation deny roles' {
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Not -Throw
     }
 
@@ -68,7 +147,7 @@ Describe 'Candidate plan and output safety' {
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
                     $_.address -cne 'module.azure.azapi_resource.validation_federated_credential'
                 })
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*scope*'
     }
 
@@ -94,15 +173,29 @@ Describe 'Candidate plan and output safety' {
             else {
                 $credential[$mutation.field] = $mutation.value
             }
-            { Assert-AvmBamiIdentityPlan -Plan $invalid -Settings $script:settings -Repository $script:repository.full_name } |
+            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } |
                 Should -Throw '*validation federation*'
         }
+    }
+
+    It 'binds the BAMI validation subject to the supplied verified IDs' {
+        $alternate = New-AvmTestBamiPlan -RepositorySyncRepositoryId '987654321'
+        $script:planArguments.RepositorySyncRepositoryId = '987654321'
+        { Assert-AvmBamiIdentityPlan -Plan $alternate @script:planArguments } | Should -Not -Throw
+        $script:planArguments.RepositorySyncRepositoryId = '1239632211'
+        { Assert-AvmBamiIdentityPlan -Plan $alternate @script:planArguments } | Should -Throw '*validation federation*'
+
+        $alternate = New-AvmTestBamiPlan -RepositoryOwnerId '123456789'
+        $script:planArguments.RepositoryOwnerId = '123456789'
+        { Assert-AvmBamiIdentityPlan -Plan $alternate @script:planArguments } | Should -Not -Throw
+        $script:planArguments.RepositoryOwnerId = '6844498'
+        { Assert-AvmBamiIdentityPlan -Plan $alternate @script:planArguments } | Should -Throw '*validation federation*'
     }
 
     It 'rejects every delete or replacement, including directory membership changes' {
         foreach ($actions in @(@('delete'), @('delete', 'create'), @('create', 'delete'))) {
             $script:plan.resource_changes[2].change.actions = $actions
-            { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+            { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
                 Should -Throw '*not delete or replace*'
         }
     }
@@ -111,14 +204,14 @@ Describe 'Candidate plan and output safety' {
         $script:plan.planned_values.root_module.child_modules[0].resources += @{
             address = 'module.azure.azapi_resource.extra_owner'; mode = 'managed'; values = @{}
         }
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*scope*'
         $script:plan = New-AvmTestBamiPlan
         $script:plan.planned_values.root_module.child_modules[0].resources[0].values.parent_id = '/subscriptions/legacy/resourceGroups/legacy'
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*expected repository*'
         $script:plan.errored = $true
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*incomplete or errored*'
     }
 
@@ -130,7 +223,7 @@ Describe 'Candidate plan and output safety' {
                 $parts = $properties.condition -split '\r?\nAND\r?\n'
                 $parts[$clause] = $parts[$clause].Replace($role, '00000000-0000-4000-8000-000000000099')
                 $properties.condition = $parts -join "`nAND`n"
-                { Assert-AvmBamiIdentityPlan -Plan $invalid -Settings $script:settings -Repository $script:repository.full_name } |
+                { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } |
                     Should -Throw '*delegation fix*'
             }
         }
@@ -138,12 +231,12 @@ Describe 'Candidate plan and output safety' {
             $invalid = New-AvmTestBamiPlan
             $properties = $invalid.planned_values.root_module.child_modules[0].resources[1].values.body.properties
             $properties.condition = $properties.condition.Replace('GuidNotEquals', $replacement)
-            { Assert-AvmBamiIdentityPlan -Plan $invalid -Settings $script:settings -Repository $script:repository.full_name } | Should -Throw
+            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw
         }
         $invalid = New-AvmTestBamiPlan
         $properties = $invalid.planned_values.root_module.child_modules[0].resources[1].values.body.properties
         $properties.condition = $properties.condition.Replace('roleAssignments/write', 'roleAssignments/ write')
-        { Assert-AvmBamiIdentityPlan -Plan $invalid -Settings $script:settings -Repository $script:repository.full_name } |
+        { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } |
             Should -Throw '*required deny rules*'
     }
 
@@ -220,12 +313,15 @@ Describe 'Terraform effective contract and state wiring' {
         $validation | Should -Match 'parent_id\s*=\s*azapi_resource.identity.id'
         $validation | Should -Match 'locks\s*=\s*\[azapi_resource.identity.id\]'
         $validation | Should -Match 'name\s*=\s*"\$\{local.owner_repo_name\}-avm-validation"'
-        $validation | Should -Match 'subject\s*=\s*"repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation"'
+        $validation | Should -Match 'subject\s*=\s*"repository_owner_id:\$\{var.github_organization_id\}:repository_id:\$\{var.repository_sync_repository_id\}:environment:avm-validation"'
+        $validation | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
         $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
         $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
         $bami | Should -Match 'source\s*=\s*"\.\./terraform/modules/azure"'
+        $ordinary | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
+        $bami | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
         $ordinary | Should -Match 'count\s*=\s*var.repository_creation_mode_enabled \? 0 : 1'
         $bami | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
     }
@@ -240,10 +336,11 @@ Describe 'Terraform effective contract and state wiring' {
         foreach ($field in @('tenant_id', 'client_id', 'test_subscription_ids')) {
             $locals | Should -Match ('\b' + $field + '\s*=\s*var.bami_test_settings\.' + $field + '\b')
         }
-        $subscriptions = ConvertFrom-AvmTestTenantJson -Json $script:settings.TEST_BAMI_SUBSCRIPTION_IDS
+        $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+        $subscriptions = ConvertFrom-AvmTestTenantJson -Json $settings.TEST_BAMI_SUBSCRIPTION_IDS
         $subscriptions.Count | Should -Be 28
-        $subscriptions.id | Should -Not -Contain $script:settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID
-        $subscriptions.id | Should -Not -Contain $script:settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        $subscriptions.id | Should -Not -Contain $settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+        $subscriptions.id | Should -Not -Contain $settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
     }
 
     It 'validates selected settings and trusted main before mutations without an activation switch' {
@@ -255,11 +352,15 @@ Describe 'Terraform effective contract and state wiring' {
         $source.IndexOf('$env:GITHUB_REPOSITORY') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source.IndexOf('Resolve-AvmRepositorySyncFederationContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
+        $source.IndexOf('Resolve-AvmRepositorySyncFederationContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source.IndexOf('Invoke-AvmBamiRepositoryIdentity') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source | Should -Match 'if \(\$testTenant.TestTenant -ceq ''bami''\)'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $workflow | Should -Match '-bamiSettings \$bamiSettings'
+        $source | Should -Match '\[string\]\$repositorySyncRepositoryId = \$env:GITHUB_REPOSITORY_ID'
+        $workflow | Should -Not -Match '-repositorySyncRepositoryId'
         $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled'
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')

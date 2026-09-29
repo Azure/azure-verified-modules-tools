@@ -6,6 +6,20 @@ BeforeAll {
 
 Describe 'Isolated candidate identity orchestration' -Tag Component {
     BeforeEach {
+        $script:previousGitHubContext = @{}
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF')) {
+            $script:previousGitHubContext[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_REPOSITORY_ID = '1239632211'
+        $env:GITHUB_REF = 'refs/heads/main'
+        $script:toolsRepository = [pscustomobject]@{
+            full_name = 'Azure/azure-verified-modules-tools'
+            id = 1239632211
+            fork = $false
+            owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 }
+        }
         $script:repo = [pscustomobject]@{
             full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
             name = 'terraform-azurerm-avm-ptn-example-repo'
@@ -29,8 +43,12 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
             }
             Root = Join-Path $TestDrive 'candidate-root'
             TemporaryRoot = $TestDrive
+            RepositorySyncRepositoryId = '1239632211'
         }
-        Mock Invoke-RepositoryGitHubApi { $script:repo }
+        Mock Invoke-RepositoryGitHubApi {
+            if ($Endpoint -ceq 'repos/Azure/azure-verified-modules-tools') { $script:toolsRepository }
+            else { $script:repo }
+        }
         Mock Invoke-AvmBamiIdentityTerraform {
             param($Arguments, $Root, $Environment)
             switch ($Arguments[0]) {
@@ -41,6 +59,12 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
                 'show' { $script:plan | ConvertTo-Json -Depth 30 -Compress }
                 'output' { @{ test_identity = @{ value = $script:identity } } | ConvertTo-Json -Depth 10 -Compress }
             }
+        }
+    }
+
+    AfterEach {
+        foreach ($name in $script:previousGitHubContext.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $script:previousGitHubContext[$name])
         }
     }
 
@@ -71,7 +95,28 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
         $script:capturedVariables.github_repository_id | Should -BeExactly '1234'
         $script:capturedVariables.github_organization_id | Should -BeExactly '6844498'
+        $script:capturedVariables.repository_sync_repository_id | Should -BeExactly '1239632211'
         @(Get-ChildItem -LiteralPath $TestDrive -Directory | Where-Object Name -Like 'avm-bami-*').Count | Should -Be 0
+    }
+
+    It 'rejects an untrusted tools repository ID before planning the candidate' {
+        $env:GITHUB_REPOSITORY_ID = '1234'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters } | Should -Throw '*trusted tools repository*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
+    }
+
+    It 'keeps direct BAMI candidate preparation on trusted main' {
+        $env:GITHUB_REF = 'refs/heads/feature'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters } | Should -Throw '*trusted*main*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
+    }
+
+    It 'rejects a candidate whose GitHub owner differs from the trusted tools organization' {
+        $script:repo.owner.id = 1234
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters } | Should -Throw '*unexpected candidate repository identity*'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
     }
 
     It 'uses the original TME backend with a tenant-qualified key and child-only candidate provider values' {

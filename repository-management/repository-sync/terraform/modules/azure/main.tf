@@ -42,7 +42,7 @@ resource "azapi_resource" "validation_federated_credential" {
     properties = {
       audiences = ["api://AzureADTokenExchange"]
       issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation"
+      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation"
     }
   }
 }

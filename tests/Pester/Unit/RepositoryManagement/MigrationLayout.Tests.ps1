@@ -61,7 +61,7 @@ Describe "Repository management migration layout" {
         )
         $retiredReferences = @(
             "tf-repo-mgmt"
-            "repository_sync"
+            "repository_sync(?!_repository_id\b)"
             "repository-meta-data"
             "\.github/actions/avm-repos"
             "validate-vscode-extensions\.sh"
@@ -71,6 +71,12 @@ Describe "Repository management migration layout" {
             $found = @($files | Select-String -Pattern $pattern)
             $found | Should -BeNullOrEmpty -Because "'$pattern' belongs to the source layout"
         }
+    }
+
+    It 'permits only the required federation ID input from the retired identifier pattern' {
+        'repository_sync_repository_id' | Should -Not -Match 'repository_sync(?!_repository_id\b)'
+        'repository_sync_repository_id_legacy' | Should -Match 'repository_sync(?!_repository_id\b)'
+        'repository_sync/modules' | Should -Match 'repository_sync(?!_repository_id\b)'
     }
 
     It "does not manage the retired Copilot Actions environment or secrets" {

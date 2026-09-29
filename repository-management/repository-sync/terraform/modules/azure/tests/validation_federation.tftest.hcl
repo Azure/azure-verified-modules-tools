@@ -42,6 +42,7 @@ variables {
   github_job_workflow_ref             = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
   github_organization_id              = "6844498"
   github_repository_id                = "1234"
+  repository_sync_repository_id       = "1239632211"
 }
 
 run "existing_environments_keep_their_module_trust" {
@@ -65,7 +66,7 @@ run "validation_trust_stays_on_the_same_test_identity" {
   assert {
     condition = (
       azapi_resource.validation_federated_credential.body.properties.subject ==
-      "repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation" &&
+      "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation" &&
       azapi_resource.validation_federated_credential.body.properties.issuer ==
       "https://token.actions.githubusercontent.com" &&
       length(azapi_resource.validation_federated_credential.body.properties.audiences) == 1 &&
@@ -74,6 +75,7 @@ run "validation_trust_stays_on_the_same_test_identity" {
     )
     error_message = "Validation must trust only the tools repository's avm-validation environment."
   }
+
   assert {
     condition = (
       azapi_resource.validation_federated_credential.name == "${local.owner_repo_name}-avm-validation" &&
@@ -83,4 +85,47 @@ run "validation_trust_stays_on_the_same_test_identity" {
     )
     error_message = "Validation federation must remain on the existing module test identity."
   }
+}
+
+run "validation_subject_follows_the_verified_context_inputs" {
+  command = plan
+
+  variables {
+    github_organization_id        = "7654321"
+    repository_sync_repository_id = "987654321"
+  }
+  assert {
+    condition = (
+      azapi_resource.validation_federated_credential.body.properties.subject ==
+      "repository_owner_id:7654321:repository_id:987654321:environment:avm-validation"
+    )
+    error_message = "Validation subject must be built from the supplied organization and tools repository IDs."
+  }
+}
+
+run "validation_rejects_absent_repository_id" {
+  command = plan
+
+  variables {
+    repository_sync_repository_id = null
+  }
+  expect_failures = [var.repository_sync_repository_id]
+}
+
+run "validation_rejects_nonpositive_repository_ids" {
+  command = plan
+
+  variables {
+    repository_sync_repository_id = "0"
+  }
+  expect_failures = [var.repository_sync_repository_id]
+}
+
+run "validation_rejects_nonnumeric_repository_ids" {
+  command = plan
+
+  variables {
+    repository_sync_repository_id = "123abc"
+  }
+  expect_failures = [var.repository_sync_repository_id]
 }
