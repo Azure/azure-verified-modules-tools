@@ -8,6 +8,14 @@ function Get-AvmBicepDocsExample {
         [Parameter(Mandatory)]
         [string] $RepositoryRoot,
 
+        [Parameter(Mandatory)]
+        [string] $ToolPath,
+
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary] $CompiledTemplate,
+
+        [System.Collections.Generic.Dictionary[string, object]] $CompiledTemplateCache,
+
         [AllowEmptyCollection()]
         [string[]] $RequiredParameters = @()
     )
@@ -20,6 +28,21 @@ function Get-AvmBicepDocsExample {
     $directory = [System.IO.DirectoryInfo]::new(
         [System.IO.Path]::GetFullPath($ModulePath))
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
+    $pathComparer = if ($IsWindows) {
+        [System.StringComparer]::OrdinalIgnoreCase
+    }
+    else { [System.StringComparer]::Ordinal }
+    $templates = if ($null -ne $CompiledTemplateCache) {
+        $CompiledTemplateCache
+    }
+    else {
+        [System.Collections.Generic.Dictionary[string, object]]::new($pathComparer)
+    }
+    $currentSource = [System.IO.Path]::GetFullPath((Join-Path $ModulePath 'main.bicep'))
+    $templates[$currentSource] = [pscustomobject]@{
+        Template = $CompiledTemplate
+        Required = [string[]]$RequiredParameters
+    }
     while ($null -ne $directory -and $directory.FullName -ne $root) {
         $exampleRoot = Join-Path -Path $directory.FullName -ChildPath 'tests' `
             -AdditionalChildPath 'e2e'
@@ -43,9 +66,16 @@ function Get-AvmBicepDocsExample {
                 }
                 $lines = $source.ReplaceLineEndings("`n") -split "`n"
                 $start = -1
+                $targetPath = ''
                 for ($index = 0; $index -lt $lines.Count; $index++) {
-                    if ($lines[$index] -match "^module testDeployment '\.\./.*main\.bicep' = ") {
+                    $declaration = [regex]::Match(
+                        $lines[$index], "^module testDeployment '(\.\./[^']*main\.bicep)' = ")
+                    if ($declaration.Success) {
                         $start = $index
+                        $reference = $declaration.Groups[1].Value.Replace(
+                            '/', [string][System.IO.Path]::DirectorySeparatorChar)
+                        $targetPath = [System.IO.Path]::GetFullPath(
+                            [System.IO.Path]::Combine($testFile.DirectoryName, $reference))
                         break
                     }
                 }
@@ -92,19 +122,105 @@ function Get-AvmBicepDocsExample {
                         break
                     }
                 }
+                $validationError = ''
+                if ($start -ge 0) {
+                    $relativeTest = [System.IO.Path]::GetRelativePath(
+                        $root, $testFile.FullName).Replace('\', '/')
+                    $relativeTarget = [System.IO.Path]::GetRelativePath(
+                        $root, $targetPath)
+                    if ($relativeTarget -eq '..' -or
+                        $relativeTarget.StartsWith(
+                            "..$([System.IO.Path]::DirectorySeparatorChar)",
+                            [System.StringComparison]::Ordinal) -or
+                        [System.IO.Path]::IsPathRooted($relativeTarget)) {
+                        $validationError = "Bicep test '$relativeTest' references a module outside the repository. Correct the test before generating its README."
+                    }
+                    else {
+                        $relativeTarget = $relativeTarget.Replace('\', '/')
+                        if (-not [System.IO.File]::Exists($targetPath)) {
+                            $validationError = "Bicep test '$relativeTest' references missing module '$relativeTarget'. Correct the test before generating its README."
+                        }
+                        else {
+                            if (-not $templates.ContainsKey($targetPath)) {
+                                $compiledPath = Join-Path (
+                                    [System.IO.Path]::GetDirectoryName($targetPath)) 'main.json'
+                                $json = if ([System.IO.File]::Exists($compiledPath)) {
+                                    try {
+                                        $utf8.GetString([System.IO.File]::ReadAllBytes($compiledPath))
+                                    }
+                                    catch [System.Text.DecoderFallbackException] {
+                                        throw [AvmConfigurationException]::new(
+                                            "Compiled Bicep module must contain valid UTF-8: $compiledPath")
+                                    }
+                                }
+                                else {
+                                    Get-AvmBicepCompiledJson -SourcePath $targetPath -ToolPath $ToolPath
+                                }
+                                try {
+                                    $compiled = $json | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+                                }
+                                catch {
+                                    throw [AvmConfigurationException]::new(
+                                        "Cannot read compiled Bicep module '$compiledPath': $($_.Exception.Message)")
+                                }
+                                if ($compiled -isnot [System.Collections.IDictionary]) {
+                                    throw [AvmConfigurationException]::new(
+                                        "Compiled Bicep module must contain a JSON object: $compiledPath")
+                                }
+                                $required = @(Get-AvmBicepDocsRequiredParameter `
+                                        -Template $compiled -SourcePath $compiledPath)
+                                $templates[$targetPath] = [pscustomobject]@{
+                                    Template = $compiled
+                                    Required = [string[]]$required
+                                }
+                            }
+                            $target = $templates[$targetPath]
+                            $known = [System.Collections.Generic.HashSet[string]]::new(
+                                [System.StringComparer]::Ordinal)
+                            $targetParameters = $target.Template['parameters']
+                            if ($targetParameters -is [System.Collections.IDictionary]) {
+                                foreach ($name in $targetParameters.psbase.Keys) {
+                                    $null = $known.Add([string]$name)
+                                }
+                            }
+                            $supplied = [System.Collections.Generic.HashSet[string]]::new(
+                                [System.StringComparer]::Ordinal)
+                            foreach ($name in $parameters.psbase.Keys) {
+                                $null = $supplied.Add([string]$name)
+                            }
+                            $unknown = @($supplied | Where-Object {
+                                    -not $known.Contains($_)
+                                } | Sort-Object -Culture 'en-US')
+                            $missing = @($target.Required | Where-Object {
+                                    -not $supplied.Contains($_)
+                                } | Sort-Object -Culture 'en-US')
+                            $errors = @()
+                            if ($unknown.Count -gt 0) {
+                                $errors += "unknown parameters: $($unknown -join ', ')"
+                            }
+                            if ($missing.Count -gt 0) {
+                                $errors += "missing required parameters: $($missing -join ', ')"
+                            }
+                            if ($errors.Count -gt 0) {
+                                $validationError = "Bicep test '$relativeTest' targets '$relativeTarget' with $($errors -join '; '). Correct the test before generating its README."
+                            }
+                        }
+                    }
+                }
                 $ignorePath = Join-Path $testFile.DirectoryName '.e2eignore'
                 $ignore = if ([System.IO.File]::Exists($ignorePath)) {
                     $utf8.GetString([System.IO.File]::ReadAllBytes($ignorePath)).Trim()
                 }
                 else { '' }
-                $fragments = if ($start -ge 0) {
+                $fragments = if ($start -ge 0 -and $validationError -eq '') {
                     ConvertTo-AvmBicepDocsExampleParameter -Parameters $parameters `
-                        -RequiredParameters $RequiredParameters
+                        -RequiredParameters $templates[$targetPath].Required
                 }
                 else { $null }
                 $value = [pscustomobject]@{
                     IsModule           = $start -ge 0
                     Parameters         = $parameters
+                    InvalidReason      = $validationError
                     IgnoreReason       = $ignore
                     HasIgnore          = [System.IO.File]::Exists($ignorePath)
                     BicepParameters    = if ($null -ne $fragments) { $fragments.BicepParameters } else { '' }

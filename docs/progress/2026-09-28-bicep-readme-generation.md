@@ -32,6 +32,8 @@ registry or retire its existing generator and CI in this slice.
       source-less READMEs. Never use README text as a generator input.
 - [x] Cover templates, root/child/scope examples, Notes/no-Notes, CLI errors,
       `-WhatIf`, drift, migration, and Terraform dispatch with focused tests.
+- [x] Reject referenced test examples with unknown or missing required
+      parameters against their actual target module without writing a README.
 - [x] Update user-facing documentation and the implementation spec/plan.
 - [x] Pass `./build.ps1 pre-commit` for the non-cutover renderer draft.
 - [ ] Complete the full-registry comparison, mark this slice complete,
@@ -263,6 +265,18 @@ is **not** a full 577-file gate; the latest full gate remains failed.
 `./build.ps1 pre-commit` passed on this generic correction: five tasks,
 zero errors, and 49 existing test warnings. Lint recovered from the
 known transient analyzer-engine exception.
+The user chose to fail a README that references an invalid test example,
+rather than omit the example. The next candidate validates the test's
+parameters against its actual target module, including ancestor targets
+reassigned to child documentation; reports unknown and missing required
+names; and prevents partial README writes. Compiled templates are reused
+within a docs invocation instead of rebuilding an ancestor for each
+child. Focused required-parameter unit tests (2/2), Bicep docs components
+(22/22), real pinned-CLI scoped integration tests (3/3), and lint pass.
+`./build.ps1 pre-commit` passed on this candidate: five tasks, zero
+errors, and 49 existing warnings. The independent registry comparison
+is pending; the known-invalid conversation-knowledge-mining tests must
+now fail until their source is corrected.
 
 ## Blockers and dependencies
 
@@ -281,9 +295,12 @@ previously failing file. Previous exact and approved paths must remain
 protected while those generic renderer gaps are fixed.
 Two conversation-knowledge-mining e2e tests reference undeclared
 parameter names and omit a required module parameter; the current
-native example reader formats them without compiling or validating
-their parameters. Invalid examples must be rejected or reported
-explicitly, with the upstream tests corrected before cutover.
+native example reader formats them without validating their parameters.
+The user chose to stop rendering a README that references an invalid
+test and report its unknown and missing required parameter names; the
+user separately approved repairing those upstream tests in the registry.
+The source repair is in progress on its own branch; old-main comparison
+must report the invalid example until that correction merges.
 `avm/ptn/app/container-job-toolkit`
 has a genuine
 upstream Bicep BCP426 compile failure. Its source fix is in

@@ -800,6 +800,28 @@ output registrationToken string? = 'token'
                 $_.Path -eq 'avm/res/storage/storage-account/rg-scope/README.md'
             })[0].Content
         $withoutRootRoleMapScoped | Should -Not -Match 'Roles configurable by name:'
+
+        $invalidTest = [System.IO.Path]::Combine(
+            $module, 'tests', 'e2e', 'rg-scope.minimal', 'main.test.bicep')
+        $invalidSource = [System.IO.File]::ReadAllText($invalidTest).Replace(
+            "name: 'avmdocs12345'", "wrongName: 'invalid'")
+        [System.IO.File]::WriteAllText(
+            $invalidTest, $invalidSource, [System.Text.UTF8Encoding]::new($false))
+        $invalid = Invoke-AvmDocs -Path $root -CheckDrift `
+            -IncludeRenderedContent -SkipModuleVersionCheck
+        $invalid.Status | Should -BeExactly 'fail'
+        $invalid.FilesProcessed | Should -Be 2
+        $invalidFailures = @($invalid.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
+        $invalidFailures.Count | Should -Be 1
+        $invalidFailures[0].Message |
+            Should -Match 'unknown parameters: wrongName; missing required parameters: name'
+        @($invalid.GeneratedReadmes | Where-Object {
+                $_.Path -eq 'avm/res/storage/storage-account/rg-scope/README.md'
+            }).Count | Should -Be 0
+        { Invoke-AvmDocs -Path $root -SkipModuleVersionCheck } |
+            Should -Throw '*unknown parameters: wrongName; missing required parameters: name*'
+        Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $scope 'README.md') | Should -BeFalse
     }
 
     It 'preserves compiled alias constraints and omits non-documentable native children' {

@@ -55,6 +55,12 @@ function Invoke-AvmBicepDocs {
     $filesProcessed = 0
     $filesSelected = 0
     $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $pathComparer = if ($IsWindows) {
+        [System.StringComparer]::OrdinalIgnoreCase
+    }
+    else { [System.StringComparer]::Ordinal }
+    $compiledTemplates = [System.Collections.Generic.Dictionary[string, object]]::new(
+        $pathComparer)
 
     foreach ($scope in $scopes) {
         $files = @(Get-ChildItem -LiteralPath $scope.Path -Force |
@@ -90,7 +96,8 @@ function Invoke-AvmBicepDocs {
         $filesSelected++
         try {
             $values = Get-AvmBicepDocsCustomValue -ModulePath $scope.Path `
-                -RepositoryRoot $Context.Root -ToolPath $tool.Path
+                -RepositoryRoot $Context.Root -ToolPath $tool.Path `
+                -CompiledTemplateCache $compiledTemplates
         }
         catch [AvmProcessException], [AvmConfigurationException] {
             if (-not $CheckDrift) {
@@ -141,9 +148,15 @@ function Invoke-AvmBicepDocs {
         $result.StdOut.Contains('__AVM_DOCS_AMBIGUOUS_ROLES__:')
         $missingVariant = $null -ne $result.StdOut -and
         $result.StdOut.Contains('__AVM_DOCS_MISSING_VARIANT__:')
+        $invalidExample = [regex]::Match(
+            [string]$result.StdOut, '(?m)^__AVM_DOCS_INVALID_EXAMPLE__:(.*)$')
         if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.StdOut) -or
-            $unmappedExample -or $ambiguousRoles -or $missingVariant) {
-            $message = if ($unmappedExample) {
+            $unmappedExample -or $ambiguousRoles -or $missingVariant -or
+            $invalidExample.Success) {
+            $message = if ($invalidExample.Success) {
+                "Bicep docs could not render '$relative': $($invalidExample.Groups[1].Value.Trim())"
+            }
+            elseif ($unmappedExample) {
                 "Bicep docs included an example without a matching source for '$relative'. Check tests/e2e and bicepconfig.json scope reassignments."
             }
             elseif ($ambiguousRoles) {

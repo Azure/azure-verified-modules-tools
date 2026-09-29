@@ -197,6 +197,43 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
         }
     }
 
+    It 'rejects invalid test examples without writing any planned README' {
+        $fixture = New-BicepDocsFixture -Name 'invalid-example'
+        $readme = Join-Path $fixture.Module 'README.md'
+        [System.IO.File]::WriteAllText($readme, "Original`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                if ($WorkingDirectory -match 'child$') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut   = "__AVM_DOCS_INVALID_EXAMPLE__:Bicep test 'tests/e2e/minimal/main.test.bicep' targets 'avm/res/storage/storage-account/main.bicep' with unknown parameters: wrongName; missing required parameters: name. Correct the test before generating its README.`n"
+                        StdErr   = ''
+                    }
+                }
+                return [pscustomobject]@{ ExitCode = 0; StdOut = "# New root`n"; StdErr = '' }
+            }
+            $drift = Invoke-AvmDocs -Path $F.Root -CheckDrift `
+                -IncludeRenderedContent -SkipModuleVersionCheck
+            $drift.Status | Should -BeExactly 'fail'
+            $drift.FilesProcessed | Should -Be 1
+            $drift.GeneratedReadmes.Count | Should -Be 1
+            $failures = @($drift.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
+            $failures.Count | Should -Be 1
+            $failures[0].Message |
+                Should -Match 'unknown parameters: wrongName; missing required parameters: name'
+            { Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck } |
+                Should -Throw '*unknown parameters: wrongName; missing required parameters: name*'
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly "Original`n"
+            Test-Path -LiteralPath (Join-Path $F.Module 'child' 'README.md') |
+                Should -BeFalse
+        }
+    }
+
     It 'builds compiled JSON when absent and includes transitive resource types' {
         $fixture = New-BicepDocsFixture -Name 'compiled-fallback'
         Remove-Item -LiteralPath (Join-Path $fixture.Module 'main.json')
@@ -427,16 +464,52 @@ import { lockType } from 'br/public:avm/utl/types/avm-common-types:0.3.0'
         $null = New-Item -ItemType Directory -Path $child -Force
         $examples = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture; Child = $child } {
             param($F, $Child)
+            $childTemplate = @{
+                parameters = @{
+                    childOnly = @{ type = 'string' }
+                }
+            }
             Get-AvmBicepDocsExample -ModulePath $Child -RepositoryRoot $F.Root `
-                -RequiredParameters @('name')
+                -ToolPath 'mock-bicep' -CompiledTemplate $childTemplate `
+                -RequiredParameters @('childOnly')
         }
         $example = $examples['../tests/e2e/rg-scope.minimal/main.test.bicep']
         $example.IsModule | Should -BeTrue
+        $example.InvalidReason | Should -BeExactly ''
         $example.Parameters.name.value | Should -BeExactly 'avmdocs12345'
         $example.BicepParameters | Should -BeExactly "    name: 'avmdocs12345'"
         $example.JsonParameters | Should -Match '"contentVersion": "1.0.0.0"'
         $example.BicepParameterFile | Should -BeExactly "param name = 'avmdocs12345'"
         Test-Path -LiteralPath (Join-Path $fixture.Module 'README.md') | Should -BeFalse
+    }
+
+    It 'identifies unknown and missing parameters in a referenced ancestor test' {
+        $fixture = New-BicepDocsFixture -Name 'invalid-source-parameters'
+        $child = Join-Path $fixture.Module 'rg-scope'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        $testFile = [System.IO.Path]::Combine(
+            $fixture.Module, 'tests', 'e2e', 'rg-scope.minimal', 'main.test.bicep')
+        $source = [System.IO.File]::ReadAllText($testFile).Replace(
+            "name: 'avmdocs12345'", "wrongName: 'invalid'")
+        [System.IO.File]::WriteAllText(
+            $testFile, $source, [System.Text.UTF8Encoding]::new($false))
+
+        $examples = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture; Child = $child } {
+            param($F, $Child)
+            Get-AvmBicepDocsExample -ModulePath $Child -RepositoryRoot $F.Root `
+                -ToolPath 'mock-bicep' -CompiledTemplate @{
+                    parameters = @{ childOnly = @{ type = 'string' } }
+                } -RequiredParameters @('childOnly')
+        }
+        $invalid = $examples['../tests/e2e/rg-scope.minimal/main.test.bicep']
+        $invalid.InvalidReason | Should -Match 'tests/e2e/rg-scope.minimal/main.test.bicep'
+        $invalid.InvalidReason | Should -Match 'storage-account/main.bicep'
+        $invalid.InvalidReason |
+            Should -Match 'unknown parameters: wrongName; missing required parameters: name'
+        $invalid.BicepParameters | Should -BeExactly ''
+        $invalid.JsonParameters | Should -BeExactly ''
+        $examples['../tests/e2e/rg-scope.max/main.test.bicep'].InvalidReason |
+            Should -BeExactly ''
     }
 
     It 'orders multi-scope child links for the parent usage section' {

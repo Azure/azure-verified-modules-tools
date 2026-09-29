@@ -619,6 +619,13 @@ drift mode and returns generated `{Path, Content}` values for an independent
 comparator. A Bicep compilation failure is reported per module in drift
 mode; a source-less README is explicitly identified rather than reported as
 generated.
+Referenced module test examples are validated against the compiled
+parameters of their actual target `main.bicep`, including tests assigned
+to a child README. Unknown names or omitted required parameters fail
+that README with the test path and parameter names in the error; drift
+mode reports the failure per module, and normal generation writes no
+READMEs when any module fails. Invalid tests are never published as
+successful usage examples.
 
 Do not replace the registry's existing generator or CI, bulk regenerate
 READMEs, or release this migration until an independent comparison shows

@@ -9,7 +9,9 @@ function Get-AvmBicepDocsCustomValue {
         [string] $ToolPath,
 
         [Parameter(Mandatory)]
-        [string] $RepositoryRoot
+        [string] $RepositoryRoot,
+
+        [System.Collections.Generic.Dictionary[string, object]] $CompiledTemplateCache
     )
 
     Set-StrictMode -Version 3.0
@@ -145,18 +147,29 @@ function Get-AvmBicepDocsCustomValue {
 
     $typelessOutputs = @()
     $compiledPath = Join-Path $ModulePath 'main.json'
-    $compiledJson = if ([System.IO.File]::Exists($compiledPath)) {
-        $utf8.GetString([System.IO.File]::ReadAllBytes($compiledPath))
+    $sourcePath = [System.IO.Path]::GetFullPath((Join-Path $ModulePath 'main.bicep'))
+    $cached = if ($null -ne $CompiledTemplateCache -and
+        $CompiledTemplateCache.ContainsKey($sourcePath)) {
+        $CompiledTemplateCache[$sourcePath]
+    }
+    else { $null }
+    if ($null -ne $cached) {
+        $compiled = $cached.Template
     }
     else {
-        Get-AvmBicepCompiledJson -SourcePath (Join-Path $ModulePath 'main.bicep') -ToolPath $ToolPath
-    }
-    try {
-        $compiled = $compiledJson | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-    }
-    catch {
-        throw [AvmConfigurationException]::new(
-            "Cannot read compiled Bicep module '$compiledPath': $($_.Exception.Message)")
+        $compiledJson = if ([System.IO.File]::Exists($compiledPath)) {
+            $utf8.GetString([System.IO.File]::ReadAllBytes($compiledPath))
+        }
+        else {
+            Get-AvmBicepCompiledJson -SourcePath $sourcePath -ToolPath $ToolPath
+        }
+        try {
+            $compiled = $compiledJson | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new(
+                "Cannot read compiled Bicep module '$compiledPath': $($_.Exception.Message)")
+        }
     }
     if ($compiled -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new(
@@ -207,30 +220,24 @@ function Get-AvmBicepDocsCustomValue {
         $compiled['outputs']
     }
     else { @{} }
-    $requiredParameters = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in @($compiledParameters.psbase.Keys | Sort-Object -Culture 'en-US')) {
-        $parameter = $compiledParameters[$name]
-        if ($parameter -isnot [System.Collections.IDictionary]) {
-            throw [AvmConfigurationException]::new(
-                "Compiled Bicep parameter '$name' must be a JSON object in '$compiledPath'.")
+    $requiredParameters = @(
+        if ($null -ne $cached) {
+            $cached.Required
         }
-        $definitionNullable = $false
-        if ($parameter.ContainsKey('$ref')) {
-            $definitionName = ([string]$parameter['$ref'] -split '/')[-1]
-            $definition = $compiled['definitions'][$definitionName]
-            if ($definition -isnot [System.Collections.IDictionary]) {
-                throw [AvmConfigurationException]::new(
-                    "Compiled Bicep parameter '$name' references a missing definition '$definitionName' in '$compiledPath'.")
-            }
-            $definitionNullable = $definition['nullable'] -eq $true
+        else {
+            Get-AvmBicepDocsRequiredParameter -Template $compiled -SourcePath $compiledPath
         }
-        if (-not $parameter.ContainsKey('defaultValue') -and
-            $parameter['nullable'] -ne $true -and -not $definitionNullable) {
-            $requiredParameters.Add($name)
+    )
+    if ($null -ne $CompiledTemplateCache -and $null -eq $cached) {
+        $CompiledTemplateCache[$sourcePath] = [pscustomobject]@{
+            Template = $compiled
+            Required = [string[]]$requiredParameters
         }
     }
     $examples = Get-AvmBicepDocsExample -ModulePath $ModulePath `
-        -RepositoryRoot $RepositoryRoot -RequiredParameters $requiredParameters.ToArray()
+        -RepositoryRoot $RepositoryRoot -ToolPath $ToolPath `
+        -CompiledTemplate $compiled -RequiredParameters $requiredParameters `
+        -CompiledTemplateCache $CompiledTemplateCache
     $scopeChildren = @($items | Where-Object {
             $_.PSIsContainer -and $_.Name -clike '*-scope'
         } | Sort-Object -Culture 'en-US' -Property Name | ForEach-Object {
