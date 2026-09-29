@@ -60,6 +60,45 @@ Describe 'Candidate plan and output safety' {
             Should -Not -Throw
     }
 
+    It 'requires exactly the tools validation credential alongside the existing three environment credentials' {
+        $addresses = @($script:plan.planned_values.root_module.child_modules[0].resources | ForEach-Object { $_.address })
+        @($addresses | Where-Object { $_ -like '*federated_credential*' }).Count | Should -Be 4
+        $addresses | Should -Contain 'module.azure.azapi_resource.validation_federated_credential'
+        $script:plan.planned_values.root_module.child_modules[0].resources =
+            @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
+                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential'
+                })
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings -Repository $script:repository.full_name } |
+            Should -Throw '*scope*'
+    }
+
+    It 'rejects changed validation federation claims, identity scope, or audiences' {
+        $mutations = @(
+            @{ field = 'subject'; value = 'repository_owner_id:6844498:repository_id:1234:environment:avm-validation' }
+            @{ field = 'subject'; value = 'repository_owner_id:6844498:repository_id:1239632211:ref:refs/heads/main' }
+            @{ field = 'subject'; value = 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation:job_workflow_ref:untrusted' }
+            @{ field = 'issuer'; value = 'https://example.invalid' }
+            @{ field = 'audiences'; value = @('api://AzureADTokenExchange', 'untrusted') }
+            @{ field = 'name'; value = 'another-identity-avm-validation' }
+            @{ field = 'type'; value = 'Microsoft.Authorization/roleAssignments@2022-04-01' }
+            @{ field = 'parent_id'; value = '/subscriptions/another/resourceGroups/another/providers/Microsoft.ManagedIdentity/userAssignedIdentities/another' }
+        )
+        foreach ($mutation in $mutations) {
+            $invalid = New-AvmTestBamiPlan -KnownClient
+            $credential = @($invalid.planned_values.root_module.child_modules[0].resources | Where-Object {
+                    $_.address -ceq 'module.azure.azapi_resource.validation_federated_credential'
+                })[0].values
+            if ($mutation.field -in @('subject', 'issuer', 'audiences')) {
+                $credential.body.properties[$mutation.field] = $mutation.value
+            }
+            else {
+                $credential[$mutation.field] = $mutation.value
+            }
+            { Assert-AvmBamiIdentityPlan -Plan $invalid -Settings $script:settings -Repository $script:repository.full_name } |
+                Should -Throw '*validation federation*'
+        }
+    }
+
     It 'rejects every delete or replacement, including directory membership changes' {
         foreach ($actions in @(@('delete'), @('delete', 'create'), @('create', 'delete'))) {
             $script:plan.resource_changes[2].change.actions = $actions
@@ -169,6 +208,42 @@ Describe 'Terraform effective contract and state wiring' {
         $candidate | Should -Not -Match 'provider "github"|storage_account_name\s*='
         ([regex]::Matches($candidate, 'client_id\s*=\s*var.controller_client_id')).Count | Should -Be 2
         ([regex]::Matches($candidate, 'use_cli\s*=\s*false')).Count | Should -Be 2
+    }
+
+    It 'uses the existing per-module identity for both validation subjects without changing the original trust' {
+        $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
+        $original = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "identity_federated_credentials" \{.*?^\}').Value
+        $original | Should -Match 'for_each\s*=\s*var.github_repository_environment_names'
+        $original | Should -Match 'subject\s*=\s*"repository_owner_id:\$\{var.github_organization_id\}:repository_id:\$\{var.github_repository_id\}:environment:\$\{each.value\}:job_workflow_ref:\$\{var.github_job_workflow_ref\}"'
+        $validation = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "validation_federated_credential" \{.*?^\}').Value
+        $validation | Should -Not -BeNullOrEmpty
+        $validation | Should -Match 'parent_id\s*=\s*azapi_resource.identity.id'
+        $validation | Should -Match 'locks\s*=\s*\[azapi_resource.identity.id\]'
+        $validation | Should -Match 'name\s*=\s*"\$\{local.owner_repo_name\}-avm-validation"'
+        $validation | Should -Match 'subject\s*=\s*"repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation"'
+        $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'
+        $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
+        $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
+        $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
+        $bami | Should -Match 'source\s*=\s*"\.\./terraform/modules/azure"'
+        $ordinary | Should -Match 'count\s*=\s*var.repository_creation_mode_enabled \? 0 : 1'
+        $bami | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
+    }
+
+    It 'exposes the effective legacy or BAMI test settings to plan-only consumers' {
+        $output = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'outputs.tf')
+        $output | Should -Match '(?s)output "test_settings" \{\s*description\s*=\s*"[^"]+"\s*value\s*=\s*local.test_settings\s*\}'
+        $locals = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'locals.tf')
+        $locals | Should -Match 'client_id\s*=\s*module.azure\[0\].client_id'
+        $locals | Should -Match 'tenant_id\s*=\s*module.azure\[0\].tenant_id'
+        $locals | Should -Match 'test_subscription_ids\s*=\s*var.test_subscription_ids'
+        foreach ($field in @('tenant_id', 'client_id', 'test_subscription_ids')) {
+            $locals | Should -Match ('\b' + $field + '\s*=\s*var.bami_test_settings\.' + $field + '\b')
+        }
+        $subscriptions = ConvertFrom-AvmTestTenantJson -Json $script:settings.TEST_BAMI_SUBSCRIPTION_IDS
+        $subscriptions.Count | Should -Be 28
+        $subscriptions.id | Should -Not -Contain $script:settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+        $subscriptions.id | Should -Not -Contain $script:settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
     }
 
     It 'validates selected settings and trusted main before mutations without an activation switch' {

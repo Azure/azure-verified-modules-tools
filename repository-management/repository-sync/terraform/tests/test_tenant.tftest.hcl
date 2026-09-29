@@ -52,6 +52,15 @@ run "legacy_is_unchanged" {
     condition     = local.test_settings.test_subscription_ids == var.test_subscription_ids
     error_message = "Legacy subscriptions must be unchanged."
   }
+  assert {
+    condition = (
+      length(keys(output.test_settings)) == 3 &&
+      output.test_settings.client_id == module.azure[0].client_id &&
+      output.test_settings.tenant_id == module.azure[0].tenant_id &&
+      output.test_settings.test_subscription_ids == var.test_subscription_ids
+    )
+    error_message = "The plan must expose the existing test identity and configured subscription list."
+  }
 }
 
 run "repository_creation_remains_independent" {
@@ -63,6 +72,14 @@ run "repository_creation_remains_independent" {
   assert {
     condition     = length(module.azure) == 0 && local.test_settings.client_id == "" && length(local.test_settings.test_subscription_ids) == 0
     error_message = "Repository creation must not provision test identities or publish test settings."
+  }
+  assert {
+    condition = (
+      output.test_settings.client_id == "" &&
+      output.test_settings.tenant_id == "" &&
+      length(output.test_settings.test_subscription_ids) == 0
+    )
+    error_message = "Repository creation must not expose a usable test identity."
   }
 }
 
@@ -95,6 +112,21 @@ run "bami_uses_complete_tuple_and_retains_legacy_identity" {
   assert {
     condition     = length(module.azure) == 1 && module.azure[0].client_id == "20000000-0000-4000-8000-000000000001"
     error_message = "The legacy Azure module must remain in the same root and state."
+  }
+  assert {
+    condition = (
+      length(keys(output.test_settings)) == 3 &&
+      output.test_settings.client_id == var.bami_test_settings.client_id &&
+      output.test_settings.client_id != var.bami_test_settings.controller_client_id &&
+      output.test_settings.tenant_id == var.bami_test_settings.tenant_id &&
+      output.test_settings.test_subscription_ids == var.bami_test_settings.test_subscription_ids &&
+      length(output.test_settings.test_subscription_ids) == 28 &&
+      alltrue([for subscription in output.test_settings.test_subscription_ids :
+        subscription.id != var.bami_test_settings.admin_subscription_id &&
+        subscription.id != var.bami_test_settings.persistent_subscription_id
+      ])
+    )
+    error_message = "The plan must expose the BAMI execution identity and only its 28 ephemeral test subscriptions."
   }
 }
 

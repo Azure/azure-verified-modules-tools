@@ -33,6 +33,20 @@ resource "azapi_resource" "identity_federated_credentials" {
   }
 }
 
+resource "azapi_resource" "validation_federated_credential" {
+  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
+  name      = "${local.owner_repo_name}-avm-validation"
+  parent_id = azapi_resource.identity.id
+  locks     = [azapi_resource.identity.id]
+  body = {
+    properties = {
+      audiences = ["api://AzureADTokenExchange"]
+      issuer    = "https://token.actions.githubusercontent.com"
+      subject   = "repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation"
+    }
+  }
+}
+
 # Add owner role assignment.
 # The condition prevents the assignee from creating new role assignments for owner, user access administrator, or role based access control administrator.
 resource "azapi_resource" "identity_role_assignment" {

@@ -103,6 +103,14 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
     }
 
+    It 'does not publish a plan-only candidate whose validation credential still needs applying' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient -ValidationPending
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        $result.ConsumerSettings | Should -BeNullOrEmpty
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
     It 'applies only the guarded saved plan and verifies dedicated outputs' {
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false
         $result.Status | Should -BeExactly 'Ready'

@@ -72,13 +72,15 @@ function Assert-AvmBamiIdentityPlan {
         }
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
+    $validationCredentialAddress = 'module.azure.azapi_resource.validation_federated_credential'
     $allowed = @(
         'module.azure.azapi_resource.identity',
         'module.azure.azapi_resource.identity_role_assignment',
         'module.azure.azuread_group_member.example',
         'module.azure.azapi_resource.identity_federated_credentials["pr-check"]',
         'module.azure.azapi_resource.identity_federated_credentials["integration-test"]',
-        'module.azure.azapi_resource.identity_federated_credentials["examples-test"]'
+        'module.azure.azapi_resource.identity_federated_credentials["examples-test"]',
+        $validationCredentialAddress
     )
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
@@ -95,6 +97,23 @@ function Assert-AvmBamiIdentityPlan {
     $name = $Repository.Replace('/', '-').Replace('windows', 'w5s')
     if ($identities[0]['values']['parent_id'] -cne $parentId -or $identities[0]['values']['name'] -cne $name) {
         throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
+    }
+    $credential = @($resources | Where-Object { $_['address'] -ceq $validationCredentialAddress })[0]['values']
+    if ($credential -isnot [System.Collections.IDictionary] -or
+        $credential['body'] -isnot [System.Collections.IDictionary] -or
+        $credential['body']['properties'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Candidate validation federation must have complete credential properties.')
+    }
+    $credentialProperties = $credential['body']['properties']
+    $audiences = @($credentialProperties['audiences'])
+    if ($credential['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+        $credential['name'] -cne "$name-avm-validation" -or
+        ($null -ne $credential['parent_id'] -and
+            $credential['parent_id'] -cne "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name") -or
+        $credentialProperties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
+        $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
+        $credentialProperties['subject'] -cne 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation') {
+        throw [System.InvalidOperationException]::new('Candidate validation federation must target only the tools repository environment and the existing BAMI identity.')
     }
     $role = $roles[0]['values']
     $properties = $role['body']['properties']
@@ -260,6 +279,12 @@ function Invoke-AvmBamiRepositoryIdentity {
         $planJson = Invoke-AvmBamiIdentityTerraform -Arguments @('show', '-json', $planPath) -Root $Root -Environment $environment
         $plan = ConvertFrom-Json -InputObject $planJson -AsHashtable -Depth 100
         Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository
+        if ($PlanOnly -and @($plan['resource_changes'] | Where-Object {
+                    $_ -and $_['address'] -ceq 'module.azure.azapi_resource.validation_federated_credential' -and
+                    $_['change']['actions'] -notcontains 'no-op'
+                }).Count -gt 0) {
+            return [pscustomobject]@{ Status = 'PendingCandidateIdentity'; StateKey = $stateKey; ConsumerSettings = $null }
+        }
         if ($PlanOnly) {
             $outputs = $plan['planned_values']['outputs']
             $identity = if ($outputs -and $outputs.Contains('test_identity')) { $outputs['test_identity']['value'] } else { $null }
