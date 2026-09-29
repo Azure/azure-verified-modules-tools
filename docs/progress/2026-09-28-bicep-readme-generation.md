@@ -25,11 +25,11 @@ registry or retire its existing generator and CI in this slice.
       read-only drift checks; keep Notes sidecars as the sole authored input.
 - [x] Add idempotent, fenced-heading-aware legacy Notes extraction that never
       overwrites a sidecar.
-- [ ] Independently render all 574 source-backed READMEs without errors;
-      compare raw bytes, allowing only the explicitly approved eight-line
-      vault example-comment difference and, until their correction lands,
-      four exact H1-only differences; preserve and hash-check the three
-      source-less READMEs. Never use README text as a generator input.
+- [x] Independently render all 574 source-backed READMEs against the
+      reviewed combined registry candidate; compare raw bytes with only
+      the approved eight-line Vault example-comment difference, and
+      preserve and hash-check the three source-less READMEs. Never use
+      README text as a generator input.
 - [x] Cover templates, root/child/scope examples, Notes/no-Notes, CLI errors,
       `-WhatIf`, drift, migration, and Terraform dispatch with focused tests.
 - [x] Reject referenced test examples with unknown or missing required
@@ -40,8 +40,8 @@ registry or retire its existing generator and CI in this slice.
       on pinned registry main, comparing the entire generated file as bytes.
 - [x] Update user-facing documentation and the implementation spec/plan.
 - [x] Pass `./build.ps1 pre-commit` for the non-cutover renderer draft.
-- [ ] Complete the full-registry comparison, mark this slice complete,
-      and push any final parity corrections.
+- [ ] Requalify the strict 577-path gate on merged registry main and its
+      deliberately updated baseline, then mark this slice complete.
 
 ## Validation
 
@@ -297,9 +297,8 @@ heading-approved paths match the 13 corrected README blobs in draft
 byte-for-byte. The only render failures are the known-invalid
 conversation-knowledge-mining sandbox test and toolkit's BCP426
 compilation error; no other invalid-test failures or regressions
-among previously exact or approved paths were found. The old-main
-gate remains **failed**: these draft bytes are not comparator
-allowances, and neither upstream source correction is merged.
+among previously exact or approved paths were found. The old-main gate remains **failed**: these draft bytes are not comparator
+allowances. At that snapshot neither upstream source correction was merged.
 The separately approved Conversation test repair, including corrected
 descriptions for both examples, is committed in draft
 [registry pull request 7415](https://github.com/Azure/bicep-registry-modules/pull/7415)
@@ -338,22 +337,49 @@ processed one source-backed README with no unexpected issues. The entire
 `C4B74984F9490632A5A51A66A385E4F0E2F80A70E4F515D4B3666CF4E82C0079`);
 the Notes sidecar retained its independently verified bytes. This scoped
 proof does **not** replace the strict full 577-path combined comparison,
-which remains pending authorization.
+which was subsequently authorized.
+The independent frozen27 full combined-candidate diagnostic used the
+verified 190-file tools snapshot at
+`4962cd619347e2c111e50a3db0ae591081092ecd`, pinned registry main
+`557f50ac5c2733658e943c40d3838da27a77c86d`, 13 corrected README
+blobs from draft
+[registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410),
+and the two repaired tests and README from draft
+[registry pull request 7415](https://github.com/Azure/bicep-registry-modules/pull/7415).
+All **574/574** source-backed READMEs rendered without error: **573**
+generated files matched raw bytes exactly; the Vault root differed only
+by its precisely approved eight JSON-example comment lines. Three
+source-less READMEs remained byte-identical, all 53 Notes sidecars were
+saved and hash-verified, and the four formerly allowed headings matched
+bytes without allowances. There were zero unexpected byte differences,
+paths, or renderer errors. Independently verified assets on draft
+[registry pull request 7416](https://github.com/Azure/bicep-registry-modules/pull/7416)
+have the same 53 Notes blobs and packaged Scriban SHA-256
+`3099E02E1DB7B637F0ABA462E2213C9225DC9769C7000E8CF741F440695DAF34`.
+The `avm-readme-combined-27` report contains all 577 path comparisons
+and 574 generated outputs. Drift mode reported `Status=fail` because
+the disposable checkout deliberately omitted all generated READMEs
+and includes three explicitly reported source-less files; the
+independent raw-byte comparator verified these expected issues and
+found no others. This is a **GO for the combined candidate only**:
+the tracked old-main gate remains red, draft changes are unmerged,
+and no baseline re-pin, CI cutover, release, or registry write occurred.
 
 ## Blockers and dependencies
 
-The registry comparison must confirm 574 independently rendered byte matches
-plus three unchanged source-less documents, or report exact differences.
+The next strict comparison must run on merged registry main with a
+deliberately updated README baseline; the successful combined-overlay
+diagnostic does not turn the old-main gate green.
 The checked-in vault Example 2+ JSON omits eight section comments that the
 current legacy generator would add. The user approved reporting only this
 specific historical difference as a documented comparison exception, not
 altering the renderer or claiming the vault README is byte-identical. Every
 other byte and module remains subject to the full regression gate. The
 earlier 180-mismatch full scan included missing discriminated-union
-variants, which the current Scriban template renders. The latest
-frozen full comparison has nine unapproved old-main differences, all
-matching the corresponding corrected README bytes in the unmerged
-registry draft, plus the two expected source-backed render failures.
+variants, which the current Scriban template renders. The frozen26
+old-main comparison had nine unapproved differences matching the
+corrected README bytes in the unmerged registry draft, plus two
+source-backed render failures.
 The prior missing CICD Allowed blocks and other structural mismatches
 are resolved without regressing previously exact or approved paths.
 Any updated registry source or baseline needs a fresh full comparison.
@@ -371,11 +397,11 @@ corrected tests and README are merged.
 The earlier BCP426 compilation failure in `avm/ptn/app/container-job-toolkit`
 was corrected by merged
 [registry pull request 7407](https://github.com/Azure/bicep-registry-modules/pull/7407).
-The combined overlay then exposed array-item type examples promoted into
-two malformed parameter examples. The narrow correction passed independent
-whole-file byte proof on toolkit; a fresh full comparison is still required
-before cutover qualification. Four
-historical README titles disagree with existing
+The combined frozen26 overlay then exposed array-item type examples promoted
+into two malformed parameter examples. The narrow correction passed
+independent whole-file toolkit proof and the frozen27 full combined-candidate
+comparison; post-merge strict validation remains required before cutover
+qualification. Four historical README titles disagree with existing
 canonical module types; the user approved correcting just their first lines in
 draft [registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410).
 Until it merges, check only those exact H1 replacements as explicit,
