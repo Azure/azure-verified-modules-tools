@@ -296,6 +296,19 @@ compilation error; no other invalid-test failures or regressions
 among previously exact or approved paths were found. The old-main
 gate remains **failed**: these draft bytes are not comparator
 allowances, and neither upstream source correction is merged.
+The separately approved Conversation test repair, including corrected
+descriptions for both examples, is committed in draft
+[registry pull request 7415](https://github.com/Azure/bicep-registry-modules/pull/7415)
+at `3ee2feac0394095d2fca17814712f786710fd635`. An independent
+single-module render using that immutable source and the same frozen
+renderer produced the README without errors (66,774 bytes; SHA-256
+`77F60279B4F21E709B5F14ACEBDDBA3FF405A247CC1EACF9FEB97683FA1028BA`).
+Compared with old main, the only differences are two complete,
+valid three-format usage examples (178 added lines) and removal of
+one user-approved stale blank line after the introduction. This
+bounded check does not replace a full scan on the eventual merged
+source and README baseline; no registry README or baseline was changed
+by this renderer slice.
 
 ## Blockers and dependencies
 
@@ -322,8 +335,9 @@ does not publish a README.
 The user chose to stop rendering a README that references an invalid
 test and report its unknown and missing required parameter names; the
 user separately approved repairing those upstream tests in the registry.
-The source repair is in progress on its own branch; old-main comparison
-must report the invalid example until that correction merges.
+The source repair is committed but unmerged on its own branch;
+old-main comparison must report the invalid example until the
+corrected tests and README are merged.
 `avm/ptn/app/container-job-toolkit`
 has a genuine
 upstream Bicep BCP426 compile failure. Its source fix is in
