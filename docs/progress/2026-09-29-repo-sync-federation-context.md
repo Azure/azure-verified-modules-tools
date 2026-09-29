@@ -45,6 +45,12 @@ for the ordinary, shared Azure, and BAMI roots. Mocked `terraform test` passed
 `terraform fmt -check`, and the diff passed `git diff --check`. No Azure
 resource operation was run.
 
+The repository configuration gate also selects the one intended mocked BAMI
+candidate plan by run name before checking its bounded resources and federation
+against the verified test fixture. Negative variable-validation runs are not
+candidate identity plans. The exact `./build.ps1 infra,test-tenant-terraform`
+check passed locally after this correction, as did the full pre-commit gate.
+
 ## Dependencies
 
 This changes the planned credential subject only. Provisioning still requires
