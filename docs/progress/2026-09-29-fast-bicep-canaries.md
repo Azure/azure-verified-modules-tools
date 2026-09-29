@@ -7,10 +7,11 @@
 
 ## Outcome
 
-Add Application Security Group, IP Group, and Route Table to the central Bicep
-`testTenant` canary group, retaining DevTest Lab and the legacy default. Only
-the canonical path selection changes; the eight-source/five-execution bundle,
-identities, Terraform selections, and managed-file rings remain unchanged.
+Extend the central Bicep `testTenant` canary group while preserving its existing
+selection and the legacy default. The current paths are maintained only in
+[configuration](../../repository-management/bicep-test-tenant-config/config.json).
+The eight-source/five-execution bundle, identities, Terraform selections, and
+managed-file rings remain unchanged.
 
 This is source-only preparation. Merging the selection makes the active
 scheduled/manual Bicep publisher eligible to publish the added paths. Live
@@ -21,9 +22,11 @@ durations informed selection, not fresh BAMI results or a speed guarantee.
 ## Checklist
 
 - [x] Add exactly the three selected paths, retaining Lab and legacy fallback.
-- [x] Assert the exact real-config JSON projection and selector-only expansion.
+- [x] Validate configuration shape without duplicating its current membership.
+- [x] Test group resolution and selector-only expansion with synthetic inputs.
+- [x] Remove the repeated canary list from the README.
 - [x] Preserve malformed-path, bundle, and Terraform selection safeguards.
-- [x] Run the focused repository gate for source review.
+- [x] Rerun the focused repository gate after the review feedback.
 
 ## Validation
 
@@ -42,15 +45,14 @@ durations informed selection, not fresh BAMI results or a speed guarantee.
 )
 ```
 
-Passed: layout, lint, 154 unit tests, and 17 component tests; zero failures.
-The real central config produces exactly Lab plus the selected trio.
-The mocked active-Lab transition writes only `TEST_BAMI_MODULE_PATHS`;
-all five execution values stay unchanged. Existing malformed-path, complete
-bundle, and Terraform canary membership/order checks pass.
+Passed: layout, lint, 155 unit tests, and 17 component tests; zero failures or
+skips. The tests exercise selection rules and selector-only expansion without
+copying the live canary list. A separate check validates the checked-in
+configuration without prescribing its membership. GitHub calls and the
+component configuration read are mocked; no live runs or settings changed.
 
 `git diff --check` passed. Publisher workflows, shared bundle/resolver code,
-Terraform configuration, and repository sync are unchanged. Tests use mocked
-GitHub calls and offline fixture processes; no live runs or settings changed.
+Terraform configuration, and repository sync are unchanged.
 
 ## Blockers or dependencies
 

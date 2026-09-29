@@ -6,7 +6,18 @@ BeforeAll {
     $run = [regex]::Match($workflow, '(?ms)^        run: \|\n(?<body>.*)\z')
     if (-not $run.Success) { throw 'The Bicep publication run script is missing.' }
     $script:workflowRun = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
-    $script:canarySelector = '["avm/res/dev-test-lab/lab","avm/res/network/application-security-group","avm/res/network/ip-group","avm/res/network/route-table"]'
+    $script:configurationPath = Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json'
+    $script:fixturePaths = @(
+        'avm/res/test-provider/first-resource'
+        'avm/res/test-provider/second-resource'
+    )
+    $script:canarySelector = ConvertTo-Json -InputObject $script:fixturePaths -Compress
+    $script:fixtureConfigurationJson = @{
+        moduleGroups = @(
+            @{ name = 'default'; order = -1; modules = @('*'); testTenant = 'legacy' }
+            @{ name = 'selected'; order = 10; modules = $script:fixturePaths; testTenant = 'bami' }
+        )
+    } | ConvertTo-Json -Depth 5
     $script:sourceValues = [ordered]@{
         TEST_BAMI_TENANT_ID = '11111111-1111-4111-8111-111111111111'
         TEST_BAMI_CONTROLLER_CLIENT_ID = '22222222-2222-4222-8222-222222222222'
@@ -42,7 +53,7 @@ BeforeAll {
     }
 }
 
-Describe 'Bicep test tenant entry point with real configuration and mocked GitHub' -Tag Component {
+Describe 'Bicep test tenant entry point with fixture configuration and mocked GitHub' -Tag Component {
     BeforeEach {
         foreach ($variableName in $script:sourceValues.Keys) {
             [System.Environment]::SetEnvironmentVariable($variableName, $script:sourceValues[$variableName])
@@ -67,7 +78,11 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         }
         $entryState = $script:entryState
         $newVariable = ${function:New-BicepEntryVariable}
+        $configurationJson = $script:fixtureConfigurationJson
         Mock Import-Module {}
+        Mock Get-Content ({ $configurationJson }.GetNewClosure()) -ParameterFilter {
+            $LiteralPath -eq $script:configurationPath
+        }
         Mock Get-Command ({ [pscustomobject]@{ Source = $entryState.BlockedExecutable } }.GetNewClosure()) -ParameterFilter {
             $Name -ceq 'gh' -and $CommandType -eq 'Application'
         }
@@ -128,7 +143,7 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
-    It 'applies the real central canary selector last and leaves all unrelated variables untouched' {
+    It 'applies the configured selector last and leaves all unrelated variables untouched' {
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
         $script:entryState.WriteNames | Should -HaveCount 6
@@ -151,10 +166,10 @@ Describe 'Bicep test tenant entry point with real configuration and mocked GitHu
         $result | ConvertTo-Json -Depth 5 | Should -Not -Match 'fixture-installation-token|11111111|22222222|33333333|rg-bami-test'
     }
 
-    It 'adds the fast canaries to an active Lab selection without rewriting execution values' {
+    It 'expands an active selection without rewriting execution values' {
         $null = & $script:entryPath -Apply
         $script:entryState.WriteNames.Clear()
-        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = '["avm/res/dev-test-lab/lab"]'
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = ConvertTo-Json -InputObject @($script:fixturePaths[0]) -Compress
 
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'

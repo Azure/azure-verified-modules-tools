@@ -90,45 +90,53 @@ Describe 'Central test tenant group resolution' {
 
 Describe 'Tools-owned Bicep configuration' {
     BeforeAll {
-        $script:canaryPaths = @(
-            'avm/res/dev-test-lab/lab'
-            'avm/res/network/application-security-group'
-            'avm/res/network/ip-group'
-            'avm/res/network/route-table'
+        $script:fixturePaths = @(
+            'avm/res/test-provider/first-resource'
+            'avm/res/test-provider/second-resource'
         )
-        $script:canaryPathsJson = ConvertTo-Json -InputObject $script:canaryPaths -Compress
+        $script:fixturePathsJson = ConvertTo-Json -InputObject $script:fixturePaths -Compress
     }
 
     BeforeEach {
-        $script:bicep = Get-Content -Raw (Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json') |
-            ConvertFrom-Json -AsHashtable
+        $script:bicep = @{
+            moduleGroups = @(
+                @{ name = 'default'; order = -1; modules = @('*'); testTenant = 'legacy' }
+                @{ name = 'selected'; order = 10; modules = @($script:fixturePaths[1], $script:fixturePaths[0]); testTenant = 'bami' }
+            )
+        }
     }
 
-    It 'compiles exactly Lab and the three fast canaries as a JSON array' {
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:canaryPathsJson
+    It 'validates the checked-in configuration without fixing its membership' {
+        $configuration = Get-Content -Raw (Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json') |
+            ConvertFrom-Json -AsHashtable
+        { ConvertTo-AvmBicepModulePaths -Configuration $configuration } | Should -Not -Throw
+    }
+
+    It 'compiles selected paths as a sorted JSON array' {
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:fixturePathsJson
     }
 
     It 'keeps unrelated modules on the legacy tenant' -ForEach @(
-        'avm/res/network/virtual-network'
-        'avm/res/storage/storage-account'
+        'avm/res/test-provider/unselected-resource'
+        'avm/ptn/test-provider/unselected-pattern'
     ) {
         Resolve-AvmGroupTestTenant -Groups $script:bicep.moduleGroups -SelectorProperty modules -Item $_ |
             Should -BeExactly 'legacy'
     }
 
     It 'shares group order and declaration precedence' {
-        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = $script:canaryPaths; testTenant = 'legacy' }
+        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = $script:fixturePaths; testTenant = 'legacy' }
         ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly '[]'
-        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = $script:canaryPaths; testTenant = 'bami' }
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:canaryPathsJson
+        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = $script:fixturePaths; testTenant = 'bami' }
+        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:fixturePathsJson
     }
 
     It 'deduplicates selected paths and omits every resolved legacy path' {
         $script:bicep.moduleGroups += @(
-            @{ name = 'more'; order = 10; modules = @('avm/res/storage/storage-account', 'avm/res/dev-test-lab/lab'); testTenant = 'bami' }
-            @{ name = 'legacy'; modules = @('avm/res/network/virtual-network'); testTenant = 'legacy' }
+            @{ name = 'more'; order = 10; modules = @('avm/res/test-provider/third-resource', $script:fixturePaths[0]); testTenant = 'bami' }
+            @{ name = 'legacy'; modules = @('avm/res/test-provider/legacy-resource'); testTenant = 'legacy' }
         )
-        $expected = ConvertTo-Json -InputObject @($script:canaryPaths + 'avm/res/storage/storage-account') -Compress
+        $expected = ConvertTo-Json -InputObject @($script:fixturePaths + 'avm/res/test-provider/third-resource') -Compress
         ConvertTo-AvmBicepModulePaths -Configuration $script:bicep |
             Should -BeExactly $expected
     }
@@ -139,7 +147,7 @@ Describe 'Tools-owned Bicep configuration' {
             $changed.moduleGroups[1][$key] = @()
             { ConvertTo-AvmBicepModulePaths -Configuration $changed } | Should -Throw '*only name*'
         }
-        foreach ($path in @('avm/res/dev-test-lab/lab/.test', 'avm/res/dev-test-lab/*', '*', 'AVM/res/dev-test-lab/lab')) {
+        foreach ($path in @('avm/res/test-provider/first-resource/.test', 'avm/res/test-provider/*', '*', 'AVM/res/test-provider/first-resource')) {
             $script:bicep.moduleGroups[1].modules = @($path)
             { ConvertTo-AvmBicepModulePaths -Configuration $script:bicep } | Should -Throw
         }
