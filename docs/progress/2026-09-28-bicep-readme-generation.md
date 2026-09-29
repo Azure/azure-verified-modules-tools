@@ -282,9 +282,20 @@ two retain the same strict historical approvals, and five retain the
 same old-main differences. The sole render failure is the invalid
 conversation-knowledge-mining sandbox test: it supplies undeclared
 `aiServiceLocation` and `usecase`, omits required
-`azureAiServiceLocation`, and produces no README. A full 577-path
-diagnostic has been requested to find any other invalid examples;
-the focused result does **not** establish full-registry parity.
+`azureAiServiceLocation`, and produces no README. The subsequent
+full independent frozen candidate26 diagnostic accounted for all 577
+paths on the unchanged old-main source and baseline: 574 source-backed
+selected, 572 rendered, 558 old-main byte-exact, three source-less
+byte-exact, five unchanged strict approvals, nine unapproved old-main
+differences, and two render failures. All nine differences and the four
+heading-approved paths match the 13 corrected README blobs in draft
+[registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410)
+byte-for-byte. The only render failures are the known-invalid
+conversation-knowledge-mining sandbox test and toolkit's BCP426
+compilation error; no other invalid-test failures or regressions
+among previously exact or approved paths were found. The old-main
+gate remains **failed**: these draft bytes are not comparator
+allowances, and neither upstream source correction is merged.
 
 ## Blockers and dependencies
 
@@ -295,15 +306,19 @@ current legacy generator would add. The user approved reporting only this
 specific historical difference as a documented comparison exception, not
 altering the renderer or claiming the vault README is byte-identical. Every
 other byte and module remains subject to the full regression gate. The
-earlier 180-mismatch full scan included missing discriminated-union variants,
-which the current Scriban template renders. The latest frozen full comparison
-still has 16 unapproved differences and one upstream compile failure;
-the `computeTypes` and another Allowed block were also lost inside a
-previously failing file. Previous exact and approved paths must remain
-protected while those generic renderer gaps are fixed.
+earlier 180-mismatch full scan included missing discriminated-union
+variants, which the current Scriban template renders. The latest
+frozen full comparison has nine unapproved old-main differences, all
+matching the corresponding corrected README bytes in the unmerged
+registry draft, plus the two expected source-backed render failures.
+The prior missing CICD Allowed blocks and other structural mismatches
+are resolved without regressing previously exact or approved paths.
+Any updated registry source or baseline needs a fresh full comparison.
 Two conversation-knowledge-mining e2e tests reference undeclared
-parameter names and omit a required module parameter; the current
-native example reader formats them without validating their parameters.
+parameter names and omit a required module parameter; the prior
+native example reader formatted them without validating their parameters.
+The current reader rejects the example with actionable names and
+does not publish a README.
 The user chose to stop rendering a README that references an invalid
 test and report its unknown and missing required parameter names; the
 user separately approved repairing those upstream tests in the registry.
