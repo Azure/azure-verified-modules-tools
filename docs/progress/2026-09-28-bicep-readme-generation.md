@@ -36,6 +36,8 @@ registry or retire its existing generator and CI in this slice.
       parameters against their actual target module without writing a README.
 - [x] Keep array-item type metadata examples off their containing array
       parameters while preserving explicit parameter and child examples.
+- [x] Independently verify the corrected renderer against the toolkit README
+      on pinned registry main, comparing the entire generated file as bytes.
 - [x] Update user-facing documentation and the implementation spec/plan.
 - [x] Pass `./build.ps1 pre-commit` for the non-cutover renderer draft.
 - [ ] Complete the full-registry comparison, mark this slice complete,
@@ -325,9 +327,18 @@ the parameters had no authored examples. The renderer now excludes array
 item examples without excluding explicit parameter or nested property
 examples, and still rejects malformed item metadata. Five focused helper
 unit tests and a real pinned-Bicep CLI test passed. `./build.ps1 pre-commit`
-passed all five tasks with zero errors and 49 existing warnings. The updated
-renderer has **not yet** undergone independent toolkit or full-registry
-byte comparison. This combined frozen26 result is **not** a green cutover gate.
+passed all five tasks with zero errors and 49 existing warnings. This
+combined frozen26 result is **not** a green cutover gate.
+The corrected tools commit `4962cd619347e2c111e50a3db0ae591081092ecd`
+was independently frozen and verified against all 190 packaged module
+files; only the intended compiled-parameter helper differed. On pinned
+registry main `557f50ac`, its single-module toolkit render selected and
+processed one source-backed README with no unexpected issues. The entire
+70,564-byte generated README matched current main exactly (SHA-256
+`C4B74984F9490632A5A51A66A385E4F0E2F80A70E4F515D4B3666CF4E82C0079`);
+the Notes sidecar retained its independently verified bytes. This scoped
+proof does **not** replace the strict full 577-path combined comparison,
+which remains pending authorization.
 
 ## Blockers and dependencies
 
@@ -361,8 +372,9 @@ The earlier BCP426 compilation failure in `avm/ptn/app/container-job-toolkit`
 was corrected by merged
 [registry pull request 7407](https://github.com/Azure/bicep-registry-modules/pull/7407).
 The combined overlay then exposed array-item type examples promoted into
-two malformed parameter examples; the narrow renderer correction needs
-independent byte proof on that module and a fresh full comparison. Four
+two malformed parameter examples. The narrow correction passed independent
+whole-file byte proof on toolkit; a fresh full comparison is still required
+before cutover qualification. Four
 historical README titles disagree with existing
 canonical module types; the user approved correcting just their first lines in
 draft [registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410).
