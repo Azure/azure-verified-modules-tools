@@ -34,6 +34,8 @@ registry or retire its existing generator and CI in this slice.
       `-WhatIf`, drift, migration, and Terraform dispatch with focused tests.
 - [x] Reject referenced test examples with unknown or missing required
       parameters against their actual target module without writing a README.
+- [x] Keep array-item type metadata examples off their containing array
+      parameters while preserving explicit parameter and child examples.
 - [x] Update user-facing documentation and the implementation spec/plan.
 - [x] Pass `./build.ps1 pre-commit` for the non-cutover renderer draft.
 - [ ] Complete the full-registry comparison, mark this slice complete,
@@ -309,6 +311,23 @@ one user-approved stale blank line after the introduction. This
 bounded check does not replace a full scan on the eventual merged
 source and README baseline; no registry README or baseline was changed
 by this renderer slice.
+The independent combined-overlay comparison on merged toolkit source
+`557f50ac`, corrected documentation draft `68b9d026`, and repaired
+Conversation draft `c79d24b5` rendered all 574 source-backed READMEs
+without errors. Of 577 tracked files, 572 generated files were byte-exact,
+the Vault root retained its precise approved eight-comment difference,
+and three source-less READMEs were preserved. All 53 Notes sidecars were
+saved and hash-verified. The **one unapproved difference** was toolkit's
+README: two array parameters acquired malformed examples from their
+element object types, adding 24 lines. Array-item compiled metadata reused
+the parameter's path and promoted type-level `example` values even though
+the parameters had no authored examples. The renderer now excludes array
+item examples without excluding explicit parameter or nested property
+examples, and still rejects malformed item metadata. Five focused helper
+unit tests and a real pinned-Bicep CLI test passed. `./build.ps1 pre-commit`
+passed all five tasks with zero errors and 49 existing warnings. The updated
+renderer has **not yet** undergone independent toolkit or full-registry
+byte comparison. This combined frozen26 result is **not** a green cutover gate.
 
 ## Blockers and dependencies
 
@@ -338,12 +357,13 @@ user separately approved repairing those upstream tests in the registry.
 The source repair is committed but unmerged on its own branch;
 old-main comparison must report the invalid example until the
 corrected tests and README are merged.
-`avm/ptn/app/container-job-toolkit`
-has a genuine
-upstream Bicep BCP426 compile failure. Its source fix is in
-[registry pull request 7407](https://github.com/Azure/bicep-registry-modules/pull/7407);
-re-evaluate any affected README baseline after that change lands. The renderer
-must not mask the failure. Four historical README titles disagree with existing
+The earlier BCP426 compilation failure in `avm/ptn/app/container-job-toolkit`
+was corrected by merged
+[registry pull request 7407](https://github.com/Azure/bicep-registry-modules/pull/7407).
+The combined overlay then exposed array-item type examples promoted into
+two malformed parameter examples; the narrow renderer correction needs
+independent byte proof on that module and a fresh full comparison. Four
+historical README titles disagree with existing
 canonical module types; the user approved correcting just their first lines in
 draft [registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410).
 Until it merges, check only those exact H1 replacements as explicit,

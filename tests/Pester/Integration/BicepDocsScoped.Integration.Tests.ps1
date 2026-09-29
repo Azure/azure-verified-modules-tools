@@ -1068,6 +1068,77 @@ param providerRules {
         Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
     }
 
+    It 'does not render exported array item type examples as parameter examples' {
+        $root = Join-Path $TestDrive 'array-example-repository'
+        $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'
+        $null = New-Item -ItemType Directory -Path $module -Force
+        Copy-Item -Path (Join-Path $script:fixtureRoot '*') -Destination $module -Recurse
+        Remove-Item -LiteralPath (Join-Path $module 'main.json')
+        [System.IO.File]::AppendAllText((Join-Path $module 'main.bicep'), @'
+
+@export()
+@metadata({
+  example: '''[[
+    {
+      name: 'type-level'
+    }
+  ]'''
+})
+@description('The reusable entry type.')
+type entryType = {
+  @metadata({ example: 'property-level' })
+  @description('Required. Entry name.')
+  name: string
+}
+
+@description('Optional. Entries without a parameter example.')
+param entries entryType[]?
+
+@metadata({
+  example: '''
+  [
+    {
+      name: 'parameter-level'
+    }
+  ]
+  '''
+})
+@description('Optional. Entries with a parameter example.')
+param authoredEntries entryType[]?
+'@, [System.Text.UTF8Encoding]::new($false))
+
+        $template = Join-Path $root 'docs' 'templates' 'avm-readme-v1.scriban'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Path $template -Parent) -Force
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'avm-readme-v1.scriban') `
+            -Destination $template
+        [System.IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'), @'
+{
+  "documentation": {
+    "template": { "file": "docs/templates/avm-readme-v1.scriban" }
+  }
+}
+'@, [System.Text.UTF8Encoding]::new($false))
+
+        $result = Invoke-AvmDocs -Path $root -CheckDrift -IncludeRenderedContent -SkipModuleVersionCheck
+        $errors = @($result.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed')
+        $errors.Count | Should -Be 0 -Because (@($errors | ForEach-Object Message) -join '; ')
+        $content = @($result.GeneratedReadmes | Where-Object {
+                $_.Path -eq 'avm/res/storage/storage-account/README.md'
+            })[0].Content
+
+        $entries = [regex]::Match(
+            $content, '(?s)### Parameter: `entries`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $entries.Success | Should -BeTrue
+        $entries.Groups['body'].Value | Should -Not -Match '- Example:'
+        $authored = [regex]::Match(
+            $content, '(?s)### Parameter: `authoredEntries`(?<body>.*?)(?=\n### Parameter:|\n## Outputs)')
+        $authored.Success | Should -BeTrue
+        $authored.Groups['body'].Value |
+            Should -Match '- Example:\n  ```Bicep\n  \[\n    \{\n      name: ''parameter-level''\n    \}\n  \]\n  ```'
+        $content | Should -Not -Match "name: 'type-level'"
+        Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
+    }
+
     It 'renders native discriminated union variants and their nested parameters' {
         $root = Join-Path $TestDrive 'union-repository'
         $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'

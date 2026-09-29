@@ -97,19 +97,23 @@ function Get-AvmBicepDocsCompiledParameter {
             }
             if ($null -eq $current.Example -and $metadata.Contains('example')) {
                 $example = $metadata['example']
+                $normalizedExample = $null
                 if ($example -is [string]) {
-                    $current.Example = $example
+                    $normalizedExample = $example
                 }
                 elseif ($example -is [array] -and
                     @($example | Where-Object { $_ -isnot [string] }).Count -eq 0) {
-                    $current.Example = [string[]]$example
+                    $normalizedExample = [string[]]$example
                 }
                 elseif ($example -is [System.Collections.IDictionary]) {
-                    $current.Example = $example
+                    $normalizedExample = $example
                 }
                 else {
                     throw [AvmConfigurationException]::new(
                         "Compiled Bicep example for '$($entry.Path)' must be a string, an object, or an array of strings in '$SourcePath'.")
+                }
+                if (-not $entry.FromArrayItem) {
+                    $current.Example = $normalizedExample
                 }
             }
         }

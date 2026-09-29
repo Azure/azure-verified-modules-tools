@@ -241,12 +241,70 @@ Describe 'Get-AvmBicepDocsCompiledParameter' {
         } | Should -Throw '*references missing definition*'
     }
 
+    It 'does not promote array item type examples to the parameter while retaining authored examples' {
+        $template = @{
+            parameters = @{
+                entries = @{
+                    type     = 'array'
+                    nullable = $true
+                    items    = @{ '$ref' = '#/definitions/entryType' }
+                }
+                authoredEntries = @{
+                    type     = 'array'
+                    metadata = @{ example = "[{ name: 'parameter-level' }]" }
+                    items    = @{ '$ref' = '#/definitions/entryType' }
+                }
+                scalarEntries = @{
+                    type  = 'array'
+                    items = @{ type = 'string'; metadata = @{ example = 'item-level' } }
+                }
+            }
+            definitions = @{
+                entryType = @{
+                    type       = 'object'
+                    metadata   = @{ example = "[[{ name: 'type-level' }]" }
+                    properties = @{
+                        name = @{
+                            type     = 'string'
+                            metadata = @{ example = 'property-level' }
+                        }
+                    }
+                }
+            }
+        }
+
+        $details = InModuleScope 'Avm.Authoring' -Parameters @{ T = $template } {
+            param($T)
+            Get-AvmBicepDocsCompiledParameter -Template $T -SourcePath 'synthetic/main.json'
+        }
+
+        $details['entries'].Example | Should -BeNullOrEmpty
+        $details['authoredEntries'].Example | Should -BeExactly "[{ name: 'parameter-level' }]"
+        $details['scalarEntries'].Example | Should -BeNullOrEmpty
+        $details['entries.name'].Example | Should -BeExactly 'property-level'
+    }
+
     It 'rejects invalid compiled example types instead of silently dropping them' {
         {
             InModuleScope 'Avm.Authoring' {
                 Get-AvmBicepDocsCompiledParameter -Template @{
                     parameters = @{ image = @{
                             type = 'string'; metadata = @{ example = @('valid', 42) }
+                        }
+                    }
+                } -SourcePath 'synthetic/main.json'
+            }
+        } | Should -Throw '*must be a string, an object, or an array of strings*'
+    }
+
+    It 'rejects invalid array item examples even though item examples are not rendered' {
+        {
+            InModuleScope 'Avm.Authoring' {
+                Get-AvmBicepDocsCompiledParameter -Template @{
+                    parameters = @{
+                        entries = @{
+                            type  = 'array'
+                            items = @{ type = 'string'; metadata = @{ example = @('valid', 42) } }
                         }
                     }
                 } -SourcePath 'synthetic/main.json'
