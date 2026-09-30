@@ -114,6 +114,9 @@ configured test subscription. A failure blocks publication. When both pass, a
 job with the GitHub App token checks that the target branch has not moved and
 that the patch recreates the validated Git tree before pushing and merging the
 generated change. An unchanged module needs neither checks nor publication.
+Each matrix entry calls the per-repository reusable workflow so a failed
+preparation skips only its own validation and publication; other repositories
+continue through their own checks.
 
 Manual plan-only runs perform the same candidate checks without publishing.
 They use the authoring source from the selected workflow branch by default;

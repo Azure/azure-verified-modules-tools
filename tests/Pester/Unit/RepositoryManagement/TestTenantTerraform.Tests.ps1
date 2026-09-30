@@ -355,7 +355,7 @@ Describe 'Terraform effective contract and state wiring' {
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source.IndexOf('Invoke-AvmBamiRepositoryIdentity') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source | Should -Match 'if \(\$testTenant.TestTenant -ceq ''bami''\)'
-        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml')
         $workflow | Should -Match '-bamiSettings \$bamiSettings'
         $source | Should -Match '\[string\]\$repositorySyncRepositoryId = \$env:GITHUB_REPOSITORY_ID'
         $workflow | Should -Not -Match '-repositorySyncRepositoryId'

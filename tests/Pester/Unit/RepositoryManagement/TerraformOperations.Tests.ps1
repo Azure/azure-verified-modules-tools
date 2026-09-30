@@ -159,6 +159,9 @@ Describe 'State identity wiring' {
 
     It 'keeps provider environment while logging the CLI into the state identity' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
+            '.github/workflows/repository-management-sync-repository.yml'
+        )) -Raw
+        $dispatcher = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
         $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
@@ -181,7 +184,7 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
         $workflow | Should -Not -Match '(?<![A-Z_])STORAGE_ACCOUNT_(CONTAINER_)?NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
-        $workflow | Should -Match 'cancel-in-progress: false'
+        $dispatcher | Should -Match 'cancel-in-progress: false'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
     }
 
@@ -270,7 +273,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'missing' }
         @{ Mode = 'partial' }
     ) {
-        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync-repository.yml')
         $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      # Only state lock recovery')
         $step.Success | Should -BeTrue
         $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |
