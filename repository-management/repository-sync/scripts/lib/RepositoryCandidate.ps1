@@ -201,6 +201,90 @@ function Assert-RepositorySyncValidationReceipt {
     }
 }
 
+function Format-RepositorySyncCandidateCheckResult {
+    param(
+        [Parameter(Mandatory)] [ValidateSet('pr-check', 'unit')] [string]$Check,
+        [Parameter(Mandatory)] [object]$Result
+    )
+
+    if ($Result.Status -ceq 'pass') {
+        return @()
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("Candidate ${Check}: $($Result.Status)")
+    $steps = $Result.PSObject.Properties['Steps']
+    $details = @(if ($Check -eq 'pr-check') {
+        if ($null -ne $steps) {
+            $steps.Value | Where-Object { $null -ne $_ -and $_.Status -in @('fail', 'error') }
+        }
+    }
+    else {
+        $Result
+    })
+
+    if ($details.Count -eq 0) {
+        $lines.Add('  No failing steps were returned.')
+    }
+    foreach ($detail in $details) {
+        $label = if ($Check -eq 'pr-check') { [string]$detail.Step } else { 'unit tests' }
+        $lines.Add("  ${label}: $($detail.Status)")
+        $errorProperty = $detail.PSObject.Properties['Error']
+        $hasError = $null -ne $errorProperty -and -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)
+        if ($hasError) {
+            $lines.Add('    ' + ([string]$errorProperty.Value -replace '[\r\n\t]+', ' ').Trim())
+        }
+
+        $nested = $detail.PSObject.Properties['Result']
+        $checkResult = if ($Check -eq 'pr-check') {
+            if ($null -ne $nested) { $nested.Value } else { $null }
+        }
+        else {
+            $detail
+        }
+        if ($null -eq $checkResult) {
+            if (-not $hasError) {
+                $lines.Add('    No structured diagnostics were returned.')
+            }
+            continue
+        }
+        $runs = $checkResult.PSObject.Properties['RunsTotal']
+        if ($null -ne $runs) {
+            $lines.Add("    $($runs.Value) test run(s); $($checkResult.RunsFailed) failed.")
+        }
+        $issueProperty = $checkResult.PSObject.Properties['Issues']
+        $issues = @(if ($null -ne $issueProperty) {
+            $issueProperty.Value | Where-Object { $null -ne $_ }
+        })
+        $blocking = @($issues | Where-Object {
+                $severity = $_.PSObject.Properties['Severity']
+                $null -ne $severity -and $severity.Value -in @('error', 'warning')
+            })
+        if ($label -eq 'lint' -and $blocking.Count -gt 0) {
+            $issues = $blocking
+        }
+        foreach ($issue in $issues) {
+            $severity = if ($issue.PSObject.Properties['Severity']) { [string]$issue.Severity } else { 'issue' }
+            $file = if ($issue.PSObject.Properties['File']) { [string]$issue.File } else { '' }
+            $line = if ($issue.PSObject.Properties['Line'] -and [int]$issue.Line -gt 0) { ":$($issue.Line)" } else { '' }
+            $position = if ($file) { "${file}${line}: " } else { '' }
+            $code = if ($issue.PSObject.Properties['Code'] -and $issue.Code) { "[$($issue.Code)] " } else { '' }
+            $message = if ($issue.PSObject.Properties['Message']) { [string]$issue.Message } else { [string]$issue }
+            $lines.Add("    ${position}[${severity}] ${code}$(($message -replace '[\r\n\t]+', ' ').Trim())")
+        }
+        if ($issues.Count -eq 0 -and -not $hasError) {
+            $lines.Add($(if ($Check -eq 'unit' -and $Result.Status -ceq 'skipped') {
+                        '    No unit tests ran; changed candidates require tests/unit/*.tftest.hcl.'
+                    }
+                    else {
+                        '    No structured diagnostics were returned.'
+                    }))
+        }
+    }
+
+    return $lines.ToArray()
+}
+
 function Invoke-RepositorySyncCandidateValidation {
     param(
         [Parameter(Mandatory)] [string]$Repository,
@@ -270,6 +354,12 @@ function Invoke-RepositorySyncCandidateValidation {
         }
         $unitTests = Invoke-AvmTestUnit -Path $unitRoot -Ecosystem terraform -SkipModuleVersionCheck
         if ($prCheck.Status -cne 'pass' -or $unitTests.Status -cne 'pass') {
+            foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $prCheck)) {
+                Write-Host $line
+            }
+            foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $unitTests)) {
+                Write-Host $line
+            }
             $failedSteps = @($prCheck.Steps | Where-Object Status -in @('fail', 'error') | ForEach-Object {
                     "$($_.Step): $($_.Status)"
                 })

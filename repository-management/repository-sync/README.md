@@ -117,6 +117,9 @@ generated change. An unchanged module needs neither checks nor publication.
 Each matrix entry calls the per-repository reusable workflow so a failed
 preparation skips only its own validation and publication; other repositories
 continue through their own checks.
+Failed validation logs show the failing check steps and their structured lint,
+policy, and test diagnostics. An absent unit-test tier is reported as skipped,
+not as a passing check.
 
 Manual plan-only runs perform the same candidate checks without publishing.
 They use the authoring source from the selected workflow branch by default;

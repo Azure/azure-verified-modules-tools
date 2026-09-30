@@ -81,6 +81,76 @@ Describe 'Repository sync test identity selection' {
     }
 }
 
+Describe 'Repository candidate failure diagnostics' {
+    It 'shows blocking lint findings with file and rule while retaining check errors' {
+        $result = [pscustomobject]@{
+            Status = 'error'
+            Steps = @(
+                [pscustomobject]@{
+                    Step = 'lint'
+                    Status = 'fail'
+                    Error = $null
+                    Result = [pscustomobject]@{
+                        Issues = @(
+                            [pscustomobject]@{
+                                File = 'examples/default/main.tf'
+                                Line = 9
+                                Severity = 'warning'
+                                Code = 'terraform_unused_required_providers'
+                                Message = 'provider modtm is declared but not used'
+                            },
+                            [pscustomobject]@{
+                                File = 'variables.tf'
+                                Line = 11
+                                Severity = 'notice'
+                                Code = 'avm_interface_retry'
+                                Message = 'non-failing notice'
+                            }
+                        )
+                    }
+                },
+                [pscustomobject]@{
+                    Step = 'check policy'
+                    Status = 'error'
+                    Error = "No value for required variable`nlocation"
+                    Result = $null
+                }
+            )
+        }
+        $output = @(Format-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $result) -join "`n"
+        $output | Should -Match 'Candidate pr-check: error'
+        $output | Should -Match 'lint: fail'
+        $output | Should -Match 'examples/default/main\.tf:9: \[warning\] \[terraform_unused_required_providers\]'
+        $output | Should -Match 'check policy: error'
+        $output | Should -Match 'No value for required variable location'
+        $output | Should -Not -Match 'non-failing notice'
+    }
+
+    It 'shows the underlying unit diagnostic and distinguishes skipped suites from passes' {
+        $failure = [pscustomobject]@{
+            Status = 'fail'
+            RunsTotal = 2
+            RunsFailed = 1
+            Issues = @([pscustomobject]@{
+                    File = 'tests/unit/example.tftest.hcl'
+                    Line = 17
+                    Severity = 'error'
+                    Code = ''
+                    Message = 'Invalid Resource ID'
+                })
+        }
+        $output = @(Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $failure) -join "`n"
+        $output | Should -Match '2 test run\(s\); 1 failed'
+        $output | Should -Match 'tests/unit/example\.tftest\.hcl:17: \[error\] Invalid Resource ID'
+
+        $skipped = [pscustomobject]@{ Status = 'skipped'; RunsTotal = 0; RunsFailed = 0; Issues = @() }
+        (@(Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $skipped) -join "`n") |
+            Should -Match 'No unit tests ran; changed candidates require tests/unit/'
+        @(Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result ([pscustomobject]@{ Status = 'pass' })) |
+            Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Repository sync candidate validation' {
     BeforeEach {
         $script:directory = Join-Path $TestDrive ('candidate-' + [guid]::NewGuid().ToString('N'))
@@ -136,14 +206,32 @@ Describe 'Repository sync candidate validation' {
     }
 
     It 'runs both checks but does not issue a receipt when pr-check fails' {
+        $script:diagnostics = [System.Collections.Generic.List[string]]::new()
+        Mock Write-Host { $script:diagnostics.Add([string]$Object) }
         Mock Invoke-AvmPrCheck {
-            [pscustomobject]@{ Status = 'fail'; Steps = @([pscustomobject]@{ Step = 'validate'; Status = 'fail' }) }
+            [pscustomobject]@{
+                Status = 'fail'
+                Steps = @([pscustomobject]@{
+                        Step = 'lint'
+                        Status = 'fail'
+                        Result = [pscustomobject]@{
+                            Issues = @([pscustomobject]@{
+                                    File = 'examples/default/main.tf'
+                                    Line = 9
+                                    Severity = 'warning'
+                                    Code = 'terraform_unused_required_providers'
+                                    Message = 'provider modtm is unused'
+                                })
+                        }
+                    })
+            }
         }
         { Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
             -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
             Should -Throw '*pr-check=fail*'
         Should -Invoke Invoke-AvmTestUnit -Exactly 1
+        ($script:diagnostics -join "`n") | Should -Match 'examples/default/main\.tf:9: \[warning\] \[terraform_unused_required_providers\]'
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
     }
 
