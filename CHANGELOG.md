@@ -31,10 +31,11 @@ section when cutting a release.
   with an explicit Azure subscription. Tokens are substituted only in a
   temporary compiled template, `.e2eignore` is honored, and resource-group
   targets require an existing group. Terraform integration is unchanged.
-- `avm test unit` runs Bicep Pester unit tests, optional nested module scopes,
-  and the existing registry compliance suite when available. Tag and name
-  filters, child-process isolation, and separate fail/skipped results make
-  missing or disabled tests visible without changing the build-only `avm test`.
+- `avm test unit` runs Bicep module-owned Pester tests/unit by default, with
+  optional nested scopes and explicit `-IncludeCompliance` or
+  `-CompliancePath` for the registry compliance suite during migration. Tag
+  and name filters, child-process isolation, and separate fail/skipped results
+  make missing or disabled tests visible without changing build-only `avm test`.
 - `avm test integration --max-retry` defaults to two retries for recognized
   Azure capacity and region-ineligible failures, matching the E2E retry bound.
   Replay requires completed Terraform-owned teardown and preserves test

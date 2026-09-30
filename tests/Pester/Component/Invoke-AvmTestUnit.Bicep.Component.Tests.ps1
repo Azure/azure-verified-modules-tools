@@ -116,6 +116,53 @@ Describe 'Compliance' {
         $result.FilesProcessed | Should -Be 2
     }
 
+    It 'does not run a discoverable registry compliance suite by default' {
+        $suite = Join-Path -Path $script:root -ChildPath 'utilities' `
+            -AdditionalChildPath 'pipelines', 'staticValidation', 'compliance', 'module.tests.ps1'
+        $null = New-Item -ItemType Directory -Path (Split-Path $suite) -Force
+        Set-Content -LiteralPath $suite -Value @'
+Describe 'Compliance' {
+    It 'fails if run by default' -Tag 'fast' { $true | Should -BeFalse }
+}
+'@ -Encoding utf8NoBOM
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:root } {
+            param($Root)
+            Mock Resolve-AvmTool { throw 'Default unit tests must not resolve a Bicep compiler' }
+            Invoke-AvmTestUnit -Path $Root -RepositoryRoot $Root -Tag 'fast'
+        }
+        $result.Status | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+        $result.ComplianceFile | Should -BeNullOrEmpty
+        $result.RunsPassed | Should -Be 1
+    }
+
+    It 'includes the discoverable registry compliance suite only when requested' {
+        $suite = Join-Path -Path $script:root -ChildPath 'utilities' `
+            -AdditionalChildPath 'pipelines', 'staticValidation', 'compliance', 'module.tests.ps1'
+        $null = New-Item -ItemType Directory -Path (Split-Path $suite) -Force
+        Set-Content -LiteralPath $suite -Value @'
+param([array] $moduleFolderPaths, [string] $repoRootPath)
+Describe 'Compliance' {
+    It 'receives module scopes on opt-in' -Tag 'compliance' {
+        $moduleFolderPaths.Count | Should -Be 1
+        $moduleFolderPaths[0] | Should -Be $repoRootPath
+    }
+}
+'@ -Encoding utf8NoBOM
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:root } {
+            param($Root)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Path = [Environment]::ProcessPath; Source = 'cache' }
+            }
+            Invoke-AvmTestUnit -Path $Root -RepositoryRoot $Root `
+                -IncludeCompliance -Tag 'compliance'
+        }
+        $result.Status | Should -Be 'pass'
+        $result.ComplianceFile | Should -Be $suite
+        $result.FilesProcessed | Should -Be 2
+        $result.RunsPassed | Should -Be 1
+    }
+
     It 'returns skipped without starting Pester when no test suite exists' {
         $root = Join-Path $TestDrive 'empty-bicep'
         $null = New-Item -ItemType Directory -Path $root -Force
@@ -127,23 +174,26 @@ Describe 'Compliance' {
         $result.RunsTotal | Should -Be 0
     }
 
-    It 'fails instead of skipping a missing monorepo compliance suite' {
+    It 'does not require monorepo compliance unless explicitly requested' {
         $root = Join-Path $TestDrive 'registry-without-compliance'
         $modulePath = Join-Path $root 'avm' 'res' 'storage' 'sample'
         $null = New-Item -ItemType Directory -Path $modulePath -Force
         Set-Content -LiteralPath (Join-Path $root 'bicepconfig.json') -Value '{}' -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $modulePath 'main.bicep') `
             -Value 'param x string' -Encoding utf8NoBOM
+        $unit = Join-Path $modulePath 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        Set-Content -LiteralPath (Join-Path $unit 'module.tests.ps1') `
+            -Value "Describe 'Monorepo unit' { It 'passes' { `$true | Should -BeTrue } }" `
+            -Encoding utf8NoBOM
 
-        $thrown = $null
-        try {
-            Invoke-AvmTestUnit -Path $root | Out-Null
-        }
-        catch {
-            $thrown = $_.Exception
-        }
-        $thrown.GetType().Name | Should -Be 'AvmConfigurationException'
-        $thrown.Message | Should -Match 'compliance suite not found'
+        $default = Invoke-AvmTestUnit -Path $root
+        $default.Status | Should -Be 'pass'
+        $default.UnitFiles | Should -Be 1
+        $default.RunsPassed | Should -Be 1
+        $default.ComplianceFile | Should -BeNullOrEmpty
+        { Invoke-AvmTestUnit -Path $root -IncludeCompliance } |
+            Should -Throw -ExpectedMessage '*compliance suite not found*'
     }
 
     It 'rejects wrong-case Bicep entry point and test directories' {

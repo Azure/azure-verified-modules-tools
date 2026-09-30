@@ -67,9 +67,28 @@ Describe 'Invoke-AvmTestUnit' {
             $result.RunsPassed | Should -Be 1
             Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1 -ParameterFilter {
                 $Tag[0] -eq 'UDT' -and $TestName[0] -eq '*parameter*' -and $Recurse -and
-                $CompliancePath -eq 'module.tests.ps1' -and $RepositoryRoot -eq $D
+                $CompliancePath -eq 'module.tests.ps1' -and $RepositoryRoot -eq $D -and
+                -not $IncludeCompliance.IsPresent
             }
             Should -Invoke Invoke-AvmTerraformTestSuite -Times 0 -Exactly
+        }
+    }
+
+    It 'forwards an explicit compliance opt-in and rejects an empty suite path' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = 'module'; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmBicepTestUnit {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
+            }
+            Invoke-AvmTestUnit -IncludeCompliance | Out-Null
+            Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1 -ParameterFilter {
+                $IncludeCompliance.IsPresent
+            }
+            { Invoke-AvmTestUnit -CompliancePath '' } |
+                Should -Throw -ExpectedMessage '*CompliancePath cannot be empty*'
+            Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1
         }
     }
 
@@ -85,6 +104,8 @@ Describe 'Invoke-AvmTestUnit' {
                 [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = 'module'; Ecosystem = 'terraform' }
             }
             { Invoke-AvmTestUnit -Tag 'unit' } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Bicep*'
+            { Invoke-AvmTestUnit -IncludeCompliance } |
                 Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Bicep*'
         }
     }

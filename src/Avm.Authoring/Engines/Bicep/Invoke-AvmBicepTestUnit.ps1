@@ -15,6 +15,8 @@ function Invoke-AvmBicepTestUnit {
 
         [switch] $Recurse,
 
+        [switch] $IncludeCompliance,
+
         [string] $CompliancePath,
 
         [string] $RepositoryRoot
@@ -63,8 +65,13 @@ function Invoke-AvmBicepTestUnit {
     $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context -RepositoryRoot $RepositoryRoot
     $defaultSuite = Join-Path -Path $repoRoot -ChildPath 'utilities' `
         -AdditionalChildPath 'pipelines', 'staticValidation', 'compliance', 'module.tests.ps1'
-    $suite = if (-not [string]::IsNullOrWhiteSpace($CompliancePath)) {
-        $resolvedSuite = if ([System.IO.Path]::IsPathRooted($CompliancePath)) {
+    $includeSuite = $IncludeCompliance -or -not [string]::IsNullOrWhiteSpace($CompliancePath)
+    $suite = $null
+    if ($includeSuite) {
+        $resolvedSuite = if ([string]::IsNullOrWhiteSpace($CompliancePath)) {
+            $defaultSuite
+        }
+        elseif ([System.IO.Path]::IsPathRooted($CompliancePath)) {
             $CompliancePath
         }
         else {
@@ -73,25 +80,20 @@ function Invoke-AvmBicepTestUnit {
         if (-not (Test-Path -LiteralPath $resolvedSuite -PathType Leaf)) {
             throw [AvmConfigurationException]::new("Bicep compliance suite not found: $resolvedSuite")
         }
-        $item = Get-Item -LiteralPath $resolvedSuite -ErrorAction Stop
-        $item.FullName
-    }
-    elseif (Test-Path -LiteralPath $defaultSuite -PathType Leaf) {
-        $defaultSuite
-    }
-    else {
-        $null
-    }
-    if ($Context.Kind -eq 'bicep-monorepo' -and $null -eq $suite -and $scopes.Count -gt 0) {
-        throw [AvmConfigurationException]::new(
-            "Bicep monorepo compliance suite not found at '$defaultSuite'. Pass -CompliancePath to select a suite.")
+        $suite = (Get-Item -LiteralPath $resolvedSuite -ErrorAction Stop).FullName
     }
     if ($null -ne $suite -and $scopes.Count -gt 0) {
         $files.Insert(0, $suite)
     }
 
     if ($files.Count -eq 0) {
-        Write-AvmLog 'no Bicep unit or compliance tests found' -Level Warning
+        $message = if ($includeSuite) {
+            'no Bicep unit or compliance tests found'
+        }
+        else {
+            'no Bicep unit tests found'
+        }
+        Write-AvmLog $message -Level Warning
         return [pscustomobject][ordered]@{
             Engine           = 'bicep'
             Tool             = 'Pester'

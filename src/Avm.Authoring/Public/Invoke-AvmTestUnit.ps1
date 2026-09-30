@@ -4,14 +4,13 @@ function Invoke-AvmTestUnit {
         Run the module's Bicep Pester or Terraform unit-test tier.
 
     .DESCRIPTION
-        For Bicep, runs tests/unit/*.tests.ps1 and, when available, the
-        registry's compliance module.tests.ps1 suite. Pester runs in a child
-        PowerShell process and receives repoRootPath and moduleFolderPaths,
-        as in Test-ModuleLocally. The compliance suite uses the pinned Bicep
-        binary. -Recurse includes nested module scopes. A standalone module
-        without the registry's compliance suite runs only its own unit tests;
-        ComplianceFile is null in the result. -CompliancePath selects an
-        external suite explicitly.
+        For Bicep, runs module tests/unit/*.tests.ps1 only by default.
+        Pester runs in a child PowerShell process and receives repoRootPath
+        and moduleFolderPaths. -Recurse includes nested module scopes.
+        -IncludeCompliance explicitly adds the registry's compliance
+        module.tests.ps1 suite using the pinned Bicep binary; -CompliancePath
+        selects an alternate suite and implies -IncludeCompliance. Compliance
+        is not run twice by default when convention checks are enabled.
 
         For Terraform, runs 'terraform test' against tests/unit/ through
         Invoke-AvmTerraformTestSuite -Tier unit.
@@ -23,8 +22,9 @@ function Invoke-AvmTestUnit {
         Explicitly skipped Pester tests fail the tier.
 
         This is a standalone credential-free tier. The Terraform tier also
-        runs in 'avm pr-check'; Bicep compliance is not yet wired into
-        'avm pr-check' or 'avm check convention'.
+        runs in 'avm pr-check'. Bicep convention checks are separate; the
+        existing registry CI remains authoritative until that work is
+        complete and a cutover is approved.
 
         Routed by the dispatcher: 'avm test unit'.
 
@@ -51,9 +51,14 @@ function Invoke-AvmTestUnit {
     .PARAMETER Recurse
         Bicep-only: include child module scopes and their unit tests.
 
+    .PARAMETER IncludeCompliance
+        Bicep-only: also run the registry compliance suite. This is an
+        explicit transition option, not part of the default unit tier.
+
     .PARAMETER CompliancePath
         Bicep-only: explicit compliance Pester suite file. Relative paths
         resolve under -RepositoryRoot or the discovered repository root.
+        Selecting a path enables compliance without -IncludeCompliance.
 
     .PARAMETER RepositoryRoot
         Bicep-only: override the registry root passed to compliance tests.
@@ -72,6 +77,9 @@ function Invoke-AvmTestUnit {
 
     .EXAMPLE
         avm test unit --ecosystem bicep --tag UDT --recurse
+
+    .EXAMPLE
+        avm test unit --include-compliance
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -96,6 +104,8 @@ function Invoke-AvmTestUnit {
         [Alias('PesterTestRecurse')]
         [switch] $Recurse,
 
+        [switch] $IncludeCompliance,
+
         [string] $CompliancePath,
 
         [string] $RepositoryRoot,
@@ -115,16 +125,21 @@ function Invoke-AvmTestUnit {
             if ($NoInit) {
                 throw [AvmConfigurationException]::new('-NoInit is only supported for Terraform unit tests.')
             }
+            if ($PSBoundParameters.ContainsKey('CompliancePath') -and
+                [string]::IsNullOrWhiteSpace($CompliancePath)) {
+                throw [AvmConfigurationException]::new('-CompliancePath cannot be empty.')
+            }
             Invoke-AvmBicepTestUnit -Context $context -AllowPathFallback:$AllowPathFallback `
                 -Tag $Tag -TestName $TestName -Recurse:$Recurse `
-                -CompliancePath $CompliancePath -RepositoryRoot $RepositoryRoot
+                -IncludeCompliance:$IncludeCompliance -CompliancePath $CompliancePath `
+                -RepositoryRoot $RepositoryRoot
         }
         'terraform' {
             if ($Tag.Count -gt 0 -or $TestName.Count -gt 0 -or $Recurse -or
-                -not [string]::IsNullOrWhiteSpace($CompliancePath) -or
+                $IncludeCompliance -or $PSBoundParameters.ContainsKey('CompliancePath') -or
                 -not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
                 throw [AvmConfigurationException]::new(
-                    '-Tag, -TestName, -Recurse, -CompliancePath and -RepositoryRoot are only supported for Bicep unit tests.')
+                    '-Tag, -TestName, -Recurse, -IncludeCompliance, -CompliancePath and -RepositoryRoot are only supported for Bicep unit tests.')
             }
             Invoke-AvmTerraformTestSuite -Context $context -Tier 'unit' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
         }
