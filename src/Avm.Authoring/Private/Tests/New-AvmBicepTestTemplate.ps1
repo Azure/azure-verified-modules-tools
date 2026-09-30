@@ -12,7 +12,11 @@ function New-AvmBicepTestTemplate {
         [string] $BicepPath,
 
         [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, string]] $Tokens
+        [System.Collections.Generic.Dictionary[string, string]] $Tokens,
+
+        [System.Collections.Generic.Dictionary[string, string]] $ScopedTokens,
+
+        [switch] $RequireScopedTokens
     )
 
     Set-StrictMode -Version 3.0
@@ -27,10 +31,7 @@ function New-AvmBicepTestTemplate {
         throw [AvmProcessException]::new($message)
     }
 
-    $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
-        -SourcePath $SourcePath -Tokens $Tokens
-
-    $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $template = [string]$build.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     if ($template -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new("Bicep test compilation did not return an ARM object: $SourcePath")
     }
@@ -47,6 +48,19 @@ function New-AvmBicepTestTemplate {
         }
     }
 
+    if ($RequireScopedTokens -and $scope -ne 'group' -and $null -eq $ScopedTokens) {
+        throw [AvmConfigurationException]::new(
+            "Bicep e2e test '$SourcePath' requires an explicit GUID -TenantId for $scope scope.")
+    }
+    $effectiveTokens = if ($scope -ne 'group' -and $null -ne $ScopedTokens) {
+        $ScopedTokens
+    }
+    else {
+        $Tokens
+    }
+    $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
+        -SourcePath $SourcePath -Tokens $effectiveTokens
+    $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write temporary ARM test template')) {
         throw [AvmConfigurationException]::new("Temporary ARM test template creation was declined: $DestinationPath")
     }

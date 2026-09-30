@@ -10,6 +10,10 @@ function Get-AvmBicepTestTokenMap {
 
         [string] $ManagementGroupId,
 
+        [string] $TenantId,
+
+        [string] $RunId,
+
         [string] $TokenFile,
 
         [System.Collections.IDictionary] $Tokens = @{}
@@ -45,6 +49,16 @@ function Get-AvmBicepTestTokenMap {
     if (-not [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
         $values.Add('managementGroupId', $ManagementGroupId)
     }
+    if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
+        $values.Add('tenantId', $TenantId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RunId)) {
+        if ($RunId -cnotmatch '^[0-9a-f]{32}$') {
+            throw [AvmConfigurationException]::new('Bicep e2e run ID must be 32 lowercase hexadecimal characters.')
+        }
+        $values.Add('avmE2eRunId', $RunId)
+        $values.Add('avmE2eSuffix', $RunId.Substring(0, 10))
+    }
     foreach ($name in $provided.Keys) {
         if ($name -isnot [string] -or $name -cnotmatch '^[A-Za-z][A-Za-z0-9_]*$') {
             throw [AvmConfigurationException]::new(
@@ -53,14 +67,27 @@ function Get-AvmBicepTestTokenMap {
         if ($provided[$name] -isnot [string]) {
             throw [AvmConfigurationException]::new("Bicep test token '$name' must contain a string.")
         }
-        if ($name -in @('subscriptionId', 'managementGroupId')) {
+        if ($name -in @('subscriptionId', 'managementGroupId', 'tenantId') -and
+            ($name -ne 'tenantId' -or -not [string]::IsNullOrWhiteSpace($TenantId))) {
             throw [AvmConfigurationException]::new(
                 "Bicep test token '$name' must come from the corresponding explicit scope parameter.")
         }
         if ($values.ContainsKey($name)) {
             throw [AvmConfigurationException]::new("Duplicate Bicep test token '$name'.")
         }
-        $values.Add($name, [string]$provided[$name])
+        $value = [string]$provided[$name]
+        if ($name -eq 'namePrefix' -and -not [string]::IsNullOrWhiteSpace($RunId)) {
+            $value = $value.Replace(
+                '#_avmE2eSuffix_#', $RunId.Substring(0, 10),
+                [System.StringComparison]::OrdinalIgnoreCase)
+            $value = $value.Replace(
+                '#_avmE2eRunId_#', $RunId,
+                [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        $values.Add($name, $value)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RunId) -and -not $values.ContainsKey('namePrefix')) {
+        $values.Add('namePrefix', 'avm' + $RunId.Substring(0, 10))
     }
     return $values
 }

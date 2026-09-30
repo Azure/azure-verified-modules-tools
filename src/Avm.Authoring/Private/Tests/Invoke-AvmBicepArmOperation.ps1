@@ -47,8 +47,11 @@ function Invoke-AvmBicepArmOperation {
     if (-not [string]::IsNullOrWhiteSpace($ParameterPath)) {
         $arguments.AddRange([string[]]@('--parameters', ('@' + $ParameterPath)))
     }
-    if ($Operation -eq 'Create') {
+    if ($Operation -eq 'Create' -and $Scope -in @('group', 'mg')) {
         $arguments.AddRange([string[]]@('--mode', 'Incremental'))
+    }
+    elseif ($Operation -eq 'WhatIf') {
+        $arguments.AddRange([string[]]@('--result-format', 'FullResourcePayloads', '--no-pretty-print'))
     }
     if ($Scope -eq 'group') {
         if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {

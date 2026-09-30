@@ -43,6 +43,35 @@ Describe 'Bicep ARM test token helpers' {
         }
     }
 
+    It 'generates run-unique scoped tokens without replacing a custom name prefix' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive; S = $script:subscription } {
+            param($R, $S)
+            $runId = '0123456789abcdef0123456789abcdef'
+            $tenantId = '00000000-0000-0000-0000-000000000002'
+            $generated = Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                -TenantId $tenantId -RunId $runId
+            $generated['tenantId'] | Should -Be $tenantId
+            $generated['avmE2eRunId'] | Should -Be $runId
+            $generated['avmE2eSuffix'] | Should -Be '0123456789'
+            $generated['namePrefix'] | Should -Be 'avm0123456789'
+
+            $custom = Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                -TenantId $tenantId -RunId $runId `
+                -Tokens @{ namePrefix = 'team#_avmE2eSuffix_#' }
+            $custom['namePrefix'] | Should -Be 'team0123456789'
+            (Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                    -RunId $runId -Tokens @{ namePrefix = 'unchanged' })['namePrefix'] |
+                Should -Be 'unchanged'
+            { Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                    -TenantId $tenantId -RunId $runId `
+                    -Tokens @{ avmE2eSuffix = 'custom' } } |
+                Should -Throw -ExpectedMessage '*Duplicate*'
+            { Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                    -TenantId $tenantId -Tokens @{ tenantId = 'another' } } |
+                Should -Throw -ExpectedMessage '*explicit scope parameter*'
+        }
+    }
+
     It 'escapes inserted JSON strings and refuses missing tokens' {
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive; S = $script:subscription } {
             param($R, $S)
@@ -215,6 +244,34 @@ Describe 'Bicep ARM template and parameter staging' {
                     -Scope mg -Operation Validate -SubscriptionId '00000000-0000-0000-0000-000000000001' `
                     -DeploymentName 'avm-test' -WorkingDirectory '.' -Location 'westus' } |
                 Should -Throw -ExpectedMessage '*ManagementGroupId*'
+        }
+    }
+
+    It 'uses supported Create flags for <Scope> deployments' -ForEach @(
+        @{ Scope = 'group'; Mode = $true }
+        @{ Scope = 'sub'; Mode = $false }
+        @{ Scope = 'mg'; Mode = $true }
+        @{ Scope = 'tenant'; Mode = $false }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            K = $Scope; ExpectMode = $Mode
+        } {
+            param($K, $ExpectMode)
+            Mock Invoke-AvmProcess {
+                $script:createArguments = [string[]]$ArgumentList
+                [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+            }
+            $null = Invoke-AvmBicepArmOperation -AzPath 'fake-az' `
+                -TemplatePath 'case.json' -Scope $K -Operation Create `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -DeploymentName 'avm-test' -WorkingDirectory '.' -Location 'westus' `
+                -ResourceGroupName 'test-group' -ManagementGroupId 'test-mg'
+            $script:createArguments[2] | Should -Be 'create'
+            ($script:createArguments -contains '--mode') | Should -Be $ExpectMode
+            if ($ExpectMode) {
+                $script:createArguments | Should -Contain 'Incremental'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1
         }
     }
 }

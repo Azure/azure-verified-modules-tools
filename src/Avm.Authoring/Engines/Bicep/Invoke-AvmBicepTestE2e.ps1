@@ -16,6 +16,10 @@ function Invoke-AvmBicepTestE2e {
 
         [string] $SubscriptionId,
 
+        [string] $TenantId,
+
+        [string] $ManagementGroupId,
+
         [string] $Location,
 
         [string] $ResourceGroupPrefix,
@@ -78,15 +82,31 @@ function Invoke-AvmBicepTestE2e {
     if ([string]::IsNullOrWhiteSpace($Location)) {
         throw [AvmConfigurationException]::new('Bicep e2e requires an explicit -Location.')
     }
-    if ([string]::IsNullOrWhiteSpace($ResourceGroupPrefix) -or
-        $ResourceGroupPrefix.Length -gt 57 -or
-        $ResourceGroupPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') {
+    $prefixTooLong = -not [string]::IsNullOrWhiteSpace($ResourceGroupPrefix) -and $ResourceGroupPrefix.Length -gt 57
+    $prefixHasInvalidCharacters = $ResourceGroupPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+    if (-not [string]::IsNullOrWhiteSpace($ResourceGroupPrefix) -and
+        ($prefixTooLong -or $prefixHasInvalidCharacters)) {
         throw [AvmConfigurationException]::new(
             'Bicep e2e requires a safe -ResourceGroupPrefix (1-57 letters, digits, underscores, dots or hyphens).')
     }
+    if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
+        $tenant = [guid]::Empty
+        if (-not [guid]::TryParse($TenantId, [ref]$tenant) -or $tenant -eq [guid]::Empty) {
+            throw [AvmConfigurationException]::new(
+                'Bicep higher-scope e2e requires an explicit, nonempty GUID -TenantId.')
+        }
+        $TenantId = $tenant.ToString('D')
+    }
+    $groupHasInvalidCharacters = $ManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$'
+    $groupHasInvalidSuffix = -not [string]::IsNullOrWhiteSpace($ManagementGroupId) -and $ManagementGroupId.EndsWith('.')
+    if (-not [string]::IsNullOrWhiteSpace($ManagementGroupId) -and
+        ($groupHasInvalidCharacters -or $groupHasInvalidSuffix)) {
+        throw [AvmConfigurationException]::new(
+            'Bicep e2e -ManagementGroupId must be a safe group name, not an ARM resource ID.')
+    }
     if (-not $PSCmdlet.ShouldProcess(
             "$($cases.Count) Bicep example(s) in subscription $SubscriptionId",
-            'Create isolated resource groups, deploy tests and delete the groups')) {
+            'Deploy Bicep tests and remove only verified test resources')) {
         $empty.RunsSkipped = $cases.Count
         return [pscustomobject]$empty
     }
@@ -113,30 +133,94 @@ function Invoke-AvmBicepTestE2e {
     $attempted = 0
     $stopForCleanup = $false
     try {
-        $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
-            -DestinationPath (Join-Path $runDirectory 'parameters.json') `
-            -Tokens $tokenMap -ParameterFile $ParameterFile -Parameters $Parameters -Confirm:$false
+        $parameterPath = $null
         for ($index = 0; $index -lt $cases.Count; $index++) {
             $path = Join-Path $runDirectory ('{0}.json' -f $index)
-            $template = New-AvmBicepTestTemplate -SourcePath $cases[$index].Path `
-                -DestinationPath $path -BicepPath $bicep.Path -Tokens $tokenMap -Confirm:$false
-            if ($template.Scope -ne 'group') {
-                throw [AvmConfigurationException]::new(
-                    "Bicep e2e test '$($cases[$index].RelativePath)' targets '$($template.Scope)'. Only resource-group templates have guaranteed cleanup; use avm test integration for this scope.")
+            $caseRunId = [guid]::NewGuid().ToString('N')
+            $scopedTokens = if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
+                Get-AvmBicepTestTokenMap -Root $Context.Root `
+                    -SubscriptionId $SubscriptionId -TenantId $TenantId `
+                    -ManagementGroupId $ManagementGroupId -RunId $caseRunId `
+                    -TokenFile $TokenFile -Tokens $Tokens
             }
-            Assert-AvmBicepTestIsolation -Template $template.Template `
-                -SourcePath $cases[$index].RelativePath
+            else {
+                $null
+            }
+            $template = New-AvmBicepTestTemplate -SourcePath $cases[$index].Path `
+                -DestinationPath $path -BicepPath $bicep.Path -Tokens $tokenMap `
+                -ScopedTokens $scopedTokens -RequireScopedTokens -Confirm:$false
+            $caseParameterPath = $null
+            if ($template.Scope -eq 'group') {
+                Assert-AvmBicepTestIsolation -Template $template.Template `
+                    -SourcePath $cases[$index].RelativePath
+            }
+            else {
+                if ($template.Scope -eq 'mg' -and
+                    [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
+                    throw [AvmConfigurationException]::new(
+                        "Bicep e2e test '$($cases[$index].RelativePath)' requires -ManagementGroupId.")
+                }
+                Assert-AvmBicepScopedTestIsolation -Template $template.Template `
+                    -Scope $template.Scope -SourcePath $cases[$index].RelativePath
+                $caseParameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
+                    -DestinationPath (Join-Path $runDirectory ('{0}-parameters.json' -f $index)) `
+                    -Tokens $scopedTokens -ParameterFile $ParameterFile `
+                    -Parameters $Parameters -Confirm:$false
+            }
             $assertionFiles = @(Get-AvmBicepE2eAssertionFile -CasePath $cases[$index].Path)
             $compiled.Add([pscustomobject]@{
                     Case           = $cases[$index]
+                    Scope          = $template.Scope
+                    RunId          = $caseRunId
+                    DeploymentName = 'avm-e2e-{0}' -f $caseRunId
                     TemplatePath   = $path
+                    ParameterPath  = $caseParameterPath
                     AssertionFiles = [string[]]$assertionFiles
                 })
+        }
+        if (@($compiled | Where-Object { $_.Scope -eq 'group' }).Count -gt 0) {
+            if ([string]::IsNullOrWhiteSpace($ResourceGroupPrefix)) {
+                throw [AvmConfigurationException]::new(
+                    'Resource-group Bicep e2e tests require a safe -ResourceGroupPrefix.')
+            }
+            $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
+                -DestinationPath (Join-Path $runDirectory 'parameters.json') `
+                -Tokens $tokenMap -ParameterFile $ParameterFile `
+                -Parameters $Parameters -Confirm:$false
         }
 
         foreach ($item in $compiled) {
             if ($stopForCleanup) {
                 break
+            }
+            if ($item.Scope -ne 'group') {
+                $run = Invoke-AvmBicepScopedTestE2eCase -Item $item `
+                    -AzPath $az.Source -SubscriptionId $SubscriptionId -TenantId $TenantId `
+                    -ManagementGroupId $ManagementGroupId -Location $Location `
+                    -RepositoryRoot $repoRoot -WorkingDirectory $Context.Root -Confirm:$false
+                $attempted += $run.Attempted
+                if ($run.Passed) {
+                    $passed++
+                }
+                if ($run.Failed) {
+                    $failed++
+                }
+                foreach ($entry in $run.AssertionResults) {
+                    $assertions.Add($entry)
+                }
+                foreach ($entry in $run.WhatIfChanges) {
+                    $changes.Add($entry)
+                }
+                foreach ($entry in $run.Issues) {
+                    $issues.Add($entry)
+                }
+                foreach ($id in $run.CleanupPending) {
+                    $pending.Add($id)
+                }
+                if ($run.CleanupPending.Count -gt 0) {
+                    $stopForCleanup = $true
+                }
+                continue
             }
             $runId = [guid]::NewGuid().ToString('N')
             $groupName = '{0}-{1}' -f $ResourceGroupPrefix, $runId
@@ -258,94 +342,10 @@ function Invoke-AvmBicepTestE2e {
                     $failed++
                     continue
                 }
-                $assertionResult = [ordered]@{
-                    Case             = $item.Case.RelativeDirectory
-                    Status           = 'not-present'
-                    FilesProcessed   = $item.AssertionFiles.Count
-                    RunsTotal        = 0
-                    RunsPassed       = 0
-                    RunsFailed       = 0
-                    RunsSkipped      = 0
-                    RunsInconclusive = 0
-                    RunsFiltered     = 0
-                }
-                if ($item.AssertionFiles.Count -gt 0) {
-                    try {
-                        $deployment = [string]$deployed.StdOut |
-                            ConvertFrom-Json -AsHashtable -ErrorAction Stop
-                        $outputs = $deployment['properties']['outputs']
-                        if ($null -ne $outputs -and
-                            $outputs -isnot [System.Collections.IDictionary]) {
-                            throw [AvmProcessException]::new(
-                                "ARM deployment '$deploymentName' returned invalid outputs.")
-                        }
-                        $testInputData = @{
-                            DeploymentOutputs    = $outputs
-                            ModuleTestFolderPath = [System.IO.Path]::GetDirectoryName($item.Case.Path)
-                        }
-                        $summary = Invoke-AvmBicepPesterSuite -Mode E2e `
-                            -Files $item.AssertionFiles -TestInputData $testInputData `
-                            -WorkingDirectory $repoRoot -TimeoutSec 1800
-                    }
-                    catch [AvmProcessException] {
-                        $assertionResult.Status = 'fail'
-                        $assertions.Add([pscustomobject]$assertionResult)
-                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                            -Code 'assertion-runner-failed' `
-                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' could not run: $($_.Exception.Message)"
-                        $failed++
-                        continue
-                    }
-                    catch [System.TimeoutException] {
-                        $assertionResult.Status = 'fail'
-                        $assertions.Add([pscustomobject]$assertionResult)
-                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                            -Code 'assertion-timeout' `
-                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' timed out: $($_.Exception.Message)"
-                        $failed++
-                        continue
-                    }
-                    $assertionResult.RunsTotal = [int]$summary.Total
-                    $assertionResult.RunsPassed = [int]$summary.Passed
-                    $assertionResult.RunsFailed = [int]$summary.Failed
-                    $assertionResult.RunsSkipped = [int]$summary.Skipped
-                    $assertionResult.RunsInconclusive = [int]$summary.Inconclusive
-                    $assertionResult.RunsFiltered = [int]$summary.Filtered
-                    $assertionResult.Status = if ($summary.Passed -gt 0 -and
-                        $summary.Total -eq $summary.Passed -and $summary.Failed -eq 0 -and
-                        $summary.Skipped -eq 0 -and $summary.Inconclusive -eq 0 -and
-                        $summary.Filtered -eq 0 -and $summary.Issues.Count -eq 0) {
-                        'pass'
-                    }
-                    else {
-                        'fail'
-                    }
-                    foreach ($diagnostic in @($summary.Issues)) {
-                        $file = if ([string]::IsNullOrWhiteSpace([string]$diagnostic.File)) {
-                            $item.Case.RelativePath
-                        }
-                        else {
-                            [string]$diagnostic.File
-                        }
-                        $code = ([string]$diagnostic.Code).Replace(
-                            'avm.bicep.pester-', 'assertion-')
-                        Add-AvmBicepTestIssue -Issues $issues -File $file -Code $code `
-                            -Line ([int]$diagnostic.Line) `
-                            -Message "$($item.Case.RelativeDirectory): $($diagnostic.Message)"
-                    }
-                    if ($assertionResult.Status -eq 'fail' -and $summary.Issues.Count -eq 0) {
-                        $code = if ($summary.Total -eq 0 -or $summary.Passed -eq 0) {
-                            'assertion-empty'
-                        }
-                        else {
-                            'assertion-incomplete'
-                        }
-                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                            -Code $code `
-                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' were not all passed (passed $($summary.Passed), total $($summary.Total), skipped $($summary.Skipped), inconclusive $($summary.Inconclusive), filtered $($summary.Filtered))."
-                    }
-                }
-                $assertions.Add([pscustomobject]$assertionResult)
+                $assertionResult = Invoke-AvmBicepTestE2eAssertion -Item $item `
+                    -DeploymentName $deploymentName -DeploymentOutput ([string]$deployed.StdOut) `
+                    -RepositoryRoot $repoRoot -Issues $issues
+                $assertions.Add($assertionResult)
                 if ($assertionResult.Status -eq 'fail') {
                     $failed++
                     continue

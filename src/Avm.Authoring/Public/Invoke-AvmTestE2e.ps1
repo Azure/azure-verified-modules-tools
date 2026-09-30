@@ -16,12 +16,25 @@ function Invoke-AvmTestE2e {
         ownership tag and subscription are verified; failed cleanup is
         reported with the group name.
 
-        Subscription, management-group, tenant, cross-scope, linked,
-        deployment-script and authorization resources are rejected before
-        group creation.
-        Use 'avm test integration' to validate and preview those scopes
-        without deploying. Tokens and additional ARM parameters are staged
-        in temporary JSON files without editing source files.
+        Subscription, management-group and tenant templates require an
+        explicit subscription and tenant; management-group templates also
+        require the ID of an existing test management group. The selected
+        Azure CLI account and management-group target are checked, but the
+        caller must select an authorized nonproduction target and identity.
+        No subscription, tenant or management group is provisioned or deleted.
+        Only unassigned policy definitions, policy-set definitions, role
+        definitions, and empty run-tagged subscription resource groups may
+        be created, along with inspectable inline same-scope deployments.
+        Cross-scope, linked, scripted, assignment, alias and other resource
+        types are rejected. A Create-only, expanded what-if prediction,
+        preflight nonexistence, run-unique name, recorded deployment operation,
+        and live resource identity must all agree before deletion. Failed
+        ownership or deletion leaves the case failed with CleanupPending IDs
+        and stops subsequent examples. Deployment history is retained.
+        This narrow subset does not replace the registry's full test lifecycle.
+        Use 'avm test integration' to validate and preview unsupported scopes
+        or resources without deploying them. Tokens and additional ARM
+        parameters are staged in temporary JSON files without editing source.
 
         Bicep AssertionResults distinguish optional absent assertions
         (Status 'not-present', deployment-only pass) from passing assertions
@@ -81,18 +94,32 @@ function Invoke-AvmTestE2e {
         Bicep-only: include nested module test scopes.
 
     .PARAMETER SubscriptionId
-        Bicep-only: explicit subscription GUID; ambient defaults are not used.
+        Bicep-only: explicit subscription GUID for resource-group deployment
+        or higher-scope Azure CLI account selection; ambient defaults are not used.
+
+    .PARAMETER TenantId
+        Bicep-only: explicit tenant GUID required for subscription,
+        management-group and tenant deployments. The selected account must
+        match it. Tenant-root write permissions are not assumed.
+
+    .PARAMETER ManagementGroupId
+        Bicep-only: existing management-group name required for management-group
+        deployments. This command never creates or deletes that group.
 
     .PARAMETER Location
-        Bicep-only: resource-group location for disposable examples.
+        Bicep-only: location for disposable groups and higher-scope deployment
+        metadata.
 
     .PARAMETER ResourceGroupPrefix
-        Bicep-only: required prefix for a new unique disposable group per
-        example. The group and everything inside it are deleted after testing.
+        Bicep-only: required when resource-group examples are selected. A new
+        unique disposable group is deleted after its example.
 
     .PARAMETER TokenFile
         Bicep-only: JSON object of token names and string values, relative to
-        the module root or absolute. Subscription ID has its own parameter.
+        the module root or absolute. Scope IDs have explicit parameters.
+        Higher-scope cases receive generated avmE2eRunId, avmE2eSuffix, and
+        a default namePrefix; a custom namePrefix must produce run-unique
+        resource names, for example using #_avmE2eSuffix_#.
 
     .PARAMETER Tokens
         Bicep-only: direct PowerShell hashtable instead of -TokenFile.
@@ -130,6 +157,9 @@ function Invoke-AvmTestE2e {
 
     .EXAMPLE
         avm test e2e --subscription-id 00000000-0000-0000-0000-000000000001 --location westus --resource-group-prefix avm-e2e --token-file test-tokens.json
+
+    .EXAMPLE
+        Invoke-AvmTestE2e -Path C:\repos\bicep-module -Example defaults -SubscriptionId $testSubscriptionId -TenantId $testTenantId -ManagementGroupId $testManagementGroupId -Location westus
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -153,6 +183,10 @@ function Invoke-AvmTestE2e {
         [switch] $Recurse,
 
         [string] $SubscriptionId,
+
+        [string] $TenantId,
+
+        [string] $ManagementGroupId,
 
         [string] $Location,
 
@@ -194,6 +228,8 @@ function Invoke-AvmTestE2e {
                 List                = $List
                 Recurse             = $Recurse
                 SubscriptionId      = $SubscriptionId
+                TenantId            = $TenantId
+                ManagementGroupId   = $ManagementGroupId
                 Location            = $Location
                 ResourceGroupPrefix = $ResourceGroupPrefix
                 TokenFile           = $TokenFile
@@ -206,7 +242,7 @@ function Invoke-AvmTestE2e {
             }
             elseif ($PSCmdlet.ShouldProcess(
                     "$($context.Root) in subscription $SubscriptionId",
-                    'Run Bicep tests in disposable resource groups')) {
+                    'Deploy Bicep tests and remove verified owned resources')) {
                 Invoke-AvmBicepTestE2e @bicepInput -Confirm:$false -WhatIf:$false
             }
             else {
@@ -215,6 +251,8 @@ function Invoke-AvmTestE2e {
         }
         'terraform' {
             if ($Recurse -or $PSBoundParameters.ContainsKey('SubscriptionId') -or
+                $PSBoundParameters.ContainsKey('TenantId') -or
+                $PSBoundParameters.ContainsKey('ManagementGroupId') -or
                 $PSBoundParameters.ContainsKey('Location') -or
                 $PSBoundParameters.ContainsKey('ResourceGroupPrefix') -or
                 $PSBoundParameters.ContainsKey('TokenFile') -or

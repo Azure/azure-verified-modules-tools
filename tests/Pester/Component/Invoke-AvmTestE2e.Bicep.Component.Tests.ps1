@@ -528,7 +528,7 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $script:state.Calls.Count | Should -Be 0
     }
 
-    It 'requires explicit scope and a safe group prefix before compiling or calling Azure' {
+    It 'requires explicit scope and a safe group prefix before calling Azure' {
         { Invoke-AvmTestE2e -Path $script:root -SkipModuleVersionCheck } |
             Should -Throw -ExpectedMessage '*explicit*SubscriptionId*'
         { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
@@ -540,7 +540,8 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
                 -Location 'westus' -ResourceGroupPrefix 'not safe!' -SkipModuleVersionCheck } |
             Should -Throw -ExpectedMessage '*safe -ResourceGroupPrefix*'
-        $script:state.Calls.Count | Should -Be 0
+        @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count |
+            Should -Be 0
     }
 
     It 'honors WhatIf by skipping all tool and Azure calls' {
@@ -554,11 +555,12 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $script:state.Groups.Count | Should -Be 0
     }
 
-    It 'refuses subscription-scoped templates before creating a group' {
+    It 'refuses unsupported subscription resources before creating a group' {
         $script:state.Schema = 'https://schema.management.azure.com/schemas/2019-04-01/subscriptionDeploymentTemplate.json#'
         { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -Location 'westus' -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*Only resource-group templates*'
+                -TenantId '00000000-0000-0000-0000-000000000002' `
+                -Location 'westus' -SkipModuleVersionCheck } |
+            Should -Throw -ExpectedMessage '*unsupported sub resource type*'
         @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count | Should -Be 0
     }
 
