@@ -12,7 +12,7 @@ function Get-AvmBicepConventionScope {
     $normalized = [System.IO.Path]::GetFullPath($Path).Replace('\', '/')
     $identity = [regex]::Match(
         $normalized,
-        '^(?<repository>.+)/(?<module>avm/(?<type>res|ptn|utl)/(?<name>[^/]+/[^/]+)(?<child>/.*)?)$')
+        '^(?<repository>.+)/(?<module>avm/(?<type>res|ptn|utl)/(?<name>[^/]+/[^/]+)(?<child>/.*)?)\z')
     if (-not $identity.Success) {
         return $null
     }

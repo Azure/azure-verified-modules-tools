@@ -88,7 +88,11 @@ function Test-AvmBicepConventionTestFile {
                             -Code 'avm.bicep.test-service-short-suffix' `
                             -Message "The serviceShort value in '$folderName' must end in '$expectedSuffix'."))
             }
-            $others = @($ServiceShortIndex[$shortValue] | Where-Object { $_ -cne $testFile.FullName })
+            $others = @()
+            if ($ServiceShortIndex.ContainsKey($shortValue)) {
+                $others = @($ServiceShortIndex[$shortValue] |
+                        Where-Object { $_ -cne $testFile.FullName })
+            }
             if ($others.Count -gt 0) {
                 $relativeOther = [System.IO.Path]::GetRelativePath($Scope.RepositoryRoot, $others[0]).Replace('\', '/')
                 $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $testFile.FullName `

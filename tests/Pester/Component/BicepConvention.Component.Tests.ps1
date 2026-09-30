@@ -62,6 +62,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.UncoveredFamilies.Count | Should -Be 4
         $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
+        $result.UncoveredFamilies | Should -Not -Contain 'child publish allowlist and resource-folder singularization'
         $result.UncoveredFamilies | Should -Not -Contain 'workflow and CODEOWNERS checks'
         $result.Issues.Count | Should -Be 1
         $result.Issues[0].Code | Should -Be 'avm.bicep.convention-incomplete'
@@ -652,6 +653,121 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $result.Issues.Code | Should -Contain 'avm.bicep.version-missing'
         $result.Issues.Code | Should -Contain 'avm.bicep.changelog-missing'
+    }
+
+    Context 'Child publishing allowlist' {
+        BeforeEach {
+            $script:child = Join-Path $script:modulePath 'child'
+            $script:allowlistPath = Join-Path $script:workingRoot `
+                'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json'
+            [System.IO.File]::WriteAllText((Join-Path $script:child 'version.json'), '{"version":"0.1"}')
+            $changelog = [System.IO.File]::ReadAllText((Join-Path $script:modulePath 'CHANGELOG.md'))
+            [System.IO.File]::WriteAllText((Join-Path $script:child 'CHANGELOG.md'),
+                $changelog.Replace('widget/CHANGELOG.md', 'widget/child/CHANGELOG.md'))
+        }
+
+        It 'accepts a versioned child on the checkout allowlist' {
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+
+            @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
+                Should -Be 0
+            $result.UncoveredFamilies | Should -Contain 'resource-folder singularization beyond naming syntax'
+        }
+
+        It 'rejects a versioned child absent from the current checkout allowlist' {
+            [System.IO.File]::WriteAllText(
+                $script:allowlistPath, '{"allowed-child-modules":["avm/res/mock/widget/other"]}')
+
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-not-allowed')
+            $issue.Count | Should -Be 1
+            $issue[0].File | Should -Be 'avm/res/mock/widget/child/version.json'
+            $issue[0].Message | Should -Match 'avm/res/mock/widget/child'
+        }
+
+        It 'requires the authoritative allowlist when any child is versioned' {
+            Remove-Item -LiteralPath $script:allowlistPath
+
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-allowlist')
+            $issue.Count | Should -Be 1
+            $issue[0].File | Should -Be (
+                'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json')
+            $issue[0].Message | Should -Match 'Versioned children cannot be approved'
+
+            Remove-Item -LiteralPath (Join-Path $script:child 'version.json')
+            Remove-Item -LiteralPath (Join-Path $script:child 'CHANGELOG.md')
+            $unversioned = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            @($unversioned.Issues | Where-Object Code -like 'avm.bicep.child-publish-*').Count |
+                Should -Be 0
+        }
+
+        It 'rejects invalid checkout allowlists: <Case>' -TestCases @(
+            @{ Case = 'malformed JSON'; Content = '{' }
+            @{ Case = 'missing array'; Content = '{}' }
+            @{ Case = 'wrong shape'; Content = '{"allowed-child-modules":"avm/res/mock/widget/child"}' }
+            @{ Case = 'path escape'; Content = '{"allowed-child-modules":["avm/res/mock/widget/../child"]}' }
+            @{ Case = 'wrong case'; Content = '{"allowed-child-modules":["avm/res/mock/widget/Child"]}' }
+            @{ Case = 'trailing newline'; Content = '{"allowed-child-modules":["avm/res/mock/widget/child\n"]}' }
+            @{ Case = 'duplicate path'; Content = '{"allowed-child-modules":["avm/res/mock/widget/child","avm/res/mock/widget/child"]}' }
+        ) {
+            param($Case, $Content)
+
+            [System.IO.File]::WriteAllText($script:allowlistPath, $Content)
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+
+            @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-allowlist').Count |
+                Should -Be 1
+            $result.Issues.Code | Should -Not -Contain 'avm.bicep.child-publish-not-allowed'
+        }
+
+        It 'fails with a named error on unreadable UTF-8 in the allowlist' {
+            [System.IO.File]::WriteAllBytes($script:allowlistPath, [byte[]]@(0xC3, 0x28))
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
+        }
+
+        It 'rejects the wrong casing of an allowlist directory on Windows and Linux' {
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName 'Helper'
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
+        }
+
+        It 'does not trust a mis-cased child version filename' {
+            Rename-Item -LiteralPath (Join-Path $script:child 'version.json') -NewName 'Version.json'
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-version-file'
+        }
+
+        It 'reports unreadable allowlist directories even if repository-wide test discovery fails first' {
+            InModuleScope 'Avm.Authoring' {
+                Mock Get-ChildItem {
+                    throw [System.UnauthorizedAccessException]::new('Fixture directory is unreadable.')
+                } -ParameterFilter {
+                    ($File -and $Recurse -and $Filter -eq 'main.test.bicep' -and
+                    $LiteralPath -notmatch '[\\/]tests$') -or
+                    ($LiteralPath -like '*staticValidation*compliance')
+                }
+            }
+
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Issues.Code | Should -Contain 'avm.bicep.test-discovery'
+            $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
+            $result.Status | Should -Be 'fail'
+        }
+    }
+
+    It 'rejects a noncanonical scope path ending in a newline rather than truncating its identity' {
+        if ($IsWindows) {
+            Set-ItResult -Skipped -Because 'Windows rejects control characters in filesystem paths.'
+            return
+        }
+        $path = Join-Path $script:modulePath "child`n"
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $path } {
+            param($P)
+            Get-AvmBicepConventionScope -Path $P
+        }
+        $scope | Should -BeNullOrEmpty
     }
 
     It 'reports invalid version values and malformed changelog sections with file positions' {

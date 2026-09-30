@@ -53,8 +53,19 @@ function Invoke-AvmBicepCheckConvention {
 
     $serviceShortIndex = @{}
     if ($scopes.Count -gt 0) {
-        foreach ($testFile in @(Get-ChildItem -LiteralPath $scopes[0].RepositoryRoot -File -Recurse -Filter 'main.test.bicep' |
-                    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) })) {
+        $testFiles = @()
+        try {
+            $testFiles = @(Get-ChildItem -LiteralPath $scopes[0].RepositoryRoot -File -Recurse `
+                    -Filter 'main.test.bicep' -ErrorAction Stop |
+                    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) })
+        }
+        catch [System.IO.IOException], [System.UnauthorizedAccessException],
+        [System.Management.Automation.ActionPreferenceStopException] {
+            $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `
+                        -Path $scopes[0].RepositoryRoot -Code 'avm.bicep.test-discovery' `
+                        -Message "Repository-wide e2e test discovery failed; serviceShort uniqueness cannot be checked: $($_.Exception.Message)"))
+        }
+        foreach ($testFile in $testFiles) {
             $source = Get-AvmBicepCommentFreeSource -Source ([System.IO.File]::ReadAllText($testFile.FullName))
             $short = [regex]::Match(
                 $source, "(?m)^[ \t]*param[ \t]+serviceShort[ \t]+string[ \t]*=[ \t]*'(?<value>[^'\r\n]*)'")
@@ -199,12 +210,16 @@ function Invoke-AvmBicepCheckConvention {
         foreach ($issue in @(Test-AvmBicepConventionCodeowner -RepositoryRoot $scopes[0].RepositoryRoot)) {
             $issues.Add($issue)
         }
+        foreach ($issue in @(Test-AvmBicepConventionChildPublish `
+                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
+            $issues.Add($issue)
+        }
     }
 
     $uncovered = @(
         'publication-aware changelog and parent/child version checks'
         'README regeneration and API-version checks'
-        'child publish allowlist and resource-folder singularization'
+        'resource-folder singularization beyond naming syntax'
         'registry-literal telemetry syntax and description parity for scaffolded modules'
     )
     $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $Context.Root `

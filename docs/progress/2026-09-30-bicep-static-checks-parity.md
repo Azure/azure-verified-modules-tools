@@ -37,7 +37,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:100 | `main.bicep` exists | C: exact regular file/case |
 | M:108 | `main.json` exists | C: exact regular file/case; content is separate |
 | M:116 | `README.md` exists with exact casing | C |
-| M:131 | Published child is in publishing allowlist | G |
+| M:131 | Published child is in publishing allowlist | C: validates the checkout's authoritative file on each check; missing/invalid input fails for versioned children |
 | M:147 | Versioned modules have `CHANGELOG.md` | C |
 | M:157 | Resource folder is singular/lowercase/hyphenated | P: naming syntax, not singularization |
 | M:194 | Root version exists except on multi-scope parent | C |
@@ -156,6 +156,12 @@ filter ordering, condition expressions, and effective module ownership are
 checked beyond the legacy substring/membership assertions so a bypass cannot
 appear covered. The registry's workflows and conditions are not changed.
 
+The [child publishing slice](2026-09-30-bicep-child-publishing-allowlist.md)
+loads the checked-in registry allowlist when a discovered child has
+`version.json`; it does not embed or infer a list. Missing, mis-cased,
+linked, malformed or unreadable input fails with a named issue, while
+unversioned children need no allowlist.
+
 The M:1696 assertion requests `Changelog.md` in its link, but actual registry
 files and this repository's generated changelogs use `CHANGELOG.md`. The new
 rule checks the real canonical casing; retaining the literal assertion would
@@ -201,8 +207,8 @@ description are independent; this slice does not edit either validation rule.
 
 The [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md)
 covered e2e compilation and compiled-template assertions. Complete
-publication-aware versions and changelogs, child publish allowlisting,
-resource-folder singularization, README drift, and
+publication-aware versions and changelogs, resource-folder singularization,
+README drift, and
 advisory API-version checks. Reconcile the scaffold telemetry form with
 registry's literal assertions. A separate publication-aware slice must use authoritative
 MCR tags without inventing local published-version history. The coverage
