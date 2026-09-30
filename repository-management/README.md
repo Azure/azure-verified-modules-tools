@@ -41,11 +41,13 @@ the existing cleanup policy.
 ## Test tenant selection
 
 `testTenant` accepts only `legacy` or `bami`. The
-[Terraform configuration](repository-config/config.json) defaults to `legacy`
-and is the source of truth for tenant selection. Groups can select `bami`
-independently of managed-file promotion; tenant-only groups declare no
-`managedFiles`. Higher `order` wins; later declaration wins a tie. Missing
-settings retain `legacy`.
+[Terraform configuration](repository-config/config.json) defaults to `bami`
+for all repositories discovered by the existing Terraform sync, including new
+and otherwise unlisted repositories. Configuration is the source of truth;
+tenant selection is independent of managed-file promotion. Higher `order`
+wins; later declaration wins a tie, so explicit legacy exceptions remain
+supported. If no matching group declares `testTenant`, the resolver still
+falls back to `legacy`.
 
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
@@ -75,7 +77,7 @@ Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
-Unselected repositories retain their existing settings. See the
+Explicit legacy selections retain the legacy consumer settings. See the
 [candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
 Bicep variable sync copies only the five execution fields: tenant, Bicep

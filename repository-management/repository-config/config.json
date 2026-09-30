@@ -3,7 +3,7 @@
     {
       "name": "default",
       "order": -1,
-      "testTenant": "legacy",
+      "testTenant": "bami",
       "repositories": [
         "*"
       ],
@@ -82,16 +82,6 @@
       ],
       "topics": [
         "canary"
-      ]
-    },
-    {
-      "name": "bami-rollout",
-      "order": 5,
-      "testTenant": "bami",
-      "repositories": [
-        "avm-res-network-applicationsecuritygroup",
-        "avm-res-network-ipgroup",
-        "avm-res-network-routetable"
       ]
     },
     {
