@@ -59,6 +59,13 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     ShouldPublish = $true
                 }
             }
+            Mock Get-AvmBicepApiSpecList {
+                @{
+                    'Microsoft.Storage' = @{
+                        storageAccounts = @('2023-05-01')
+                    }
+                }
+            }
             Mock Invoke-WebRequest {
                 $name = $Uri.AbsolutePath.Substring(4).Replace('/tags/list', '')
                 [pscustomobject]@{
@@ -82,6 +89,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
         $result.UncoveredFamilies.Count | Should -Be 3
+        $result.UncoveredFamilies | Should -Contain 'README regeneration parity against registry output'
         $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
         $result.UncoveredFamilies | Should -Not -Contain 'child publish allowlist and resource-folder singularization'
@@ -94,6 +102,45 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 $ArgumentList[0] -eq 'build' -and $ArgumentList[1] -eq '--stdout'
             }
         }
+    }
+
+    It 'reports an outdated compiled resource API as an advisory and retains the unrelated coverage failure' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmBicepApiSpecList {
+                @{
+                    'Microsoft.Storage' = @{
+                        storageAccounts = @(
+                            '2023-05-01', '2023-12-01', '2024-05-01', '2025-01-01',
+                            '2025-06-01', '2025-09-01', '2026-01-01'
+                        )
+                    }
+                }
+            }
+        }
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.api-version-outdated'
+        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+        @($result.Issues | Where-Object Code -eq 'avm.bicep.api-version-outdated' |
+                Where-Object Severity -eq 'warning').Count | Should -BeGreaterThan 0
+    }
+
+    It 'fails closed when the API-version source cannot be read' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmBicepApiSpecList {
+                throw [AvmConfigurationException]::new('API catalogue unavailable')
+            }
+        }
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.api-specs-unavailable'
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.api-specs-unavailable')
+        $issue.Count | Should -Be 1
+        $issue[0].Severity | Should -Be 'error'
     }
 
     It 'reports a missing module workflow once for its top-level scope' {

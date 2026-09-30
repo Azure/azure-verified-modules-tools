@@ -81,6 +81,7 @@ function Invoke-AvmBicepCheckConvention {
     }
 
     $sources = [System.Collections.Generic.List[object]]::new()
+    $compiledModules = [System.Collections.Generic.List[object]]::new()
     $compiledTests = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::Ordinal)
     foreach ($scope in $scopes) {
@@ -163,6 +164,11 @@ function Invoke-AvmBicepCheckConvention {
                 $compiledTests[$sourceFile.Path] = $template
                 continue
             }
+            $compiledModules.Add([pscustomobject]@{
+                    Path     = $sourceFile.Path
+                    Scope    = $sourceFile.Scope
+                    Template = $template
+                })
             $artifactPath = Join-Path $sourceFile.Scope.Path 'main.json'
             $artifact = @(Get-ChildItem -LiteralPath $sourceFile.Scope.Path -Force |
                     Where-Object { $_.Name -ieq 'main.json' })
@@ -186,6 +192,10 @@ function Invoke-AvmBicepCheckConvention {
                 $issues.Add($issue)
             }
         }
+    }
+    foreach ($issue in @(Test-AvmBicepConventionApiVersion -Root $Context.Root `
+                -Modules $compiledModules.ToArray())) {
+        $issues.Add($issue)
     }
 
     foreach ($scope in $scopes) {
@@ -221,7 +231,7 @@ function Invoke-AvmBicepCheckConvention {
     }
 
     $uncovered = @(
-        'README regeneration and API-version checks'
+        'README regeneration parity against registry output'
         'resource-folder singularization beyond naming syntax'
         'registry-literal telemetry syntax and description parity for scaffolded modules'
     )

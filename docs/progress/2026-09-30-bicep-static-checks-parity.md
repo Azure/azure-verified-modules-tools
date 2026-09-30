@@ -123,7 +123,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:2235 | Deploying test directly invokes `testDeployment` | C: compiled resource count gates source check |
 | M:2252 | Deployment name contains `-test-` | C: compiled resource count gates source check |
 | M:2269 | `serviceShort` unique throughout repository | C |
-| M:2385 | API versions are recent | G: advisory warnings in current registry |
+| M:2385 | API versions are recent | C: advisories for outdated/near-expiry compiled root/child resources, including extensions and nested deployments; unavailable/malformed API source fails closed |
 | D:51 | Valid JSON `metadata.json` per module | E: existing metadata step; source/child parity belongs to separate slice |
 | D:75 | Compiled telemetry prefix agrees with metadata | P/E: fresh compiled value checked for both source forms; transform verifies checked-in `main.json` across all discovered scopes, but literal registry source acceptance differs |
 
@@ -172,6 +172,15 @@ unrecognized not-found responses, invalid pagination, malformed tags, stale
 Git refs and offline checks fail with named issues. Only an exact registry
 `NAME_UNKNOWN` 404 identifies an unpublished module. No live MCR request
 was made during development.
+
+The [API-version slice](2026-09-30-bicep-api-version-advisories.md)
+reads the registry's fixed HTTPS API-specification endpoint once per
+convention check and evaluates compiled resources in root/child templates
+and nested deployments. It reports outdated and oldest-approved versions
+as advisory warnings, including the legacy provider mapping for extension
+resources. Unknown provider/type entries are named warnings; invalid,
+unavailable or offline source data and malformed relevant version arrays
+are named errors instead of silently skipping the check.
 
 The M:1696 assertion requests `Changelog.md` in its link, but actual registry
 files and this repository's generated changelogs use `CHANGELOG.md`. The new
