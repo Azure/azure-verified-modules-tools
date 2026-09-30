@@ -16,7 +16,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
-| `Public/Initialize-AvmModule.ps1`                 | `avm init` -> one-time local Bicep scaffolding or Terraform metadata setup; Bicep `-Proposed` creates only metadata.json. |
+| `Public/Initialize-AvmModule.ps1`                 | `avm init` -> local Bicep scaffolding, or resumable Terraform repository creation and setup; Bicep `-Proposed` creates only metadata.json. |
 | `Public/Test-AvmModuleMetadata.ps1`                | `avm metadata validate` -> validate root or child metadata using the packaged schema. |
 | `Public/Get-AvmModuleMetadata.ps1`                 | `avm metadata show` -> read and validate an existing metadata.json file. |
 | `Public/Initialize-AvmModuleMetadata.ps1`          | `avm metadata initialize` -> create metadata.json without overwriting an existing file. |
@@ -39,6 +39,8 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |
 | `Engines/Terraform/Invoke-AvmTerraformTest.ps1`   | Validates examples and warns about uncovered local modules.                      |
 | `Engines/Terraform/Invoke-AvmTerraformDocs.ps1`   | Runs `terraform-docs markdown table` in inject mode against the module README.     |
+| `Engines/Terraform/Initialize-AvmTerraformRepository.ps1` | Resumable `avm init` stages for a Terraform repository; see [Initialize a Terraform module repository](#initialize-a-terraform-module-repository). |
+| `Private/GitHub/`                                 | GitHub CLI and Git wrappers, team access, ruleset opt-out, and app installation requests. |
 | `Private/`                                        | Module-internal helpers organised by feature. Dot-sourced but not exported.        |
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
 | `Private/Docs/`                                   | Bicep template, Notes, source-example, and compiled-resource documentation helpers. |
@@ -60,6 +62,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Resources/Schemas/v1/`                           | Authoritative, packaged module metadata and catalog JSON schemas.                 |
 | `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
 | `Resources/bicep/avm-readme-v1.scriban`          | Versioned, model-driven Bicep README template; copy into the repository and select it in `bicepconfig.json`. |
+| `Resources/Scaffolds/Terraform/`                 | Minimal Terraform module files written by `avm init`.                             |
 
 ### Exception taxonomy
 
@@ -71,6 +74,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `AvmToolException`           | `AVM1010` | Generic tool-resolver failure. Subcodes: `AVM1011` SHA mismatch, `AVM1012` missing     |
 |                              |           | platform, `AVM1013` missing entrypoint, `AVM1014` cache-miss + no PATH match.          |
 | `AvmProcessException`        | `AVM1020` | `Invoke-AvmProcess` failed to start or returned non-zero (unless `-IgnoreExitCode`).   |
+| `AvmGitHubException`         | `AVM1070` | A GitHub API call made through the GitHub CLI failed; `StatusCode` holds the HTTP status. |
 
 ### Context resolution
 
@@ -168,8 +172,8 @@ avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-a
 The missing module and provider directories are created after validation.
 Provide `-InputObject` for scripted use, or answer prompts for the module
 display name, description, canonical type, and owners (empty is allowed).
-`avm init -Ecosystem terraform -ModuleType resource -Path <directory>`
-creates local metadata.json only, never a remote repository or source files.
+For Terraform, see
+[Initialize a Terraform module repository](#initialize-a-terraform-module-repository).
 Without `-Proposed`, Bicep `avm init` writes `metadata.json`, `main.bicep`,
 `version.json`, `CHANGELOG.md`, and defaults and WAF-aligned
 `tests/e2e/*/main.test.bicep` for a new root. It neither generates
@@ -224,6 +228,69 @@ every module root and child. Required tools resolve first; metadata validation
 then stops the chain on missing or invalid files before other steps or module-file
 changes. Initialize missing files with `avm metadata initialize` before
 rerunning either check.
+
+## Initialize a Terraform module repository
+
+`avm init` creates and sets up a Terraform module repository in the `Azure`
+GitHub organization. Install Git and the GitHub CLI, sign in with
+`gh auth login` (the token needs the `repo`, `read:org`, and `workflow`
+scopes), then run:
+
+```pwsh
+avm init -Ecosystem terraform -ModuleType resource -Path ./terraform-azure-avm-res-storage-storageaccount
+```
+
+The folder name is the repository name; inside an existing clone the `origin`
+remote identifies it instead. If the folder name is not a valid
+`terraform-<provider>-avm-<res|ptn|utl>-<name>`, `avm init` asks for the name
+and uses a folder of that name beneath `-Path`. Missing metadata is prompted
+for or supplied with `-InputObject`. Resource and pattern modules get a new
+telemetry identifier unless one is supplied.
+
+Each stage checks what already exists, so rerunning the command after an
+interruption continues where it stopped. A failed stage is reported and
+stops the run:
+
+1. Write `metadata.json` to the folder, which keeps the answers for later runs.
+1. Create the public repository if it does not exist.
+1. Wait for the open source portal setup and just-in-time (JIT) elevation,
+   printing the portal answers. A non-interactive session stops here.
+1. Grant `azure-verified-modules-module-contributors` push and
+   `azure-verified-modules-module-readers` triage access. Higher existing
+   access is kept.
+1. Publish the first commit to `main` from a temporary clone: the portal's
+   seed files, `metadata.json`, the minimal scaffold from
+   `Resources/Scaffolds/Terraform`, and the current managed files, telemetry,
+   and README added by `avm pre-commit`. Nothing else from your folder is
+   published, and a `main` that already holds module files is never
+   overwritten. When `main` already has `metadata.json`, the run checks that
+   `terraform.tf`, `_header.md`, an example folder, and `tests/` exist too.
+1. Open a pull request in `microsoft/github-operations` for the AVM and
+   Terraform Cloud app installations, unless the repository is listed or an
+   open request exists. Repository sync finishes the setup after installation.
+1. Clone the repository into the folder when it is empty or holds only the
+   published `metadata.json`. The clone is made beside the folder and then
+   moved into place, so a failed clone leaves the folder as it was. Otherwise
+   your files are left untouched.
+
+The organization's production ruleset requires pull requests on `main`, even
+for JIT-elevated administrators. The first push therefore runs with the
+repository's `global-rulesets-opt-out` custom property temporarily set to
+`true`. The original value is recorded in the `repository-init` folder of the
+Avm state directory before the change and restored afterwards. If the run stops
+before restoring it, the next run on the same machine restores the recorded
+value, provided the property is still `true` and repository sync does not
+manage the repository. A record left for a deleted repository of the same name
+is discarded. If the property is already `true`, repository sync does not
+manage the repository, and this machine has no record, the original value is
+unknown, so the run stops until the property is set back. Repository sync keeps
+the property `true` and adds its own ruleset, which also requires pull requests,
+so a synced repository without module files needs its first commit through a
+pull request.
+
+`-WhatIf` reports the stages that would run without changing anything.
+Declining a `-Confirm` prompt stops the run at that stage. Terraform
+`-ChildModule` initialization creates only the child's `metadata.json`.
 
 ## Local smoke test
 

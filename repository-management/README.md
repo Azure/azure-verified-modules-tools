@@ -1,16 +1,16 @@
 # Repository management
 
-This area owns the managed files, scheduled repository synchronization, and
-operator-driven repository creation used by AVM Terraform repositories, plus
-the shared Bicep/Terraform module catalog.
+This area owns the managed files and scheduled repository synchronization used
+by AVM Terraform repositories, plus the shared Bicep/Terraform module catalog.
 
 [Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
 indexes and source CSV row-removal protection.
 
-Repository sync and [repository creation](repository-creation/README.md) are
-intentionally independent. New repositories initialize their own metadata from
-explicit creation inputs before publishing module files. No separate tooling
-inventory registration is required.
+New Terraform repositories are created with `avm init` from
+[Avm.Authoring](../src/Avm.Authoring/README.md#initialize-a-terraform-module-repository),
+which publishes the module's own metadata in its first commit. Repository sync
+takes over once the AVM GitHub App is installed. No separate tooling inventory
+registration is required.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.

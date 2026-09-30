@@ -168,3 +168,13 @@ class AvmManagedFilesLookupException : System.Exception {
     AvmManagedFilesLookupException([string] $message) : base($message) {}
     AvmManagedFilesLookupException([string] $message, [Exception] $innerException) : base($message, $innerException) {}
 }
+
+# A GitHub REST call made through the GitHub CLI failed. StatusCode is the HTTP
+# status reported by gh, or 0 when the request did not produce one.
+class AvmGitHubException : AvmException {
+    [int] $StatusCode
+
+    AvmGitHubException([string] $message, [int] $statusCode) : base($message, 'AVM1070') {
+        $this.StatusCode = $statusCode
+    }
+}
