@@ -134,6 +134,42 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
         Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'Avm.Authoring' -and $ErrorAction -eq 'Stop' }
     }
 
+    It 'selects the checked-out authoring module only for plan-only previews' {
+        $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        Mock Remove-AvmMetadataFileConflict { $false }
+        Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $false; Reason = 'current pin' } }
+        Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'pass'; Steps = @() } }
+        Mock Invoke-RepositoryFileSync {
+            param($Prepare, $State, $PlanOnly)
+            & $Prepare @{ Root = 'isolated-clone'; Repository = @{ full_name = 'Azure/terraform-test' }; State = $State; PlanOnly = $PlanOnly }
+            @{ HasChanges = $false; Status = 'NoChange' }
+        }
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -defaultBranch main -planOnly $true -authoringModulePath $source -issueLog @()
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq $source }
+        Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Exactly 1 -ParameterFilter { $modulePath -ceq $source }
+
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -defaultBranch main -planOnly $false -authoringModulePath $source -issueLog @() } |
+            Should -Throw '*only supported for plan-only*'
+    }
+
+    It 'does not replace the checked-out authoring module with the Gallery release' {
+        $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        $script:skipNestedVersionCheck = $false
+        Mock Invoke-AvmPreCommit {
+            $script:skipNestedVersionCheck = $PSDefaultParameterValues['*:SkipModuleVersionCheck']
+            [pscustomobject]@{ Status = 'pass' }
+        }
+        Mock Update-PSResource { throw 'Gallery must not be upgraded during a branch preview.' }
+        $null = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -modulePath $source
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq $source -and $Force }
+        Should -Invoke Invoke-AvmPreCommit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+        Should -Invoke Update-PSResource -Times 0
+        $script:skipNestedVersionCheck | Should -BeTrue
+    }
+
     It 'keeps the existing Terraform preparation and upgrade behavior in its adapter' {
         Mock Remove-AvmMetadataFileConflict { $false }
         Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $true; Reason = 'forced update' } }

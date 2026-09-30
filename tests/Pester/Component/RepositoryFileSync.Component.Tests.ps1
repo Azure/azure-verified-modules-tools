@@ -11,7 +11,7 @@ BeforeAll {
     ) -join [System.IO.Path]::PathSeparator
     $shared = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
-    foreach ($name in @('RepositoryFileSync.ps1', 'AvmPreCommit.ps1', 'ManagedFilesUpgrade.ps1')) {
+    foreach ($name in @('RepositoryFileSync.ps1', 'AvmPreCommit.ps1', 'ManagedFilesUpgrade.ps1', 'RepositoryCandidate.ps1')) {
         . (Join-Path $shared $name)
     }
     $script:terraformOwnership = @{
@@ -40,6 +40,32 @@ BeforeAll {
             base = [pscustomobject]@{ ref = 'main'; sha = $script:state.MainSha; repo = $script:state.Repo }
             head = [pscustomobject]@{ ref = $script:state.Branch; sha = $script:state.RemoteHead; repo = $script:state.Repo }
         }
+    }
+
+    function New-CorePreparedArtifact {
+        param([string]$Directory, [string]$BaseSha = ('a' * 40))
+
+        $null = New-Item -ItemType Directory -Path $Directory -Force
+        $candidate = @{
+            schemaVersion = 1
+            repository = 'Azure/terraform-test'
+            phase = 'prepared'
+            defaultBranch = 'main'
+            baseSha = $BaseSha
+            hasChanges = $true
+            planOnly = $false
+            headSha = 'b' * 40
+            treeSha = '2' * 40
+            changedPaths = @('main.tf')
+            authoringSource = 'gallery'
+            authoringVersion = '0.0.0'
+        }
+        [System.IO.File]::WriteAllText((Join-Path $Directory 'candidate.json'), ($candidate | ConvertTo-Json -Depth 6))
+        [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.tar'), [byte[]]@(1, 2, 3))
+        [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.patch'), [byte[]]@(4, 5, 6))
+        $receipt = Join-Path $Directory 'receipt'
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt
+        return $receipt
     }
 
     function Invoke-CoreApi {
@@ -100,6 +126,12 @@ BeforeAll {
         }
         if ($Arguments -contains 'commit-tree') { $script:state.LocalHead = 'c' * 40; return $script:state.LocalHead }
         if ($Arguments -contains 'commit') { $script:state.LocalHead = 'c' * 40; return '' }
+        if ($Arguments[0] -eq 'archive' -or
+            ($Arguments[0] -eq 'diff' -and @($Arguments | Where-Object { $_ -like '--output=*' }).Count -gt 0)) {
+            $output = @($Arguments | Where-Object { $_ -like '--output=*' })[0].Substring(9)
+            [System.IO.File]::WriteAllBytes($output, [byte[]]@(1, 2, 3))
+            return ''
+        }
         switch ($Arguments[0]) {
             'config' { return '' }
             'sparse-checkout' { return '' }
@@ -110,14 +142,21 @@ BeforeAll {
             'fetch' { return '' }
             'update-ref' { return '' }
             'add' { return '' }
-            'rev-parse' { return $script:state.LocalHead }
+            'rev-parse' {
+                if ($Arguments[-1] -eq 'HEAD^{tree}') { return '2' * 40 }
+                return $script:state.LocalHead
+            }
             'ls-tree' { return "100644 blob $('e' * 40)`t$($Arguments[-1])" }
             'status' {
                 $script:state.PreparedCodeownersBytes = [System.IO.File]::ReadAllBytes((Join-Path $WorkingDirectory '.github' 'CODEOWNERS'))
-                if ($script:state.NoChanges) { return '' }
+                if ($script:state.NoChanges -or $script:state.LocalHead -ceq ('c' * 40)) { return '' }
                 return " M $($script:state.LocalPaths[0])"
             }
             'diff' { return ($script:state.LocalPaths -join [char]0) + [char]0 }
+            'apply' {
+                [System.IO.File]::WriteAllText((Join-Path $WorkingDirectory 'main.tf'), 'prepared')
+                return ''
+            }
             'write-tree' { return '2' * 40 }
             'push' {
                 if ($script:state.RejectPush) { throw 'non-fast-forward update rejected' }
@@ -288,6 +327,78 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $script:state.GhCalls | Should -HaveCount 0
         $script:state.ApiCalls | Should -HaveCount 0
         @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'push' }) | Should -HaveCount 0
+    }
+
+    It 'stages a changed Terraform candidate before any remote operation in <Mode> mode' -ForEach @(
+        @{ Mode = 'plan-only'; Plan = $true }
+        @{ Mode = 'apply'; Plan = $false }
+    ) {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.LocalPaths = @('main.tf', '.github/CODEOWNERS')
+        $candidateDirectory = Join-Path $TestDrive "candidate-$Mode"
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main `
+            -planOnly $Plan -candidateOutputDirectory $candidateDirectory -issueLog @()
+        $result.HasChanges | Should -BeTrue
+        $manifest = Get-Content -LiteralPath (Join-Path $candidateDirectory 'candidate.json') -Raw | ConvertFrom-Json -AsHashtable
+        $manifest.phase | Should -BeExactly 'prepared'
+        $manifest.hasChanges | Should -BeTrue
+        $manifest.planOnly | Should -Be $Plan
+        $manifest.repository | Should -BeExactly 'Azure/terraform-test'
+        $manifest.baseSha | Should -BeExactly ('a' * 40)
+        $manifest.headSha | Should -BeExactly ('c' * 40)
+        $manifest.treeSha | Should -BeExactly ('2' * 40)
+        $manifest.changedPaths | Should -Be @('main.tf', '.github/CODEOWNERS')
+        $manifest.authoringSource | Should -BeExactly 'gallery'
+        $manifest.authoringVersion | Should -BeExactly '0.0.0'
+        (Get-Item -LiteralPath (Join-Path $candidateDirectory 'candidate.tar')).Length | Should -BeGreaterThan 0
+        (Get-Item -LiteralPath (Join-Path $candidateDirectory 'candidate.patch')).Length | Should -BeGreaterThan 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'commit' }) | Should -HaveCount 1
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
+    }
+
+    It 'skips local commits and remote operations when pre-commit produces no changes' {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.NoChanges = $true
+        Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'pass'; Steps = @() } }
+        $candidateDirectory = Join-Path $TestDrive 'candidate-unchanged'
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main `
+            -planOnly $true -candidateOutputDirectory $candidateDirectory -issueLog @()
+        $result.HasChanges | Should -BeFalse
+        $manifest = Get-Content -LiteralPath (Join-Path $candidateDirectory 'candidate.json') -Raw | ConvertFrom-Json -AsHashtable
+        $manifest.phase | Should -BeExactly 'prepared'
+        $manifest.hasChanges | Should -BeFalse
+        @($script:state.GitCalls | Where-Object { $_ -contains 'add' -or $_ -contains 'commit' -or $_[0] -eq 'push' }) |
+            Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
+    }
+
+    It 'publishes the matching validated tree using the original bot branch and merge path' {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:state.LocalPaths = @('main.tf')
+        $script:state.RemotePaths = @('main.tf')
+        $directory = Join-Path $TestDrive 'validated-candidate'
+        $receipt = New-CorePreparedArtifact -Directory $directory
+        $result = Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-test' `
+            -CandidateDirectory $directory -ReceiptDirectory $receipt
+        $result.Status | Should -BeExactly 'Merged'
+        $script:state.Merged | Should -BeTrue
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 1
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'merge' }) | Should -HaveCount 1
+    }
+
+    It 'does not push a validated candidate when the target branch moved' {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $directory = Join-Path $TestDrive 'outdated-candidate'
+        $receipt = New-CorePreparedArtifact -Directory $directory -BaseSha ('e' * 40)
+        { Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-test' `
+            -CandidateDirectory $directory -ReceiptDirectory $receipt } |
+            Should -Throw '*target branch moved since candidate validation*'
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
+        @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
     }
 
     It 'propagates Terraform preparation and publication failures without reporting success' -ForEach @(

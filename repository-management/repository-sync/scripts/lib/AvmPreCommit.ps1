@@ -86,7 +86,8 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     param(
         [string]$repoId,
         [string]$repositoryConfigDir,
-        [bool]$upgradeManagedFiles = $false
+        [bool]$upgradeManagedFiles = $false,
+        [string]$modulePath
     )
 
     $preCommitParameters = @{
@@ -98,8 +99,19 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     if ($upgradeManagedFiles) {
         $preCommitParameters.Upgrade = $true
     }
+    if ($modulePath) {
+        $preCommitParameters.SkipModuleVersionCheck = $true
+        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
+            $PSDefaultParameterValues.Clone()
+        } else {
+            @{}
+        }
+        $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
+        $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
+    }
 
-    Import-Module Avm.Authoring -Force -ErrorAction Stop
+    $moduleName = if ($modulePath) { $modulePath } else { 'Avm.Authoring' }
+    Import-Module -Name $moduleName -Force -ErrorAction Stop
     try {
         return Invoke-AvmPreCommit @preCommitParameters
     } catch {
@@ -110,6 +122,9 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
         )
         if (-not $isModuleUpgradeRequired) {
             throw
+        }
+        if ($modulePath) {
+            throw [System.InvalidOperationException]::new('The checked-out Avm.Authoring source cannot be replaced by a Gallery upgrade during a plan-only preview.')
         }
 
         Write-Host "A newer Avm.Authoring release became available. Upgrading the module and retrying avm pre-commit once." -ForegroundColor Yellow
@@ -135,13 +150,19 @@ function Invoke-AvmPreCommitForRepository {
         [string]$defaultBranch,
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
+        [string]$candidateOutputDirectory,
+        [string]$authoringModulePath,
         [array]$issueLog
     )
 
     $result = @{ IssueLog = $issueLog; HasChanges = $false }
 
     try {
-        Import-Module Avm.Authoring -ErrorAction Stop
+        if ($authoringModulePath -and -not $planOnly) {
+            throw [System.ArgumentException]::new('Checked-out Avm.Authoring source is only supported for plan-only repository sync.')
+        }
+        $moduleName = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
+        Import-Module -Name $moduleName -ErrorAction Stop
         $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
         $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
             -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
@@ -150,9 +171,10 @@ function Invoke-AvmPreCommitForRepository {
             RepositoryConfigDir = $repositoryConfigDir
             ForceFileUpdate = $forceFileUpdate
             CodeownersContent = $codeowners
+            AuthoringModulePath = $authoringModulePath
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
-            -PlanOnly:$planOnly -State $prepareState -Prepare {
+            -PlanOnly:$planOnly -CandidateOutputDirectory $candidateOutputDirectory -State $prepareState -Prepare {
                 param($context)
                 $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
                 $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
@@ -160,10 +182,25 @@ function Invoke-AvmPreCommitForRepository {
                     -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
                 Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray
                 $prepared = Invoke-AvmPreCommitWithUpgradeRetry -repoId $context.State.RepoId `
-                    -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade
+                    -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade `
+                    -modulePath $context.State.AuthoringModulePath
                 Assert-AvmPreCommitResult -preCommitResult $prepared
                 Set-TerraformCodeowners -RepositoryRoot $context.Root -Content $context.State.CodeownersContent
             }
+        if ($candidateOutputDirectory -and $published.HasChanges) {
+            $manifestPath = Join-Path $candidateOutputDirectory 'candidate.json'
+            $candidate = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+            $module = (Get-Command -Name Invoke-AvmPreCommit -CommandType Function -ErrorAction Stop).Module
+            if (-not $module) {
+                throw [System.InvalidOperationException]::new('The candidate has no loaded Avm.Authoring module version.')
+            }
+            $candidate.authoringSource = if ($authoringModulePath) { 'checkout' } else { 'gallery' }
+            $candidate.authoringVersion = $module.Version.ToString()
+            [System.IO.File]::WriteAllText(
+                $manifestPath,
+                (ConvertTo-Json -InputObject $candidate -Depth 8) + "`n",
+                [System.Text.UTF8Encoding]::new($false))
+        }
         $result.HasChanges = $published.HasChanges
         return $result
     } catch {

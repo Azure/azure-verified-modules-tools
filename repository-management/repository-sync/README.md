@@ -103,6 +103,28 @@ canary. Do not run another writer outside the serialized sync workflow.
 Do not change the backend, move state, grant permissions, or reuse the
 controller as an execution identity to bypass a failed prerequisite.
 
+## Candidate validation before publication
+
+After `avm pre-commit`, a changed module is committed locally and transferred
+as an artifact; the preparation job no longer pushes it. A separate
+`avm-validation` job runs `avm pr-check` and `avm test unit` against that exact
+file tree with the module's existing test identity and a randomly selected
+configured test subscription. A failure blocks publication. When both pass, a
+job with the GitHub App token checks that the target branch has not moved and
+that the patch recreates the validated Git tree before pushing and merging the
+generated change. An unchanged module needs neither checks nor publication.
+
+Manual plan-only runs perform the same candidate checks without publishing.
+They use the authoring source from the selected workflow branch by default;
+set `use_workflow_authoring_source=false` to test the released Gallery module.
+Scheduled and manually requested apply runs continue to use Gallery.
+Plan-only does not provision a missing `avm-validation` federated credential:
+apply that prerequisite separately before the first preview. BAMI's
+trusted-main restriction still applies. The validation job can run
+module-owned PowerShell hooks and Terraform unit-test apply blocks, so
+plan-only prevents repository publication and governance apply, **not** every
+possible Azure-side test action.
+
 ## Isolated branch testing
 
 After an approved snapshot copy, test the migration branch explicitly with all

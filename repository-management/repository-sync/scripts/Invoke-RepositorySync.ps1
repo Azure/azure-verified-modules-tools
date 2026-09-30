@@ -34,7 +34,9 @@ param(
     [switch]$forceFileUpdate,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @(),
-    [hashtable]$bamiSettings = @{}
+    [hashtable]$bamiSettings = @{},
+    [string]$candidateOutputDirectory = "",
+    [string]$authoringModulePath = ""
 )
 
 Write-Host "Running repo sync script"
@@ -47,6 +49,7 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "RepositoryConfig.ps1")
 . (Join-Path $libDir "RepoTree.ps1")
 . (Join-Path $libDir "AvmPreCommit.ps1")
+. (Join-Path $libDir "RepositoryCandidate.ps1")
 . (Join-Path $libDir "ManagedFilesUpgrade.ps1")
 . (Join-Path $libDir "BranchProtection.ps1")
 . (Join-Path $libDir "UnmanagedRulesets.ps1")
@@ -104,6 +107,10 @@ $repoSplit = $repoUrl.Split("/")
 $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
 $orgAndRepoName = "$orgName/$repoName"
+if ($candidateOutputDirectory) {
+    Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+        -Repository $orgAndRepoName -Phase initializing -PlanOnly $planOnly
+}
 
 $candidateSettings = $null
 if ($testTenant.TestTenant -ceq 'bami') {
@@ -120,6 +127,10 @@ if ($testTenant.TestTenant -ceq 'bami') {
     }
     $candidate = Invoke-AvmBamiRepositoryIdentity @candidateParameters
     if ($candidate.Status -cne 'Ready') {
+        if ($candidateOutputDirectory) {
+            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
+        }
         Write-Warning "${orgAndRepoName}: $($candidate.Status). The consumer update is pending; no repository settings were changed."
         return $candidate
     }
@@ -263,6 +274,10 @@ $issueLog = Invoke-TerraformPlanAndApply `
 # its own .avm/managed-files-version.json.
 if(!$repositoryCreationModeEnabled) {
     if($issueLog.Count -gt $preTerraformIssueCount) {
+        if ($candidateOutputDirectory) {
+            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
+        }
         Write-Host "Skipping avm pre-commit for $orgAndRepoName because terraform reported issues for this run." -ForegroundColor Yellow
     } else {
         $preCommitResult = Invoke-AvmPreCommitForRepository `
@@ -274,8 +289,28 @@ if(!$repositoryCreationModeEnabled) {
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
+            -candidateOutputDirectory $candidateOutputDirectory `
+            -authoringModulePath $authoringModulePath `
             -issueLog $issueLog
         $issueLog = $preCommitResult.IssueLog
+        if ($candidateOutputDirectory -and $preCommitResult.HasChanges) {
+            $arguments = if ($planOnly) {
+                @('show', '-json', "$repoId.tfplan")
+            } else {
+                @('output', '-json')
+            }
+            $response = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments `
+                -WorkingDirectory $terraformModulePath -TimeoutSec 600
+            if ($response.ExitCode -ne 0) {
+                throw [System.InvalidOperationException]::new(
+                    "Could not read the repository test identity from Terraform: $($response.StdErr)")
+            }
+            $output = ConvertFrom-Json -InputObject $response.StdOut -AsHashtable -Depth 100
+            if (-not $planOnly) {
+                $output = @{ planned_values = @{ outputs = $output } }
+            }
+            Save-RepositorySyncCandidateTestSettings -Plan $output -Directory $candidateOutputDirectory
+        }
     }
 }
 

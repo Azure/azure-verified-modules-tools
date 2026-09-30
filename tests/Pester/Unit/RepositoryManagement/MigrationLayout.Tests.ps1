@@ -129,7 +129,9 @@ Describe "Repository management migration layout" {
         }
 
         ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
-            Should -Be 2
+            Should -Be 3
+        ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm-validation\s*$')).Count |
+            Should -Be 1
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |
