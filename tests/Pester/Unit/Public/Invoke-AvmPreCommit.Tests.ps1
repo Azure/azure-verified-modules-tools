@@ -57,6 +57,7 @@ Describe 'Invoke-AvmPreCommit' {
                     [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
                 }
                 Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
                 Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
 
                 $defaultOutput = @(Invoke-AvmPreCommit -Path $D 6>&1)
@@ -83,7 +84,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 3/5: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 3/6: lint'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit pass'
         @($observed.VerboseInfo) | Should -Contain 'nested pre-commit info'
@@ -140,7 +141,7 @@ Describe 'Invoke-AvmPreCommit' {
         $probe.Result.Steps.Step | Should -Be @('metadata')
     }
 
-    It 'composes all five steps in the expected order on a passing chain (bicep)' {
+    It 'compiles Bicep artifacts after validation on a passing chain' {
         $dir = Join-Path $TestDrive ("precommit-bicep-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -154,14 +155,19 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmDocs   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Invoke-AvmPreCommit -Path $D
+            $r = Invoke-AvmPreCommit -Path $D
+            Should -Invoke Invoke-AvmTransform -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'bicep' -and -not $CheckDrift
+            }
+            $r
         }
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 5
-        $result.Steps.Step | Should -Be @('metadata', 'format', 'lint', 'validate', 'docs')
+        $result.Steps.Count               | Should -Be 6
+        $result.Steps.Step | Should -Be @('metadata', 'format', 'lint', 'validate', 'transform', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
@@ -187,6 +193,7 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmLint   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmDocs   { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Invoke-AvmPreCommit -Path $D
         }

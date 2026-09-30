@@ -1,22 +1,21 @@
-# Bicep engine (Phase 1)
+# Bicep engine
 
-This folder is the entry point for the Bicep facade that consolidates the
-existing `Set-AVMModule`, `New-AVMResourceModule`, `New-AVMPatternModule`,
-`Test-AVMModule`, `Publish-AVMModule`, and related contributor workflows
-behind the `avm` dispatcher.
+`avm init` scaffolds a local module; `-Proposed` creates only metadata. The
+repeatable Bicep chain formats, lints, validates, compiles `main.bicep` into
+`main.json`, and renders documentation without deploying or publishing.
 
-Phase 1 will introduce these verbs (per `docs/avm-consolidation-plan.md`
-section 6):
+`avm docs` uses the pinned Bicep CLI and a versioned Scriban template selected
+by the nearest `bicepconfig.json` through `documentation.template.file`. The
+path must be relative to that config and point to an exact copy of the
+packaged template in `Resources/bicep/`. Source files and compiled JSON
+supply generated content; authored Notes live in an adjacent
+`README.notes.md` body-only sidecar. Run `avm docs export-notes` once to
+extract existing Notes without overwriting an existing sidecar. Use
+`avm docs -CheckDrift` to compare without writes; `-IncludeRenderedContent`
+returns generated text only in drift mode.
 
-| Verb                                | Public cmdlet              | Status   |
-| ----------------------------------- | -------------------------- | -------- |
-| `avm bicep test`                    | `Invoke-AvmBicepTest`      | Pending  |
-| `avm bicep publish`                 | `Publish-AvmBicepModule`   | Pending  |
-| `avm bicep scaffold res`            | `New-AvmBicepResource`     | Pending  |
-| `avm bicep scaffold ptn`            | `New-AvmBicepPattern`      | Pending  |
-| `avm bicep scaffold utl`            | `New-AvmBicepUtility`      | Pending  |
-| `avm bicep upgrade`                 | `Update-AvmBicepModule`    | Pending  |
-
-Until Phase 1 lands, this folder is intentionally empty apart from this
-README. The Phase 0 dispatcher will list these verbs as `(pending)` once the
-verb registry gains a 'state' column.
+The registry's existing generator and CI remain authoritative until the
+independent full-registry byte comparison matches every source-backed README
+apart from the eight separately reported Key Vault JSON-example comments,
+and verifies the source-less READMEs separately. Do not bulk regenerate or
+replace the registry's generator based on component tests alone.

@@ -15,12 +15,10 @@ function Format-AvmBicepModule {
         avm.pins. -AllowPathFallback is passed through so callers can opt
         in to the host PATH when the managed cache is empty.
 
-        Drift mode (-CheckDrift, used by pr-check): 'bicep format' has no
-        dry-run, so the format still runs and any file it rewrote becomes a
-        Status='fail' Issue - the same write-then-flag contract the mapotf
-        transform uses. The working copy is therefore modified in drift
-        mode; the point is that the drift is now reported rather than
-        silently discarded with the runner.
+        Drift mode (-CheckDrift, used by pr-check) invokes 'bicep format
+        <file> --stdout' and compares its UTF-8 bytes with the source bytes.
+        Formatting differences become Status='fail' Issues without writing
+        to the working copy. Formatter failures still throw.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -31,9 +29,8 @@ function Format-AvmBicepModule {
         lock-pinned version matches.
 
     .PARAMETER CheckDrift
-        When set, treat any file 'bicep format' rewrote as a failure
-        (Status='fail' with one Issue per file) instead of a silent fix.
-        Used by the pr-check chain.
+        When set, report formatting differences without modifying files
+        (Status='fail' with one Issue per file). Used by the pr-check chain.
 
     .OUTPUTS
         pscustomobject with Status, Engine, Tool, ToolPath,
@@ -66,7 +63,18 @@ function Format-AvmBicepModule {
     $files = @($discovered)
 
     $changed = New-Object System.Collections.Generic.List[string]
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     foreach ($file in $files) {
+        if ($CheckDrift) {
+            $original = [System.IO.File]::ReadAllBytes($file.FullName)
+            $result = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('format', $file.FullName, '--stdout')
+            $formatted = $utf8NoBom.GetBytes($result.StdOut)
+            if (-not [System.Linq.Enumerable]::SequenceEqual([byte[]]$original, [byte[]]$formatted)) {
+                $changed.Add($file.FullName)
+            }
+            continue
+        }
+
         $before = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
         Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('format', $file.FullName) | Out-Null
         $after = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash

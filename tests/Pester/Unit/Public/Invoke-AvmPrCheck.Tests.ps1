@@ -293,6 +293,9 @@ Describe 'Invoke-AvmPrCheck' {
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
                 $Context.Ecosystem -eq 'bicep'
             }
+            Should -Invoke Invoke-AvmTransform -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'bicep' -and $CheckDrift
+            }
         }
         ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }

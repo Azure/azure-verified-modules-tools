@@ -10,7 +10,7 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Invoke-AvmBicepDocs (stub — walker reverted pending new CLI design)' {
+Describe 'Invoke-AvmBicepDocs' {
     It 'throws ArgumentException when the context is not a bicep ecosystem' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
@@ -24,17 +24,16 @@ Describe 'Invoke-AvmBicepDocs (stub — walker reverted pending new CLI design)'
         $err.Message        | Should -Match "Ecosystem='terraform'"
     }
 
-    It 'throws AvmNotSupportedException for a bicep context (engine deferred to new CLI command)' {
+    It 'rejects alternative Bicep output paths before resolving a tool' {
         $err = InModuleScope 'Avm.Authoring' {
             try {
-                Invoke-AvmBicepDocs -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
+                Invoke-AvmBicepDocs -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive }) `
+                    -OutputFile 'elsewhere.md'
                 $null
             }
             catch { $_.Exception }
         }
-        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-        $err.Message        | Should -Match 'redesigned as a separate CLI command'
-        $err.Message        | Should -Match 'docs/avm-consolidation-plan\.md'
+        $err.GetType().Name | Should -Be 'ArgumentException'
+        $err.Message | Should -Match 'must be README.md'
     }
 }

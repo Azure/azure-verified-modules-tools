@@ -94,6 +94,29 @@ Describe 'Invoke-AvmBicepTest' {
         $result.Issues[0].Code       | Should -Be 'BCP018'
     }
 
+    It 'fails when the compiler exits nonzero without a parseable error diagnostic' {
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 2; StdOut = ''; StdErr = 'Bicep could not read a module reference.'
+                }
+            }
+            Invoke-AvmBicepTest -Context $C
+        }
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Count | Should -Be 2
+        $result.Issues[0].Code | Should -Be 'avm.bicep.build-failed'
+        $result.Issues[0].Message | Should -Match 'module reference'
+    }
+
     It 'returns Status=pass when only warnings are emitted' {
         $ctx = $script:context
         $a = $script:fileA

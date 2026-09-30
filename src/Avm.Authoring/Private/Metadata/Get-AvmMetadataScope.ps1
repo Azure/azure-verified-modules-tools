@@ -1,7 +1,14 @@
 function Get-AvmMetadataScope {
     [CmdletBinding()]
     [OutputType([pscustomobject[]])]
-    param([Parameter(Mandatory)][pscustomobject] $Context)
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Context,
+
+        [switch] $IncludeModuleDirectories,
+
+        [switch] $IncludeReadmeOnly
+    )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
@@ -56,13 +63,18 @@ function Get-AvmMetadataScope {
         $items = @(Get-ChildItem -LiteralPath $path -Force)
         $hasModule = @($items | Where-Object { -not $_.PSIsContainer -and $_.Name -ieq 'main.bicep' }).Count -gt 0
         $hasMetadata = @($items | Where-Object { $_.Name -ieq 'metadata.json' }).Count -gt 0
-        if ($hasModule -or $hasMetadata -or ($path -ceq $root -and $Context.Kind -ne 'bicep-monorepo')) {
+        $hasReadme = $IncludeReadmeOnly -and
+        @($items | Where-Object { $_.Name -ieq 'README.md' }).Count -gt 0
+        if ($hasModule -or $hasMetadata -or $hasReadme -or
+            ($path -ceq $root -and $Context.Kind -ne 'bicep-monorepo')) {
             $modulePath = [regex]::Match($path, '(?:^|[\\/])avm[\\/](res|ptn|utl)[\\/][^\\/]+[\\/][^\\/]+(?<child>[\\/].+)?$')
             $isChild = if ($modulePath.Success) { $modulePath.Groups['child'].Success } else { $path -cne $root }
             $scopes.Add([pscustomobject]@{ Path = $path; ChildModule = $isChild })
         }
         foreach ($directory in $items | Where-Object { $_.PSIsContainer } | Sort-Object Name -CaseSensitive) {
-            if (-not $directory.Name.StartsWith('.') -and $directory.Name -notin $excluded) {
+            if (-not $directory.Name.StartsWith('.') -and
+                ($directory.Name -notin $excluded -or
+                ($IncludeModuleDirectories -and $directory.Name -eq 'modules'))) {
                 $pending.Enqueue($directory.FullName)
             }
         }

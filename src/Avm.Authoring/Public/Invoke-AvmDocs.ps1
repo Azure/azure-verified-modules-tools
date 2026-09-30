@@ -6,7 +6,7 @@ function Invoke-AvmDocs {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepDocs      (ARM-JSON walker; stubbed)
+          - bicep      -> Invoke-AvmBicepDocs      (Bicep docs + Scriban template)
           - terraform  -> Invoke-AvmTerraformDocs  ('terraform-docs markdown table' inject mode)
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
@@ -26,8 +26,8 @@ function Invoke-AvmDocs {
         lock-pinned version.
 
     .PARAMETER OutputFile
-        README path (relative to module root) to inject into. Defaults to
-        'README.md'.
+        README path relative to a Terraform module. Bicep documentation
+        always targets README.md in each source-bearing module.
 
     .PARAMETER CheckDrift
         Report-only mode used by pr-check. Any README that regeneration
@@ -35,6 +35,10 @@ function Invoke-AvmDocs {
         Issue, instead of being silently rewritten. Without it a CI run
         regenerates docs in the throwaway working copy and reports a pass,
         so stale READMEs merge unnoticed.
+
+    .PARAMETER IncludeRenderedContent
+        With Bicep and -CheckDrift, return generated README text and relative
+        paths for independent raw-byte comparisons, without writing files.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
@@ -50,7 +54,9 @@ function Invoke-AvmDocs {
     .EXAMPLE
         Invoke-AvmDocs -Path C:\repos\my-tf-module -Ecosystem terraform
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'The facade forwards WhatIf to the Bicep engine and explicitly refuses it for Terraform.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
         Justification = 'Noun mirrors the avm CLI verb (avm docs).')]
     [OutputType([pscustomobject])]
@@ -67,6 +73,8 @@ function Invoke-AvmDocs {
 
         [switch] $CheckDrift,
 
+        [switch] $IncludeRenderedContent,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -75,15 +83,24 @@ function Invoke-AvmDocs {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
+        -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     switch ($context.Ecosystem) {
         'bicep' {
-            # The bicep walker is stubbed and throws AvmNotSupportedException
-            # before drift could matter, so -CheckDrift is not forwarded.
-            Invoke-AvmBicepDocs -Context $context -AllowPathFallback:$AllowPathFallback -OutputFile $OutputFile
+            Invoke-AvmBicepDocs -Context $context -AllowPathFallback:$AllowPathFallback `
+                -OutputFile $OutputFile -CheckDrift:$CheckDrift `
+                -IncludeRenderedContent:$IncludeRenderedContent -WhatIf:$WhatIfPreference
         }
         'terraform' {
+            if ($IncludeRenderedContent) {
+                throw [AvmConfigurationException]::new(
+                    '-IncludeRenderedContent is available only for Bicep -CheckDrift.')
+            }
+            if ($WhatIfPreference) {
+                throw [AvmConfigurationException]::new(
+                    "Terraform documentation does not support -WhatIf; use -CheckDrift to compare without changing module files.")
+            }
             Invoke-AvmTerraformDocs -Context $context -AllowPathFallback:$AllowPathFallback -OutputFile $OutputFile -CheckDrift:$CheckDrift
         }
         default {
