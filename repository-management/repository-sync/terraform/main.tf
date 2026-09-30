@@ -10,12 +10,13 @@ module "azure" {
     var.github_repository_integration_test_environment_name,
     var.github_repository_examples_test_environment_name,
   ]
-  identity_resource_group_name = var.identity_resource_group_name
-  location                     = var.location
-  github_job_workflow_ref      = var.github_job_workflow_ref
-  github_organization_id       = module.github.organization_id
-  github_repository_id         = module.github.repository_id
-  is_protected_repo            = var.is_protected_repo
+  identity_resource_group_name  = var.identity_resource_group_name
+  location                      = var.location
+  github_job_workflow_ref       = var.github_job_workflow_ref
+  github_organization_id        = module.github.organization_id
+  github_repository_id          = module.github.repository_id
+  repository_sync_repository_id = var.repository_sync_repository_id
+  is_protected_repo             = var.is_protected_repo
 }
 
 module "github" {

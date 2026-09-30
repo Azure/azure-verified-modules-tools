@@ -15,11 +15,12 @@ BeforeAll {
 Describe 'Repository sync test tenant selection' -Tag Component {
     BeforeEach {
         $script:previousEnvironment = @{}
-        foreach ($environmentName in @('ARM_USE_AZUREAD', 'GITHUB_EVENT_NAME', 'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REF', 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED')) {
+        foreach ($environmentName in @('ARM_USE_AZUREAD', 'GITHUB_EVENT_NAME', 'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED')) {
             $script:previousEnvironment[$environmentName] = [Environment]::GetEnvironmentVariable($environmentName)
         }
         $env:GITHUB_ACTIONS = 'true'
         $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_REPOSITORY_ID = '1239632211'
         $env:GITHUB_REF = 'refs/heads/main'
         $env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED = 'false'
         $script:terraformRoot = Join-Path $TestDrive ('terraform-' + [guid]::NewGuid().ToString('N'))
@@ -41,7 +42,16 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             stateStorageAccountName = 'tmestorage'
             stateContainerName = 'tme-state'
             bamiSettings = New-AvmTestBamiSettings
+            repositorySyncRepositoryId = '1239632211'
         }
+        $script:toolsRepository = [pscustomobject]@{
+            full_name = 'Azure/azure-verified-modules-tools'
+            id = 1239632211
+            fork = $false
+            owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 }
+        }
+        $toolsRepository = $script:toolsRepository
+        Mock Invoke-RepositoryGitHubApi ({ $toolsRepository }.GetNewClosure())
         Mock Start-Process { throw [System.InvalidOperationException]::new('ordinary-sync-process-boundary') }
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw [System.InvalidOperationException]::new('candidate-sync-process-boundary') }
     }
@@ -110,6 +120,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
             $PlanOnly -eq $expectedPlan -and $RepoId -ceq 'avm-ptn-example-repo' -and
             $Repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
+            $RepositorySyncRepositoryId -ceq '1239632211' -and
             $BamiValues.Count -eq 8 -and $BamiValues.TEST_BAMI_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001' -and
             $Backend.TenantId -ceq '44444444-4444-4444-8444-444444444444'
         }
@@ -188,11 +199,45 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
         $script:arguments.planOnly = $PlanOnly
         $script:arguments.bamiSettings = @{ invalid = 'ignored' }
-        $env:GITHUB_REPOSITORY = 'fork/azure-verified-modules-tools'
         $env:GITHUB_REF = 'refs/heads/feature'
 
         { & $script:driver @script:arguments } | Should -Throw '*ordinary-sync-process-boundary*'
         Should -Invoke Start-Process -Exactly 1 -ParameterFilter { $FilePath -eq 'gh' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects a forked tools context for legacy before workspace cleanup' {
+        $script:config.repositoryGroups[0].testTenant = 'legacy'
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        $env:GITHUB_REPOSITORY = 'fork/azure-verified-modules-tools'
+        Mock Clear-TerraformWorkspace {}
+        { & $script:driver @script:arguments } | Should -Throw '*trusted tools repository*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    It 'rejects a missing tools repository ID before any identity work' {
+        $script:config.repositoryGroups[0].testTenant = 'legacy'
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        $env:GITHUB_REPOSITORY_ID = ''
+        $script:arguments.repositorySyncRepositoryId = ''
+        Mock Clear-TerraformWorkspace {}
+        { & $script:driver @script:arguments } | Should -Throw '*trusted tools repository*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+    }
+
+    It 'rejects a tools repository ID not confirmed by GitHub' {
+        $script:toolsRepository.id = 1234
+        Mock Clear-TerraformWorkspace {}
+        { & $script:driver @script:arguments } | Should -Throw '*GitHub did not confirm*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 1 -ParameterFilter {
+            $Endpoint -ceq 'repos/Azure/azure-verified-modules-tools'
+        }
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
@@ -275,6 +320,8 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             if ($Tenant -ceq 'bami') { $expected += 'identity' }
             $expected += @('tree', 'protection', 'rulesets', 'codeql', 'teams', 'collaborators', 'unmanaged-teams', 'init', 'terraform', 'files')
             $script:managementState.Events | Should -Be $expected
+            $writtenVariables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | ConvertFrom-Json
+            $writtenVariables.repository_sync_repository_id | Should -BeExactly '1239632211'
             Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter {
                 $stateTenantId -eq '44444444-4444-4444-8444-444444444444' -and
                 $stateSubscriptionId -eq '55555555-5555-4555-8555-555555555555' -and
@@ -289,7 +336,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             }
             if ($Tenant -ceq 'bami') {
                 Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
-                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8
+                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8 -and $RepositorySyncRepositoryId -ceq '1239632211'
                 }
             }
             else {
