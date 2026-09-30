@@ -1,8 +1,8 @@
 # Bicep README authoring
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-09-28
-**Updated**: 2026-09-29
+**Updated**: 2026-09-30
 **Branch**: `jaredfholgate-interactive-metadata-initialization`
 
 ## Outcome
@@ -13,7 +13,8 @@ versioned AVM Scriban template selected through the nearest repository-owned
 authored Notes. Provide a separate, one-time command that extracts legacy
 Notes into immutable, adjacent `README.notes.md` files. Preserve Terraform
 documentation and metadata-only proposal behavior. Do not change the Bicep
-registry or retire its existing generator and CI in this slice.
+registry or retire its existing generator and CI in this slice. Qualify the
+renderer through a one-off independent comparison, not a tracked registry gate.
 
 ## Checklist
 
@@ -25,11 +26,11 @@ registry or retire its existing generator and CI in this slice.
       read-only drift checks; keep Notes sidecars as the sole authored input.
 - [x] Add idempotent, fenced-heading-aware legacy Notes extraction that never
       overwrites a sidecar.
-- [x] Independently render all 574 source-backed READMEs against the
+- [x] Independently render all 575 source-backed READMEs against the
       reviewed combined registry candidate; compare raw bytes with only
       the approved eight-line Vault example-comment difference, and
-      preserve and hash-check the three source-less READMEs. Never use
-      README text as a generator input.
+      preserve and hash-check the three source-less READMEs and 53 Notes
+      sidecars. Never use README text as a generator input.
 - [x] Cover templates, root/child/scope examples, Notes/no-Notes, CLI errors,
       `-WhatIf`, drift, migration, and Terraform dispatch with focused tests.
 - [x] Reject referenced test examples with unknown or missing required
@@ -41,12 +42,17 @@ registry or retire its existing generator and CI in this slice.
       invalid-test failures and repository-root output.
 - [x] Independently verify the corrected renderer against the toolkit README
       on pinned registry main, comparing the entire generated file as bytes.
+- [x] Verify toolkit and nested role-assignment READMEs with module-root
+      invocations, then complete the one-off 578-path combined comparison
+      on the fixed immutable tools source.
 - [x] Update user-facing documentation and the implementation spec/plan.
 - [x] Pass `./build.ps1 pre-commit` for the non-cutover renderer draft.
-- [ ] Requalify the strict 577-path gate on merged registry main and its
-      deliberately updated baseline, then mark this slice complete.
 
 ## Validation
+
+Earlier frozen comparisons below retain their as-of results for the audit
+trail; the frozen28 result at the end is the current one-off qualification.
+No tracked registry comparison gate or CI cutover is part of this slice.
 
 `./build.ps1 pre-commit` passed after the post-`8b2dfe99` generic fixes:
 layout, lint, 1,879 unit tests (nine skipped), and the component shards
@@ -383,57 +389,50 @@ contexts still reject a test with an unknown and missing required
 parameter. `./build.ps1 pre-commit` passed layout, clean lint, 1,883
 unit tests (nine skipped), and 903 component tests with zero errors
 and 49 existing warnings. Frozen27 remains a pass only for its
-original immutable source and invocation; the changed source needs
-a fresh independent registry comparison before cutover.
+original immutable source and repository-root invocation.
 
-## Blockers and dependencies
+The module-root fix was committed and pushed at
+`f13ce1c92cf575c740374129c20577a9097e3106`. The independent frozen28
+snapshot verified all 190 packaged Git blobs; only
+`Private/Docs/Get-AvmBicepDocsExample.ps1` changed from frozen27 (SHA-256
+`47ECC16BB31191001511BDAC7001F2F721F8BB44D37A19E9D3198ADFC605389D`).
+The packaged template and Bicep tool pin did not change. Using the actual
+published template/configuration and Notes assets, independent module-root
+invocations rendered toolkit 1/1 and role-assignment root plus three scopes
+4/4 byte-exact with `Status=pass` and no issues.
 
-The next strict comparison must run on merged registry main with a
-deliberately updated README baseline; the successful combined-overlay
-diagnostic does not turn the old-main gate green.
-The checked-in vault Example 2+ JSON omits eight section comments that the
-current legacy generator would add. The user approved reporting only this
-specific historical difference as a documented comparison exception, not
-altering the renderer or claiming the vault README is byte-identical. Every
-other byte and module remains subject to the full regression gate. The
-earlier 180-mismatch full scan included missing discriminated-union
-variants, which the current Scriban template renders. The frozen26
-old-main comparison had nine unapproved differences matching the
-corrected README bytes in the unmerged registry draft, plus two
-source-backed render failures.
-The prior missing CICD Allowed blocks and other structural mismatches
-are resolved without regressing previously exact or approved paths.
-Any updated registry source or baseline needs a fresh full comparison.
-Two conversation-knowledge-mining e2e tests reference undeclared
-parameter names and omit a required module parameter; the prior
-native example reader formatted them without validating their parameters.
-The current reader rejects the example with actionable names and
-does not publish a README.
-The user chose to stop rendering a README that references an invalid
-test and report its unknown and missing required parameter names; the
-user separately approved repairing those upstream tests in the registry.
-The source repair is committed but unmerged on its own branch;
-old-main comparison must report the invalid example until the
-corrected tests and README are merged.
-The earlier BCP426 compilation failure in `avm/ptn/app/container-job-toolkit`
-was corrected by merged
-[registry pull request 7407](https://github.com/Azure/bicep-registry-modules/pull/7407).
-The combined frozen26 overlay then exposed array-item type examples promoted
-into two malformed parameter examples. The narrow correction passed
-independent whole-file toolkit proof and the frozen27 full combined-candidate
-comparison; post-merge strict validation remains required before cutover
-qualification. Four historical README titles disagree with existing
-canonical module types; the user approved correcting just their first lines in
-draft [registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410).
-Until it merges, check only those exact H1 replacements as explicit,
-fail-closed comparison allowances; then deliberately re-pin the README
-baseline and remove the allowances. The VM `linux.max` test's longstanding
-literal SKU differs from the published README placeholder, and the legacy
-converter does not contain a generic SKU rewrite. The user chose to publish
-the source literal in all three example formats; draft
-[registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410)
-changes exactly those README lines. The old baseline must continue to fail
-without any renderer exception until that correction merges and the
-independent gate is deliberately re-pinned. Do not bulk regenerate READMEs, replace
-the existing generator or CI, or claim parity until the entire 577-file
-gate is green under the narrowly approved exception.
+The one-off frozen28 full comparison pinned registry main at
+`e598d45191e282374fa271597318b733f23c7c0e`, applied the exact
+corrections from [registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410)
+and [registry pull request 7415](https://github.com/Azure/bicep-registry-modules/pull/7415),
+and verified all 55 published asset blobs from
+[registry pull request 7416](https://github.com/Azure/bicep-registry-modules/pull/7416),
+including 53 Notes sidecars. Of **578** tracked READMEs, **575/575**
+source-backed files rendered without errors: **574** generated files were
+raw-byte exact and the Vault root differed only by the approved eight
+JSON-example comment lines. All three source-less READMEs remained
+byte-identical; the newly added Function App README and four previously
+allowed headings matched exactly, with zero unexpected paths or differences.
+The renderer returned `Status=fail` only because the disposable checkout
+intentionally omitted 575 generated READMEs and identified three
+source-less ones; the independent comparator classified those expected
+issues and found zero unexpected issues or invalid outputs. This
+qualifies the **pinned combined candidate**, not the unchanged old-main
+baseline or a live registry workflow. The comparison and module-root
+proof are retained in session-only `avm-readme-combined-28` artifacts.
+
+## Review boundaries
+
+The corrected registry READMEs, Conversation tests, and published assets
+remain open for separate review in
+[registry pull request 7410](https://github.com/Azure/bicep-registry-modules/pull/7410),
+[registry pull request 7415](https://github.com/Azure/bicep-registry-modules/pull/7415),
+and [registry pull request 7416](https://github.com/Azure/bicep-registry-modules/pull/7416).
+The user chose a one-off comparison instead of a source-controlled gate:
+[registry pull request 7408](https://github.com/Azure/bicep-registry-modules/pull/7408)
+and [registry pull request 7417](https://github.com/Azure/bicep-registry-modules/pull/7417)
+were closed unmerged. No tracked strict baseline re-pin, CI cutover,
+release, or registry write is required or authorized by this tools slice.
+Future changes to the pinned renderer or registry candidate require a new
+comparison before making the same byte-parity claim; frozen28 is not a
+blanket approval to regenerate READMEs or replace the existing generator.
