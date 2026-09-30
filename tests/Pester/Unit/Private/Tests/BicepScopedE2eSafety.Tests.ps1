@@ -6,6 +6,9 @@ BeforeAll {
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
     $script:subscription = '00000000-0000-0000-0000-000000000001'
     $script:runId = '0123456789abcdef0123456789abcdef'
+    $script:pinnedFixturePath = Join-Path `
+        (Split-Path -Parent (Split-Path -Parent $script:moduleRoot)) `
+        'tests\fixtures\bicep-scoped\role-definition-mg-default.6eb8e6ff.json'
 }
 
 AfterAll {
@@ -13,6 +16,145 @@ AfterAll {
 }
 
 Describe 'Bicep scoped e2e template safety' {
+    It 'inspects pinned Bicep 0.47.16 symbolic resources and telemetry' {
+        $template = Get-Content -LiteralPath $script:pinnedFixturePath -Raw -Encoding utf8 |
+            ConvertFrom-Json -AsHashtable
+        $template.metadata._generator.version | Should -Be '0.47.16.16243'
+        $template.resources[0].properties.template.languageVersion | Should -BeExactly '2.0'
+        $symbols = @($template.resources[0].properties.template.resources.Keys)
+        $symbols.Count | Should -Be 2
+        $symbols | Should -Contain 'avmTelemetry'
+        $symbols | Should -Contain 'res_roleDefinition_mg'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $template } {
+            param($Compiled)
+            { Assert-AvmBicepScopedTestIsolation -Template $Compiled `
+                    -Scope mg -SourcePath 'pinned-role-definition.bicep' } |
+                Should -Not -Throw
+        }
+    }
+
+    It 'rejects unsafe changes to pinned symbolic <Case>' -ForEach @(
+        @{ Case = 'assignment'; Mutation = 'type'; ErrorMessage = '*unsupported*' }
+        @{ Case = 'cross-scope write'; Mutation = 'scope'; ErrorMessage = '*cross-scope*' }
+        @{ Case = 'Complete mode'; Mutation = 'mode'; ErrorMessage = '*literal Incremental mode*' }
+        @{ Case = 'linked template'; Mutation = 'link'; ErrorMessage = '*inline template*' }
+        @{ Case = 'changed telemetry output'; Mutation = 'output'; ErrorMessage = '*telemetry-only*' }
+        @{ Case = 'telemetry parameters'; Mutation = 'parameters'; ErrorMessage = '*telemetry-only*' }
+        @{ Case = 'extra telemetry output'; Mutation = 'extra-output'; ErrorMessage = '*telemetry-only*' }
+    ) {
+        $compiled = Get-Content -LiteralPath $script:pinnedFixturePath -Raw -Encoding utf8 |
+            ConvertFrom-Json -AsHashtable
+        $outer = $compiled.resources[0]
+        $inner = $outer.properties.template.resources
+        $telemetry = $inner.avmTelemetry.properties.template
+        switch ($Mutation) {
+            type { $inner.res_roleDefinition_mg.type = 'Microsoft.Authorization/roleAssignments' }
+            scope { $inner.res_roleDefinition_mg.scope = '[tenant()]' }
+            mode { $inner.avmTelemetry.properties.mode = 'Complete' }
+            link { $inner.avmTelemetry.properties.templateLink = @{ uri = 'https://example.invalid' } }
+            output { $telemetry.outputs.telemetry.value = '[reference(''outside'')]' }
+            parameters { $telemetry.parameters = @{} }
+            'extra-output' { $telemetry.outputs.unreviewed = @{ type = 'String'; value = 'other' } }
+        }
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Compiled = $compiled; Expected = $ErrorMessage
+        } {
+            param($Compiled, $Expected)
+            { Assert-AvmBicepScopedTestIsolation -Template $Compiled `
+                    -Scope mg -SourcePath 'pinned-role-definition.bicep' } |
+                Should -Throw -ExpectedMessage $Expected
+        }
+    }
+
+    It 'refuses malformed symbolic resource objects and unsupported versions' {
+        InModuleScope 'Avm.Authoring' {
+            $template = @{
+                languageVersion = '2.0'
+                resources = @{
+                    approved = @{ type = 'Microsoft.Authorization/roleDefinitions' }
+                }
+            }
+            $template.languageVersion = '3.0'
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*symbolic resource shape*'
+            $template.languageVersion = '2.0'
+            $template.resources = @(@{ type = 'Microsoft.Authorization/roleDefinitions' })
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*symbolic resource shape*'
+            $null = $template.Remove('languageVersion')
+            $template.resources = @{ approved = @{ type = 'Microsoft.Authorization/roleDefinitions' } }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*no inspectable ARM resources*'
+        }
+    }
+
+    It 'refuses invalid or duplicate symbolic names and invalid resources' {
+        InModuleScope 'Avm.Authoring' {
+            $valid = @{ type = 'Microsoft.Authorization/roleDefinitions' }
+            $template = @{ languageVersion = '2.0'; resources = @{ ' ' = $valid } }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*symbolic resource name*'
+            $template.resources = @{
+                approved = $null
+            }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*invalid ARM resource*'
+            $duplicate = @'
+{"languageVersion":"2.0","resources":{"approved":{"type":"Microsoft.Authorization/roleDefinitions"},"APPROVED":{"type":"Microsoft.Authorization/roleDefinitions"}}}
+'@ | ConvertFrom-Json -AsHashtable
+            { Assert-AvmBicepScopedTestIsolation -Template $duplicate `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*symbolic resource name*'
+        }
+    }
+
+    It 'inspects symbolic child resources under the existing allowlist' {
+        InModuleScope 'Avm.Authoring' {
+            $template = @{
+                languageVersion = '2.0'
+                resources = @{
+                    parent = @{
+                        type = 'Microsoft.Authorization/policyDefinitions'
+                        resources = @{
+                            child = @{ type = 'Microsoft.Authorization/roleDefinitions' }
+                        }
+                    }
+                }
+            }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } | Should -Not -Throw
+            $template.resources.parent.resources.child.type =
+                'Microsoft.Authorization/roleAssignments'
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*unsupported*'
+        }
+    }
+
+    It 'rejects a telemetry-only template as a top-level test' {
+        InModuleScope 'Avm.Authoring' {
+            $template = @{
+                '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+                contentVersion = '1.0.0.0'
+                resources = @()
+                outputs = @{
+                    telemetry = @{
+                        type = 'String'
+                        value = 'For more information, see https://aka.ms/avm/TelemetryInfo'
+                    }
+                }
+            }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope sub -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*no inspectable ARM resources*'
+        }
+    }
+
     It 'accepts reviewed definitions and inspectable inline nested deployments' {
         InModuleScope 'Avm.Authoring' {
             $template = @{

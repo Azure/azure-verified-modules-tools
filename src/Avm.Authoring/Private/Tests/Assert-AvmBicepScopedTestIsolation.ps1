@@ -9,14 +9,49 @@ function Assert-AvmBicepScopedTestIsolation {
         [string] $Scope,
 
         [Parameter(Mandatory)]
-        [string] $SourcePath
+        [string] $SourcePath,
+
+        [switch] $AllowTelemetryOnly
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
     $resources = $Template['resources']
-    if ($resources -isnot [array] -or $resources.Count -eq 0) {
+    $resourceList = [System.Collections.Generic.List[object]]::new()
+    $symbolic = $Template.Contains('languageVersion')
+    if ($symbolic) {
+        if ($Template['languageVersion'] -isnot [string] -or
+            $Template['languageVersion'] -cne '2.0' -or
+            $resources -isnot [System.Collections.IDictionary]) {
+            throw [AvmConfigurationException]::new(
+                "Bicep e2e test '$SourcePath' has an unsupported ARM symbolic resource shape.")
+        }
+        $symbols = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($name in $resources.Keys) {
+            if ($name -isnot [string] -or [string]::IsNullOrWhiteSpace($name) -or
+                -not $symbols.Add($name)) {
+                throw [AvmConfigurationException]::new(
+                    "Bicep e2e test '$SourcePath' has an invalid or duplicate ARM symbolic resource name.")
+            }
+            $resourceList.Add($resources[$name])
+        }
+    }
+    elseif ($resources -is [array]) {
+        foreach ($resource in $resources) {
+            $resourceList.Add($resource)
+        }
+    }
+    else {
+        throw [AvmConfigurationException]::new(
+            "Bicep e2e test '$SourcePath' has no inspectable ARM resources.")
+    }
+    if ($resourceList.Count -eq 0) {
+        if ($AllowTelemetryOnly) {
+            Assert-AvmBicepScopedTelemetryTemplate -Template $Template -SourcePath $SourcePath
+            return
+        }
         throw [AvmConfigurationException]::new(
             "Bicep e2e test '$SourcePath' has no inspectable ARM resources.")
     }
@@ -28,7 +63,7 @@ function Assert-AvmBicepScopedTestIsolation {
     if ($Scope -eq 'sub') {
         $allowed += 'Microsoft.Resources/resourceGroups'
     }
-    foreach ($resource in $resources) {
+    foreach ($resource in $resourceList) {
         if ($resource -isnot [System.Collections.IDictionary]) {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e test '$SourcePath' has an invalid ARM resource.")
@@ -79,19 +114,25 @@ function Assert-AvmBicepScopedTestIsolation {
                 }
             }
             Assert-AvmBicepScopedTestIsolation -Template $properties['template'] `
-                -Scope $Scope -SourcePath $SourcePath
+                -Scope $Scope -SourcePath $SourcePath -AllowTelemetryOnly
         }
         elseif ($type -notin $allowed) {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e test '$SourcePath' contains unsupported $Scope resource type '$type'; deployment was refused.")
         }
         if ($resource.Contains('resources')) {
-            if ($resource['resources'] -isnot [array]) {
+            $children = $resource['resources']
+            if ($children -isnot [array] -and
+                -not ($symbolic -and $children -is [System.Collections.IDictionary])) {
                 throw [AvmConfigurationException]::new(
                     "Bicep e2e test '$SourcePath' contains child resources that cannot be inspected.")
             }
-            if ($resource['resources'].Count -gt 0) {
-                Assert-AvmBicepScopedTestIsolation -Template @{ resources = $resource['resources'] } `
+            if ($children.Count -gt 0) {
+                $childTemplate = @{ resources = $children }
+                if ($children -is [System.Collections.IDictionary]) {
+                    $childTemplate.languageVersion = '2.0'
+                }
+                Assert-AvmBicepScopedTestIsolation -Template $childTemplate `
                     -Scope $Scope -SourcePath $SourcePath
             }
         }

@@ -26,6 +26,8 @@ function Invoke-AvmTestE2e {
         definitions, and empty run-tagged subscription resource groups may
         be created, along with inspectable inline same-scope deployments
         using literal Incremental mode and only reviewed inline properties.
+        ARM 2.0 symbolic resources are inspected under the same allowlist;
+        only the exact outputs-only AVM telemetry template may be empty.
         Cross-scope, linked, scripted, assignment, alias and other resource
         types are rejected. A Create-only, expanded what-if prediction,
         preflight nonexistence, run-unique name, recorded deployment operation,

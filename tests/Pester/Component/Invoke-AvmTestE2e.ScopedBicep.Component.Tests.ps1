@@ -7,6 +7,8 @@ BeforeAll {
     $script:subscription = '00000000-0000-0000-0000-000000000001'
     $script:tenant = '00000000-0000-0000-0000-000000000002'
     $script:managementGroup = 'test-management-group'
+    $script:pinnedFixturePath = Join-Path $script:repoRoot `
+        'tests\fixtures\bicep-scoped\role-definition-mg-default.6eb8e6ff.json'
 }
 
 AfterAll {
@@ -30,6 +32,7 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
             Nested                = $false
             NestedMode            = 'Incremental'
             NestedProperty        = ''
+            CompiledTemplateJson  = $null
             PreviewKind           = 'Create'
             PreviewIdOverride     = $null
             PreviewMissingAfter   = $false
@@ -82,6 +85,11 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                         TimeoutSec = $TimeoutSec
                     })
                 if ($FilePath -eq 'fake-bicep') {
+                    if ($null -ne $state.CompiledTemplateJson) {
+                        return [pscustomobject]@{
+                            ExitCode = 0; StdOut = $state.CompiledTemplateJson; StdErr = ''
+                        }
+                    }
                     $resource = @{
                         type = $state.ResourceType
                         name = '#_namePrefix_#-policy'
@@ -685,6 +693,54 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                 $_.Arguments[0] -eq 'deployment' -and
                 $_.Arguments[1] -eq 'operation'
             }).Count | Should -Be 2
+    }
+
+    It 'preflights pinned symbolic resources and telemetry before mocked ARM validation' {
+        $script:state.Scope = 'mg'
+        $script:state.CompiledTemplateJson = Get-Content -LiteralPath $script:pinnedFixturePath `
+            -Raw -Encoding utf8
+        $script:state.FailedOperation = 'validate'
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -ManagementGroupId $script:managementGroup -Location 'westus' `
+            -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-validate-failed'
+        @($script:state.Calls | Where-Object {
+                $_.FilePath -eq 'fake-az' -and
+                $_.Arguments[0] -eq 'deployment' -and
+                $_.Arguments[2] -eq 'validate'
+            }).Count | Should -Be 1
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'deployment' -and
+                $_.Arguments[2] -eq 'create'
+            }).Count | Should -Be 0
+    }
+
+    It 'refuses unsafe pinned symbolic <Case> before any Azure call' -ForEach @(
+        @{ Case = 'assignment'; Mutation = 'type' }
+        @{ Case = 'cross-scope write'; Mutation = 'scope' }
+        @{ Case = 'unreviewed telemetry output'; Mutation = 'output' }
+    ) {
+        $script:state.Scope = 'mg'
+        $template = Get-Content -LiteralPath $script:pinnedFixturePath -Raw -Encoding utf8 |
+            ConvertFrom-Json -AsHashtable
+        $symbolic = $template.resources[0].properties.template.resources
+        switch ($Mutation) {
+            type { $symbolic.res_roleDefinition_mg.type = 'Microsoft.Authorization/roleAssignments' }
+            scope { $symbolic.res_roleDefinition_mg.scope = '[tenant()]' }
+            output {
+                $symbolic.avmTelemetry.properties.template.outputs.telemetry.value =
+                    '[reference(''outside'')]'
+            }
+        }
+        $script:state.CompiledTemplateJson = $template | ConvertTo-Json -Depth 100 -Compress
+        { Invoke-AvmTestE2e -Path $script:root `
+                -SubscriptionId $script:subscription -TenantId $script:tenant `
+                -ManagementGroupId $script:managementGroup -Location 'westus' `
+                -SkipModuleVersionCheck } | Should -Throw
+        @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count |
+            Should -Be 0
     }
 
     It 'refuses unsafe nested <Case> before any Azure call' -ForEach @(
