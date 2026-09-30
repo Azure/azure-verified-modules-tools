@@ -158,6 +158,17 @@ variable "github_job_workflow_ref" {
   default     = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
 }
 
+variable "repository_sync_repository_id" {
+  type        = string
+  description = "Verified GitHub Actions repository ID for the tools repository; unused in repository creation mode."
+  default     = null
+
+  validation {
+    condition     = var.repository_sync_repository_id == null || can(regex("^[1-9][0-9]*$", var.repository_sync_repository_id))
+    error_message = "repository_sync_repository_id must be a positive decimal GitHub repository ID when provided."
+  }
+}
+
 variable "github_avm_app_id" {
   type        = string
   description = "The GitHub App ID for the AVM."

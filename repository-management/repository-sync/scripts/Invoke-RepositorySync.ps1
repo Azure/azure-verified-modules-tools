@@ -34,7 +34,8 @@ param(
     [switch]$forceFileUpdate,
     [string]$managementGroupId = "",
     [array]$testSubscriptionIds = @(),
-    [hashtable]$bamiSettings = @{}
+    [hashtable]$bamiSettings = @{},
+    [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
 )
 
 Write-Host "Running repo sync script"
@@ -94,6 +95,12 @@ if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true' -and
     throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
 }
 $testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
+$repositorySyncContext = if ($repositoryCreationModeEnabled) {
+    $null
+}
+else {
+    Resolve-AvmRepositorySyncFederationContext -RepositoryId $repositorySyncRepositoryId
+}
 Write-Host "$([Environment]::NewLine)Checking $($repoId)"
 
 if(!$skipCleanup) {
@@ -113,6 +120,7 @@ if ($testTenant.TestTenant -ceq 'bami') {
         BamiValues = $testTenant.Settings
         Backend = $stateBackend
         Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
+        RepositorySyncRepositoryId = $repositorySyncContext.RepositoryId
         PlanOnly = $planOnly
     }
     if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
@@ -223,6 +231,9 @@ $terraformVariables = @{
 
 if ($null -ne $candidateSettings) {
     $terraformVariables["bami_test_settings"] = $candidateSettings
+}
+if ($null -ne $repositorySyncContext) {
+    $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
 }
 
 # Only emit the override when a group actually sets it. Writing a null would

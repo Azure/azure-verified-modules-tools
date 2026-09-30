@@ -386,7 +386,9 @@ task 'test-tenant-terraform' {
                 if ($directory -eq 'bami-identity') {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
-                    $plans = @($events | Where-Object { $_['type'] -eq 'test_plan' })
+                    $plans = @($events | Where-Object {
+                            $_['type'] -eq 'test_plan' -and $_['@testrun'] -ceq 'candidate_plan_binds_the_expected_tenant'
+                        })
                     if ($plans.Count -ne 1) {
                         throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider candidate plan.')
                     }
@@ -401,7 +403,8 @@ task 'test-tenant-terraform' {
                     }
                     try {
                         Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
-                            -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo'
+                            -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' `
+                            -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211'
                         Write-Build Green '  actual candidate plan passes the delegation guard'
                     }
                     catch [System.InvalidOperationException] {

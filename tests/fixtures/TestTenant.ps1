@@ -25,7 +25,12 @@ function New-AvmTestBamiIdentity {
 }
 
 function New-AvmTestBamiPlan {
-    param([switch] $KnownClient)
+    param(
+        [switch] $KnownClient,
+        [switch] $ValidationPending,
+        [string] $RepositoryOwnerId = '6844498',
+        [string] $RepositorySyncRepositoryId = '1239632211'
+    )
 
     $condition = @'
 (
@@ -48,6 +53,8 @@ AND
  )
 )
 '@
+    $identity = New-AvmTestBamiIdentity
+    if (-not $KnownClient) { $identity.Remove('client_id') }
     $resources = @(
         @{
             address = 'module.azure.azapi_resource.identity'
@@ -83,12 +90,37 @@ AND
             values = @{}
         }
     }
-    $identity = New-AvmTestBamiIdentity
-    if (-not $KnownClient) { $identity.Remove('client_id') }
+    $resources += @{
+        address = 'module.azure.azapi_resource.validation_federated_credential'
+        mode = 'managed'
+        type = 'azapi_resource'
+        values = @{
+            type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+            name = 'Azure-terraform-azurerm-avm-ptn-example-repo-avm-validation'
+            parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
+            body = @{
+                properties = @{
+                    audiences = @('api://AzureADTokenExchange')
+                    issuer = 'https://token.actions.githubusercontent.com'
+                    subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+                }
+            }
+        }
+    }
+    $changes = @($resources | ForEach-Object {
+            $actions = if ($KnownClient -and (-not $ValidationPending -or
+                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential')) {
+                @('no-op')
+            }
+            else {
+                @('create')
+            }
+            @{ address = $_.address; change = @{ actions = $actions } }
+        })
     return @{
         format_version = '1.2'
         errored = $false
-        resource_changes = @($resources | ForEach-Object { @{ address = $_.address; change = @{ actions = @('create') } } })
+        resource_changes = $changes
         planned_values = @{
             root_module = @{ child_modules = @(@{ address = 'module.azure'; resources = $resources }) }
             outputs = @{ test_identity = @{ value = $identity } }
