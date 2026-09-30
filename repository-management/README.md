@@ -19,6 +19,21 @@ The current snapshot came from the legacy Terraform governance repository at com
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
 
+## Standard GitHub labels
+
+[`labels/avm-standard-github-labels.json`](labels/avm-standard-github-labels.json)
+is the source for AVM standard label names, descriptions, and colors. Terraform
+repository sync reads it locally; the `Repos: Label Sync` workflow reconciles
+the AVM and Bicep repositories daily and when the catalog changes. The workflow
+only creates or updates standard labels, retaining repository-specific labels.
+Manual runs default to a write-free plan.
+
+The same workflow proposes a generated CSV update in the AVM repository. Keep
+its existing CSV URL for the public specification's table and download, but
+edit the JSON here instead. The one `githubDescription` override preserves the
+longer specification text while keeping the GitHub label description within
+GitHub's 100-character limit.
+
 ## Terraform repository metadata
 
 Repository discovery reads and validates each selected repository's root

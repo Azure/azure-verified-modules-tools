@@ -142,8 +142,8 @@ variable "location" {
 
 variable "github_labels_source_path" {
   type        = string
-  description = "Source csv for labels."
-  default     = "../temp/labels.csv"
+  description = "Path to the standard GitHub labels JSON in the tools repository."
+  default     = "../../labels/avm-standard-github-labels.json"
 }
 
 variable "is_protected_repo" {

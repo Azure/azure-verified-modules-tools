@@ -1,0 +1,101 @@
+---
+name: 'Repos: Label Sync'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/repository-management-label-sync.yml'
+      - 'repository-management/labels/**'
+  schedule:
+    - cron: '5 12 * * *'
+  workflow_dispatch:
+    inputs:
+      plan_only:
+        description: 'Show label and documentation changes without writing them.'
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standard-github-labels
+  cancel-in-progress: false
+
+jobs:
+  sync-labels:
+    name: Sync repository labels
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: avm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Create target-scoped labels token
+        id: labels-token
+        if: github.event_name != 'workflow_dispatch' || inputs.plan_only == false
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: |
+            Azure-Verified-Modules
+            bicep-registry-modules
+          permission-issues: write
+
+      - name: Reconcile standard labels
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.labels-token.outputs.token || github.token }}
+          AVM_APP_SLUG: ${{ steps.labels-token.outputs.app-slug }}
+          APPLY: ${{ github.event_name != 'workflow_dispatch' || inputs.plan_only == false }}
+        run: |
+          ./repository-management/labels/scripts/Sync-AvmStandardGitHubLabels.ps1 `
+            -Apply:($env:APPLY -eq 'true') -Confirm:$false
+
+  publish-csv:
+    name: Publish documentation CSV
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: avm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Create target-scoped documentation token
+        id: docs-token
+        if: github.event_name != 'workflow_dispatch' || inputs.plan_only == false
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: Azure-Verified-Modules
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Propose generated CSV when it changes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.docs-token.outputs.token || github.token }}
+          AVM_APP_SLUG: ${{ steps.docs-token.outputs.app-slug }}
+          PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.plan_only == false }}
+        run: |
+          ./repository-management/labels/scripts/Publish-AvmStandardGitHubLabelsCsv.ps1 `
+            -Publish:($env:PUBLISH -eq 'true') -Confirm:$false
