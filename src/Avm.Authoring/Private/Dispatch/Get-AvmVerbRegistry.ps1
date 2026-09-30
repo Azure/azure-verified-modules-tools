@@ -102,7 +102,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('test', 'e2e')
             Cmdlet  = 'Invoke-AvmTestE2e'
-            Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
+            Summary = 'Deploy isolated Bicep examples or run Terraform e2e tests.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('docs')

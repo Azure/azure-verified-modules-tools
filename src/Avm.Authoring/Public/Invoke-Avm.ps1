@@ -64,7 +64,15 @@ function Invoke-Avm {
 
         $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
         $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
-        if (-not $isUpdateCommand) {
+        $isE2eListCommand = $false
+        if ($rawArguments.Count -ge 3) {
+            $isE2eListCommand = [string]$rawArguments[0] -ceq 'test' -and [string]$rawArguments[1] -ceq 'e2e'
+            if ($isE2eListCommand) {
+                $isE2eListCommand = @($rawArguments[2..($rawArguments.Count - 1)] |
+                        Where-Object { [string]$_ -match '^--?list(?:=true)?$' }).Count -gt 0
+            }
+        }
+        if (-not $isUpdateCommand -and -not $isE2eListCommand) {
             Test-AvmModuleVersion `
                 -SkipModuleVersionCheck:$SkipModuleVersionCheck `
                 -RefreshLatestVersion `

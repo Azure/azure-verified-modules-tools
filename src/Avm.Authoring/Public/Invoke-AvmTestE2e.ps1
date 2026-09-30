@@ -1,35 +1,43 @@
 function Invoke-AvmTestE2e {
     <#
     .SYNOPSIS
-        Run the module's end-to-end (e2e) test tier by deploying, checking
-        idempotency, and destroying each example under examples/.
+        Run Bicep isolated deployments or Terraform example end-to-end tests.
 
     .DESCRIPTION
-        Terraform-only test tier. Resolves the enclosing module via
-        Get-AvmModuleContext, then hands off to Invoke-AvmTerraformTestE2e,
-        which walks each runnable example under examples/ and runs
-        init -> apply -> idempotency plan -> destroy against a real backend.
+        Bicep tests are discovered under tests/e2e/**/main.test.bicep.
+        Eligible resource-group templates run in a new, uniquely named and
+        tagged disposable group per example. ARM validate and what-if must
+        succeed, and what-if must predict only creations within that group,
+        before a deployment is allowed. Successful ARM provisioning is
+        verified from the deployment response. The group is deleted after
+        success or failure, but only after its ownership tag and subscription
+        are verified; failed cleanup is reported with the group name.
 
-        Unlike the unit and integration tiers (which run 'terraform test'
-        against tests/<tier>/), the e2e tier provisions and then tears down
-        real infrastructure from the module's examples. It therefore needs
-        valid cloud credentials at runtime (for example an authenticated 'az'
-        session or ARM_* environment variables). Authentication is left to
-        terraform and its providers; this verb performs no preflight.
+        Subscription, management-group, tenant, cross-scope, linked,
+        deployment-script and authorization resources are rejected before
+        group creation.
+        Use 'avm test integration' to validate and preview those scopes
+        without deploying. Authored post-deployment Pester assertions are not
+        run by this tier. Tokens and additional ARM parameters are staged in
+        temporary JSON files without editing source files.
+
+        Terraform walks runnable examples/ and runs init, apply,
+        idempotency plan and destroy against a real backend.
+
+        Both ecosystems require cloud credentials at runtime. No e2e run
+        belongs in the local pre-commit gate.
 
         An example directory can opt out of the e2e run by containing a
         '.e2eignore' marker file. Modules that ship no runnable example report
         Status 'skipped' rather than a pass, so an absent tier can never look
         like a green one.
 
-        Use -Example to target one or more named examples (this is how the
-        reusable workflow fans the tier out across a matrix), and -List to
-        discover the runnable example names as JSON.
+        Use -Example to select one or more cases. -List emits JSON names
+        without resolving tools, credentials or a subscription.
 
-        An apply that fails on region or SKU capacity is retried: the example
-        is destroyed and redeployed up to -MaxRetry times. Retries are recorded
-        as warning-level Issues, so a recovered example stays green while the
-        flake remains visible. The idempotency check is never retried.
+        For Terraform only, an apply that fails on region or SKU capacity is
+        destroyed and retried up to -MaxRetry times. The idempotency check is
+        never retried. Bicep examples never automatically retry deployment.
 
         This verb is a standalone command; it needs credentials, so it is NOT
         part of the 'avm pre-commit' or 'avm pr-check' gauntlets.
@@ -41,37 +49,56 @@ function Invoke-AvmTestE2e {
         current location.
 
     .PARAMETER Ecosystem
-        Force the ecosystem selector. Defaults to 'auto'. Bicep modules are
-        rejected: the e2e test tier is terraform-only.
+        Force the ecosystem selector. Defaults to 'auto'.
 
     .PARAMETER AllowPathFallback
         When set, accept a PATH-resolved tool binary that self-reports the
         lock-pinned version.
 
     .PARAMETER Example
-        Restrict the run to the named examples. Accepts either the folder leaf
-        ('example-a') or a repo-relative path ('examples/example-a'). Omitted,
-        every runnable example is processed sequentially, which is the local
-        default. A name that does not exist, or that carries a '.e2eignore'
-        marker, is a hard error rather than a silent skip, so a stale CI matrix
-        can never quietly drop a test.
+        Restrict the run to named examples. Bicep accepts a test-case folder
+        leaf or a root-relative path; Terraform accepts an examples/ folder.
+        Missing, ambiguous or ignored explicit selections are errors.
 
     .PARAMETER List
-        Emit a compact JSON array of runnable example names (honouring
-        '.e2eignore') and nothing else, then return. Intended to feed a
-        GitHub Actions matrix via fromJson(). Emits '[]' when the module ships
-        no runnable example. Does not resolve or install terraform.
+        Emit a JSON array of runnable example paths (Bicep) or folder names
+        (Terraform), excluding .e2eignore. No Azure or tool access is needed.
 
     .PARAMETER MaxRetry
-        How many times to retry an example whose 'terraform apply' failed with
-        a transient capacity or quota error. Defaults to 2 (up to three
-        attempts in total); 0 disables retries. Each retry destroys the example
-        before redeploying, so the region is re-rolled against an empty state.
-        Retries are recorded as warnings and do not fail the run.
+        Terraform-only transient apply retry budget, default 2. Bicep never
+        retries a destructive deployment automatically.
+
+    .PARAMETER Recurse
+        Bicep-only: include nested module test scopes.
+
+    .PARAMETER SubscriptionId
+        Bicep-only: explicit subscription GUID; ambient defaults are not used.
+
+    .PARAMETER Location
+        Bicep-only: resource-group location for disposable examples.
+
+    .PARAMETER ResourceGroupPrefix
+        Bicep-only: required prefix for a new unique disposable group per
+        example. The group and everything inside it are deleted after testing.
+
+    .PARAMETER TokenFile
+        Bicep-only: JSON object of token names and string values, relative to
+        the module root or absolute. Subscription ID has its own parameter.
+
+    .PARAMETER Tokens
+        Bicep-only: direct PowerShell hashtable instead of -TokenFile.
+
+    .PARAMETER ParameterFile
+        Bicep-only: existing ARM JSON parameter file copied to temporary
+        storage and token-substituted, relative to the module root or absolute.
+
+    .PARAMETER Parameters
+        Bicep-only: direct PowerShell hashtable instead of -ParameterFile.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Issues.
+        Status, FilesProcessed, Issues. Bicep also reports RunsTotal,
+        RunsPassed, RunsFailed, RunsSkipped, CleanupPending and WhatIfChanges.
 
     .EXAMPLE
         avm test e2e
@@ -87,8 +114,14 @@ function Invoke-AvmTestE2e {
 
     .EXAMPLE
         Invoke-AvmTestE2e -Path C:\repos\terraform-azurerm-avm-res-foo
+
+    .EXAMPLE
+        avm test e2e --ecosystem bicep --list
+
+    .EXAMPLE
+        avm test e2e --subscription-id 00000000-0000-0000-0000-000000000001 --location westus --resource-group-prefix avm-e2e --token-file test-tokens.json
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Position = 0)]
@@ -107,23 +140,87 @@ function Invoke-AvmTestE2e {
         [ValidateRange(0, 10)]
         [int] $MaxRetry = 2,
 
+        [switch] $Recurse,
+
+        [string] $SubscriptionId,
+
+        [string] $Location,
+
+        [string] $ResourceGroupPrefix,
+
+        [string] $TokenFile,
+
+        [Alias('AdditionalTokens')]
+        [System.Collections.IDictionary] $Tokens = @{},
+
+        [string] $ParameterFile,
+
+        [System.Collections.IDictionary] $Parameters = @{},
+
         [switch] $SkipModuleVersionCheck
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    if ($List) {
+        $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
+    }
+    else {
+        Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+        $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    }
 
     switch ($context.Ecosystem) {
+        'bicep' {
+            if ($PSBoundParameters.ContainsKey('MaxRetry')) {
+                throw [AvmConfigurationException]::new(
+                    '-MaxRetry is only supported for Terraform e2e tests.')
+            }
+            $bicepInput = @{
+                Context             = $context
+                AllowPathFallback   = $AllowPathFallback
+                Example             = $Example
+                List                = $List
+                Recurse             = $Recurse
+                SubscriptionId      = $SubscriptionId
+                Location            = $Location
+                ResourceGroupPrefix = $ResourceGroupPrefix
+                TokenFile           = $TokenFile
+                Tokens              = $Tokens
+                ParameterFile       = $ParameterFile
+                Parameters          = $Parameters
+            }
+            if ($List) {
+                Invoke-AvmBicepTestE2e @bicepInput
+            }
+            elseif ($PSCmdlet.ShouldProcess(
+                    "$($context.Root) in subscription $SubscriptionId",
+                    'Run Bicep tests in disposable resource groups')) {
+                Invoke-AvmBicepTestE2e @bicepInput -Confirm:$false -WhatIf:$false
+            }
+            else {
+                Invoke-AvmBicepTestE2e @bicepInput -WhatIf
+            }
+        }
         'terraform' {
+            if ($Recurse -or $PSBoundParameters.ContainsKey('SubscriptionId') -or
+                $PSBoundParameters.ContainsKey('Location') -or
+                $PSBoundParameters.ContainsKey('ResourceGroupPrefix') -or
+                $PSBoundParameters.ContainsKey('TokenFile') -or
+                $PSBoundParameters.ContainsKey('Tokens') -or
+                $PSBoundParameters.ContainsKey('ParameterFile') -or
+                $PSBoundParameters.ContainsKey('Parameters') -or
+                $PSBoundParameters.ContainsKey('WhatIf') -or
+                $PSBoundParameters.ContainsKey('Confirm')) {
+                throw [AvmConfigurationException]::new(
+                    'Bicep scope, token, parameter and ShouldProcess options are not supported for Terraform e2e tests.')
+            }
             Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback -Example $Example -List:$List -MaxRetry $MaxRetry
         }
         default {
-            throw [AvmNotSupportedException]::new(
-                "avm test e2e is a terraform-only tier; the resolved module ecosystem is '$($context.Ecosystem)'. Bicep e2e-test tiers are not implemented.")
+            throw [AvmContextException]::new(
+                "Cannot run e2e tests: unknown ecosystem '$($context.Ecosystem)'.")
         }
     }
 }

@@ -21,6 +21,12 @@ section when cutting a release.
 
 ### Added
 
+- `avm test e2e` deploys eligible Bicep test examples into uniquely named,
+  tagged disposable resource groups with ARM validation and a bounded what-if
+  preview first. It verifies successful ARM provisioning; cleanup checks
+  ownership and reports any remaining group. Other scopes and cross-scope
+  resources are rejected, and post-deployment Pester assertions remain
+  unsupported. Terraform e2e and legacy registry CI are unchanged.
 - `avm test integration` validates and previews Bicep `tests/e2e` examples
   with an explicit Azure subscription. Tokens are substituted only in a
   temporary compiled template, `.e2eignore` is honored, and resource-group

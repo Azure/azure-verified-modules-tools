@@ -116,22 +116,10 @@ function Invoke-AvmBicepTestIntegration {
         }
 
         if (@($compiled | Where-Object { $_.Scope -eq 'group' }).Count -gt 0) {
-            $exists = Invoke-AvmProcess -FilePath $az.Source -ArgumentList @(
-                'group', 'exists', '--name', $ResourceGroupName,
-                '--subscription', $SubscriptionId, '--output', 'tsv'
-            ) -WorkingDirectory $Context.Root -IgnoreExitCode
-            if ($exists.ExitCode -ne 0) {
-                $message = Add-AvmProcessFailureDetail `
-                    -Message "Could not check whether resource group '$ResourceGroupName' exists." `
-                    -StdErr $exists.StdErr
-                throw [AvmProcessException]::new($message)
-            }
-            $groupExists = $exists.StdOut.Trim()
-            if ($groupExists -cnotin @('true', 'false')) {
-                throw [AvmProcessException]::new(
-                    "Azure CLI returned an invalid resource-group existence result for '$ResourceGroupName'.")
-            }
-            if ($groupExists -ceq 'false') {
+            $exists = Test-AvmBicepResourceGroup -AzPath $az.Source `
+                -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName `
+                -WorkingDirectory $Context.Root
+            if (-not $exists) {
                 throw [AvmConfigurationException]::new(
                     "Resource group '$ResourceGroupName' must already exist for Bicep ARM validation; this tier never creates it.")
             }
@@ -160,24 +148,9 @@ function Invoke-AvmBicepTestIntegration {
                     break
                 }
                 if ($step -eq 'WhatIf') {
-                    $plan = [string]$result.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-                    if ($plan -isnot [System.Collections.IDictionary] -or
-                        $plan['changes'] -isnot [array]) {
-                        throw [AvmProcessException]::new(
-                            "ARM what-if for '$($item.Case.RelativePath)' returned no JSON changes array.")
-                    }
-                    foreach ($change in $plan['changes']) {
-                        if ($change -isnot [System.Collections.IDictionary] -or
-                            [string]::IsNullOrWhiteSpace([string]$change['resourceId']) -or
-                            [string]::IsNullOrWhiteSpace([string]$change['changeType'])) {
-                            throw [AvmProcessException]::new(
-                                "ARM what-if for '$($item.Case.RelativePath)' returned an invalid change.")
-                        }
-                        $changes.Add([pscustomobject][ordered]@{
-                                File       = $item.Case.RelativePath
-                                ResourceId = [string]$change['resourceId']
-                                ChangeType = [string]$change['changeType']
-                            })
+                    foreach ($change in @(Read-AvmBicepWhatIfChange `
+                                -Output ([string]$result.StdOut) -File $item.Case.RelativePath)) {
+                        $changes.Add($change)
                     }
                 }
                 $passed++

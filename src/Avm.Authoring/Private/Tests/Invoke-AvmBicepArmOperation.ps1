@@ -47,6 +47,9 @@ function Invoke-AvmBicepArmOperation {
     if (-not [string]::IsNullOrWhiteSpace($ParameterPath)) {
         $arguments.AddRange([string[]]@('--parameters', ('@' + $ParameterPath)))
     }
+    if ($Operation -eq 'Create') {
+        $arguments.AddRange([string[]]@('--mode', 'Incremental'))
+    }
     if ($Scope -eq 'group') {
         if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
             throw [AvmConfigurationException]::new('Resource-group Bicep tests require -ResourceGroupName.')
