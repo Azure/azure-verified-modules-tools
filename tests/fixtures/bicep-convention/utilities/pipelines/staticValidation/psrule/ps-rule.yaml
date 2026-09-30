@@ -1,0 +1,27 @@
+binding:
+  preferTargetInfo: true
+  targetType:
+    - type
+    - resourceType
+requires:
+  PSRule: "@pre >=2.9.0"
+  PSRule.Rules.Azure: "@pre >=1.38.0"
+include:
+  module:
+    - PSRule.Rules.Azure
+execution:
+  ruleSuppressed: Debug
+  unprocessedObject: Debug
+input:
+  pathIgnore:
+    - "*"
+    - "!avm/**/defaults/*.test.bicep"
+    - "!avm/**/waf-aligned/*.test.bicep"
+configuration:
+  AZURE_PARAMETER_FILE_EXPANSION: false
+  AZURE_BICEP_FILE_EXPANSION: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 60
+rule:
+  includeLocal: false
+  exclude:
+    - Azure.KeyVault.PurgeProtect

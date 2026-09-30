@@ -528,13 +528,15 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.test-scope-reference'
     }
 
-    It 'reports policy coverage and all required and advisory baselines without claiming PSRule ran' {
+    It 'fails closed when repository PSRule configuration is absent' {
+        Remove-Item -LiteralPath (Join-Path $script:workingRoot `
+                'utilities/pipelines/staticValidation/psrule/ps-rule.yaml')
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Status | Should -Be 'fail'
         $result.ToolSource | Should -Be 'not-run'
         $result.RequiredBaselines | Should -Be @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security')
         $result.AdvisoryBaselines | Should -Be @('Azure.Default', 'Azure.Pillar.Security')
-        $result.Issues[0].Code | Should -Be 'avm.bicep.psrule-incomplete'
+        $result.Issues[0].Code | Should -Be 'avm.bicep.psrule-config'
     }
 }

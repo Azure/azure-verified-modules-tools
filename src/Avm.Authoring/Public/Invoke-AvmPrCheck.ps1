@@ -34,9 +34,11 @@ function Invoke-AvmPrCheck {
         writes nothing and instead treats any needed add/update/remove
         as Status='fail'. This makes stale governed files a hard CI
         failure so the module is refreshed before merge rather than
-        silently rewritten in CI.         For bicep the sync step is unsupported and skipped. A Bicep policy
-        or convention step cannot be skipped: incomplete static coverage
-        fails the run until the required checks are implemented.
+        silently rewritten in CI. For Bicep the sync step is unsupported and
+        skipped. Bicep policy runs the required and advisory PSRule baselines
+        when its repository config and selected test sources are available;
+        missing inputs fail the check. Convention coverage is still
+        incomplete and fails the run until the remaining checks are covered.
 
         The sync step also gates on the managed-files release recorded in
         '.avm/managed-files-version.json': governed files are compared against

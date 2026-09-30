@@ -161,16 +161,26 @@ replaces tenant/subscription/management group, name-prefix, local and custom
 tokens across test sources **and their referenced files** before evaluating
 rules. Its [configuration](https://github.com/Azure/bicep-registry-modules/blob/6eb8e6ff3fe2910043d184da4192799752271ecf/utilities/pipelines/staticValidation/psrule/ps-rule.yaml)
 expands Bicep, applies suppression rules, and excludes selected global rules.
+The [PSRule evaluation slice](2026-09-30-bicep-psrule-policy-evaluation.md)
+uses the target repository's matching configuration and `.ps-rule/` directory
+with exact-version PSRule modules. It stages tokenized selected sources and
+transitive local references outside the checkout, then verifies that each
+baseline produced inspectable results for expanded Azure resources. Missing
+config, tool, token, local reference, baseline, or output fails; a required
+rule violation is an error, and an advisory violation is a warning. It does
+not make the other convention gaps pass.
 
 | Source | PSRule baseline and result in registry | Coverage |
 | --- | --- | --- |
-| W:63 | `Azure.Pillar.Reliability`, required | G: not executed |
-| W:65 | `CB.AVM.WAF.Security`, required | G: not executed |
-| W:93 | `Azure.Default`, advisory | G: not executed |
-| W:95 | `Azure.Pillar.Security`, advisory | G: not executed |
+| W:63 | `Azure.Pillar.Reliability`, required | C: evaluated on staged tests; rule failures are errors |
+| W:65 | `CB.AVM.WAF.Security`, required | C: repository custom baseline; failures are errors |
+| W:93 | `Azure.Default`, advisory | C: evaluated; rule failures are warnings |
+| W:95 | `Azure.Pillar.Security`, advisory | C: evaluated; rule failures are warnings |
 
-`avm.bicep.psrule-incomplete` reports the missing required and advisory
-baselines and fails policy; it does not pretend a rule engine ran. The registry
+PSRule 2.9.0 and PSRule.Rules.Azure 1.47.0 are exact, optional Bicep-only
+dependencies; the registry's own action resolves its package version
+independently. Real local evaluation exercised all eight baseline/test
+combinations using these versions and the pinned Bicep compiler. The registry
 workflow's fork-safe conditions and publication/deployment gates are unchanged.
 Module-owned `tests/unit` execution belongs to the separately reviewed Bicep
 test-tier slice, not convention. JSON `moduleDescription` and Bicep source
@@ -184,10 +194,9 @@ publication-aware versions and changelogs, child publish allowlisting,
 resource-folder singularization, workflow/CODEOWNERS, README drift, and
 advisory API-version checks. Reconcile the scaffold telemetry form with
 registry's literal assertions and cover stored `main.json` drift for
-`modules/` children. Run PSRule on selected tokenized test sources and their
-referenced files with the registry's options and suppression rules, preserving
-required versus advisory results. The coverage ledger above is the
-per-assertion handoff; these are not implicit passes. Preserve the current
+`modules/` children. A separate publication-aware slice must use authoritative
+MCR tags without inventing local published-version history. The coverage
+ledger above is the per-assertion handoff; these are not implicit passes. Preserve the current
 fork-safe and static-validation workflow conditions during any later cutover.
 
 ## Checklist

@@ -71,13 +71,16 @@ Describe 'Invoke-AvmCheckPolicy' {
         }
     }
 
-    It 'reports unimplemented bicep PSRule coverage as a failing diagnostic' {
+    It 'fails closed if no Bicep policy test sources can be selected' {
         $result = InModuleScope 'Avm.Authoring' {
-            Invoke-AvmBicepCheckPolicy -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
+            Invoke-AvmBicepCheckPolicy -Context ([pscustomobject]@{
+                    Ecosystem = 'bicep'; Kind = 'bicep-module'; Root = $TestDrive
+                })
         }
         $result.Status | Should -Be 'fail'
+        $result.ToolSource | Should -Be 'not-run'
         $result.RequiredBaselines.Count | Should -Be 2
         $result.AdvisoryBaselines.Count | Should -Be 2
-        $result.Issues[0].Code | Should -Be 'avm.bicep.psrule-incomplete'
+        $result.Issues.Code | Should -Contain 'avm.bicep.psrule-input-missing'
     }
 }
