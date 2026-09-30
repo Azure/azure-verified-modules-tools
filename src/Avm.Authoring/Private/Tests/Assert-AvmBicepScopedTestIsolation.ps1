@@ -52,7 +52,8 @@ function Assert-AvmBicepScopedTestIsolation {
                 throw [AvmConfigurationException]::new(
                     "Bicep e2e test '$SourcePath' has a nested deployment without an inspectable inline template.")
             }
-            if ($properties['mode'] -cne 'Incremental') {
+            if ($properties['mode'] -isnot [string] -or
+                $properties['mode'] -cne 'Incremental') {
                 throw [AvmConfigurationException]::new(
                     "Bicep e2e test '$SourcePath' has a nested deployment without a literal Incremental mode.")
             }
@@ -70,7 +71,9 @@ function Assert-AvmBicepScopedTestIsolation {
             if ($properties.Contains('expressionEvaluationOptions')) {
                 $options = $properties['expressionEvaluationOptions']
                 if ($options -isnot [System.Collections.IDictionary] -or
-                    $options.Count -ne 1 -or $options['scope'] -cne 'inner') {
+                    $options.Count -ne 1 -or
+                    $options['scope'] -isnot [string] -or
+                    $options['scope'] -cne 'inner') {
                     throw [AvmConfigurationException]::new(
                         "Bicep e2e test '$SourcePath' requires inner-scope nested expression evaluation.")
                 }

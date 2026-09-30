@@ -690,6 +690,7 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
     It 'refuses unsafe nested <Case> before any Azure call' -ForEach @(
         @{ Case = 'Complete mode'; Mode = 'Complete'; Property = '' }
         @{ Case = 'dynamic mode'; Mode = '[parameters(''mode'')]'; Property = '' }
+        @{ Case = 'array mode'; Mode = @('Incremental'); Property = '' }
         @{ Case = 'rollback'; Mode = 'Incremental'; Property = 'onErrorDeployment' }
         @{ Case = 'linked parameters'; Mode = 'Incremental'; Property = 'parametersLink' }
     ) {

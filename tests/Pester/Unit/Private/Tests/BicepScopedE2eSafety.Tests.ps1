@@ -82,6 +82,8 @@ Describe 'Bicep scoped e2e template safety' {
         @{ Case = 'Complete'; Mode = 'Complete' }
         @{ Case = 'dynamic'; Mode = '[parameters(''mode'')]' }
         @{ Case = 'missing'; Mode = $null }
+        @{ Case = 'singleton array'; Mode = @('Incremental') }
+        @{ Case = 'boolean'; Mode = $true }
     ) {
         InModuleScope 'Avm.Authoring' -Parameters @{ RequestedMode = $Mode } {
             param($RequestedMode)
@@ -149,6 +151,11 @@ Describe 'Bicep scoped e2e template safety' {
 
             $properties.parameters = @{}
             $properties.expressionEvaluationOptions = @{ scope = 'outer' }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope sub -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*inner-scope nested expression evaluation*'
+
+            $properties.expressionEvaluationOptions = @{ scope = @('inner') }
             { Assert-AvmBicepScopedTestIsolation -Template $template `
                     -Scope sub -SourcePath 'case.bicep' } |
                 Should -Throw -ExpectedMessage '*inner-scope nested expression evaluation*'
