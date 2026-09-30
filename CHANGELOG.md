@@ -21,6 +21,10 @@ section when cutting a release.
 
 ### Added
 
+- `avm test integration` validates and previews Bicep `tests/e2e` examples
+  with an explicit Azure subscription. Tokens are substituted only in a
+  temporary compiled template, `.e2eignore` is honored, and resource-group
+  targets require an existing group. Terraform integration is unchanged.
 - `avm test unit` runs Bicep Pester unit tests, optional nested module scopes,
   and the existing registry compliance suite when available. Tag and name
   filters, child-process isolation, and separate fail/skipped results make

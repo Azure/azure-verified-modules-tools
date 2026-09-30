@@ -97,7 +97,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('test', 'integration')
             Cmdlet  = 'Invoke-AvmTestIntegration'
-            Summary = 'Run the terraform integration test tier (tests/integration).'
+            Summary = 'Run Bicep ARM validate/what-if or Terraform integration tests.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('test', 'e2e')
