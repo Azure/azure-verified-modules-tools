@@ -189,7 +189,70 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
 
             $plans | Should -HaveCount 1
             $plans[0].Content | Should -Match "metadata description = 'Authored deployment details\.'"
-            $plans[0].Content | Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+            $plans[0].Content | Should -Match ([regex]::Escape(
+                    "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
+            $plans[0].Content | Should -Match ([regex]::Escape('${telemetryIdPrefix}.'))
+            $plans[0].Content | Should -Not -Match 'avmTelemetryIdPrefix'
+        }
+    }
+
+    It 'recognizes only complete <Form> telemetry wiring' -TestCases @(
+        @{
+            Form = 'registry'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+            Expected = $true
+        }
+        @{
+            Form = 'legacy'
+            Declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+            Expected = $true
+        }
+        @{
+            Form = 'conflicting source'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+            Expected = $false
+        }
+        @{
+            Form = 'mismatched reference'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+            Expected = $false
+        }
+    ) {
+        param($Declaration, $Reference, $Expected)
+        $source = @'
+metadata name = 'Authored module name'
+metadata description = 'Authored deployment details.'
+<declaration>
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '<reference>.${uniqueString(resourceGroup().id)}'
+}
+'@.Replace('<declaration>', $Declaration).Replace('<reference>', $Reference)
+        InModuleScope Avm.Authoring -Parameters @{ Source = $source; Expected = $Expected } {
+            param($Source, $Expected)
+            Test-AvmBicepTelemetrySourceWiring -Source (Get-AvmBicepCommentFreeSource -Source $Source) |
+                Should -Be $Expected
+        }
+    }
+
+    It 'does not accept commented-out registry wiring as active' {
+        InModuleScope Avm.Authoring {
+            $source = @'
+/*
+var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '${telemetryIdPrefix}.old'
+}
+*/
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '46d3xbcp.res.123abcd.${uniqueString(resourceGroup().id)}'
+}
+'@
+            Test-AvmBicepTelemetrySourceWiring -Source (Get-AvmBicepCommentFreeSource -Source $source) |
+                Should -BeFalse
         }
     }
 }

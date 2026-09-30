@@ -530,6 +530,11 @@ creating directories or files.
 
 `avm metadata initialize` never overwrites existing files. `-UpdateSource`
 adds a scoped Bicep telemetry load without replacing telemetry transport.
+New source wiring and telemetry-enabled root scaffolds use
+`var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')`
+and `${telemetryIdPrefix}` in the deployment name. Existing source using that
+form or the earlier `avmTelemetryIdPrefix`/`$.telemetryIdPrefix` form is
+preserved without migration; conflicting variable definitions fail.
 When source wiring is requested and no prefix is supplied, initialization
 retains the single, valid prefix already authored in main.bicep, excluding
 that module's own published catalog record from duplicate checks. A prefix

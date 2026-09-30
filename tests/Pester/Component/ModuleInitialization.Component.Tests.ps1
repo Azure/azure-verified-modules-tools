@@ -530,8 +530,11 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
             Should -BeExactly '0.1'
         (Get-Content -LiteralPath (Join-Path $fixture.Path 'CHANGELOG.md') -Raw) |
             Should -Match 'avm/res/storage/storage-account/CHANGELOG.md'
-        (Get-Content -LiteralPath (Join-Path $fixture.Path 'main.bicep') -Raw) |
-            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        $source = Get-Content -LiteralPath (Join-Path $fixture.Path 'main.bicep') -Raw
+        $source | Should -Match ([regex]::Escape(
+                "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape('${telemetryIdPrefix}.'))
+        $source | Should -Not -Match 'avmTelemetryIdPrefix'
         (Test-AvmModuleMetadata -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
                 -CheckSource -SkipModuleVersionCheck).Status | Should -Be 'pass'
     }
@@ -687,18 +690,31 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $before
     }
 
-    It 'generates metadata for an existing source that already reads the prefix from metadata.json' {
+    It 'generates metadata for an existing <Form> source without changing it' -TestCases @(
+        @{
+            Form = 'registry'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+        }
+        @{
+            Form = 'legacy'
+            Declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+        }
+    ) {
+        param($Declaration, $Reference)
         $fixture = New-InitializationFixture
         $null = New-Item -ItemType Directory -Path $fixture.Path
         $sourcePath = Join-Path $fixture.Path 'main.bicep'
-        [System.IO.File]::WriteAllText($sourcePath, @'
+        $source = @'
 metadata name = 'Authored name'
-metadata description = 'Deploys a Storage Account.'
-var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')
+metadata description = 'Authored deployment details.'
+<declaration>
 resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
-  name: '${avmTelemetryIdPrefix}.${uniqueString(resourceGroup().id)}'
+  name: '<reference>.${uniqueString(resourceGroup().id)}'
 }
-'@)
+'@.Replace('<declaration>', $Declaration).Replace('<reference>', $Reference)
+        [System.IO.File]::WriteAllText($sourcePath, $source)
         $before = [System.IO.File]::ReadAllBytes($sourcePath)
         $result = InModuleScope Avm.Authoring -Parameters @{ Target = $fixture.Path; Values = $fixture.InputObject } {
             param($Target, $Values)
@@ -708,6 +724,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
                 -InputObject $Values -SkipModuleVersionCheck
         }
         $result.Metadata.telemetryIdPrefix | Should -BeExactly '46d3xbcp.res.123abcd'
+        $result.Metadata.moduleDescription | Should -BeExactly 'Deploys a Storage Account.'
         $result.PlannedFiles | Should -Not -Contain 'main.bicep'
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $before
     }

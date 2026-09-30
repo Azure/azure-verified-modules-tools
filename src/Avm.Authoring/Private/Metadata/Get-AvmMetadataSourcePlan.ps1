@@ -24,15 +24,16 @@ function Get-AvmMetadataSourcePlan {
         return
     }
 
-    $declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
-    $nameReference = '${avmTelemetryIdPrefix}'
+    $declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+    $nameReference = '${telemetryIdPrefix}'
     $headPattern = "(?m)(?<head>^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@[^']+'[^\r\n]*\{\s*name[\t ]*:[\t ]*')"
-    if ($code.Contains($declaration) -and
-        [regex]::IsMatch($code, $headPattern + [regex]::Escape($nameReference) + '\.')) {
+    if (Test-AvmBicepTelemetrySourceWiring -Source $code) {
         return
     }
-    if ([regex]::IsMatch($code, '(?m)^[\t ]*var[\t ]+avmTelemetryIdPrefix\b')) {
-        throw [System.ArgumentException]::new('main.bicep already defines avmTelemetryIdPrefix differently; review its source manually.')
+    $conflict = [regex]::Match($code, '(?m)^[\t ]*var[\t ]+(?<name>telemetryIdPrefix|avmTelemetryIdPrefix)\b')
+    if ($conflict.Success) {
+        throw [System.ArgumentException]::new(
+            "main.bicep already defines $($conflict.Groups['name'].Value) differently; review its source manually.")
     }
 
     $authoredPrefix = Get-AvmBicepTelemetrySourcePrefix -Path $Path

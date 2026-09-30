@@ -1091,13 +1091,68 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
         $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $result.Changed | Should -BeTrue
         $source = [System.IO.File]::ReadAllText($fixture.SourcePath)
-        $source | Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape(
+                "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape('${telemetryIdPrefix}.'))
+        $source | Should -Not -Match 'avmTelemetryIdPrefix'
         $source | Should -Not -Match ([regex]::Escape("loadJsonContent('metadata.json')"))
         $source | Should -Match ([regex]::Escape("metadata name = 'Storage Accounts'"))
         $source | Should -Match ([regex]::Escape("metadata description = 'Deploys a Storage Account.'"))
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
         (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource).Changed | Should -BeFalse
         [System.IO.File]::ReadAllText($fixture.SourcePath) | Should -BeExactly $source
+    }
+
+    It 'preserves an existing <Form> telemetry reader and independent source description' -TestCases @(
+        @{
+            Form = 'registry'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+        }
+        @{
+            Form = 'legacy'
+            Declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+        }
+    ) {
+        param($Declaration, $Reference)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.moduleDescription = 'Catalog description separate from source.'
+        Save-MetadataFixture -Fixture $fixture
+        $source = [System.IO.File]::ReadAllText($fixture.SourcePath)
+        $source = $source.Replace('param enableTelemetry bool = true', "$Declaration`nparam enableTelemetry bool = true")
+        $source = $source.Replace($fixture.Data.telemetryIdPrefix, $Reference)
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $source)
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $metadataBefore = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        $parameters = $fixture.Parameters
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
+
+        $result.Status | Should -Be 'pass'
+        $result.Changed | Should -BeFalse
+        $result.PlannedFiles | Should -HaveCount 0
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $metadataBefore
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+    }
+
+    It 'rejects a conflicting existing <Form> variable before writing metadata' -TestCases @(
+        @{ Form = 'registry'; VariableName = 'telemetryIdPrefix' }
+        @{ Form = 'legacy'; VariableName = 'avmTelemetryIdPrefix' }
+    ) {
+        param($VariableName)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $source = "var $VariableName = 'authored-other-value'`n" +
+        [System.IO.File]::ReadAllText($fixture.SourcePath)
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $source)
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $parameters = $fixture.Parameters
+
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } |
+            Should -Throw "*already defines $VariableName differently*"
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
     }
 
     It 'owner and canonical type changes never rewrite Bicep source after initialization' {
@@ -1134,7 +1189,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
 
         $result.Metadata.telemetryIdPrefix | Should -BeExactly $expectedPrefix
         [System.IO.File]::ReadAllText($fixture.SourcePath) |
-            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
     }
 
@@ -1168,7 +1223,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $updated = [System.IO.File]::ReadAllText($fixture.SourcePath)
         $updated | Should -Match ([regex]::Escape($comment))
-        $updated | Should -Match ([regex]::Escape("// deployment name`n  name: '" + '${avmTelemetryIdPrefix}'))
+        $updated | Should -Match ([regex]::Escape("// deployment name`n  name: '" + '${telemetryIdPrefix}'))
     }
 
     It 'reuses an authored telemetry prefix for an instrumented utility' {

@@ -54,7 +54,13 @@ Describe 'Integration: module metadata native readers' -Tag Integration -Skip:($
 
         function Get-NativeBicepTelemetryPrefix {
             param($Template)
-            $value = $Template.variables.avmTelemetryIdPrefix
+            $variableName = @('telemetryIdPrefix', 'avmTelemetryIdPrefix') |
+                Where-Object { $Template.variables.PSObject.Properties[$_] } |
+                Select-Object -First 1
+            if (-not $variableName) {
+                throw 'Compiled telemetry prefix variable is missing.'
+            }
+            $value = $Template.variables.PSObject.Properties[$variableName].Value
             $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             while ($value -is [string]) {
                 $reference = [regex]::Match($value, "^\[variables\('([^']+)'\)\]$")
