@@ -31,7 +31,9 @@ function Test-AvmBicepConventionLayout {
 
     foreach ($name in @('main.json', 'README.md')) {
         $matching = @($items | Where-Object { $_.Name -ieq $name })
-        if ($matching.Count -ne 1 -or $matching[0].PSIsContainer -or $matching[0].Name -cne $name) {
+        if ($matching.Count -ne 1 -or $matching[0].PSIsContainer -or $matching[0].Name -cne $name -or
+            ($name -ceq 'main.json' -and
+            ($matching[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path (Join-Path $Scope.Path $name) `
                         -Code 'avm.bicep.required-file' -Message "A regular $name with exact casing is required."))
         }

@@ -4,8 +4,9 @@ function Invoke-AvmBicepTransform {
         Compile Bicep module sources into their checked-in main.json files.
 
     .DESCRIPTION
-        Discovers root and child modules, builds each main.bicep through the
-        pinned Bicep CLI, and writes main.json only when its bytes differ.
+        Discovers root and child modules, including modules/ children, builds
+        each main.bicep through the pinned Bicep CLI, and writes main.json
+        only when its bytes differ.
         Proposed modules without main.bicep do not need a compiled artifact.
         All builds finish before any files are written. -CheckDrift instead
         reports missing or stale main.json files without changing them.
@@ -45,12 +46,11 @@ function Invoke-AvmBicepTransform {
     }
 
     $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
-    $scopes = @(Get-AvmMetadataScope -Context $Context)
+    $scopes = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)
     $plan = [System.Collections.Generic.List[object]]::new()
     $changed = [System.Collections.Generic.List[string]]::new()
     $issues = [System.Collections.Generic.List[object]]::new()
     $filesProcessed = 0
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
     foreach ($scope in $scopes) {
         $items = @(Get-ChildItem -LiteralPath $scope.Path -Force)
@@ -80,16 +80,14 @@ function Invoke-AvmBicepTransform {
         $targetPath = Join-Path -Path $scope.Path -ChildPath 'main.json'
         $compiled = Get-AvmBicepCompiledJson -SourcePath $sourcePath -ToolPath $tool.Path
         $filesProcessed++
-        $expected = $utf8NoBom.GetBytes($compiled)
         $current = if ($compiledFiles.Count -gt 0) { [System.IO.File]::ReadAllBytes($targetPath) } else { $null }
-        if ($null -ne $current -and
-            [System.Linq.Enumerable]::SequenceEqual([byte[]]$current, [byte[]]$expected)) {
+        $kind = Get-AvmBicepCompiledJsonDrift -CompiledJson $compiled -CurrentBytes $current
+        if ($null -eq $kind) {
             continue
         }
 
         $relative = [System.IO.Path]::GetRelativePath($Context.Root, $targetPath).Replace('\', '/')
         if ($CheckDrift) {
-            $kind = if ($null -eq $current) { 'missing' } else { 'stale' }
             $issues.Add([pscustomobject][ordered]@{
                     File     = $relative
                     Line     = 0

@@ -24,7 +24,8 @@ and [W: `avm.template.module.yml`](https://github.com/Azure/bicep-registry-modul
 The [Pester action](https://github.com/Azure/bicep-registry-modules/blob/6eb8e6ff3fe2910043d184da4192799752271ecf/.github/actions/templates/avm-validateModulePester/action.yml#L41-L78)
 runs M across the root and child scopes and module-owned `tests/unit`. M imports
 D at line 378. There are 90 M assertions and two D assertions; every one is
-listed below. `C` = enforced by the first or [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md);
+listed below. `C` = enforced by the first, [compiled convention](2026-09-30-bicep-compiled-convention-checks.md),
+or [child JSON drift](2026-09-30-bicep-child-compiled-json-drift.md) slice;
 `P` = partially enforced but not equivalent; `G` = gap; `E` = pre-existing
 `avm pr-check` step (metadata or Bicep transform). This table tracks cumulative
 coverage; the outcome and validation below describe the first slice at completion.
@@ -62,7 +63,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:565 | No excess push path filters | G |
 | M:585 | Automatic execution restricted to upstream repository | G |
 | M:651 | README regeneration leaves no diff | G: `avm docs` is not proven equivalent |
-| M:717 | Checked-in `main.json` matches rebuilt Bicep | P/E: transform compares exact bytes for ordinary scopes, but does not discover children under `modules/` |
+| M:717 | Checked-in `main.json` matches rebuilt Bicep | C/E: convention and transform compare exact compiled bytes across root, ordinary children and `modules/` children |
 | M:786 | Compiled template is nonempty | C/E: convention builds every source; transform builds modules |
 | M:794 | Compiled ARM schema version is current | C: four scope schemas |
 | M:818 | ARM schema reference uses HTTPS | C |
@@ -124,16 +125,17 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:2269 | `serviceShort` unique throughout repository | C |
 | M:2385 | API versions are recent | G: advisory warnings in current registry |
 | D:51 | Valid JSON `metadata.json` per module | E: existing metadata step; source/child parity belongs to separate slice |
-| D:75 | Compiled telemetry prefix agrees with metadata | P/E: fresh compiled value checked for both forms; transform checks checked-in `main.json` only outside `modules/` children |
+| D:75 | Compiled telemetry prefix agrees with metadata | P/E: fresh compiled value checked for both source forms; transform verifies checked-in `main.json` across all discovered scopes, but literal registry source acceptance differs |
 
 Before its assertions, M:48-60 builds/parses **every** module `main.bicep` and
 discovered `main.test.bicep`. Convention now compiles each root/child module
 and e2e test with the pinned Bicep CLI; failed compilation has a file-specific
 error. E2e requirements use compiled resource counts rather than a source
-heuristic. The pre-existing transform compares checked-in `main.json` for
-ordinary scopes, but its scope discovery excludes children under `modules/`.
-Compilation alone cannot prove their checked-in artifacts are current; this
-remains an explicit fail-closed coverage family.
+heuristic. Convention compares the compiler's exact output bytes with each checked-in
+`main.json`, including nested children under `modules/`. Transform discovers
+the same scopes so `avm pr-check` reports stale or missing artifacts without
+writing them, while `avm pre-commit` can repair them. Source-less metadata-only
+children need no compiled artifact.
 
 The shipped Bicep scaffold declares `avmTelemetryIdPrefix` using
 `loadJsonContent('metadata.json', '$.telemetryIdPrefix')` and describes
@@ -193,8 +195,7 @@ covered e2e compilation and compiled-template assertions. Complete
 publication-aware versions and changelogs, child publish allowlisting,
 resource-folder singularization, workflow/CODEOWNERS, README drift, and
 advisory API-version checks. Reconcile the scaffold telemetry form with
-registry's literal assertions and cover stored `main.json` drift for
-`modules/` children. A separate publication-aware slice must use authoritative
+registry's literal assertions. A separate publication-aware slice must use authoritative
 MCR tags without inventing local published-version history. The coverage
 ledger above is the per-assertion handoff; these are not implicit passes. Preserve the current
 fork-safe and static-validation workflow conditions during any later cutover.

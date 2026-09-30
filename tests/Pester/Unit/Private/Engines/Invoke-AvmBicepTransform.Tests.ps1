@@ -58,17 +58,21 @@ Describe 'Invoke-AvmBicepTransform' {
         [System.IO.File]::GetLastWriteTimeUtc($output) | Should -Be $timestamp
     }
 
-    It 'only compiles root and child sources in a monorepo, excluding proposed modules and tests' {
+    It 'compiles nested modules children in a monorepo but excludes proposed modules and tests' {
         $mono = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $root = Join-Path -Path $mono -ChildPath 'avm' -AdditionalChildPath 'res', 'mock', 'widgets'
         $child = Join-Path $root 'child'
+        $nested = Join-Path $root 'modules' 'project'
+        $metadataOnly = Join-Path $root 'modules' 'proposed'
         $proposed = Join-Path -Path $mono -ChildPath 'avm' -AdditionalChildPath 'res', 'mock', 'proposal'
         $testPath = Join-Path -Path $root -ChildPath 'tests' -AdditionalChildPath 'e2e', 'defaults'
-        foreach ($directory in @($child, $proposed, $testPath)) {
+        foreach ($directory in @($child, $nested, $metadataOnly, $proposed, $testPath)) {
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
         }
         Set-Content -LiteralPath (Join-Path $root 'main.bicep') -Value 'param root string' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $child 'main.bicep') -Value 'param child string' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $nested 'main.bicep') -Value 'param nested string' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $metadataOnly 'metadata.json') -Value '{}' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $proposed 'metadata.json') -Value '{}' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $testPath 'main.bicep') -Value 'param test string' -Encoding utf8
         $ctx = [pscustomobject]@{ Kind = 'bicep-monorepo'; Root = $mono; Ecosystem = 'bicep' }
@@ -79,13 +83,15 @@ Describe 'Invoke-AvmBicepTransform' {
         }
 
         $result.Status | Should -Be 'pass'
-        $result.FilesProcessed | Should -Be 2
+        $result.FilesProcessed | Should -Be 3
         Test-Path -LiteralPath (Join-Path $root 'main.json') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $child 'main.json') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $nested 'main.json') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $metadataOnly 'main.json') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $proposed 'main.json') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $testPath 'main.json') | Should -BeFalse
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 2
+            Should -Invoke Invoke-AvmProcess -Exactly 3
         }
     }
 
@@ -112,6 +118,44 @@ Describe 'Invoke-AvmBicepTransform' {
         ($result.Issues.Message -join ',') | Should -Match 'avm pre-commit'
         [System.IO.File]::ReadAllBytes($output) | Should -Be $before
         Test-Path -LiteralPath (Join-Path $child 'main.json') | Should -BeFalse
+    }
+
+    It 'reports and repairs nested modules drift without changing files during the check' {
+        $nested = Join-Path $script:moduleDir 'modules' 'project'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested 'main.bicep') -Value 'param project string' -Encoding utf8
+        $artifact = Join-Path $nested 'main.json'
+        [System.IO.File]::WriteAllText($artifact, '{"stale":true}', [System.Text.UTF8Encoding]::new($false))
+        $before = [System.IO.File]::ReadAllBytes($artifact)
+        $ctx = $script:context
+
+        $drift = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmBicepTransform -Context $C -CheckDrift
+        }
+        $drift.Status | Should -Be 'fail'
+        $drift.FilesProcessed | Should -Be 2
+        $drift.Changed.Count | Should -Be 0
+        @($drift.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.json-stale' -and $_.File -eq 'modules/project/main.json'
+            }).Count | Should -Be 1
+        [System.IO.File]::ReadAllBytes($artifact) | Should -Be $before
+        Test-Path -LiteralPath (Join-Path $script:moduleDir 'main.json') | Should -BeFalse
+
+        $written = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmBicepTransform -Context $C -Confirm:$false
+        }
+        $written.Status | Should -Be 'pass'
+        $written.Changed | Should -Contain $artifact
+        [System.IO.File]::ReadAllText($artifact) | Should -Be $script:compiled
+        $clean = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Invoke-AvmBicepTransform -Context $C -CheckDrift
+        }
+        $clean.Status | Should -Be 'pass'
+        $clean.FilesProcessed | Should -Be 2
+        $clean.Issues.Count | Should -Be 0
     }
 
     It 'validates and reports planned output without writing it under WhatIf' {
@@ -143,9 +187,9 @@ Describe 'Invoke-AvmBicepTransform' {
         $drift.Issues[0].Code | Should -Be 'avm.bicep.json-missing'
     }
 
-    It 'does not write earlier files when a later child build fails' {
-        $child = Join-Path $script:moduleDir 'child'
-        New-Item -ItemType Directory -Path $child | Out-Null
+    It 'does not write earlier files when a later nested modules child build fails' {
+        $child = Join-Path $script:moduleDir 'modules' 'project'
+        New-Item -ItemType Directory -Path $child -Force | Out-Null
         $childSource = Join-Path $child 'main.bicep'
         Set-Content -LiteralPath $childSource -Value 'param child string' -Encoding utf8
         $ctx = $script:context

@@ -30,7 +30,10 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             }
             Mock Invoke-AvmProcess {
                 $source = $ArgumentList[2]
-                $compiled = if ($source.EndsWith('main.test.bicep', [System.StringComparison]::Ordinal)) {
+                $compiled = if ($source -match '[\\/]modules[\\/].*[\\/]main\.bicep$') {
+                    $script:originalChildCompiled
+                }
+                elseif ($source.EndsWith('main.test.bicep', [System.StringComparison]::Ordinal)) {
                     $script:compiledE2E
                 }
                 else {
@@ -56,9 +59,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 6
+        $result.UncoveredFamilies.Count | Should -Be 5
         $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
-        $result.UncoveredFamilies | Should -Contain 'checked-in main.json drift for children under modules/'
+        $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
         $result.Issues.Count | Should -Be 1
         $result.Issues[0].Code | Should -Be 'avm.bicep.convention-incomplete'
         $result.Issues[0].Severity | Should -Be 'error'
@@ -388,6 +391,51 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         @($failing.Issues | Where-Object {
                 $_.Code -eq 'avm.bicep.required-file' -and $_.File -eq 'modules/project/README.md'
             }).Count | Should -Be 1
+    }
+
+    It 'compares nested modules checked-in ARM JSON and names stale or missing artifacts without rewriting them' {
+        $child = Join-Path $script:modulePath 'modules' 'project'
+        New-Item -ItemType Directory -Path $child -Force | Out-Null
+        foreach ($name in @('main.bicep', 'main.json', 'README.md')) {
+            Copy-Item -LiteralPath (Join-Path $script:modulePath 'child' $name) `
+                -Destination (Join-Path $child $name)
+        }
+        $artifact = Join-Path $child 'main.json'
+        $passing = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $passing.ScopesChecked | Should -Be 3
+        @($passing.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
+            Should -Be 0
+
+        $original = [System.IO.File]::ReadAllText($artifact)
+        [System.IO.File]::WriteAllText($artifact, "$original`n", [System.Text.UTF8Encoding]::new($false))
+        $before = [System.IO.File]::ReadAllBytes($artifact)
+        $stale = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $staleIssues = @($stale.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.json-stale' -and $_.File -eq 'modules/project/main.json'
+            })
+        $staleIssues.Count | Should -Be 1
+        $staleIssues[0].Message | Should -Match 'avm pre-commit'
+        [System.IO.File]::ReadAllBytes($artifact) | Should -Be $before
+
+        Remove-Item -LiteralPath $artifact
+        $missing = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($missing.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.json-missing' -and $_.File -eq 'modules/project/main.json'
+            }).Count | Should -Be 1
+        Test-Path -LiteralPath $artifact | Should -BeFalse
+    }
+
+    It 'does not require compiled JSON for a source-less metadata-only modules child' {
+        $child = Join-Path $script:modulePath 'modules' 'proposed'
+        New-Item -ItemType Directory -Path $child -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $child 'metadata.json'), '{}', [System.Text.UTF8Encoding]::new($false))
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.ScopesChecked | Should -Be 3
+        $result.CompiledFiles | Should -Be 5
+        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
+            Should -Be 0
     }
 
     It 'identifies missing files and incorrect README casing in root and child scopes' {

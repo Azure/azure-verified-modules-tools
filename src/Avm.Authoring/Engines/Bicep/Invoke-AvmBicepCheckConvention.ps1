@@ -4,8 +4,9 @@ function Invoke-AvmBicepCheckConvention {
         Run convention checks against a Bicep module.
 
     .DESCRIPTION
-        Checks layout, versions, changelogs, compiled ARM templates, and e2e
-        test sources across root and child modules without modifying them.
+        Checks layout, versions, changelogs, compiled ARM templates, checked-in
+        main.json drift, and e2e test sources across root and child modules
+        without modifying them.
         Other registry checks still require a failing coverage issue even
         when every implemented rule passes.
 
@@ -151,6 +152,24 @@ function Invoke-AvmBicepCheckConvention {
                 $compiledTests[$sourceFile.Path] = $template
                 continue
             }
+            $artifactPath = Join-Path $sourceFile.Scope.Path 'main.json'
+            $artifact = @(Get-ChildItem -LiteralPath $sourceFile.Scope.Path -Force |
+                    Where-Object { $_.Name -ieq 'main.json' })
+            $drift = $null
+            if ($artifact.Count -eq 0) {
+                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json -CurrentBytes $null
+            }
+            elseif ($artifact.Count -eq 1 -and $artifact[0].Name -ceq 'main.json' -and
+                -not $artifact[0].PSIsContainer -and
+                -not ($artifact[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json `
+                    -CurrentBytes ([System.IO.File]::ReadAllBytes($artifact[0].FullName))
+            }
+            if ($null -ne $drift) {
+                $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $artifactPath `
+                            -Code "avm.bicep.json-$drift" `
+                            -Message ("The checked-in main.json is $drift; run 'avm pre-commit' and commit the generated artifact.")))
+            }
             foreach ($issue in @(Test-AvmBicepConventionCompiledTemplate -Root $Context.Root `
                         -Scope $sourceFile.Scope -Template $template -SourcePath $sourceFile.Path)) {
                 $issues.Add($issue)
@@ -178,7 +197,6 @@ function Invoke-AvmBicepCheckConvention {
         'README regeneration and API-version checks'
         'child publish allowlist and resource-folder singularization'
         'registry-literal telemetry syntax and description parity for scaffolded modules'
-        'checked-in main.json drift for children under modules/'
     )
     $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $Context.Root `
                 -Code 'avm.bicep.convention-incomplete' `
