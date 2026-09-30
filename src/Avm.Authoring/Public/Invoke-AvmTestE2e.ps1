@@ -115,7 +115,8 @@ function Invoke-AvmTestE2e {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
+        -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     switch ($context.Ecosystem) {
         'terraform' {

@@ -99,7 +99,6 @@ Describe 'Repository sync candidate validation' {
                 Subscription = $env:ARM_SUBSCRIPTION_ID
                 UseCli = $env:ARM_USE_CLI
                 GhToken = $env:GH_TOKEN
-                SkipNestedVersionCheck = $PSDefaultParameterValues['*:SkipModuleVersionCheck']
             }
             [pscustomobject]@{ Status = 'pass'; Steps = @() }
         }
@@ -115,14 +114,13 @@ Describe 'Repository sync candidate validation' {
                 -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
                 -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
             $result | Should -BeExactly 'Passed'
-            Should -Invoke Invoke-AvmPrCheck -Exactly 1
+            Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             $script:prCheckEnvironment.Client | Should -BeExactly $script:client
             $script:prCheckEnvironment.Tenant | Should -BeExactly $script:tenant
             $script:prCheckEnvironment.Subscription | Should -BeExactly $script:subscription
             $script:prCheckEnvironment.UseCli | Should -BeExactly 'false'
             $script:prCheckEnvironment.GhToken | Should -BeNullOrEmpty
-            $script:prCheckEnvironment.SkipNestedVersionCheck | Should -BeTrue
-            Should -Invoke Invoke-AvmTestUnit -Exactly 1
+            Should -Invoke Invoke-AvmTestUnit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             if ([string]::IsNullOrEmpty($originalClient)) {
                 $env:ARM_CLIENT_ID | Should -BeNullOrEmpty
             } else {

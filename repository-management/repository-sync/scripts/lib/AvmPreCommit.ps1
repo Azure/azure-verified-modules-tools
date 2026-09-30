@@ -101,13 +101,6 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     }
     if ($modulePath) {
         $preCommitParameters.SkipModuleVersionCheck = $true
-        $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
-            $PSDefaultParameterValues.Clone()
-        } else {
-            @{}
-        }
-        $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
-        $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
     }
 
     $moduleName = if ($modulePath) { $modulePath } else { 'Avm.Authoring' }

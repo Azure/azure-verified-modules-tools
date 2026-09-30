@@ -156,18 +156,19 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
 
     It 'does not replace the checked-out authoring module with the Gallery release' {
         $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
-        $script:skipNestedVersionCheck = $false
-        Mock Invoke-AvmPreCommit {
-            $script:skipNestedVersionCheck = $PSDefaultParameterValues['*:SkipModuleVersionCheck']
-            [pscustomobject]@{ Status = 'pass' }
-        }
+        Mock Invoke-AvmPreCommit { [pscustomobject]@{ Status = 'pass' } }
         Mock Update-PSResource { throw 'Gallery must not be upgraded during a branch preview.' }
         $null = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' `
             -repositoryConfigDir 'configuration' -modulePath $source
         Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq $source -and $Force }
         Should -Invoke Invoke-AvmPreCommit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
         Should -Invoke Update-PSResource -Times 0
-        $script:skipNestedVersionCheck | Should -BeTrue
+    }
+
+    It 'keeps the Gallery version check enabled without a checked-out source' {
+        Mock Invoke-AvmPreCommit { [pscustomobject]@{ Status = 'pass' } }
+        $null = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' -repositoryConfigDir 'configuration'
+        Should -Invoke Invoke-AvmPreCommit -Exactly 1 -ParameterFilter { -not $SkipModuleVersionCheck }
     }
 
     It 'keeps the existing Terraform preparation and upgrade behavior in its adapter' {

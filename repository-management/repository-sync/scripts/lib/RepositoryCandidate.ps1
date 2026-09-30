@@ -229,13 +229,6 @@ function Invoke-RepositorySyncCandidateValidation {
     if ($active.Version.ToString() -cne $candidate.authoringVersion) {
         throw [System.InvalidOperationException]::new('The validation job loaded a different Avm.Authoring version than candidate preparation.')
     }
-    $PSDefaultParameterValues = if ($PSDefaultParameterValues) {
-        $PSDefaultParameterValues.Clone()
-    } else {
-        @{}
-    }
-    $PSDefaultParameterValues['*:SkipModuleVersionCheck'] = $true
-    $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
     $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-candidate-validation-' + [guid]::NewGuid().ToString('N'))
     $root = Join-Path $workspace 'repository'
     $null = New-Item -ItemType Directory -Path $root -Force

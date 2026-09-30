@@ -1064,7 +1064,8 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   and `Get-AvmVersion` instead return the running version with an update warning.
   `avm update` bypasses the guard so it can install the newer version.
   `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
-  checkouts; Gallery lookup failures warn and allow the command to continue.
+  checkouts. Composed commands forward it to module context resolution and
+  nested steps; Gallery lookup failures warn and allow the command to continue.
 - SemVer 2.0.0. Pre-release labels: `-preview.N`, `-rc.N`.
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.

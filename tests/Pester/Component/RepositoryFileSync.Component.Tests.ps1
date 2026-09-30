@@ -579,3 +579,41 @@ if ($result.HasChanges -or $result.Count -ne 2) { throw 'Unexpected legacy resul
         @($lines | Where-Object { $_ -ceq 'fresh-process-transport-ok' }) | Should -HaveCount 1
     }
 }
+
+Describe 'Checked-out authoring source preview' -Tag Component {
+    It 'keeps the version opt-out inside the imported module without a Gallery upgrade' {
+        $root = Join-Path $TestDrive ('terraform-preview-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $root
+        [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), "terraform {}`n")
+        $source = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+
+        Mock Import-Module {} -ParameterFilter { $Name -ceq $source }
+        Mock Test-AvmModuleVersion -ModuleName Avm.Authoring {
+            if (-not $SkipModuleVersionCheck) {
+                throw [System.InvalidOperationException]::new('A nested Gallery version check was not skipped.')
+            }
+        }
+        Mock Resolve-AvmCommandTool -ModuleName Avm.Authoring { @() }
+        Mock Test-AvmMetadataModules -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
+        Mock Invoke-AvmSync -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass' } }
+        Mock Invoke-AvmCheckConvention -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass' } }
+        Mock Invoke-AvmTransform -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass' } }
+        Mock Invoke-AvmFormat -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass' } }
+        Mock Invoke-AvmDocs -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'pass' } }
+        Mock Update-PSResource { throw 'The Gallery must not be upgraded during a source preview.' }
+
+        Push-Location $root
+        try {
+            $result = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' `
+                -repositoryConfigDir 'configuration' -modulePath $source
+            $result.Status | Should -BeExactly 'pass'
+            Should -Invoke Test-AvmModuleVersion -ModuleName Avm.Authoring -Exactly 2 -ParameterFilter {
+                $SkipModuleVersionCheck
+            }
+            Should -Invoke Update-PSResource -Exactly 0
+        }
+        finally {
+            Pop-Location
+        }
+    }
+}
