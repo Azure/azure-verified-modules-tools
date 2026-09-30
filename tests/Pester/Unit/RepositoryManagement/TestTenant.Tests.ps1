@@ -22,23 +22,26 @@ Describe 'Central test tenant group resolution' {
         $result.Topics | Should -Be @('avm')
     }
 
-    It 'selects the existing ten canaries without changing their membership or orders' {
-        $ring0 = $script:config.repositoryGroups | Where-Object name -EQ 'canary-ring-0'
-        $ring1 = $script:config.repositoryGroups | Where-Object name -EQ 'canary-ring-1'
-        $ring0.order | Should -Be 20
-        $ring1.order | Should -Be 10
-        $ring0.repositories | Should -Be @('avm-ptn-example-repo')
-        $ring1.repositories | Should -Be @(
-            'avm-ptn-example-repo', 'avm-res-devopsinfrastructure-pool', 'avm-res-network-virtualnetwork',
-            'avm-res-documentdb-databaseaccount', 'avm-res-app-managedenvironment', 'avm-res-documentdb-mongocluster',
-            'avm-res-compute-disk', 'avm-res-dbformysql-flexibleserver', 'avm-res-cdn-profile', 'avm-res-avs-privatecloud'
-        )
-        foreach ($repo in $ring1.repositories) {
-            (Resolve-RepositorySettings -repositoryConfig $script:config -repoId $repo).TestTenant | Should -BeExactly 'bami'
+    It 'validates the checked-in configuration and its BAMI default for unlisted repositories' {
+        $default = @($script:config.repositoryGroups | Where-Object name -EQ 'default')
+        $default | Should -HaveCount 1
+        $default[0].repositories | Should -Be @('*')
+        $default[0].testTenant | Should -BeExactly 'bami'
+        (Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'unlisted-repository').TestTenant |
+            Should -BeExactly 'bami'
+        & (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Test-RepositoryConfig.ps1')
+    }
+
+    It 'inherits the BAMI default while allowing an explicit higher-order legacy exception' {
+        $config = [pscustomobject]@{
+            repositoryGroups = @(
+                [pscustomobject]@{ name = 'default'; order = -1; repositories = @('*'); testTenant = 'bami' }
+                [pscustomobject]@{ name = 'files'; order = 20; repositories = @('exception'); managedFiles = @('overlay') }
+                [pscustomobject]@{ name = 'legacy'; order = 5; repositories = @('exception'); testTenant = 'legacy' }
+            )
         }
-        foreach ($repo in @('avm-res-keyvault-vault', 'avm-ptn-alz', 'unlisted')) {
-            (Resolve-RepositorySettings -repositoryConfig $script:config -repoId $repo).TestTenant | Should -BeExactly 'legacy'
-        }
+        (Resolve-RepositorySettings -repositoryConfig $config -repoId 'exception').TestTenant | Should -BeExactly 'legacy'
+        (Resolve-RepositorySettings -repositoryConfig $config -repoId 'unlisted').TestTenant | Should -BeExactly 'bami'
     }
 
     It 'uses higher order then later declaration independently of managed files' {
@@ -64,27 +67,64 @@ Describe 'Central test tenant group resolution' {
     }
 
     It 'preserves teams, topics, CODEOWNERS and workflow-ref precedence' {
-        $result = Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'avm-ptn-example-repo'
-        $result.RepositoryGroupNames | Should -Be @('default', 'canary-ring-0', 'canary-ring-1', 'azure-verified-modules-tier-1')
-        $result.Topics | Should -Be @('azure-verified-modules', 'avm', 'canary', 'avm-tier-1')
-        $result.CodeOwnersDefaultTeams | Should -Be @('azure-verified-modules-engineering-owners')
-        $result.Teams.Count | Should -Be 4
-        $moduleOwners = @($result.Teams | Where-Object name -eq 'azure-verified-modules-module-owners')
-        $moduleOwners | Should -HaveCount 1
-        $moduleOwners[0].repositoryPermission | Should -Be 'push'
-        $moduleOwners[0].environmentApproval | Should -BeFalse
-        $result.WorkloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef |
-            Should -Be 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
-        & (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Test-RepositoryConfig.ps1')
+        $config = [pscustomobject]@{
+            repositoryGroups = @(
+                [pscustomobject]@{
+                    name = 'default'; order = -1; repositories = @('*'); testTenant = 'legacy'
+                    teams = @([pscustomobject]@{ name = 'maintainers'; repositoryPermission = 'push'; environmentApproval = $true })
+                    topics = @('shared')
+                    codeOwnersFileProtectionTeams = @('maintainers')
+                    workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
+                        jobWorkflowRef = 'Azure/example/.github/workflows/test.yml@refs/heads/main'
+                    }
+                }
+                [pscustomobject]@{
+                    name = 'specific'; order = 10; repositories = @('example')
+                    topics = @('specific')
+                    codeOwnersTeams = @('maintainers')
+                    pullRequestBypassTeams = @('maintainers')
+                    workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
+                        jobWorkflowRef = 'Azure/example/.github/workflows/test.yml@refs/heads/release'
+                    }
+                }
+            )
+        }
+        $before = Resolve-RepositorySettings -repositoryConfig $config -repoId 'example'
+        $config.repositoryGroups[0].testTenant = 'bami'
+        $after = Resolve-RepositorySettings -repositoryConfig $config -repoId 'example'
+        $before.TestTenant | Should -BeExactly 'legacy'
+        $after.TestTenant | Should -BeExactly 'bami'
+        foreach ($key in @(
+            'RepositoryGroupNames', 'Teams', 'Topics', 'CodeOwnersDefaultTeams',
+            'CodeOwnersFileProtectionTeams', 'PullRequestBypassTeams',
+            'WorkloadIdentityFederationSubjectClaimOverrides'
+        )) {
+            (ConvertTo-Json -InputObject $after[$key] -Depth 10 -Compress) |
+                Should -BeExactly (ConvertTo-Json -InputObject $before[$key] -Depth 10 -Compress)
+        }
+        $after.WorkloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef |
+            Should -BeExactly 'Azure/example/.github/workflows/test.yml@refs/heads/release'
     }
 
     It 'does not change the authoring module managed-file group resolution' {
+        $config = [pscustomobject]@{
+            repositoryGroups = @(
+                [pscustomobject]@{ name = 'default'; order = -1; repositories = @('*'); testTenant = 'legacy'; managedFiles = @('root') }
+                [pscustomobject]@{ name = 'files'; order = 20; repositories = @('example'); managedFiles = @('overlay') }
+            )
+        }
         $module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -PassThru
-        $groups = & $module {
+        $before = & $module {
             param($Config)
-            (Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $Config -RepoId 'avm-ptn-example-repo').FileGroups
-        } $script:config
-        $groups | Should -Be @('root', 'canary-ring-1', 'canary-ring-0')
+            (Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $Config -RepoId 'example').FileGroups
+        } $config
+        $config.repositoryGroups[0].testTenant = 'bami'
+        $after = & $module {
+            param($Config)
+            (Resolve-AvmManagedFilesRepositorySetting -RepositoryConfig $Config -RepoId 'example').FileGroups
+        } $config
+        $before | Should -Be @('root', 'overlay')
+        $after | Should -Be $before
     }
 }
 

@@ -3,7 +3,7 @@
     {
       "name": "default",
       "order": -1,
-      "testTenant": "legacy",
+      "testTenant": "bami",
       "repositories": [
         "*"
       ],
