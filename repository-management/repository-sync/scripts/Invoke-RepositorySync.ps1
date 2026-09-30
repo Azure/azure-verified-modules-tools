@@ -93,9 +93,8 @@ if(!$repositoryCreationModeEnabled){
 $repositoryConfig = Get-Content -Path $repoConfigFilePath -Raw | ConvertFrom-Json
 $settings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId $repoId
 $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'legacy' } else { $settings.TestTenant }
-if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true' -and
-    ($env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or $env:GITHUB_REF -cne 'refs/heads/main')) {
-    throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
+if ($selectedTestTenant -ceq 'bami') {
+    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $planOnly
 }
 $testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
 $repositorySyncContext = if ($repositoryCreationModeEnabled) {

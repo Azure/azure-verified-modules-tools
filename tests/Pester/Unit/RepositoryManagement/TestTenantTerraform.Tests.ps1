@@ -343,13 +343,11 @@ Describe 'Terraform effective contract and state wiring' {
         $subscriptions.id | Should -Not -Contain $settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
     }
 
-    It 'validates selected settings and trusted main before mutations without an activation switch' {
+    It 'validates selected settings and the trusted BAMI run context before mutations without an activation switch' {
         $source = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1')
         $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation'
-        $source | Should -Match '\$env:GITHUB_ACTIONS -eq ''true'''
-        $source | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
-        $source | Should -Match '\$env:GITHUB_REF -cne ''refs/heads/main'''
-        $source.IndexOf('$env:GITHUB_REPOSITORY') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$planOnly'
+        $source.IndexOf('Assert-AvmBamiRepositorySyncRunContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-AvmRepositorySyncFederationContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
@@ -364,6 +362,11 @@ Describe 'Terraform effective contract and state wiring' {
         $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled'
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+        $helper | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$PlanOnly'
+        $helper | Should -Match '\$env:GITHUB_ACTIONS -cne ''true'''
+        $helper | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
+        $helper | Should -Match '\$env:GITHUB_EVENT_NAME -ceq ''workflow_dispatch'''
+        $helper | Should -Match '\$env:GITHUB_REF -cne ''refs/heads/main'''
         $helper | Should -Not -Match 'state (mv|rm|push|pull)|force-unlock|Import-Az|az login|Set-Az'
     }
 }

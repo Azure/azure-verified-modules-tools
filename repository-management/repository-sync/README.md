@@ -59,9 +59,10 @@ approval for that consequence before running manual canaries.
 The central `testTenant` selection determines which repositories use BAMI;
 there is no additional activation variable or script parameter. BAMI-selected
 repositories require the [complete BAMI bundle](../README.md#test-tenant-selection)
-before cleanup, Terraform, or repository mutations. In GitHub Actions they also
-require the trusted Tools repository and `refs/heads/main`. Legacy selections
-retain their normal path without requiring BAMI values.
+before cleanup, Terraform, or repository mutations. BAMI apply runs require
+the trusted Tools repository on `refs/heads/main`; manually dispatched
+`plan_only=true` previews can also run from its feature branches. Legacy
+selections retain their normal path without requiring BAMI values.
 
 Selected canaries attempt BAMI preparation during normal trusted-main syncs,
 including scheduled and repository-dispatch applies. Manual `plan_only` still
@@ -120,7 +121,10 @@ set `use_workflow_authoring_source=false` to test the released Gallery module.
 Scheduled and manually requested apply runs continue to use Gallery.
 Plan-only does not provision a missing `avm-validation` federated credential:
 apply that prerequisite separately before the first preview. BAMI's
-trusted-main restriction still applies. The validation job can run
+trusted-main restriction remains in force for applies; a manually dispatched
+branch preview is plan-only. If its identity or validation federation is
+still pending, BAMI preparation stops and no module checks run for that
+repository. The validation job can run
 module-owned PowerShell hooks and Terraform unit-test apply blocks, so
 plan-only prevents repository publication and governance apply, **not** every
 possible Azure-side test action.

@@ -170,16 +170,22 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    It 'rejects BAMI Actions execution outside trusted tools main: <Repository> <Ref>' -TestCases @(
-        @{ Repository = 'fork/azure-verified-modules-tools'; Ref = 'refs/heads/main' }
-        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature' }
-        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/pull/1/merge' }
-        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = '' }
-        @{ Repository = ''; Ref = 'refs/heads/main' }
+    It 'rejects untrusted or non-manual BAMI branch runs: <Repository> <Ref> <Event> <PlanOnly>' -TestCases @(
+        @{ Repository = 'fork/azure-verified-modules-tools'; Ref = 'refs/heads/feature'; Event = 'workflow_dispatch'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature'; Event = 'workflow_dispatch'; PlanOnly = $false }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature'; Event = 'schedule'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature'; Event = 'repository_dispatch'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/heads/feature'; Event = 'pull_request'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/pull/1/merge'; Event = 'workflow_dispatch'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = 'refs/tags/v1.0.0'; Event = 'workflow_dispatch'; PlanOnly = $true }
+        @{ Repository = 'Azure/azure-verified-modules-tools'; Ref = ''; Event = 'workflow_dispatch'; PlanOnly = $true }
+        @{ Repository = ''; Ref = 'refs/heads/main'; Event = 'schedule'; PlanOnly = $false }
     ) {
-        param($Repository, $Ref)
+        param($Repository, $Ref, $Event, $PlanOnly)
         $env:GITHUB_REPOSITORY = $Repository
         $env:GITHUB_REF = $Ref
+        $env:GITHUB_EVENT_NAME = $Event
+        $script:arguments.planOnly = $PlanOnly
         Mock Clear-TerraformWorkspace {}
         Mock Invoke-AvmBamiRepositoryIdentity {}
         { & $script:driver @script:arguments } | Should -Throw '*requires trusted*main*'
@@ -187,6 +193,24 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
         Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'passes a trusted manual BAMI branch plan to identity preparation without publishing' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/jaredfholgate-mapotf-telemetry-alignment'
+        $script:arguments.planOnly = $true
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
+
+        $result = & $script:driver @script:arguments
+
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+            $PlanOnly -and $RepositorySyncRepositoryId -ceq '1239632211'
+        }
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
     }
 
     It 'continues the ordinary path for explicit legacy with PlanOnly <PlanOnly>' -TestCases @(
@@ -344,6 +368,21 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             }
             Should -Invoke Start-Process -Exactly 0
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        }
+
+        It 'continues a trusted manual BAMI branch plan through Terraform and pre-commit' {
+            $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+            $env:GITHUB_REF = 'refs/heads/jaredfholgate-mapotf-telemetry-alignment'
+            $script:arguments.planOnly = $true
+
+            $null = & $script:driver @script:arguments
+
+            $script:managementState.Events | Should -Contain 'identity'
+            $script:managementState.Events | Should -Contain 'terraform'
+            $script:managementState.Events | Should -Contain 'files'
+            Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $PlanOnly }
+            Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly }
+            Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter { $planOnly }
         }
 
         It 'retains the pending BAMI identity stop before repository changes' {
