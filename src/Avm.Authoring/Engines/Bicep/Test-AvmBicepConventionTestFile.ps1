@@ -9,7 +9,10 @@ function Test-AvmBicepConventionTestFile {
         $Scope,
 
         [Parameter(Mandatory)]
-        [hashtable] $ServiceShortIndex
+        [hashtable] $ServiceShortIndex,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, object]] $CompiledTestFiles
     )
 
     Set-StrictMode -Version 3.0
@@ -24,6 +27,9 @@ function Test-AvmBicepConventionTestFile {
     $testFiles = @(Get-ChildItem -LiteralPath $testsPath -File -Recurse -Filter 'main.test.bicep' |
             Sort-Object FullName -CaseSensitive)
     foreach ($testFile in $testFiles) {
+        if ($testFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            continue
+        }
         $source = Get-AvmBicepCommentFreeSource -Source ([System.IO.File]::ReadAllText($testFile.FullName))
         foreach ($metadataName in @('name', 'description')) {
             $pattern = "(?m)^[ \t]*metadata[ \t]+$metadataName[ \t]*=[ \t]*'(?<value>(?:\\.|[^'\\\r\n])*)'[ \t]*\r?$"
@@ -42,7 +48,8 @@ function Test-AvmBicepConventionTestFile {
         $deployment = [regex]::Match(
             $source,
             "(?m)^[ \t]*module[ \t]+testDeployment[ \t]+'(?<target>(?:\.\./)+[^'\r\n]*main\.bicep)'[ \t]*=[ \t]*(?:if[ \t]*\([^\r\n]*\)[ \t]*)?(?:\[|\{)[ \t]*\r?$")
-        $hasResources = [regex]::IsMatch($source, '(?m)^[ \t]*(?:module|resource)[ \t]+\w')
+        $hasResources = $CompiledTestFiles.ContainsKey($testFile.FullName) -and
+        $CompiledTestFiles[$testFile.FullName]['resources'].Count -gt 0
 
         if ($hasResources) {
             if (-not $short.Success) {

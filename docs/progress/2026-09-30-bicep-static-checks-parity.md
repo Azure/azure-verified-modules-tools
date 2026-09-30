@@ -24,9 +24,10 @@ and [W: `avm.template.module.yml`](https://github.com/Azure/bicep-registry-modul
 The [Pester action](https://github.com/Azure/bicep-registry-modules/blob/6eb8e6ff3fe2910043d184da4192799752271ecf/.github/actions/templates/avm-validateModulePester/action.yml#L41-L78)
 runs M across the root and child scopes and module-owned `tests/unit`. M imports
 D at line 378. There are 90 M assertions and two D assertions; every one is
-listed below. `C` = enforced by this convention slice; `P` = partially enforced
-but not equivalent; `G` = gap; `E` = pre-existing `avm pr-check` step (metadata
-or Bicep transform), not a new convention rule.
+listed below. `C` = enforced by the first or [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md);
+`P` = partially enforced but not equivalent; `G` = gap; `E` = pre-existing
+`avm pr-check` step (metadata or Bicep transform). This table tracks cumulative
+coverage; the outcome and validation below describe the first slice at completion.
 Even when all `C` checks pass, `avm.bicep.convention-incomplete` makes the
 convention step **fail**, rather than silently claiming complete parity.
 
@@ -61,42 +62,42 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:565 | No excess push path filters | G |
 | M:585 | Automatic execution restricted to upstream repository | G |
 | M:651 | README regeneration leaves no diff | G: `avm docs` is not proven equivalent |
-| M:717 | Checked-in `main.json` matches rebuilt Bicep | E: transform compares exact bytes, stricter than registry's normalized JSON comparison |
-| M:786 | Compiled template is nonempty | E: transform rejects empty/invalid compiled JSON |
-| M:794 | Compiled ARM schema version is current | G |
-| M:818 | ARM schema reference uses HTTPS | G |
-| M:827 | ARM schema, contentVersion and resources present | E: transform validates these compiled fields |
-| M:837 | Compiled template declares module name | G |
-| M:846 | Compiled template declares module description | G |
-| M:858 | Required location parameter/default by scope | G |
-| M:872 | Telemetry parameter type/default/description | G |
-| M:884 | Parameter and user-defined type (UDT) names are camelCase | G |
-| M:915 | Parameter/UDT description format | G |
-| M:939 | Conditional parameter/UDT description states condition | G |
-| M:966 | Optional parameters/UDTs are not described as required | G |
-| M:987 | Required parameter/UDT description has required/conditional prefix | G |
-| M:1008 | Object and array-of-object parameters use typed schema | G |
-| M:1130 | Known parameter schemas use matching AVM UDT | G |
-| M:1153 | Identity UDT has principal-ID output | G |
-| M:1176 | Tags parameter is nullable | G |
-| M:1192 | Variable names are camelCase | G |
-| M:1216 | Referenced-module telemetry variable exists/is false | G |
-| M:1240 | Telemetry deployment exists | G |
-| M:1260 | Telemetry deployment condition is correct | G |
-| M:1286 | Telemetry inner verbosity output | G |
-| M:1313 | Telemetry identifier matches module identity | G |
-| M:1352 | Resource child-module telemetry is disabled where required | G |
-| M:1383 | Non-resource/multi-scope child telemetry is forwarded | G |
-| M:1417 | Output names are camelCase | G |
-| M:1435 | Output descriptions are complete sentences | G |
-| M:1458 | Location output exists when appropriate | G |
-| M:1480 | Resource-group output exists when appropriate | G |
-| M:1500 | Resource name output exists | G |
-| M:1533 | Resource ID output exists | G |
-| M:1567 | Principal-ID output exists when appropriate | G |
-| M:1593 | UDT itself is not an array | G |
-| M:1614 | UDT itself is not nullable | G |
-| M:1636 | UDT is camelCase with `Type` suffix | G |
+| M:717 | Checked-in `main.json` matches rebuilt Bicep | P/E: transform compares exact bytes for ordinary scopes, but does not discover children under `modules/` |
+| M:786 | Compiled template is nonempty | C/E: convention builds every source; transform builds modules |
+| M:794 | Compiled ARM schema version is current | C: four scope schemas |
+| M:818 | ARM schema reference uses HTTPS | C |
+| M:827 | ARM schema, contentVersion and resources present | C/E: shared compilation guard |
+| M:837 | Compiled template declares module name | C |
+| M:846 | Compiled template declares module description | C: source description independent of JSON moduleDescription |
+| M:858 | Required location parameter/default by scope | C: resource-group scope |
+| M:872 | Telemetry parameter type/default/description | P: type/default checked; accepts both the registry's literal description and the shipped scaffold's distinct description |
+| M:884 | Parameter and user-defined type (UDT) names are camelCase | C: nested properties and HCI exceptions |
+| M:915 | Parameter/UDT description format | C: nested properties |
+| M:939 | Conditional parameter/UDT description states condition | C |
+| M:966 | Optional parameters/UDTs are not described as required | C: definition nullability |
+| M:987 | Required parameter/UDT description has required/conditional prefix | C |
+| M:1008 | Object and array-of-object parameters use typed schema | C: warning before 1.0, error from 1.0 |
+| M:1130 | Known parameter schemas use matching AVM UDT | C: validates compiled definition references for six known names |
+| M:1153 | Identity UDT has principal-ID output | C: nullable string without empty fallback |
+| M:1176 | Tags parameter is nullable | C |
+| M:1192 | Variable names are camelCase | C: compiler-generated names exempt |
+| M:1216 | Referenced-module telemetry variable exists/is false | C: resource non-multi-scope |
+| M:1240 | Telemetry deployment exists | P: required for versioned modules with resources; additionally recognizes the scaffold's prefix variable |
+| M:1260 | Telemetry deployment condition is correct | C: checked for both recognized telemetry forms |
+| M:1286 | Telemetry inner verbosity output | C: checked for both recognized telemetry forms |
+| M:1313 | Telemetry identifier matches module identity | P: source declaration, compiled alias, JSON prefix and deployment name checked for two exact forms; registry accepts only its legacy source variable/JSON selector |
+| M:1352 | Resource child-module telemetry is disabled where required | C: arrays and symbolic resources |
+| M:1383 | Non-resource/multi-scope child telemetry is forwarded | C: arrays and symbolic resources |
+| M:1417 | Output names are camelCase | C |
+| M:1435 | Output descriptions are complete sentences | C |
+| M:1458 | Location output exists when appropriate | C: README primary type, including symbolic resources; legacy path lookup missed these |
+| M:1480 | Resource-group output exists when appropriate | C |
+| M:1500 | Resource name output exists | C: README primary type present in compiled resources |
+| M:1533 | Resource ID output exists | C: README primary type present in compiled resources |
+| M:1567 | Principal-ID output exists when appropriate | C |
+| M:1593 | UDT itself is not an array | C |
+| M:1614 | UDT itself is not nullable | C |
+| M:1636 | UDT is camelCase with `Type` suffix | C |
 | M:1684 | Versioned changelog is not empty | C |
 | M:1696 | Changelog header/blank lines/canonical link | C: real file casing; see note below |
 | M:1722 | Changelog section for next published version | P: checks semantic headings, not target version |
@@ -111,25 +112,38 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:2022 | Published child increment also increments versioned parents | G |
 | M:2062 | CODEOWNERS default/overrides/unique patterns | G |
 | M:2127 | Multi-scope test references matching scope module | C: source-level declaration |
-| M:2150 | Deploying test declares `serviceShort` | P: source-level deployment detection, not compiled resources |
+| M:2150 | Deploying test declares `serviceShort` | C: compiled resource count gates source check |
 | M:2165 | Defaults test `serviceShort` ends in `min` | C |
 | M:2178 | Max test `serviceShort` ends in `max` | C |
 | M:2191 | Waf-aligned test `serviceShort` ends in `waf` | C |
 | M:2204 | Test declares name metadata | C: nonempty literal and not commented out |
 | M:2212 | Test declares description metadata | C: nonempty literal and not commented out |
-| M:2220 | Deploying test declares tokenized `namePrefix` | P: source-level deployment detection |
-| M:2235 | Deploying test directly invokes `testDeployment` | P: source-level deployment detection |
-| M:2252 | Deployment name contains `-test-` | P: source-level deployment detection |
+| M:2220 | Deploying test declares tokenized `namePrefix` | C: compiled resource count gates source check |
+| M:2235 | Deploying test directly invokes `testDeployment` | C: compiled resource count gates source check |
+| M:2252 | Deployment name contains `-test-` | C: compiled resource count gates source check |
 | M:2269 | `serviceShort` unique throughout repository | C |
 | M:2385 | API versions are recent | G: advisory warnings in current registry |
 | D:51 | Valid JSON `metadata.json` per module | E: existing metadata step; source/child parity belongs to separate slice |
-| D:75 | Compiled telemetry prefix agrees with metadata | G |
+| D:75 | Compiled telemetry prefix agrees with metadata | P/E: fresh compiled value checked for both forms; transform checks checked-in `main.json` only outside `modules/` children |
 
 Before its assertions, M:48-60 builds/parses **every** module `main.bicep` and
-discovered `main.test.bicep`. The existing transform builds root/child module
-sources; compiling each e2e test source and using its compiled resources to
-gate test assertions remain gaps. Source-only detection in this slice cannot
-stand in for that compile prerequisite.
+discovered `main.test.bicep`. Convention now compiles each root/child module
+and e2e test with the pinned Bicep CLI; failed compilation has a file-specific
+error. E2e requirements use compiled resource counts rather than a source
+heuristic. The pre-existing transform compares checked-in `main.json` for
+ordinary scopes, but its scope discovery excludes children under `modules/`.
+Compilation alone cannot prove their checked-in artifacts are current; this
+remains an explicit fail-closed coverage family.
+
+The shipped Bicep scaffold declares `avmTelemetryIdPrefix` using
+`loadJsonContent('metadata.json', '$.telemetryIdPrefix')` and describes
+`enableTelemetry` differently from the registry's literal checks for
+`telemetryIdPrefix` and `loadJsonContent('metadata.json', 'telemetryIdPrefix')`.
+The new checker accepts only those two exact source forms, verifies the matching
+compiled variable, deployment name, and JSON prefix, and enforces the
+condition and nested telemetry output for either form. Literal parity with
+the registry remains partial and explicitly fail-closed; rejecting valid
+scaffolds or claiming the old assertions unchanged would both be misleading.
 
 The M:1696 assertion requests `Changelog.md` in its link, but actual registry
 files and this repository's generated changelogs use `CHANGELOG.md`. The new
@@ -137,8 +151,8 @@ rule checks the real canonical casing; retaining the literal assertion would
 reject valid published modules.
 The existing Bicep [transform engine](../../src/Avm.Authoring/Engines/Bicep/Invoke-AvmBicepTransform.ps1)
 and [compiled-template guard](../../src/Avm.Authoring/Engines/Bicep/Get-AvmBicepCompiledJson.ps1)
-provide the three `E` ARM-template checks above when that step runs; neither
-enforces the remaining compiled-template conventions.
+provide the three `E` ARM-template checks above when that step runs; the
+convention engine now also uses that guard and implements compiled assertions.
 
 The [test-file selector](https://github.com/Azure/bicep-registry-modules/blob/6eb8e6ff3fe2910043d184da4192799752271ecf/.github/actions/templates/avm-getModuleTestFiles/action.yml)
 chooses defaults and waf-aligned sources. The
@@ -164,13 +178,15 @@ description are independent; this slice does not edit either validation rule.
 
 ## Follow-up before registry migration
 
-Compile and evaluate every e2e test source; implement the remaining compiled
-template schema, parameter, UDT, output, and telemetry checks. Complete
+The [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md)
+covered e2e compilation and compiled-template assertions. Complete
 publication-aware versions and changelogs, child publish allowlisting,
 resource-folder singularization, workflow/CODEOWNERS, README drift, and
-advisory API-version checks. Run PSRule on selected tokenized test sources and
-their referenced files with the registry's options and suppression rules,
-preserving required versus advisory results. The coverage ledger above is the
+advisory API-version checks. Reconcile the scaffold telemetry form with
+registry's literal assertions and cover stored `main.json` drift for
+`modules/` children. Run PSRule on selected tokenized test sources and their
+referenced files with the registry's options and suppression rules, preserving
+required versus advisory results. The coverage ledger above is the
 per-assertion handoff; these are not implicit passes. Preserve the current
 fork-safe and static-validation workflow conditions during any later cutover.
 

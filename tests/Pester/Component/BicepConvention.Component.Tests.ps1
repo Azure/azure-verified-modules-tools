@@ -17,6 +17,35 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $script:workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         Copy-Item -LiteralPath $script:fixtureRoot -Destination $script:workingRoot -Recurse
         $script:modulePath = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'widget'
+        $e2e = Join-Path $script:workingRoot 'compiled-e2e.json'
+        $childCompiled = Join-Path $script:fixtureRoot 'avm' 'res' 'mock' 'widget' 'child' 'main.json'
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Fixture = $e2e; ChildCompiled = $childCompiled
+        } {
+            param($Fixture, $ChildCompiled)
+            $script:compiledE2E = $Fixture
+            $script:originalChildCompiled = $ChildCompiled
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'fixture'; Path = 'mock-bicep'; Source = 'fixture' }
+            }
+            Mock Invoke-AvmProcess {
+                $source = $ArgumentList[2]
+                $compiled = if ($source.EndsWith('main.test.bicep', [System.StringComparison]::Ordinal)) {
+                    $script:compiledE2E
+                }
+                else {
+                    [System.IO.Path]::ChangeExtension($source, '.json')
+                }
+                if (-not [System.IO.File]::Exists($compiled)) {
+                    $compiled = $script:originalChildCompiled
+                }
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut   = [System.IO.File]::ReadAllText($compiled)
+                    StdErr   = ''
+                }
+            }
+        }
     }
 
     It 'checks the complete root and child fixture and reports only the known coverage gap' {
@@ -25,10 +54,289 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Engine | Should -Be 'bicep'
         $result.Status | Should -Be 'fail'
         $result.ScopesChecked | Should -Be 2
-        $result.UncoveredFamilies.Count | Should -Be 5
+        $result.CompiledFiles | Should -Be 5
+        $result.CompilerSource | Should -Be 'fixture'
+        $result.UncoveredFamilies.Count | Should -Be 6
+        $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
+        $result.UncoveredFamilies | Should -Contain 'checked-in main.json drift for children under modules/'
         $result.Issues.Count | Should -Be 1
         $result.Issues[0].Code | Should -Be 'avm.bicep.convention-incomplete'
         $result.Issues[0].Severity | Should -Be 'error'
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 5 -ParameterFilter {
+                $ArgumentList[0] -eq 'build' -and $ArgumentList[1] -eq '--stdout'
+            }
+        }
+    }
+
+    It 'names root, child, and e2e compilation failures without skipping the other sources' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-AvmProcess {
+                $source = $ArgumentList[2]
+                if ($source -match '[\\/]child[\\/]main\.bicep$' -or
+                    $source -match '[\\/]waf-aligned[\\/]main\.test\.bicep$') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'BCP999: invalid source' }
+                }
+                $compiled = if ($source.EndsWith('main.test.bicep', [System.StringComparison]::Ordinal)) {
+                    $script:compiledE2E
+                }
+                else {
+                    [System.IO.Path]::ChangeExtension($source, '.json')
+                }
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut   = [System.IO.File]::ReadAllText($compiled)
+                    StdErr   = ''
+                }
+            }
+        }
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $failed = @($result.Issues | Where-Object Code -eq 'avm.bicep.compile')
+        $result.CompiledFiles | Should -Be 3
+        $failed.Count | Should -Be 2
+        $failed.File | Should -Contain 'child/main.bicep'
+        $failed.File | Should -Contain 'tests/e2e/waf-aligned/main.test.bicep'
+        $failed.Message | Should -Match 'BCP999'
+        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+    }
+
+    It 'fails closed with a named issue when the pinned compiler is unavailable' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Resolve-AvmTool {
+                throw [AvmToolException]::new('Pinned Bicep CLI is unavailable.', 'AVM1014')
+            }
+        }
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.CompiledFiles | Should -Be 0
+        $result.CompilerSource | Should -Be 'not-run'
+        $result.Issues.Code | Should -Contain 'avm.bicep.compiler-unavailable'
+        $result.Status | Should -Be 'fail'
+        InModuleScope 'Avm.Authoring' { Should -Invoke Invoke-AvmProcess -Exactly 0 }
+    }
+
+    It 'reports invalid compiled schema and metadata on both root and child source paths' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $childJson = Join-Path $script:modulePath 'child' 'main.json'
+        $rootTemplate = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $rootTemplate['$schema'] = 'http://schema.management.azure.com/obsolete'
+        $childTemplate = [System.IO.File]::ReadAllText($childJson) | ConvertFrom-Json -AsHashtable
+        $childTemplate['metadata']['description'] = ''
+        $rootTemplate | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+        $childTemplate | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $childJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.compiled-schema' -and $_.File -eq 'main.bicep'
+            }).Count | Should -Be 1
+        $result.Issues.Code | Should -Contain 'avm.bicep.compiled-schema-https'
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.compiled-metadata-description' -and
+                $_.File -eq 'child/main.bicep'
+            }).Count | Should -Be 1
+    }
+
+    It 'detects telemetry, output, and metadata-prefix drift in a versioned module' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['defaultValue'] = $false
+        $template['variables']['$fxv#0'] = 'incorrect-prefix'
+        $template['resources'][1]['condition'] = '[false()]'
+        $template['resources'][1]['properties']['template']['outputs']['telemetry']['value'] = 'incorrect'
+        $null = $template['outputs'].Remove('resourceId')
+        $template['outputs']['location']['value'] = "[parameters('name')]"
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-parameter'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-condition'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-output'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-prefix'
+        $result.Issues.Code | Should -Contain 'avm.bicep.output-resourceId'
+        $result.Issues.Code | Should -Contain 'avm.bicep.output-location'
+    }
+
+    It 'requires a deployment, location default, standard variable names, and resource-group output' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $template['resources'] = @($template['resources'][0])
+        $template['variables']['Bad-name'] = 'invalid'
+        $template['parameters']['location'] = @{
+            type = 'string'; defaultValue = 'eastus'
+            metadata = @{ description = 'Optional. Deployment location.' }
+        }
+        $template['outputs']['Bad_name'] = @{
+            type = 'string'; metadata = @{ description = 'lowercase output' }; value = 'invalid'
+        }
+        $null = $template['outputs'].Remove('resourceGroupName')
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-deployment'
+        $result.Issues.Code | Should -Contain 'avm.bicep.parameter-location'
+        $result.Issues.Code | Should -Contain 'avm.bicep.variable-name'
+        $result.Issues.Code | Should -Contain 'avm.bicep.output-name'
+        $result.Issues.Code | Should -Contain 'avm.bicep.output-description'
+        $result.Issues.Code | Should -Contain 'avm.bicep.output-resource-group'
+    }
+
+    It 'checks compiled parameter and UDT violations in a child module' {
+        $childJson = Join-Path $script:modulePath 'child' 'main.json'
+        $template = [System.IO.File]::ReadAllText($childJson) | ConvertFrom-Json -AsHashtable
+        $template['parameters'] = [ordered]@{
+            'Bad_name' = @{
+                type = 'string'; metadata = @{ description = 'Missing punctuation' }
+            }
+        }
+        $template['definitions'] = [ordered]@{
+            Bad_type = @{ type = 'array'; nullable = $true }
+        }
+        $template['outputs'] = [ordered]@{
+            'Bad_output' = @{
+                type = 'string'; metadata = @{ description = 'lowercase' }; value = 'invalid'
+            }
+        }
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $childJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        foreach ($code in @('avm.bicep.parameter-name', 'avm.bicep.parameter-description',
+                'avm.bicep.udt-array', 'avm.bicep.udt-nullable', 'avm.bicep.udt-name',
+                'avm.bicep.output-name', 'avm.bicep.output-description')) {
+            @($result.Issues | Where-Object {
+                    $_.Code -eq $code -and $_.File -eq 'child/main.bicep'
+                }).Count | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'raises untyped-object findings from warning to error at version 1' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['options'] = @{
+            type = 'object'; defaultValue = @{}
+            metadata = @{ description = 'Optional. Widget options.' }
+        }
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+
+        $before = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($before.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.parameter-untyped-object' -and $_.Severity -eq 'warning'
+            }).Count | Should -Be 1
+
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'version.json') `
+            -Value '{"version":"1.0"}' -Encoding utf8NoBOM
+        $after = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($after.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.parameter-untyped-object' -and $_.Severity -eq 'error'
+            }).Count | Should -Be 1
+    }
+
+    It 'rejects hardcoded source telemetry and missing metadata even when the compiled template has a prefix' {
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath)
+        [System.IO.File]::WriteAllText($sourcePath, $source.Replace(
+                "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')",
+                "var telemetryIdPrefix = '46d3xbcp.res.mock.widget.abc1234'"))
+        Remove-Item -LiteralPath (Join-Path $script:modulePath 'metadata.json')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-source'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-literal'
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.telemetry-metadata' -and $_.File -eq 'metadata.json'
+            }).Count | Should -Be 1
+    }
+
+    It 'accepts the shipped scaffold telemetry declaration and description as a distinct supported form' {
+        $scaffold = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'scaffold'
+        New-Item -ItemType Directory -Path $scaffold -Force | Out-Null
+        $sourcePath = Join-Path $scaffold 'main.bicep'
+        $scaffoldTemplate = Join-Path $script:moduleRoot 'Resources' 'Scaffolds' 'Bicep' 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($scaffoldTemplate)
+        $source = $source.Replace('<Add module name>', 'Mock scaffold')
+        $source = $source.Replace('<Add description>', 'Deploys a mock scaffold.')
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+        foreach ($name in @('metadata.json', 'version.json')) {
+            Copy-Item -LiteralPath (Join-Path $script:modulePath $name) -Destination (Join-Path $scaffold $name)
+        }
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['metadata']['description'] = `
+            'Optional. Enable/disable usage telemetry for this module.'
+        $template['variables']['avmTelemetryIdPrefix'] = $template['variables']['telemetryIdPrefix']
+        $null = $template['variables'].Remove('telemetryIdPrefix')
+        $template['resources'] = @($template['resources'][1])
+        $template['resources'][0]['name'] = "[format('{0}.mock', variables('avmTelemetryIdPrefix'))]"
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $scaffold } {
+            param($P)
+            Get-AvmBicepConventionScope -Path $P
+        }
+
+        $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
+            T = $template; S = $scope; P = $sourcePath; R = $script:workingRoot
+        } {
+            param($T, $S, $P, $R)
+            $resources = @(Get-AvmBicepConventionResource -Template $T)
+            Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
+                -Template $T -SourcePath $P -Resources $resources
+        })
+        $issues.Count | Should -Be 0
+    }
+
+    It 'validates symbolic child deployment telemetry forwarding without requiring a false child variable in patterns' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $child = [ordered]@{
+            type       = 'Microsoft.Resources/deployments'
+            name       = 'child'
+            properties = [ordered]@{
+                template   = @{ parameters = @{ enableTelemetry = @{ type = 'bool' } } }
+                parameters = @{ enableTelemetry = @{ value = "[parameters('enableTelemetry')]" } }
+            }
+        }
+        $template['languageVersion'] = '2.0'
+        $template['resources'] = [ordered]@{
+            widget    = $template['resources'][0]
+            telemetry = $template['resources'][1]
+            child     = $child
+        }
+        $template['outputs']['location']['value'] = "[reference('widget', '2023-05-01', 'full').location]"
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-child-variable'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-child-forwarding'
+        $result.Issues.Code | Should -Not -Contain 'avm.bicep.output-location'
+
+        $scope = [pscustomobject]@{
+            Path               = $script:modulePath
+            ModuleType         = 'ptn'
+            ModuleRelativePath = 'avm/ptn/mock/widget'
+            IsTopLevel         = $true
+            ScopeDirectories   = @()
+        }
+        $patternIssues = InModuleScope 'Avm.Authoring' -Parameters @{
+            T = $template; S = $scope; R = $script:modulePath
+        } {
+            param($T, $S, $R)
+            $resources = @(Get-AvmBicepConventionResource -Template $T)
+            @(Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
+                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -Resources $resources)
+        }
+        @($patternIssues | Where-Object { $_.Code -like 'avm.bicep.telemetry-child-*' }).Count |
+            Should -Be 0
+    }
+
+    It 'reports invalid compiled e2e JSON rather than falling back to source-only deployment checks' {
+        [System.IO.File]::WriteAllText((Join-Path $script:workingRoot 'compiled-e2e.json'), '{invalid')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $compiledErrors = @($result.Issues | Where-Object Code -eq 'avm.bicep.compile')
+        $compiledErrors.Count | Should -Be 3
+        $result.CompiledFiles | Should -Be 2
+        @($compiledErrors | Where-Object { $_.File -match '^tests/e2e/[^/]+/main\.test\.bicep$' }).Count |
+            Should -Be 3
+        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
     }
 
     It 'accepts both CRLF and LF line endings in test sources' {

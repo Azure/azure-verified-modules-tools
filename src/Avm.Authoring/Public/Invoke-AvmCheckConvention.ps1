@@ -6,8 +6,8 @@ function Invoke-AvmCheckConvention {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> first-party layout, version, changelog, and test-source
-                          checks; fails closed while other registry checks remain
+          - bicep      -> first-party layout, version, changelog, test-source,
+                          and compiled ARM checks; fails closed until registry parity
           - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours

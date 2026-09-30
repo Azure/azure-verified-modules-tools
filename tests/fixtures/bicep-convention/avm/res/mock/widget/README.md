@@ -1,1 +1,1 @@
-# Mock widget
+# Mock widget `[Microsoft.Storage/storageAccounts]`

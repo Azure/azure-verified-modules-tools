@@ -15,14 +15,17 @@ function New-AvmBicepConventionIssue {
         [Parameter(Mandatory)]
         [string] $Message,
 
-        [int] $Line = 0
+        [int] $Line = 0,
+
+        [ValidateSet('error', 'warning')]
+        [string] $Severity = 'error'
     )
 
     [pscustomobject][ordered]@{
         File     = [System.IO.Path]::GetRelativePath($Root, $Path).Replace('\', '/')
         Line     = $Line
         Column   = if ($Line -gt 0) { 1 } else { 0 }
-        Severity = 'error'
+        Severity = $Severity
         Code     = $Code
         Message  = $Message
     }
