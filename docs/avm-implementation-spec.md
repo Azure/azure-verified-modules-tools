@@ -594,11 +594,11 @@ providers once when an existing state references them; after the state
 forgets those addresses, new installations do not require `modtm`. The
 random provider requirement is removed only if no other random resources
 or data sources remain in the module. The transform also removes obsolete
-`modtm` provider declarations in standalone
-test modules, empty `modtm` test mocks, and standard references to the old
-telemetry resource. Non-empty test mocks and remaining author-owned `modtm`
-resources or data sources fail with actionable diagnostics instead of being
-silently rewritten.
+`modtm` provider declarations in examples and standalone test modules when
+they have no remaining `modtm` resources or data sources, empty `modtm` test
+mocks, and standard references to the old telemetry resource. Non-empty test
+mocks and remaining author-owned `modtm` resources or data sources fail with
+actionable diagnostics instead of being silently rewritten.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

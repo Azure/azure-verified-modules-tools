@@ -22,7 +22,7 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, example,
-        or test.
+        provider-cleanup, or an optional consumer test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'example', 'test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'example', 'provider-cleanup', 'test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -191,7 +191,7 @@ function Get-AvmTerraformTransformTarget {
             $targets.Add([pscustomobject]@{
                     Path     = $example.FullName
                     Scope    = 'example'
-                    Profiles = @('example', 'common')
+                    Profiles = @('example', 'provider-cleanup', 'common')
                 })
         }
     }
@@ -210,7 +210,7 @@ function Get-AvmTerraformTransformTarget {
                 $targets.Add([pscustomobject]@{
                         Path     = $testRoot
                         Scope    = 'test'
-                        Profiles = @('test')
+                        Profiles = @('provider-cleanup', 'test')
                     })
             }
         }
@@ -338,7 +338,7 @@ function Get-AvmRemainingModtmIssue {
 
     Set-StrictMode -Version 3.0
     $issues = [System.Collections.Generic.List[object]]::new()
-    foreach ($target in $Targets | Where-Object { $_.Profiles -contains 'root' -or $_.Scope -eq 'test' }) {
+    foreach ($target in $Targets | Where-Object { $_.Profiles -contains 'root' -or $_.Scope -in @('test', 'example') }) {
         foreach ($file in Get-ChildItem -LiteralPath $target.Path -Filter '*.tf' -File) {
             $lineNumber = 0
             foreach ($line in [System.IO.File]::ReadAllLines($file.FullName)) {
@@ -482,9 +482,10 @@ function Invoke-AvmTerraformTransform {
         Module calls then run module-call, common from deepest to root after
         every child has its inputs, forwarding location and enable_telemetry
         where supported.
-        Examples run example, common after the module calls have settled.
-        Standalone test-module directories run the test profile, and empty
-        modtm test mocks and telemetry resource references are migrated.
+        Examples run example, provider-cleanup, common after the module calls
+        have settled. Standalone test-module directories run provider-cleanup
+        and an optional consumer test profile. Empty modtm test mocks and
+        telemetry resource references are migrated.
         Non-empty modtm mocks fail with an actionable error. The final call
         removes '*.tf.mptfbackup' files.
 
@@ -569,12 +570,13 @@ function Invoke-AvmTerraformTransform {
 
     $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
-        common        = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
-        module        = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
-        root          = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
-        'module-call' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module-call'
-        example       = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
-        test          = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'test'
+        common             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
+        module             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
+        root               = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
+        'module-call'      = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module-call'
+        example            = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
+        'provider-cleanup' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        test               = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'test' -Optional
     }
     $targets = @(Get-AvmTerraformTransformTarget -Root $Context.Root)
     Write-AvmLog ("transform: discovered {0} target(s)" -f $targets.Count) -Level Verbose | Out-Null
@@ -723,7 +725,7 @@ function Invoke-AvmTerraformTransform {
                 $changed.Add([System.IO.Path]::GetRelativePath($Context.Root, $key))
             }
         }
-        $legacyIssues = @(Get-AvmRemainingModtmIssue -Root $Context.Root -Targets @($moduleTargets + $testTargets))
+        $legacyIssues = @(Get-AvmRemainingModtmIssue -Root $Context.Root -Targets @($moduleTargets + $exampleTargets + $testTargets))
     }
     finally {
         if ($null -ne $snapshot) {

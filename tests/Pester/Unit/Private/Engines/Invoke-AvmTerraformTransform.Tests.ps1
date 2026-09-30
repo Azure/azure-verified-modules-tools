@@ -142,13 +142,14 @@ Describe 'Invoke-AvmTerraformTransform' {
                 @(
                     [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
                     [pscustomobject]@{ Path = '/fake/module'; Scope = 'module'; Profiles = @('module', 'common') }
-                    [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'common') }
-                    [pscustomobject]@{ Path = '/fake/second-example'; Scope = 'example'; Profiles = @('example', 'common') }
+                    [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
+                    [pscustomobject]@{ Path = '/fake/second-example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
                 )
             }
             $script:transformBatches = [System.Collections.Generic.List[string]]::new()
             Mock Invoke-AvmParallel { $script:transformBatches.Add(($InputObject.Scope -join ',')) }
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Get-AvmRemainingModtmIssue { @() }
 
             Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
@@ -178,11 +179,12 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
-                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'common') }
+                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
                     )
                 }
                 Mock Invoke-AvmParallel
                 Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Mock Get-AvmRemainingModtmIssue { @() }
 
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
@@ -297,6 +299,31 @@ resource "modtm_custom" "authored" {}
         $result.Issues | Should -HaveCount 1
         $result.Issues[0].File | Should -BeExactly 'main.tf'
         $result.Issues[0].Line | Should -Be 1
+        $result.Issues[0].Code | Should -BeExactly 'avm.tf.modtm-remains'
+    }
+
+    It 'reports author-owned modtm data in an example instead of removing its provider' {
+        $example = Join-Path $script:moduleDir 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $example -Force
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+data "modtm_module_source" "custom" {
+  module_path = path.module
+}
+'@
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Invoke-AvmTerraformTransform -Context $C
+        }
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].File.Replace('\', '/') | Should -BeExactly 'examples/default/main.tf'
         $result.Issues[0].Code | Should -BeExactly 'avm.tf.modtm-remains'
     }
 
@@ -1077,9 +1104,9 @@ Describe 'Get-AvmTerraformTransformTarget' {
         ($targets | Where-Object Path -eq $root).Profiles | Should -Be @('root', 'module', 'common')
         ($targets | Where-Object Path -eq $direct).Profiles | Should -Be @('root', 'module', 'common')
         ($targets | Where-Object Path -eq $nested).Profiles | Should -Be @('module', 'common')
-        ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('example', 'common')
-        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('test')
-        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('test')
+        ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('example', 'provider-cleanup', 'common')
+        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('provider-cleanup', 'test')
+        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('provider-cleanup', 'test')
         @($targets.Path) | Should -Not -Contain $notModule
         @($targets.Path) | Should -Not -Contain $helperWrapper
     }
@@ -1194,6 +1221,24 @@ Describe 'Resolve-AvmMapotfConfigDir' {
         $resolved | Should -Not -BeNullOrEmpty
         $resolved | Should -BeExactly (Join-Path $script:moduleRoot 'Resources' 'mapotf' 'example')
         (Join-Path $resolved 'disable_telemetry.mptf.hcl') | Should -Exist
+    }
+
+    It 'keeps a consumer test profile optional after sharing provider cleanup' {
+        Remove-Item Env:\AVM_MPTF_CONFIG_DIR -ErrorAction SilentlyContinue
+        $root = Join-Path $TestDrive ("repo-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        $without = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName test -Optional
+        }
+        $without | Should -BeNullOrEmpty
+
+        $consumer = script:New-AvmCfgBundle -Profile 'test' -Path (Join-Path $root 'config' 'mapotf')
+        $with = InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Resolve-AvmMapotfConfigDir -Root $R -ProfileName test -Optional
+        }
+        $with | Should -BeExactly (Resolve-Path -LiteralPath $consumer).ProviderPath
     }
 
     It 'returns null for an absent optional profile' {

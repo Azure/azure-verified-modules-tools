@@ -47,7 +47,7 @@ Describe 'Integration: MAPOTF example telemetry' -Tag 'Integration' -Skip:($env:
         }
 
         function Invoke-TelemetryProfiles {
-            param([string] $Root, [string[]] $Profile = @('example', 'common'))
+            param([string] $Root, [string[]] $Profile = @('example', 'provider-cleanup', 'common'))
 
             $arguments = @('transform', '--tf-dir', $Root)
             foreach ($name in $Profile) {
@@ -118,6 +118,70 @@ variable "z_optional" {
             [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
         }
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'removes only the unused modtm requirement from an example and remains idempotent' {
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }
+  }
+}
+
+resource "random_integer" "region_index" {
+  min = 0
+  max = 1
+}
+'@
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Not -Match '(?m)^\s*modtm\s*='
+        $first | Should -Match '(?m)^\s*random\s*='
+        Assert-TelemetryExampleValid -Root $script:target
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+    }
+
+    It 'preserves a modtm requirement when an example still has authored modtm data' {
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+
+data "modtm_module_source" "custom" {
+  module_path = path.module
+}
+'@
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Match '(?m)^\s*modtm\s*='
+        $first | Should -Match 'data "modtm_module_source" "custom"'
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
+    }
+
+    It 'does not add a provider declaration to an example with no modtm requirement' {
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value 'locals { example = true }'
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $first | Should -Not -Match 'required_providers|modtm'
+
+        Invoke-TelemetryProfiles -Root $script:target -Profile provider-cleanup
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
     }
 
     It 'connects <Name> to the example variable on the first pass and stays ordered and idempotent' -TestCases @(

@@ -193,7 +193,7 @@ Describe 'Module Resources packaging' {
                 'disable_telemetry.mptf.hcl'
                 'location.mptf.hcl'
             )
-            test = @(
+            'provider-cleanup' = @(
                 'remove_modtm_provider.mptf.hcl'
             )
         }

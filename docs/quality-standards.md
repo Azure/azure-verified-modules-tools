@@ -365,12 +365,13 @@ Currently vendored:
   deployment receives a block-scoped TFLint exception. Mapotf drops comments
   in `asraw` blocks, so the transform engine inserts the exception after
   mapotf writes the resource.
-- `Resources/mapotf/{common,module,root,module-call,example,test}/*.mptf.hcl`
+- `Resources/mapotf/{common,module,root,module-call,example,provider-cleanup}/*.mptf.hcl`
   - composed per target by `Invoke-AvmTerraformTransform`. Root and child
   modules with a telemetry prefix run `root,module,common`; children without
   one run `module,common`. A second `module-call,common` pass forwards the
   opt-out and effective location to local children after their inputs exist.
-  Examples run `example,common` and test-module directories run `test`.
+  Examples run `example,provider-cleanup,common` and test-module directories
+  run `provider-cleanup`, followed by any consumer-supplied `test` profile.
   Standard empty `modtm` mocks and references in `.tftest.hcl` are migrated,
   with drift snapshots covering those files. Non-empty mocks fail explicitly.
   A configured
