@@ -222,6 +222,114 @@ function ConvertTo-AvmBamiConsumerSettings {
     }
 }
 
+function Write-AvmBamiIdentityPlanSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
+        [Parameter(Mandatory)] [object] $Repository,
+        [Parameter(Mandatory)] [string] $TenantId
+    )
+
+    $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
+    $readField = {
+        param(
+            [AllowNull()] [System.Collections.IDictionary] $Resource,
+            [System.Collections.IDictionary] $Change,
+            [string] $Path
+        )
+
+        $value = if ($Resource) { $Resource['values'] } else { $null }
+        $sensitive = if ($Resource) { $Resource['sensitive_values'] } else { $null }
+        $afterSensitive = $Change['after_sensitive']
+        $unknown = $Change['after_unknown']
+        foreach ($segment in $Path.Split('.')) {
+            if ($value -is [System.Collections.IDictionary]) { $value = $value[$segment] }
+            else { $value = $null }
+            if ($sensitive -is [System.Collections.IDictionary]) { $sensitive = $sensitive[$segment] }
+            if ($afterSensitive -is [System.Collections.IDictionary]) { $afterSensitive = $afterSensitive[$segment] }
+            if ($unknown -is [System.Collections.IDictionary]) { $unknown = $unknown[$segment] }
+        }
+        if ($sensitive -eq $true -or $afterSensitive -eq $true) { return '[redacted: sensitive]' }
+        if ($unknown -eq $true) { return '[unknown until apply]' }
+        if ($null -eq $value) { return '[not present in plan]' }
+        if ($value -is [string]) { return $value }
+        if ($Path -ceq 'body.properties.audiences' -and $value -is [array] -and
+            @($value | Where-Object { $_ -isnot [string] }).Count -eq 0) {
+            return ,$value
+        }
+        return '[unavailable: expected a string or string array]'
+    }
+    $fields = [ordered]@{
+        'module.azure.azapi_resource.identity' = [ordered]@{
+            type = 'type'
+            name = 'name'
+            parent_id = 'parent_id'
+            id = 'id'
+            tenant_id = 'output.properties.tenantId'
+            client_id = 'output.properties.clientId'
+            principal_id = 'output.properties.principalId'
+        }
+        'module.azure.azapi_resource.identity_role_assignment' = [ordered]@{
+            type = 'type'
+            parent_id = 'parent_id'
+            roleDefinitionId = 'body.properties.roleDefinitionId'
+            principalId = 'body.properties.principalId'
+            principalType = 'body.properties.principalType'
+            conditionVersion = 'body.properties.conditionVersion'
+            condition = 'body.properties.condition'
+        }
+        'module.azure.azuread_group_member.example' = [ordered]@{
+            group_object_id = 'group_object_id'
+            member_object_id = 'member_object_id'
+        }
+    }
+    $federationFields = [ordered]@{
+        type = 'type'
+        name = 'name'
+        parent_id = 'parent_id'
+        issuer = 'body.properties.issuer'
+        audiences = 'body.properties.audiences'
+        subject = 'body.properties.subject'
+    }
+    foreach ($environment in @('pr-check', 'integration-test', 'examples-test')) {
+        $fields['module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'] = $federationFields
+    }
+    $fields['module.azure.azapi_resource.validation_federated_credential'] = $federationFields
+    $summaryResources = @(
+        foreach ($address in $fields.Keys) {
+            $resource = @($resources | Where-Object { $_['address'] -ceq $address })[0]
+            $changes = @($Plan['resource_changes'] | Where-Object { $_ -and $_['address'] -ceq $address })
+            $change = if ($changes.Count -eq 1) { $changes[0]['change'] } else { @{} }
+            $actions = @($change['actions'])
+            $entry = [ordered]@{
+                address = $address
+                actions = if ($actions.Count -gt 0 -and @($actions | Where-Object {
+                            $_ -isnot [string] -or $_ -cnotin @('no-op', 'create', 'update')
+                        }).Count -eq 0) { ,$actions } else { '[unavailable: missing or ambiguous actions]' }
+            }
+            foreach ($field in $fields[$address].Keys) {
+                $entry[$field] = & $readField -Resource $resource -Change $change -Path $fields[$address][$field]
+            }
+            $entry
+        }
+    )
+    $groupAddress = 'module.azure.data.azuread_group.entra_readers'
+    $groups = @($resources | Where-Object { $_['address'] -ceq $groupAddress })
+    $group = if ($groups.Count -eq 1) { $groups[0] } else { $null }
+    $groupChanges = @($Plan['resource_changes'] | Where-Object { $_ -and $_['address'] -ceq $groupAddress })
+    $groupChange = if ($groupChanges.Count -eq 1) { $groupChanges[0]['change'] } else { @{} }
+    $summary = [ordered]@{
+        repository = $Repository.full_name
+        repository_id = [string]$Repository.id
+        repository_owner_id = [string]$Repository.owner.id
+        expected_tenant_id = $TenantId
+        directory_readers_group = & $readField -Resource $group -Change $groupChange -Path 'display_name'
+        resources = $summaryResources
+    }
+    Write-Information -MessageData ("BAMI candidate identity plan summary:`n" + (ConvertTo-Json -InputObject $summary -Depth 6)) `
+        -Tags 'AvmBamiIdentityPlanSummary' -InformationAction Continue
+}
+
 function Invoke-AvmBamiIdentityTerraform {
     [CmdletBinding()]
     param(
@@ -331,6 +439,7 @@ function Invoke-AvmBamiRepositoryIdentity {
         $plan = ConvertFrom-Json -InputObject $planJson -AsHashtable -Depth 100
         Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository `
             -RepositoryOwnerId $toolsContext.OrganizationId -RepositorySyncRepositoryId $toolsContext.RepositoryId
+        Write-AvmBamiIdentityPlanSummary -Plan $plan -Repository $repo -TenantId $settings['TEST_BAMI_TENANT_ID']
         if ($PlanOnly -and @($plan['resource_changes'] | Where-Object {
                     $_ -and $_['address'] -ceq 'module.azure.azapi_resource.validation_federated_credential' -and
                     $_['change']['actions'] -notcontains 'no-op'

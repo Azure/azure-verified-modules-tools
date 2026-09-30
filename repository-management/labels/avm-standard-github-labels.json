@@ -1,0 +1,230 @@
+{
+  "labels": [
+    {
+      "name": "AZD :technologist:",
+      "description": "These modules are requested/used by the AZD team.",
+      "color": "E0BFFA"
+    },
+    {
+      "name": "Needs: Attention :wave:",
+      "description": "Reply has been added to issue, maintainer to review",
+      "color": "E99695"
+    },
+    {
+      "name": "Needs: Immediate Attention :bangbang:",
+      "description": "Immediate attention of module owner / AVM team is needed",
+      "color": "FF0000"
+    },
+    {
+      "name": "Needs: Author Feedback :ear:",
+      "description": "Awaiting feedback from the issue/PR author",
+      "color": "F18A07"
+    },
+    {
+      "name": "Needs: External Changes :hammer_and_pick:",
+      "description": "When an issue/PR requires changes that are outside of the control of the module. e.g. to an RP.",
+      "color": "DE389D"
+    },
+    {
+      "name": "Needs: More Evidence :balance_scale:",
+      "description": "We are looking for more evidence to make a decision on this",
+      "color": "F64872"
+    },
+    {
+      "name": "Needs: Triage :mag:",
+      "description": "Maintainers need to triage still",
+      "color": "FBCA04"
+    },
+    {
+      "name": "Needs: Module Owner :mega:",
+      "description": "In the AVM repository: this module needs an owner to develop or maintain it. In the BRM repository: the module owner needs to review a PR.",
+      "color": "FF0019",
+      "githubDescription": "This module needs an owner to develop or maintain it"
+    },
+    {
+      "name": "Needs: Module Contributor :mega:",
+      "description": "This module needs secondary owner(s) or contributor(s) to develop or maintain it",
+      "color": "C95474"
+    },
+    {
+      "name": "Needs: Core Team :genie:",
+      "description": "This item needs the AVM Core Team to review it",
+      "color": "DB4503"
+    },
+    {
+      "name": "Status: Awaiting Release To Be Cut :scissors:",
+      "description": "This is fixed in the main branch but not in the latest release, will be fixed with next release cut",
+      "color": "800080"
+    },
+    {
+      "name": "Status: Do Not Merge :no_entry:",
+      "description": "Do not merge PRs with this label attached as they are not ready or aligned to future direction etc.",
+      "color": "8B4513"
+    },
+    {
+      "name": "Status: External Contribution :earth_africa:",
+      "description": "This is being worked on by someone outside of the AVM module owners/contributors or AVM core team",
+      "color": "D8FA2C"
+    },
+    {
+      "name": "Status: Fixed :white_check_mark:",
+      "description": "Auto label applied when issue fixed by merged PR",
+      "color": "90EE90"
+    },
+    {
+      "name": "Status: Help Wanted :sos:",
+      "description": "Extra attention is needed",
+      "color": "FF4500"
+    },
+    {
+      "name": "Status: In Triage :mag:",
+      "description": "Picked up for triaging by an AVM core team member",
+      "color": "D4AF37"
+    },
+    {
+      "name": "Status: In PR :point_right:",
+      "description": "This is when an issue is due to be fixed in an open PR",
+      "color": "EDEDED"
+    },
+    {
+      "name": "Status: Invalid :x:",
+      "description": "This doesn't seem right",
+      "color": "E4E669"
+    },
+    {
+      "name": "Status: Long Term :hourglass_flowing_sand:",
+      "description": "We will do it, but will take a longer amount of time due to complexity/priorities",
+      "color": "B60205"
+    },
+    {
+      "name": "Status: No Recent Activity :zzz:",
+      "description": "When an issue/PR has not been modified for X amount of days",
+      "color": "808080"
+    },
+    {
+      "name": "Status: Won't Fix :broken_heart:",
+      "description": "This will not be worked on",
+      "color": "FFFFFF"
+    },
+    {
+      "name": "Status: Owners Identified :metal:",
+      "description": "This module has its owners identified",
+      "color": "FBEF2A"
+    },
+    {
+      "name": "Status: Module Available :green_circle:",
+      "description": "The module is published",
+      "color": "C8E6C9"
+    },
+    {
+      "name": "Status: Module Deprecated :red_circle:",
+      "description": "This is a request to deprecate a module",
+      "color": "000000"
+    },
+    {
+      "name": "Status: Module Orphaned :yellow_circle:",
+      "description": "The module has no owner and is therefore orphaned at this time",
+      "color": "F4A460"
+    },
+    {
+      "name": "Status: Ready For Repository Creation :memo:",
+      "description": "This module is approved and the owner is ready for the repository to be created (Terraform)",
+      "color": "136A41"
+    },
+    {
+      "name": "Status: Repository Created :page_facing_up:",
+      "description": "This module has had it's repository created and configured ready for owner contribution (Terraform)",
+      "color": "27AB03"
+    },
+    {
+      "name": "Status: Response Overdue :triangular_flag_on_post:",
+      "description": "When an issue/PR has not been responded to for X amount of days",
+      "color": "850000"
+    },
+    {
+      "name": "Status: Looking For Assistance :duck:",
+      "description": "This item is looking for anyone to help develop the code and submit a PR for resolution",
+      "color": "03FCC2"
+    },
+    {
+      "name": "Type: Bug :bug:",
+      "description": "Something isn't working",
+      "color": "D73A4A"
+    },
+    {
+      "name": "Type: CI :rocket:",
+      "description": "This issue is related to the AVM CI",
+      "color": "74CFB0"
+    },
+    {
+      "name": "Type: Documentation :page_facing_up:",
+      "description": "Improvements or additions to documentation",
+      "color": "0075CA"
+    },
+    {
+      "name": "Type: Duplicate :palms_up_together:",
+      "description": "This issue or pull request already exists",
+      "color": "CFD3D7"
+    },
+    {
+      "name": "Type: Feature Request :heavy_plus_sign:",
+      "description": "New feature or request",
+      "color": "A2EEEF"
+    },
+    {
+      "name": "Type: Hygiene :broom:",
+      "description": "things related to testing, issue triage etc.",
+      "color": "17016A"
+    },
+    {
+      "name": "Type: New Module Proposal :bulb:",
+      "description": "A new module for AVM is being proposed",
+      "color": "ADD8E6"
+    },
+    {
+      "name": "Type: Question/Feedback :raising_hand:",
+      "description": "Further information is requested or just some feedback",
+      "color": "CB6BA2"
+    },
+    {
+      "name": "Type: Security Bug :lock:",
+      "description": "This is a security bug",
+      "color": "FFFF00"
+    },
+    {
+      "name": "Type: AVM :a: :v: :m:",
+      "description": "This is an AVM related issue",
+      "color": "F0FFFF"
+    },
+    {
+      "name": "Language: Terraform :globe_with_meridians:",
+      "description": "This is related to the Terraform IaC language",
+      "color": "7740B6"
+    },
+    {
+      "name": "Language: Bicep :muscle:",
+      "description": "This is related to the Bicep IaC language",
+      "color": "1D73B3"
+    },
+    {
+      "name": "Class: Resource Module :package:",
+      "description": "This is a resource module",
+      "color": "D3D3D3"
+    },
+    {
+      "name": "Class: Pattern Module :package:",
+      "description": "This is a pattern module",
+      "color": "A9A9A9"
+    },
+    {
+      "name": "Class: Utility Module :package:",
+      "description": "This is a utility module",
+      "color": "CAD1DE"
+    },
+    {
+      "name": "Class: Child Module :package:",
+      "description": "This is a child module",
+      "color": "5E5186"
+    }
+  ]
+}
