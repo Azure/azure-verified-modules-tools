@@ -233,7 +233,6 @@ function Invoke-AvmBicepCheckConvention {
     $uncovered = @(
         'README regeneration parity against registry output'
         'resource-folder singularization beyond naming syntax'
-        'registry-literal telemetry syntax and description parity for scaffolded modules'
     )
     $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $Context.Root `
                 -Code 'avm.bicep.convention-incomplete' `

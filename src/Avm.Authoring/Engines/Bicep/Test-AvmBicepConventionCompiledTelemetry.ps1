@@ -51,6 +51,12 @@ function Test-AvmBicepConventionCompiledTelemetry {
         'avmTelemetryIdPrefix'
     }
     else { 'telemetryIdPrefix' }
+    $description = if ($prefixName -ceq 'avmTelemetryIdPrefix') {
+        'Optional. Enable/disable usage telemetry for this module.'
+    }
+    else {
+        'Optional. Enable/Disable usage telemetry for module.'
+    }
     $hasPrefixDeclaration = $legacyDeclaration -or $scaffoldDeclaration
     if ($legacyDeclaration -and $scaffoldDeclaration) {
         $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `
@@ -64,15 +70,13 @@ function Test-AvmBicepConventionCompiledTelemetry {
         else { $null }
         if ($telemetryParameter -isnot [System.Collections.IDictionary] -or
             $telemetryParameter['type'] -cne 'bool' -or
-            $telemetryParameter['defaultValue'] -ne $true -or
+            $telemetryParameter['defaultValue'] -isnot [bool] -or
+            -not $telemetryParameter['defaultValue'] -or
             $telemetryParameter['metadata'] -isnot [System.Collections.IDictionary] -or
-            $telemetryParameter['metadata']['description'] -cnotin @(
-                'Optional. Enable/Disable usage telemetry for module.'
-                'Optional. Enable/disable usage telemetry for this module.'
-            )) {
+            $telemetryParameter['metadata']['description'] -cne $description) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `
                         -Code 'avm.bicep.telemetry-parameter' `
-                        -Message 'A versioned module with resources requires enableTelemetry: bool = true and its standard description.'))
+                        -Message "A versioned module with resources requires enableTelemetry: bool = true and description '$description'."))
         }
     }
 
@@ -119,11 +123,14 @@ function Test-AvmBicepConventionCompiledTelemetry {
                         -Message "Telemetry deployment '$($deployment.Identifier)' needs the standard nested telemetry output."))
         }
         $prefixReference = "variables('$prefixName')"
-        if (-not ([string]$resource['name']).Contains(
-                $prefixReference, [System.StringComparison]::Ordinal)) {
+        $escapedPrefix = [regex]::Escape($prefixReference)
+        $formatPrefix = "^\[format\('\{0\}[^']*'\s*,\s*$escapedPrefix\s*(?:,|\))"
+        $concatPrefix = "^\[concat\(\s*$escapedPrefix\s*(?:,|\))"
+        if ([string]$resource['name'] -cnotmatch $formatPrefix -and
+            [string]$resource['name'] -cnotmatch $concatPrefix) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `
                         -Code 'avm.bicep.telemetry-name' `
-                        -Message "Telemetry deployment '$($deployment.Identifier)' must use $prefixReference in its name."))
+                        -Message "Telemetry deployment '$($deployment.Identifier)' must start its name with $prefixReference through format or concat."))
         }
     }
 
@@ -132,7 +139,7 @@ function Test-AvmBicepConventionCompiledTelemetry {
                     -Code 'avm.bicep.telemetry-source' `
                     -Message 'Load the telemetry prefix from metadata.json rather than a literal in main.bicep.'))
     }
-    if ($source -cmatch '46d3xbcp\.') {
+    if ($source -match '46d3xbcp\.') {
         $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `
                     -Code 'avm.bicep.telemetry-literal' `
                     -Message 'Do not hardcode a 46d3xbcp telemetry prefix in main.bicep.'))
@@ -209,7 +216,8 @@ function Test-AvmBicepConventionCompiledTelemetry {
             "[parameters('enableTelemetry')]"
         }
         $variableDisabled = $variables.Contains('enableReferencedModulesTelemetry') -and
-        $variables['enableReferencedModulesTelemetry'] -eq $false
+        $variables['enableReferencedModulesTelemetry'] -is [bool] -and
+        -not $variables['enableReferencedModulesTelemetry']
         if ($disableChildren -and -not $variableDisabled) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `
                         -Code 'avm.bicep.telemetry-child-variable' `

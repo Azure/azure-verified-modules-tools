@@ -71,7 +71,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:837 | Compiled template declares module name | C |
 | M:846 | Compiled template declares module description | C: source description independent of JSON moduleDescription |
 | M:858 | Required location parameter/default by scope | C: resource-group scope |
-| M:872 | Telemetry parameter type/default/description | P: type/default checked; accepts both the registry's literal description and the shipped scaffold's distinct description |
+| M:872 | Telemetry parameter type/default/description | C: real bool default and exact description paired with each of the two approved source forms |
 | M:884 | Parameter and user-defined type (UDT) names are camelCase | C: nested properties and HCI exceptions |
 | M:915 | Parameter/UDT description format | C: nested properties |
 | M:939 | Conditional parameter/UDT description states condition | C |
@@ -83,10 +83,10 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:1176 | Tags parameter is nullable | C |
 | M:1192 | Variable names are camelCase | C: compiler-generated names exempt |
 | M:1216 | Referenced-module telemetry variable exists/is false | C: resource non-multi-scope |
-| M:1240 | Telemetry deployment exists | P: required for versioned modules with resources; additionally recognizes the scaffold's prefix variable |
+| M:1240 | Telemetry deployment exists | C: required for versioned modules with resources; name starts with metadata-backed prefix in format/concat for either authored form |
 | M:1260 | Telemetry deployment condition is correct | C: checked for both recognized telemetry forms |
 | M:1286 | Telemetry inner verbosity output | C: checked for both recognized telemetry forms |
-| M:1313 | Telemetry identifier matches module identity | P: source declaration, compiled alias, JSON prefix and deployment name checked for two exact forms; registry accepts only its legacy source variable/JSON selector |
+| M:1313 | Telemetry identifier matches module identity | C: exact canonical or shipped source selector, matching compiled alias/name and metadata.json prefix; hardcoded literals rejected |
 | M:1352 | Resource child-module telemetry is disabled where required | C: arrays and symbolic resources |
 | M:1383 | Non-resource/multi-scope child telemetry is forwarded | C: arrays and symbolic resources |
 | M:1417 | Output names are camelCase | C |
@@ -125,7 +125,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:2269 | `serviceShort` unique throughout repository | C |
 | M:2385 | API versions are recent | C: advisories for outdated/near-expiry compiled root/child resources, including extensions and nested deployments; unavailable/malformed API source fails closed |
 | D:51 | Valid JSON `metadata.json` per module | E: existing metadata step; source/child parity belongs to separate slice |
-| D:75 | Compiled telemetry prefix agrees with metadata | P/E: fresh compiled value checked for both source forms; transform verifies checked-in `main.json` across all discovered scopes, but literal registry source acceptance differs |
+| D:75 | Compiled telemetry prefix agrees with metadata | C/E: freshly compiled canonical or shipped prefix agrees with metadata, and transform/convention reject stale checked-in `main.json` across root and child scopes |
 
 Before its assertions, M:48-60 builds/parses **every** module `main.bicep` and
 discovered `main.test.bicep`. Convention now compiles each root/child module
@@ -137,15 +137,17 @@ the same scopes so `avm pr-check` reports stale or missing artifacts without
 writing them, while `avm pre-commit` can repair them. Source-less metadata-only
 children need no compiled artifact.
 
-The shipped Bicep scaffold declares `avmTelemetryIdPrefix` using
-`loadJsonContent('metadata.json', '$.telemetryIdPrefix')` and describes
-`enableTelemetry` differently from the registry's literal checks for
-`telemetryIdPrefix` and `loadJsonContent('metadata.json', 'telemetryIdPrefix')`.
-The new checker accepts only those two exact source forms, verifies the matching
-compiled variable, deployment name, and JSON prefix, and enforces the
-condition and nested telemetry output for either form. Literal parity with
-the registry remains partial and explicitly fail-closed; rejecting valid
-scaffolds or claiming the old assertions unchanged would both be misleading.
+The [telemetry compatibility slice](2026-10-01-bicep-telemetry-compatibility.md)
+accepts exactly the registry's canonical declaration and description or
+the previously shipped Tools declaration and description. It pairs each
+source form with its own compiled parameter description, resolves the
+compiled variable against `metadata.json`, and requires the deployment
+name to start with that variable in `format` or `concat`; conditional
+fallbacks cannot silently bypass the prefix. It also verifies the
+telemetry condition and nested output for versioned root and child
+modules. The existing registry literal assertion does not recognize
+the previously shipped authored form; supporting it is an explicit
+compatibility exception until a separate migration is approved.
 
 The [workflow and ownership slice](2026-09-30-bicep-workflow-ownership-checks.md)
 checks the same top-level module workflow declarations and repository-level

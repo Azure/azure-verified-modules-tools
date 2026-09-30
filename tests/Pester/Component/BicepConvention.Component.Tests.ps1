@@ -88,9 +88,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 3
+        $result.UncoveredFamilies.Count | Should -Be 2
         $result.UncoveredFamilies | Should -Contain 'README regeneration parity against registry output'
-        $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
+        $result.UncoveredFamilies | Should -Not -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
         $result.UncoveredFamilies | Should -Not -Contain 'child publish allowlist and resource-folder singularization'
         $result.UncoveredFamilies | Should -Not -Contain 'workflow and CODEOWNERS checks'
@@ -550,6 +550,235 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $issues.Count | Should -Be 0
     }
 
+    It 'accepts the previously shipped telemetry source and compiled alias throughout convention' {
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath)
+        $source = $source.Replace(
+            'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')',
+            'var avmTelemetryIdPrefix = loadJsonContent(''metadata.json'', ''$.telemetryIdPrefix'')')
+        $source = $source.Replace(
+            'Optional. Enable/Disable usage telemetry for module.',
+            'Optional. Enable/disable usage telemetry for this module.')
+        $source = $source.Replace('${telemetryIdPrefix}-test', '${avmTelemetryIdPrefix}-test')
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['metadata']['description'] = `
+            'Optional. Enable/disable usage telemetry for this module.'
+        $template['variables']['avmTelemetryIdPrefix'] = $template['variables']['telemetryIdPrefix']
+        $null = $template['variables'].Remove('telemetryIdPrefix')
+        $template['resources'][1]['name'] = "[format('{0}-test', variables('avmTelemetryIdPrefix'))]"
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($result.Issues | Where-Object Code -like 'avm.bicep.telemetry-*').Count |
+            Should -Be 0
+        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
+            Should -Be 0
+    }
+
+    It 'rejects mixed telemetry declarations and a mismatched selector for the source variable' {
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath)
+        $source += "`nvar avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')`n"
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+
+        $mixed = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $mixed.Issues.Code | Should -Contain 'avm.bicep.telemetry-source'
+
+        $source = $source.Replace(
+            'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')', '')
+        $source = $source.Replace(
+            'var avmTelemetryIdPrefix = loadJsonContent(''metadata.json'', ''$.telemetryIdPrefix'')',
+            'var avmTelemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')')
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+
+        $mismatched = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $mismatched.Issues.Code | Should -Contain 'avm.bicep.telemetry-source'
+    }
+
+    It 'rejects source literals that only appear as commented-out telemetry declarations' {
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath)
+        $source = $source.Replace(
+            'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')',
+            '// var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')')
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-source'
+    }
+
+    It 'rejects any description other than the two exact approved telemetry descriptions: <Case>' -TestCases @(
+        @{ Case = 'canonical typo'; Description = 'Optional. Enable/disable usage telemetry for module.' }
+        @{ Case = 'shipped typo'; Description = 'Optional. Enable/Disable usage telemetry for this module.' }
+    ) {
+        param($Case, $Description)
+
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['metadata']['description'] = $Description
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-parameter'
+    }
+
+    It 'requires each exact telemetry description to match its source form: <Case>' -TestCases @(
+        @{ Case = 'canonical source and shipped description'; ShippedSource = $false; Description = 'Optional. Enable/disable usage telemetry for this module.' }
+        @{ Case = 'shipped source and canonical description'; ShippedSource = $true; Description = 'Optional. Enable/Disable usage telemetry for module.' }
+    ) {
+        param($Case, $ShippedSource, $Description)
+
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['metadata']['description'] = $Description
+        if ($ShippedSource) {
+            $sourcePath = Join-Path $script:modulePath 'main.bicep'
+            $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+                'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')',
+                'var avmTelemetryIdPrefix = loadJsonContent(''metadata.json'', ''$.telemetryIdPrefix'')')
+            $source = $source.Replace('${telemetryIdPrefix}-test', '${avmTelemetryIdPrefix}-test')
+            [System.IO.File]::WriteAllText($sourcePath, $source)
+            $template['variables']['avmTelemetryIdPrefix'] = $template['variables']['telemetryIdPrefix']
+            $null = $template['variables'].Remove('telemetryIdPrefix')
+            $template['resources'][1]['name'] = "[format('{0}-test', variables('avmTelemetryIdPrefix'))]"
+        }
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-parameter'
+    }
+
+    It 'rejects a spoofed deployment name and an alias that cannot resolve to metadata' {
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['resources'][1]['name'] = "[format('46d3xbcp.res.mock.widget.abc1234-test')]"
+        $template['variables']['telemetryIdPrefix'] = '[variables(''$fxv#missing'')]'
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-name'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-prefix'
+    }
+
+    It 'rejects a conditional telemetry name that can bypass the metadata prefix' {
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['usePrefix'] = @{
+            type = 'bool'; defaultValue = $false
+            metadata = @{ description = 'Optional. Use the telemetry prefix.' }
+        }
+        $template['resources'][1]['name'] = `
+            "[if(parameters('usePrefix'), format('{0}-test', variables('telemetryIdPrefix')), 'fake-test')]"
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-name'
+    }
+
+    It 'accepts a telemetry name built by concatenating the metadata prefix first' {
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['resources'][1]['name'] = "[concat(variables('telemetryIdPrefix'), '-test')]"
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($result.Issues | Where-Object Code -like 'avm.bicep.telemetry-*').Count |
+            Should -Be 0
+    }
+
+    It 'requires a real boolean telemetry default and rejects uppercase hardcoded prefixes' {
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+            'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')',
+            "var telemetryIdPrefix = '46D3XBCP.res.mock.widget.abc1234'")
+        [System.IO.File]::WriteAllText($sourcePath, $source)
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+        $template['parameters']['enableTelemetry']['defaultValue'] = 'true'
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-parameter'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-source'
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-literal'
+    }
+
+    Context 'Versioned child telemetry' {
+        BeforeEach {
+            $script:versionedChildPath = Join-Path $script:modulePath 'child'
+            foreach ($name in @('main.bicep', 'main.json', 'metadata.json', 'version.json')) {
+                Copy-Item -LiteralPath (Join-Path $script:modulePath $name) `
+                    -Destination (Join-Path $script:versionedChildPath $name) -Force
+            }
+        }
+
+        It 'accepts the <Form> source, description, alias and deployment in a versioned child' -TestCases @(
+            @{ Form = 'canonical'; ShippedSource = $false }
+            @{ Form = 'shipped'; ShippedSource = $true }
+        ) {
+            param($Form, $ShippedSource)
+
+            $sourcePath = Join-Path $script:versionedChildPath 'main.bicep'
+            $jsonPath = Join-Path $script:versionedChildPath 'main.json'
+            $template = [System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json -AsHashtable
+            if ($ShippedSource) {
+                $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+                    'var telemetryIdPrefix = loadJsonContent(''metadata.json'', ''telemetryIdPrefix'')',
+                    'var avmTelemetryIdPrefix = loadJsonContent(''metadata.json'', ''$.telemetryIdPrefix'')')
+                $source = $source.Replace('${telemetryIdPrefix}-test', '${avmTelemetryIdPrefix}-test')
+                [System.IO.File]::WriteAllText($sourcePath, $source)
+                $template['parameters']['enableTelemetry']['metadata']['description'] = `
+                    'Optional. Enable/disable usage telemetry for this module.'
+                $template['variables']['avmTelemetryIdPrefix'] = $template['variables']['telemetryIdPrefix']
+                $null = $template['variables'].Remove('telemetryIdPrefix')
+                $template['resources'][1]['name'] = "[format('{0}-test', variables('avmTelemetryIdPrefix'))]"
+            }
+            $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $script:versionedChildPath } {
+                param($P)
+                Get-AvmBicepConventionScope -Path $P
+            }
+            $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
+                R = $script:workingRoot; P = $sourcePath; S = $scope; T = $template
+            } {
+                param($R, $P, $S, $T)
+                $resources = @(Get-AvmBicepConventionResource -Template $T)
+                Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
+                    -Template $T -SourcePath $P -Resources $resources
+            })
+            $issues.Count | Should -Be 0
+        }
+
+        It 'reports a child-scoped condition, output and alias mismatch' {
+            $sourcePath = Join-Path $script:versionedChildPath 'main.bicep'
+            $template = [System.IO.File]::ReadAllText(
+                (Join-Path $script:versionedChildPath 'main.json')) | ConvertFrom-Json -AsHashtable
+            $template['variables']['telemetryIdPrefix'] = '[variables(''$fxv#missing'')]'
+            $template['resources'][1]['condition'] = '[false()]'
+            $template['resources'][1]['properties']['template']['outputs']['telemetry']['value'] = 'missing'
+            $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $script:versionedChildPath } {
+                param($P)
+                Get-AvmBicepConventionScope -Path $P
+            }
+            $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
+                R = $script:workingRoot; P = $sourcePath; S = $scope; T = $template
+            } {
+                param($R, $P, $S, $T)
+                $resources = @(Get-AvmBicepConventionResource -Template $T)
+                Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
+                    -Template $T -SourcePath $P -Resources $resources
+            })
+            $issues.Code | Should -Contain 'avm.bicep.telemetry-condition'
+            $issues.Code | Should -Contain 'avm.bicep.telemetry-output'
+            $issues.Code | Should -Contain 'avm.bicep.telemetry-prefix'
+            @($issues | Where-Object {
+                    $_.File -ne 'avm/res/mock/widget/child/main.bicep'
+                }).Count | Should -Be 0
+        }
+    }
+
     It 'validates symbolic child deployment telemetry forwarding without requiring a false child variable in patterns' {
         $rootJson = Join-Path $script:modulePath 'main.json'
         $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
@@ -592,6 +821,24 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
         @($patternIssues | Where-Object { $_.Code -like 'avm.bicep.telemetry-child-*' }).Count |
             Should -Be 0
+    }
+
+    It 'does not accept a string false as the referenced-module telemetry switch' {
+        $rootJson = Join-Path $script:modulePath 'main.json'
+        $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
+        $template['variables']['enableReferencedModulesTelemetry'] = 'false'
+        $template['resources'] += @{
+            type = 'Microsoft.Resources/deployments'
+            name = 'nested'
+            properties = @{
+                template = @{ parameters = @{ enableTelemetry = @{ type = 'bool' } } }
+                parameters = @{ enableTelemetry = @{ value = "[variables('enableReferencedModulesTelemetry')]" } }
+            }
+        }
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rootJson -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-child-variable'
     }
 
     It 'reports invalid compiled e2e JSON rather than falling back to source-only deployment checks' {
