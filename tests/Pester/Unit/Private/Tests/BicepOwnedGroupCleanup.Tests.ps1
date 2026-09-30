@@ -326,7 +326,7 @@ Describe 'Bicep nested group operation and cleanup provenance' {
         @($script:state.Calls | Where-Object {
                 $_[0] -eq 'resource' -and $_[1] -eq 'list' -and
                 $_ -contains $script:groupName
-            }).Count | Should -Be 1
+            }).Count | Should -Be 3
     }
 
     It 'inspects the optional telemetry-only nested deployment without treating outputs as owned resources' {

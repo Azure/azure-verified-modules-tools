@@ -19,7 +19,9 @@ Describe 'Bicep e2e static deployment isolation' {
                     @{
                         type = 'Microsoft.Resources/deployments'
                         properties = @{
+                            mode = 'Incremental'
                             template = @{
+                                '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
                                 resources = @(@{ type = 'Microsoft.Storage/storageAccounts'; name = 'storage' })
                             }
                         }
@@ -54,6 +56,47 @@ Describe 'Bicep e2e static deployment isolation' {
             { Assert-AvmBicepTestIsolation -Template @{ resources = @('bad') } `
                     -SourcePath 'case.bicep' } |
                 Should -Throw -ExpectedMessage '*invalid ARM resource*'
+        }
+    }
+
+    It 'rejects nested deployments with unsafe modes, scopes or parameters' -ForEach @(
+        @{ Case = 'complete mode'; Mutation = 'mode'; Message = '*unsafe nested deployment mode*' }
+        @{ Case = 'dynamic mode'; Mutation = 'dynamic'; Message = '*unsafe nested deployment mode*' }
+        @{ Case = 'unreviewed rollback'; Mutation = 'rollback'; Message = '*unsafe nested deployment mode or property*' }
+        @{ Case = 'foreign schema'; Mutation = 'schema'; Message = '*outside its resource group*' }
+        @{ Case = 'linked parameters'; Mutation = 'parameters'; Message = '*uninspectable nested deployment parameters*' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Change = $Mutation; Expected = $Message
+        } {
+            param($Change, $Expected)
+            $deployment = @{
+                type = 'Microsoft.Resources/deployments'
+                properties = @{
+                    mode = 'Incremental'
+                    template = @{
+                        '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+                        resources = @(@{ type = 'Microsoft.Storage/storageAccounts'; name = 'storage' })
+                    }
+                }
+            }
+            switch ($Change) {
+                mode { $deployment.properties.mode = 'Complete' }
+                dynamic { $deployment.properties.mode = "[parameters('mode')]" }
+                rollback { $deployment.properties.onErrorDeployment = @{ type = 'LastSuccessful' } }
+                schema {
+                    $deployment.properties.template['$schema'] =
+                        'https://schema.management.azure.com/schemas/2019-08-01/subscriptionDeploymentTemplate.json#'
+                }
+                parameters {
+                    $deployment.properties.parameters = @{
+                        secret = @{ reference = @{ keyVault = @{ id = '/subscriptions/foreign' } } }
+                    }
+                }
+            }
+            { Assert-AvmBicepTestIsolation -Template @{ resources = @($deployment) } `
+                    -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage $Expected
         }
     }
 }

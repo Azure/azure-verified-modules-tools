@@ -27,6 +27,8 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
             Schema              = $script:groupSchema
             Resources           = @(@{ type = 'Microsoft.Storage/storageAccounts'; name = 'demo' })
             Groups              = @{}
+            LiveResources       = @{}
+            ForeignContents     = @()
             Calls               = [System.Collections.Generic.List[object]]::new()
             GroupExistsOutput   = $null
             CreateExit          = 0
@@ -35,10 +37,26 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
             ShowMismatch        = $false
             DeleteExit          = 0
             DeletePersists      = $false
+            ResourceDeleteExit  = 0
+            ResourceDeletes     = 0
+            ContentExit         = 0
+            ContentOutput       = $null
+            ForeignContentMode  = ''
+            ForeignAfterDelete  = $false
+            GroupTagAfterDelete = ''
+            ChildTags           = $null
+            CreateTimeout       = $false
             FailOperation       = ''
             WhatIfOutput        = $null
             WhatIfType          = 'Create'
             DeploymentState     = 'Succeeded'
+            HistoryState        = 'Succeeded'
+            MissingHistory      = $false
+            MissingOperations   = $false
+            OperationKind       = 'Create'
+            OperationState      = 'Succeeded'
+            DuplicateOperation = $false
+            ForeignOperation    = $false
             DeploymentOutput    = $null
             DeploymentOutputs   = @{ account = @{ type = 'String'; value = 'deployed-account' } }
             PesterResult        = $null
@@ -127,6 +145,7 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                             $group = @{
                                 id   = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$name"
                                 name = $name
+                                type = 'Microsoft.Resources/resourceGroups'
                                 tags = @{ 'avm-e2e-run-id' = $runId }
                             }
                             $script:bicepE2eState.Groups[$name] = $group
@@ -150,6 +169,7 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                                 $group = @{
                                     id   = $group.id
                                     name = $group.name
+                                    type = 'Microsoft.Resources/resourceGroups'
                                     tags = @{ 'avm-e2e-run-id' = 'different-owner' }
                                 }
                             }
@@ -170,39 +190,213 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                         }
                     }
                 }
+                if ($ArgumentList[0] -eq 'resource') {
+                    $idIndex = [array]::IndexOf($ArgumentList, '--ids')
+                    $resourceId = if ($idIndex -ge 0) { $ArgumentList[$idIndex + 1] } else { '' }
+                    switch ($ArgumentList[1]) {
+                        'list' {
+                            if ($script:bicepE2eState.ContentExit -ne 0) {
+                                return [pscustomobject]@{
+                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake inventory failure'
+                                }
+                            }
+                            $contents = @($script:bicepE2eState.LiveResources.Values) +
+                                @($script:bicepE2eState.ForeignContents)
+                            if ($script:bicepE2eState.ForeignContentMode) {
+                                $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
+                                $groupName = $ArgumentList[$groupIndex + 1]
+                                if ($script:bicepE2eState.ForeignContentMode -eq 'duplicate') {
+                                    $contents += $script:bicepE2eState.LiveResources.Values |
+                                        Select-Object -First 1
+                                }
+                                else {
+                                    $foreignGroup = if ($script:bicepE2eState.ForeignContentMode -eq 'outside') {
+                                        'foreign-group'
+                                    }
+                                    else { $groupName }
+                                    $contents += @{
+                                        id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$foreignGroup/providers/Microsoft.Storage/storageAccounts/foreign"
+                                        type = 'Microsoft.Storage/storageAccounts'
+                                        name = 'foreign'
+                                    }
+                                }
+                            }
+                            if ($script:bicepE2eState.ForeignAfterDelete -and
+                                $script:bicepE2eState.ResourceDeletes -gt 0) {
+                                $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
+                                $groupName = $ArgumentList[$groupIndex + 1]
+                                $contents += @{
+                                    id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Storage/storageAccounts/foreign"
+                                    type = 'Microsoft.Storage/storageAccounts'
+                                    name = 'foreign'
+                                }
+                            }
+                            $output = if ($null -ne $script:bicepE2eState.ContentOutput) {
+                                $script:bicepE2eState.ContentOutput
+                            }
+                            else { ConvertTo-Json -InputObject @($contents) -Depth 8 -Compress }
+                            return [pscustomobject]@{ ExitCode = 0; StdOut = $output; StdErr = '' }
+                        }
+                        'show' {
+                            if (-not $script:bicepE2eState.LiveResources.ContainsKey($resourceId)) {
+                                return [pscustomobject]@{
+                                    ExitCode = 1; StdOut = ''; StdErr = '(ResourceNotFound) missing'
+                                }
+                            }
+                            return [pscustomobject]@{
+                                ExitCode = 0
+                                StdOut = $script:bicepE2eState.LiveResources[$resourceId] |
+                                    ConvertTo-Json -Depth 8 -Compress
+                                StdErr = ''
+                            }
+                        }
+                        'delete' {
+                            if ($script:bicepE2eState.ResourceDeleteExit -ne 0) {
+                                return [pscustomobject]@{
+                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake child deletion failure'
+                                }
+                            }
+                            $null = $script:bicepE2eState.LiveResources.Remove($resourceId)
+                            $script:bicepE2eState.ResourceDeletes++
+                            if ($script:bicepE2eState.GroupTagAfterDelete) {
+                                foreach ($group in $script:bicepE2eState.Groups.Values) {
+                                    $group.tags['avm-e2e-run-id'] =
+                                        $script:bicepE2eState.GroupTagAfterDelete
+                                }
+                            }
+                            return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                        }
+                    }
+                }
                 if ($ArgumentList[0] -eq 'deployment') {
+                    $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
+                    $groupName = $ArgumentList[$groupIndex + 1]
+                    $deploymentNameIndex = [array]::IndexOf($ArgumentList, '--name')
+                    $deploymentName = $ArgumentList[$deploymentNameIndex + 1]
+                    $deploymentId = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Resources/deployments/$deploymentName"
+                    if ($ArgumentList[1] -eq 'operation' -and $ArgumentList[3] -eq 'list') {
+                        $operations = @()
+                        if (-not $script:bicepE2eState.MissingOperations) {
+                            $target = $script:bicepE2eState.LiveResources.Values |
+                                Select-Object -First 1
+                            $resourceId = if ($null -ne $script:bicepE2eState.ResourceIdOverride) {
+                                $script:bicepE2eState.ResourceIdOverride
+                            }
+                            else { [string]$target.id }
+                            $operation = @{
+                                id = "$deploymentId/operations/one"
+                                operationId = 'one'
+                                properties = @{
+                                    provisioningOperation = $script:bicepE2eState.OperationKind
+                                    provisioningState = $script:bicepE2eState.OperationState
+                                    targetResource = @{
+                                        id = $resourceId
+                                        resourceType = [string]$target.type
+                                        resourceName = [string]$target.name
+                                    }
+                                }
+                            }
+                            $operations += $operation
+                            if ($script:bicepE2eState.DuplicateOperation) {
+                                $operations += $operation
+                            }
+                            if ($script:bicepE2eState.ForeignOperation) {
+                                $operations += @{
+                                    id = "$deploymentId/operations/foreign"
+                                    operationId = 'foreign'
+                                    properties = @{
+                                        provisioningOperation = 'Create'
+                                        provisioningState = 'Succeeded'
+                                        targetResource = @{
+                                            id = $resourceId.Replace($groupName, 'foreign-group')
+                                            resourceType = [string]$target.type
+                                            resourceName = [string]$target.name
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return [pscustomobject]@{
+                            ExitCode = 0
+                            StdOut = ConvertTo-Json -InputObject @($operations) -Depth 10 -Compress
+                            StdErr = ''
+                        }
+                    }
+                    if ($ArgumentList[2] -eq 'show') {
+                        if ($script:bicepE2eState.MissingHistory) {
+                            return [pscustomobject]@{
+                                ExitCode = 1; StdOut = ''; StdErr = '(DeploymentNotFound) missing'
+                            }
+                        }
+                        return [pscustomobject]@{
+                            ExitCode = 0
+                            StdOut = @{
+                                id = $deploymentId
+                                name = $deploymentName
+                                properties = @{ provisioningState = $script:bicepE2eState.HistoryState }
+                            } | ConvertTo-Json -Depth 8 -Compress
+                            StdErr = ''
+                        }
+                    }
                     $templateIndex = [array]::IndexOf($ArgumentList, '--template-file')
                     $script:bicepE2eState.TemporaryFile = $ArgumentList[$templateIndex + 1]
                     $script:bicepE2eState.CompiledJson = Get-Content `
                         -LiteralPath $script:bicepE2eState.TemporaryFile -Raw -Encoding utf8
+                    $compiled = $script:bicepE2eState.CompiledJson | ConvertFrom-Json -AsHashtable
+                    $resourceType = [string]$compiled.resources[0].type
+                    $resourceName = [string]$compiled.resources[0].name
                     $parameterIndex = [array]::IndexOf($ArgumentList, '--parameters')
                     if ($parameterIndex -ge 0) {
                         $script:bicepE2eState.ParameterPath = $ArgumentList[$parameterIndex + 1].Substring(1)
                         $script:bicepE2eState.ParameterJson = Get-Content `
                             -LiteralPath $script:bicepE2eState.ParameterPath -Raw -Encoding utf8
                     }
-                    if ($script:bicepE2eState.FailOperation -eq $ArgumentList[2]) {
+                    if ($script:bicepE2eState.FailOperation -eq $ArgumentList[2] -and
+                        $ArgumentList[2] -ne 'create') {
                         return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Fake ARM failure' }
                     }
-                    $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
-                    $groupName = $ArgumentList[$groupIndex + 1]
                     $resourceId = if ($null -ne $script:bicepE2eState.ResourceIdOverride) {
                         $script:bicepE2eState.ResourceIdOverride
                     }
                     else {
-                        "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Storage/storageAccounts/demo"
+                        "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/$resourceType/$resourceName"
                     }
                     $preview = if ($null -ne $script:bicepE2eState.WhatIfOutput) {
                         $script:bicepE2eState.WhatIfOutput
                     }
                     else {
-                        @{ changes = @(@{ resourceId = $resourceId; changeType = $script:bicepE2eState.WhatIfType }) } |
-                            ConvertTo-Json -Depth 8 -Compress
+                        @{ changes = @(@{
+                                    resourceId = $resourceId
+                                    changeType = $script:bicepE2eState.WhatIfType
+                                    after = @{ type = $resourceType; name = $resourceName }
+                                }) } | ConvertTo-Json -Depth 8 -Compress
                     }
-                    $deploymentNameIndex = [array]::IndexOf($ArgumentList, '--name')
-                    $deploymentName = $ArgumentList[$deploymentNameIndex + 1]
+                    if ($ArgumentList[2] -eq 'create') {
+                        $script:bicepE2eState.LiveResources[$resourceId] = @{
+                            id = $resourceId
+                            type = $resourceType
+                            name = $resourceName
+                        }
+                        if ($null -ne $script:bicepE2eState.ChildTags) {
+                            $script:bicepE2eState.LiveResources[$resourceId].tags =
+                                $script:bicepE2eState.ChildTags
+                        }
+                        if ($script:bicepE2eState.CreateTimeout) {
+                            $script:bicepE2eState.HistoryState = 'Canceled'
+                            $script:bicepE2eState.OperationState = 'Canceled'
+                            throw [System.TimeoutException]::new('Fake Create timeout after partial deployment')
+                        }
+                        if ($script:bicepE2eState.FailOperation -eq 'create') {
+                            $script:bicepE2eState.HistoryState = 'Failed'
+                            $script:bicepE2eState.OperationState = 'Failed'
+                            return [pscustomobject]@{
+                                ExitCode = 1; StdOut = ''; StdErr = 'Fake ARM failure'
+                            }
+                        }
+                        $script:bicepE2eState.HistoryState = $script:bicepE2eState.DeploymentState
+                    }
                     $deployment = @{
-                        id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Resources/deployments/$deploymentName"
+                        id = $deploymentId
                         name = $deploymentName
                         properties = @{
                             provisioningState = $script:bicepE2eState.DeploymentState
@@ -231,8 +425,9 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $original = Get-Content -LiteralPath $script:sourcePath -Raw
         $result = Invoke-AvmTestE2e -Path $script:root `
             -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -Tokens @{ namePrefix = 'quote"slash\name' } `
-            -Parameters @{ administrator = 'private-value' } -SkipModuleVersionCheck
+            -ResourceGroupPrefix 'avm-e2e' -Tokens @{ namePrefix = 'owned-account' } `
+            -Parameters @{ administrator = 'private-value'; display = 'quote"slash\name' } `
+            -SkipModuleVersionCheck
 
         $result.Status | Should -Be 'pass'
         $result.RunsTotal | Should -Be 1
@@ -244,20 +439,30 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $result.CleanupPending.Count | Should -Be 0
         $result.WhatIfChanges.Count | Should -Be 1
         $script:state.Groups.Count | Should -Be 0
+        $script:state.LiveResources.Count | Should -Be 0
+        $script:state.ResourceDeletes | Should -Be 1
         ($script:state.CompiledJson | ConvertFrom-Json -AsHashtable).resources[0].name |
-            Should -Be 'quote"slash\name'
+            Should -Be 'owned-account'
         ($script:state.ParameterJson | ConvertFrom-Json -AsHashtable).parameters.administrator.value |
             Should -Be 'private-value'
+        ($script:state.ParameterJson | ConvertFrom-Json -AsHashtable).parameters.display.value |
+            Should -Be 'quote"slash\name'
         (Get-Content -LiteralPath $script:sourcePath -Raw) | Should -BeExactly $original
         (Test-Path -LiteralPath $script:state.TemporaryFile) | Should -BeFalse
         (Test-Path -LiteralPath $script:state.ParameterPath) | Should -BeFalse
         $sequence = @($script:state.Calls | ForEach-Object {
                 if ($_.FilePath -eq 'fake-bicep') { 'build' }
                 elseif ($_.Arguments[0] -eq 'group') { 'group-' + $_.Arguments[1] }
+                elseif ($_.Arguments[0] -eq 'resource') { 'resource-' + $_.Arguments[1] }
+                elseif ($_.Arguments[1] -eq 'operation') { 'operation-list' }
                 else { $_.Arguments[2] }
             })
-        $sequence | Should -Be @('build', 'group-exists', 'group-create', 'validate',
-            'what-if', 'create', 'group-exists', 'group-show', 'group-delete', 'group-exists')
+        $sequence[0..5] | Should -Be @('build', 'group-exists', 'group-create',
+            'validate', 'what-if', 'create')
+        [array]::IndexOf($sequence, 'resource-list') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'resource-delete'))
+        [array]::IndexOf($sequence, 'resource-delete') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'group-delete'))
         $create = $script:state.Calls |
             Where-Object { $_.Arguments[0] -eq 'deployment' -and $_.Arguments[2] -eq 'create' } |
             Select-Object -First 1
@@ -619,6 +824,26 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
             }).Count | Should -Be 1
     }
 
+    It 'retains foreign contents introduced before deployment when validation fails' {
+        $script:state.FailOperation = 'validate'
+        $script:state.ForeignContentMode = 'foreign'
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-validate-failed'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        $script:state.Groups.Count | Should -Be 1
+        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
+        @($result.CleanupPending | Where-Object {
+                $_ -match '/storageAccounts/foreign$'
+            }).Count | Should -Be 1
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 0
+    }
+
     It 'reports a deployment failure while still cleaning up its group' {
         $script:state.FailOperation = 'create'
         $result = Invoke-AvmTestE2e -Path $script:root `
@@ -745,5 +970,125 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         @($script:state.Calls | Where-Object {
                 $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'create'
             }).Count | Should -Be 1
+    }
+
+    It 'keeps the group and every child when <Case> makes cleanup ownership ambiguous' -ForEach @(
+        @{ Case = 'an untracked sibling'; Change = 'foreign'; Field = 'ForeignContentMode' }
+        @{ Case = 'a foreign group in inventory'; Change = 'outside'; Field = 'ForeignContentMode' }
+        @{ Case = 'a duplicate inventory entry'; Change = 'duplicate'; Field = 'ForeignContentMode' }
+        @{ Case = 'an altered child tag'; Change = 'tag'; Field = 'ChildTags' }
+        @{ Case = 'a case-variant child tag'; Change = 'case-tag'; Field = 'ChildTags' }
+        @{ Case = 'a missing deployment history'; Change = 'history'; Field = 'MissingHistory' }
+        @{ Case = 'missing operation history'; Change = 'operations'; Field = 'MissingOperations' }
+        @{ Case = 'an Update operation'; Change = 'update'; Field = 'OperationKind' }
+        @{ Case = 'a NoChange operation'; Change = 'unchanged'; Field = 'OperationKind' }
+        @{ Case = 'a nonterminal operation'; Change = 'running'; Field = 'OperationState' }
+        @{ Case = 'a repeated operation ID'; Change = 'duplicate-operation'; Field = 'DuplicateOperation' }
+        @{ Case = 'a foreign operation target'; Change = 'foreign-operation'; Field = 'ForeignOperation' }
+        @{ Case = 'an incomplete resource inventory'; Change = 'missing-inventory'; Field = 'ContentOutput' }
+        @{ Case = 'invalid resource inventory'; Change = 'invalid-inventory'; Field = 'ContentOutput' }
+        @{ Case = 'a failed resource inventory request'; Change = 'inventory-error'; Field = 'ContentExit' }
+        @{ Case = 'a failed individual child deletion'; Change = 'child-delete'; Field = 'ResourceDeleteExit' }
+    ) {
+        $value = switch ($Change) {
+            foreign { 'foreign' }
+            outside { 'outside' }
+            duplicate { 'duplicate' }
+            tag { @{ 'avm-e2e-run-id' = 'another-run' } }
+            'case-tag' { @{ 'AVM-E2E-RUN-ID' = 'another-run' } }
+            history { $true }
+            operations { $true }
+            update { 'Update' }
+            unchanged { 'NoChange' }
+            running { 'Running' }
+            'duplicate-operation' { $true }
+            'foreign-operation' { $true }
+            'missing-inventory' { '[]' }
+            'invalid-inventory' { '{}' }
+            'inventory-error' { 1 }
+            'child-delete' { 1 }
+        }
+        $script:state.$Field = $value
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsPassed | Should -Be 0
+        $result.RunsFailed | Should -Be 1
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        $script:state.Groups.Count | Should -Be 1
+        $script:state.LiveResources.Count | Should -Be 1
+        $script:state.ResourceDeletes | Should -Be 0
+        $groupName = @($script:state.Groups.Keys)[0]
+        $result.CleanupPending | Should -Contain $groupName
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 0
+    }
+
+    It 'leaves the group pending if foreign content arrives after individually deleting its proven child' {
+        $script:state.ForeignAfterDelete = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsPassed | Should -Be 0
+        $script:state.ResourceDeletes | Should -Be 1
+        $script:state.Groups.Count | Should -Be 1
+        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
+        @($result.CleanupPending | Where-Object {
+                $_ -match '/storageAccounts/foreign$'
+            }).Count | Should -Be 1
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 0
+    }
+
+    It 'leaves a retagged group pending after deleting only the already verified child' {
+        $script:state.GroupTagAfterDelete = 'another-run'
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $script:state.ResourceDeletes | Should -Be 1
+        $script:state.Groups.Count | Should -Be 1
+        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 0
+    }
+
+    It 'removes only the proven partial resource after a terminal cancelled Create timeout' {
+        $script:state.CreateTimeout = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-process-timeout'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.ResourceDeletes | Should -Be 1
+        $script:state.LiveResources.Count | Should -Be 0
+        $script:state.Groups.Count | Should -Be 0
+    }
+
+    It 'preserves partial resources after cancellation when operation history is incomplete' {
+        $script:state.CreateTimeout = $true
+        $script:state.MissingOperations = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-process-timeout'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        $result.CleanupPending.Count | Should -BeGreaterThan 0
+        $script:state.ResourceDeletes | Should -Be 0
+        $script:state.LiveResources.Count | Should -Be 1
+        $script:state.Groups.Count | Should -Be 1
     }
 }

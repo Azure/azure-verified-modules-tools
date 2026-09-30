@@ -36,6 +36,8 @@ function Get-AvmBicepScopedDeploymentOperation {
 
         [System.Collections.Generic.HashSet[string]] $SeenResources,
 
+        [switch] $DirectGroup,
+
         [int] $Depth = 0
     )
 
@@ -48,6 +50,10 @@ function Get-AvmBicepScopedDeploymentOperation {
     if ($Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($OwnedGroupName)) {
         throw [AvmConfigurationException]::new(
             'Nested Bicep group operations require an explicit run-owned group.')
+    }
+    if ($DirectGroup -and $Scope -ne 'group') {
+        throw [AvmConfigurationException]::new(
+            'Direct Bicep group operations must remain within their run-owned resource group.')
     }
     if ($null -eq $Visited) {
         $Visited = [System.Collections.Generic.HashSet[string]]::new(
@@ -111,6 +117,8 @@ function Get-AvmBicepScopedDeploymentOperation {
     }
     $observed = [System.Collections.Generic.List[object]]::new()
     $operationPrefix = "$deploymentId/operations/"
+    $operationIds = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($operation in $operations) {
         if ($operation -isnot [System.Collections.IDictionary] -or
             -not ([string]$operation['id']).StartsWith(
@@ -126,7 +134,8 @@ function Get-AvmBicepScopedDeploymentOperation {
             $nameMatches = [string]::Equals($operationName, $operationKey, [System.StringComparison]::OrdinalIgnoreCase)
         }
         if ([string]::IsNullOrWhiteSpace($operationKey) -or
-            $operationKey.Contains('/') -or -not $nameMatches) {
+            $operationKey.Contains('/') -or -not $nameMatches -or
+            -not $operationIds.Add($operationKey)) {
             throw [AvmProcessException]::new(
                 "Deployment '$deploymentId' returned an invalid scoped operation ID.")
         }
@@ -153,9 +162,15 @@ function Get-AvmBicepScopedDeploymentOperation {
             throw [AvmProcessException]::new(
                 "Deployment '$deploymentId' returned an uninspectable or unsafe operation.")
         }
-        $resource = Get-AvmBicepScopedResource -ResourceId ([string]$target['id']) `
-            -Scope $Scope -SubscriptionId $SubscriptionId -ManagementGroupId $ManagementGroupId `
-            -RunId $RunId -OwnedGroupName $OwnedGroupName
+        $resource = if ($DirectGroup) {
+            Get-AvmBicepTestGroupResource -ResourceId ([string]$target['id']) `
+                -SubscriptionId $SubscriptionId -ResourceGroupName $OwnedGroupName -RunId $RunId
+        }
+        else {
+            Get-AvmBicepScopedResource -ResourceId ([string]$target['id']) `
+                -Scope $Scope -SubscriptionId $SubscriptionId -ManagementGroupId $ManagementGroupId `
+                -RunId $RunId -OwnedGroupName $OwnedGroupName
+        }
         if (-not [string]::Equals([string]$target['resourceType'], $resource.Type,
                 [System.StringComparison]::OrdinalIgnoreCase)) {
             throw [AvmProcessException]::new(
@@ -184,7 +199,8 @@ function Get-AvmBicepScopedDeploymentOperation {
                         -ManagementGroupId $ManagementGroupId -DeploymentName $resource.Name `
                         -RunId $RunId -Plan $Plan -WorkingDirectory $WorkingDirectory `
                         -OwnedGroupName $OwnedGroupName -Pending $Pending `
-                        -Visited $Visited -SeenResources $SeenResources -Depth ($Depth + 1))) {
+                        -Visited $Visited -SeenResources $SeenResources -DirectGroup:$DirectGroup `
+                        -Depth ($Depth + 1))) {
                 $observed.Add($nested)
             }
             $null = $Pending.Remove($resource.Id)

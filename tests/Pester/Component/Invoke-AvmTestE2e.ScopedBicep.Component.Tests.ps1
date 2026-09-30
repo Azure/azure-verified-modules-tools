@@ -658,7 +658,7 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         $script:state.Groups.Count | Should -Be 0
         @($script:state.Calls | Where-Object {
                 $_.Arguments[0] -eq 'resource' -and $_.Arguments[1] -eq 'list'
-            }).Count | Should -Be 1
+            }).Count | Should -Be 3
         @($script:state.Calls | Where-Object {
                 $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
             }).Count | Should -Be 1

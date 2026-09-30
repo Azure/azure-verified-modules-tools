@@ -180,6 +180,7 @@ function Invoke-AvmBicepTestE2e {
                     RunId          = $caseRunId
                     DeploymentName = 'avm-e2e-{0}' -f $caseRunId
                     TemplatePath   = $path
+                    Template       = $template.Template
                     ParameterPath  = $caseParameterPath
                     AssertionFiles = [string[]]$assertionFiles
                 })
@@ -232,7 +233,8 @@ function Invoke-AvmBicepTestE2e {
             $groupName = '{0}-{1}' -f $ResourceGroupPrefix, $runId
             $deploymentName = 'avm-e2e-{0}' -f $runId
             $attemptedGroupCreation = $false
-            $groupCreateSucceeded = $false
+            $deploymentAttempted = $false
+            $previewPlan = $null
             $casePassed = $false
             $armInput = @{
                 AzPath            = $az.Source
@@ -266,7 +268,6 @@ function Invoke-AvmBicepTestE2e {
                     $failed++
                     continue
                 }
-                $groupCreateSucceeded = $true
                 if (-not (Test-Json -Json ([string]$created.StdOut) -ErrorAction SilentlyContinue)) {
                     Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
                         -Code 'group-create-invalid' -Message "Cannot verify newly created group '$groupName': Azure CLI returned invalid JSON."
@@ -304,8 +305,10 @@ function Invoke-AvmBicepTestE2e {
                     continue
                 }
                 try {
-                    $previewChanges = @(Read-AvmBicepWhatIfChange `
-                            -Output ([string]$preview.StdOut) -File $item.Case.RelativePath)
+                    $previewPlan = Read-AvmBicepTestGroupWhatIf `
+                        -Output ([string]$preview.StdOut) -File $item.Case.RelativePath `
+                        -Template $item.Template -SubscriptionId $SubscriptionId `
+                        -ResourceGroupName $groupName -RunId $runId
                 }
                 catch [AvmProcessException] {
                     Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
@@ -313,21 +316,16 @@ function Invoke-AvmBicepTestE2e {
                     $failed++
                     continue
                 }
-                $resourcePrefix = '/subscriptions/{0}/resourceGroups/{1}/' -f $SubscriptionId, $groupName
-                $unsafeChange = @($previewChanges | Where-Object {
-                        $_.ChangeType -cne 'Create' -or
-                        -not $_.ResourceId.StartsWith(
-                            $resourcePrefix, [System.StringComparison]::OrdinalIgnoreCase)
-                    })
-                if ($previewChanges.Count -eq 0 -or $unsafeChange.Count -gt 0) {
+                catch [AvmConfigurationException] {
                     Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'what-if-unsafe' -Message "ARM what-if for '$groupName' was empty or predicted changes outside the new group or other than Create; deployment was refused."
+                        -Code 'what-if-unsafe' -Message $_.Exception.Message
                     $failed++
                     continue
                 }
-                foreach ($change in $previewChanges) {
+                foreach ($change in $previewPlan.Changes) {
                     $changes.Add($change)
                 }
+                $deploymentAttempted = $true
                 $deployed = Invoke-AvmBicepArmOperation @armInput -Operation Create
                 if ($deployed.ExitCode -ne 0) {
                     Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
@@ -381,15 +379,25 @@ function Invoke-AvmBicepTestE2e {
                         $cleanup = Remove-AvmBicepTestResourceGroup -AzPath $az.Source `
                             -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
                             -RunId $runId -WorkingDirectory $Context.Root `
-                            -ExpectCreated:$groupCreateSucceeded
+                            -ExpectCreated -Plan $previewPlan -DeploymentName $deploymentName `
+                            -DeploymentAttempted:$deploymentAttempted
                     }
                     catch [AvmProcessException] {
-                        $cleanup = [pscustomobject]@{ Cleaned = $false; Message = $_.Exception.Message }
+                        $cleanup = [pscustomobject]@{
+                            Cleaned = $false; Pending = @(); Message = $_.Exception.Message
+                        }
                     }
                     catch [System.TimeoutException] {
-                        $cleanup = [pscustomobject]@{ Cleaned = $false; Message = $_.Exception.Message }
+                        $cleanup = [pscustomobject]@{
+                            Cleaned = $false; Pending = @(); Message = $_.Exception.Message
+                        }
                     }
                     if (-not $cleanup.Cleaned) {
+                        foreach ($id in $cleanup.Pending) {
+                            if (-not $pending.Contains($id)) {
+                                $pending.Add($id)
+                            }
+                        }
                         $pending.Add($groupName)
                         $stopForCleanup = $true
                         $message = "$($cleanup.Message) Resource group '$groupName' may require manual cleanup."

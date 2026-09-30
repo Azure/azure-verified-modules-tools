@@ -7,14 +7,18 @@ function Invoke-AvmTestE2e {
         Bicep tests are discovered under tests/e2e/**/main.test.bicep.
         Eligible resource-group templates run in a new, uniquely named and
         tagged disposable group per example. ARM validate and what-if must
-        succeed, and what-if must predict only creations within that group,
-        before a deployment is allowed. Successful ARM provisioning is
-        verified from the deployment response. Case-local *.Tests.ps1 Pester
+        succeed, and an expanded what-if must predict only declared,
+        identity-matched creations within that group before deployment.
+        Successful ARM provisioning is verified from the deployment response.
+        Case-local *.Tests.ps1 Pester
         assertions then run in a child process with TestInputData containing
         DeploymentOutputs (ARM properties.outputs) and ModuleTestFolderPath.
-        The group is deleted after success or failure, but only after its
-        ownership tag and subscription are verified; failed cleanup is
-        reported with the group name.
+        Cleanup after success or failure checks the group tag and subscription,
+        reconciles terminal deployment operations with the preview and current
+        resource inventory, and deletes individually proven children. The
+        group is deleted only after a fresh empty-inventory and ownership
+        check. Unknown children, changed tags, incomplete operations or
+        failed deletion retain the group and report CleanupPending IDs.
 
         Subscription, management-group and tenant templates require an
         explicit subscription and tenant; management-group templates also

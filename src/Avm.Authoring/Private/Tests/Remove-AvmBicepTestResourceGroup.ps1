@@ -17,7 +17,13 @@ function Remove-AvmBicepTestResourceGroup {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
-        [switch] $ExpectCreated
+        [switch] $ExpectCreated,
+
+        [pscustomobject] $Plan,
+
+        [string] $DeploymentName,
+
+        [switch] $DeploymentAttempted
     )
 
     Set-StrictMode -Version 3.0
@@ -30,10 +36,11 @@ function Remove-AvmBicepTestResourceGroup {
         if ($ExpectCreated) {
             return [pscustomobject]@{
                 Cleaned = $false
+                Pending = @()
                 Message = "Cannot verify the resource group '$ResourceGroupName' after a successful creation; manual cleanup verification is required."
             }
         }
-        return [pscustomobject]@{ Cleaned = $true; Message = '' }
+        return [pscustomobject]@{ Cleaned = $true; Pending = @(); Message = '' }
     }
     $shown = Invoke-AvmProcess -FilePath $AzPath -ArgumentList @(
         'group', 'show', '--name', $ResourceGroupName,
@@ -42,6 +49,7 @@ function Remove-AvmBicepTestResourceGroup {
     if ($shown.ExitCode -ne 0) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = Add-AvmProcessFailureDetail `
                 -Message "Cannot verify ownership of resource group '$ResourceGroupName'." `
                 -StdErr $shown.StdErr
@@ -50,6 +58,7 @@ function Remove-AvmBicepTestResourceGroup {
     if (-not (Test-Json -Json ([string]$shown.StdOut) -ErrorAction SilentlyContinue)) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = "Cannot verify ownership of resource group '$ResourceGroupName': Azure CLI returned invalid JSON."
         }
     }
@@ -69,14 +78,79 @@ function Remove-AvmBicepTestResourceGroup {
         $group['tags']['avm-e2e-run-id'] -cne $RunId) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = "Refusing to delete unverified resource group '$ResourceGroupName'; manual cleanup is required."
         }
     }
-    if (-not $PSCmdlet.ShouldProcess($ResourceGroupName, 'Delete disposable Bicep test resource group')) {
+    if (-not $PSCmdlet.ShouldProcess($ResourceGroupName, 'Delete verified Bicep test resources and empty group')) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = "Deletion of disposable resource group '$ResourceGroupName' was declined; manual cleanup is required."
         }
+    }
+    try {
+        $contents = @(Get-AvmBicepTestGroupContent -AzPath $AzPath `
+                -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName `
+                -WorkingDirectory $WorkingDirectory)
+    }
+    catch [AvmProcessException] {
+        return [pscustomobject]@{ Cleaned = $false; Pending = @(); Message = $_.Exception.Message }
+    }
+    if ($DeploymentAttempted) {
+        if ($null -eq $Plan -or [string]::IsNullOrWhiteSpace($DeploymentName)) {
+            return [pscustomobject]@{
+                Cleaned = $false
+                Pending = @($contents | ForEach-Object { [string]$_['id'] })
+                Message = "Cannot reconcile attempted Bicep deployment in '$ResourceGroupName' without its exact preview and deployment name."
+            }
+        }
+        $cleaned = Remove-AvmBicepTestGroupDeploymentResource -AzPath $AzPath `
+            -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName `
+            -RunId $RunId -DeploymentName $DeploymentName -Plan $Plan `
+            -Contents $contents -WorkingDirectory $WorkingDirectory -Confirm:$false
+        if (-not $cleaned.Cleaned) {
+            return $cleaned
+        }
+    }
+    elseif ($contents.Count -gt 0) {
+        return [pscustomobject]@{
+            Cleaned = $false
+            Pending = @($contents | ForEach-Object { [string]$_['id'] })
+            Message = "Refusing to delete group '$ResourceGroupName' containing resources without a verified deployment."
+        }
+    }
+    try {
+        $remaining = @(Get-AvmBicepTestGroupContent -AzPath $AzPath `
+                -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName `
+                -WorkingDirectory $WorkingDirectory)
+        if ($remaining.Count -gt 0) {
+            return [pscustomobject]@{
+                Cleaned = $false
+                Pending = @($remaining | ForEach-Object { [string]$_['id'] })
+                Message = "Group '$ResourceGroupName' is not empty after owned-resource reconciliation; refusing deletion."
+            }
+        }
+        $owned = [pscustomobject]@{
+            Id        = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName"
+            Type      = 'Microsoft.Resources/resourceGroups'
+            Name      = $ResourceGroupName
+            GroupName = $ResourceGroupName
+            Kind      = 'Group'
+        }
+        $state = Get-AvmBicepScopedResourceState -AzPath $AzPath `
+            -Resource $owned -SubscriptionId $SubscriptionId -RunId $RunId `
+            -WorkingDirectory $WorkingDirectory
+        if (-not $state.Exists) {
+            throw [AvmProcessException]::new(
+                "Cannot reverify ownership of group '$ResourceGroupName' immediately before deletion.")
+        }
+    }
+    catch [AvmProcessException] {
+        return [pscustomobject]@{ Cleaned = $false; Pending = @(); Message = $_.Exception.Message }
+    }
+    catch [AvmConfigurationException] {
+        return [pscustomobject]@{ Cleaned = $false; Pending = @(); Message = $_.Exception.Message }
     }
     $deleted = Invoke-AvmProcess -FilePath $AzPath -ArgumentList @(
         'group', 'delete', '--name', $ResourceGroupName, '--subscription', $SubscriptionId,
@@ -85,6 +159,7 @@ function Remove-AvmBicepTestResourceGroup {
     if ($deleted.ExitCode -ne 0) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = Add-AvmProcessFailureDetail `
                 -Message "Failed to delete disposable resource group '$ResourceGroupName'." `
                 -StdErr $deleted.StdErr
@@ -95,8 +170,9 @@ function Remove-AvmBicepTestResourceGroup {
             -WorkingDirectory $WorkingDirectory) {
         return [pscustomobject]@{
             Cleaned = $false
+            Pending = @()
             Message = "Resource group '$ResourceGroupName' still exists after deletion; manual cleanup is required."
         }
     }
-    return [pscustomobject]@{ Cleaned = $true; Message = '' }
+    return [pscustomobject]@{ Cleaned = $true; Pending = @(); Message = '' }
 }
