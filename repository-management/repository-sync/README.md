@@ -85,6 +85,15 @@ identity scope, no deletes/replacements, and the required delegation deny
 condition. Failed or uncertain applies do not trigger automatic state repair,
 state imports, or apply retries.
 
+After validation, both paths log an allow-listed candidate-plan summary:
+repository and tenant identifiers, the seven managed addresses and actions,
+identity and membership scopes, federation bindings, and the full delegation
+condition. Unknown and sensitive fields are marked explicitly. The summary
+excludes raw plans, state, variables, output documents, and credentials; it
+uploads no artifact.
+This diagnostic grants no approval and changes no cutover gate. A later apply
+generates and validates its own saved plan, not the earlier preview binary.
+
 Before any operator-approved BAMI run, verify the
 [Owner delegation fix](https://github.com/Azure/azure-verified-modules-tools/pull/111)
 has landed: Owner, User Access Administrator, and RBAC Administrator must all
