@@ -28,6 +28,8 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
             Schema                = 'subscriptionDeploymentTemplate'
             ResourceType          = 'Microsoft.Authorization/policyDefinitions'
             Nested                = $false
+            NestedMode            = 'Incremental'
+            NestedProperty        = ''
             PreviewKind           = 'Create'
             PreviewIdOverride     = $null
             PreviewMissingAfter   = $false
@@ -89,10 +91,17 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                         $resource.tags = @{ 'avm-e2e-run-id' = '#_avmE2eRunId_#' }
                     }
                     if ($state.Nested) {
+                        $properties = @{
+                            mode = $state.NestedMode
+                            template = @{ resources = @($resource) }
+                        }
+                        if ($state.NestedProperty) {
+                            $properties[$state.NestedProperty] = @{ type = 'LastSuccessful' }
+                        }
                         $resource = @{
                             type = 'Microsoft.Resources/deployments'
                             name = 'nested-#_avmE2eSuffix_#'
-                            properties = @{ template = @{ resources = @($resource) } }
+                            properties = $properties
                         }
                     }
                     $template = @{
@@ -676,6 +685,23 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                 $_.Arguments[0] -eq 'deployment' -and
                 $_.Arguments[1] -eq 'operation'
             }).Count | Should -Be 2
+    }
+
+    It 'refuses unsafe nested <Case> before any Azure call' -ForEach @(
+        @{ Case = 'Complete mode'; Mode = 'Complete'; Property = '' }
+        @{ Case = 'dynamic mode'; Mode = '[parameters(''mode'')]'; Property = '' }
+        @{ Case = 'rollback'; Mode = 'Incremental'; Property = 'onErrorDeployment' }
+        @{ Case = 'linked parameters'; Mode = 'Incremental'; Property = 'parametersLink' }
+    ) {
+        $script:state.Nested = $true
+        $script:state.NestedMode = $Mode
+        $script:state.NestedProperty = $Property
+        { Invoke-AvmTestE2e -Path $script:root `
+                -SubscriptionId $script:subscription -TenantId $script:tenant `
+                -Location 'westus' -SkipModuleVersionCheck } | Should -Throw
+        @($script:state.Calls | Where-Object {
+                $_.FilePath -eq 'fake-az'
+            }).Count | Should -Be 0
     }
 
     It 'does not assume tenant-root access when ARM validation is denied' {

@@ -20,6 +20,9 @@ Describe 'Bicep scoped e2e template safety' {
                     @{
                         type = 'Microsoft.Resources/deployments'
                         properties = @{
+                            mode = 'Incremental'
+                            parameters = @{}
+                            expressionEvaluationOptions = @{ scope = 'inner' }
                             template = @{
                                 resources = @(@{
                                         type = 'Microsoft.Authorization/policyDefinitions'
@@ -72,6 +75,83 @@ Describe 'Bicep scoped e2e template safety' {
             { Assert-AvmBicepScopedTestIsolation -Template $linked `
                     -Scope tenant -SourcePath 'case.bicep' } |
                 Should -Throw -ExpectedMessage '*inline template*'
+        }
+    }
+
+    It 'refuses <Case> nested deployment mode before Azure access' -ForEach @(
+        @{ Case = 'Complete'; Mode = 'Complete' }
+        @{ Case = 'dynamic'; Mode = '[parameters(''mode'')]' }
+        @{ Case = 'missing'; Mode = $null }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ RequestedMode = $Mode } {
+            param($RequestedMode)
+            $template = @{
+                resources = @(@{
+                        type = 'Microsoft.Resources/deployments'
+                        properties = @{
+                            mode = $RequestedMode
+                            template = @{
+                                resources = @(@{
+                                        type = 'Microsoft.Authorization/policyDefinitions'
+                                    })
+                            }
+                        }
+                    })
+            }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope mg -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*literal Incremental mode*'
+        }
+    }
+
+    It 'refuses unreviewed nested property <Property>' -ForEach @(
+        @{ Property = 'parametersLink'; Value = @{ uri = 'https://example.invalid/parameters.json' } }
+        @{ Property = 'onErrorDeployment'; Value = @{ type = 'LastSuccessful' } }
+        @{ Property = 'debugSetting'; Value = @{ detailLevel = 'requestContent' } }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Name = $Property; Value = $Value
+        } {
+            param($Name, $Value)
+            $properties = @{
+                mode = 'Incremental'
+                template = @{
+                    resources = @(@{ type = 'Microsoft.Authorization/policyDefinitions' })
+                }
+            }
+            $properties[$Name] = $Value
+            { Assert-AvmBicepScopedTestIsolation -Template @{
+                    resources = @(@{
+                            type = 'Microsoft.Resources/deployments'
+                            properties = $properties
+                        })
+                } -Scope sub -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage "*unsupported nested deployment property '$Name'*"
+        }
+    }
+
+    It 'refuses non-inline parameters and outer expression evaluation' {
+        InModuleScope 'Avm.Authoring' {
+            $properties = @{
+                mode = 'Incremental'
+                template = @{
+                    resources = @(@{ type = 'Microsoft.Authorization/policyDefinitions' })
+                }
+                parameters = '[parameters(''values'')]'
+            }
+            $template = @{ resources = @(@{
+                        type = 'Microsoft.Resources/deployments'
+                        properties = $properties
+                    }) }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope sub -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*inline nested deployment parameters*'
+
+            $properties.parameters = @{}
+            $properties.expressionEvaluationOptions = @{ scope = 'outer' }
+            { Assert-AvmBicepScopedTestIsolation -Template $template `
+                    -Scope sub -SourcePath 'case.bicep' } |
+                Should -Throw -ExpectedMessage '*inner-scope nested expression evaluation*'
         }
     }
 }

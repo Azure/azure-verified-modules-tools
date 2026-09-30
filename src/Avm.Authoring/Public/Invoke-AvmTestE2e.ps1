@@ -24,7 +24,8 @@ function Invoke-AvmTestE2e {
         No subscription, tenant or management group is provisioned or deleted.
         Only unassigned policy definitions, policy-set definitions, role
         definitions, and empty run-tagged subscription resource groups may
-        be created, along with inspectable inline same-scope deployments.
+        be created, along with inspectable inline same-scope deployments
+        using literal Incremental mode and only reviewed inline properties.
         Cross-scope, linked, scripted, assignment, alias and other resource
         types are rejected. A Create-only, expanded what-if prediction,
         preflight nonexistence, run-unique name, recorded deployment operation,
