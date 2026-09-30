@@ -2,7 +2,7 @@
 
 **Status**: complete
 **Started**: 2026-09-29
-**Updated**: 2026-09-29
+**Updated**: 2026-09-30
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -26,20 +26,23 @@ release; scheduled apply continues using Gallery.
 
 ## Validation
 
-`./build.ps1 pre-commit` succeeded (0 errors; 834 component tests passed)
-after targeted unit and component cases exercised changed, unchanged,
-plan-only, check-failure, moved-base, and matching-tree publication paths.
-A real local Git archive/patch round trip recreated the same tree in a
-separate checkout. `actionlint` passed for the edited workflow. No sync
-workflow, protected environment, Terraform apply, or Azure resource was run
-for this slice.
+`./build.ps1 pre-commit` succeeded on the combined branch (1,894 unit
+tests passed, 9 platform skips, 842 component tests passed, 0 errors).
+Focused cases exercised changed, unchanged, plan-only, check-failure,
+moved-base, and matching-tree publication paths. A real local Git
+archive/patch round trip recreated the same tree in a separate checkout.
+`actionlint` passed for the edited workflow. The single conflict when
+bringing the federation prerequisite from `main` into this branch was
+resolved by preserving both sets of sync-script parameters; the complete
+gate was repeated afterward. I did not start a sync workflow, approve an
+environment, run Terraform apply, or change an Azure resource.
 
 ## Blockers or dependencies
 
 The existing identity federation and a plan-visible `test_settings` output
-are being added separately in
+were merged separately in
 [Azure/azure-verified-modules-tools#197](https://github.com/Azure/azure-verified-modules-tools/pull/197).
 A plan-only run cannot create its own federated credential: the first live
-preview must follow its merge and a separately approved identity apply.
-That review's checks pass, but its branch protection still requires an
-approving review. BAMI main-branch safety remains in force.
+preview must follow a separately approved identity apply and verification
+that the module's test identity can authenticate. BAMI main-branch safety
+remains in force.

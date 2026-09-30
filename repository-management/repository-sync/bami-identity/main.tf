@@ -10,9 +10,10 @@ module "azure" {
     "integration-test",
     "examples-test",
   ]
-  location                = var.location
-  github_job_workflow_ref = var.github_job_workflow_ref
-  github_organization_id  = var.github_organization_id
-  github_repository_id    = var.github_repository_id
-  is_protected_repo       = true
+  location                      = var.location
+  github_job_workflow_ref       = var.github_job_workflow_ref
+  github_organization_id        = var.github_organization_id
+  github_repository_id          = var.github_repository_id
+  repository_sync_repository_id = var.repository_sync_repository_id
+  is_protected_repo             = true
 }

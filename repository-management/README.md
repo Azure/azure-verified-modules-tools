@@ -48,8 +48,9 @@ wins a tie. Missing settings retain `legacy`.
 
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
-only one behavioral setting: `testTenant`. Initially only
-`avm/res/dev-test-lab/lab` selects `bami`.
+only one behavioral setting: `testTenant`. That configuration is the source
+of truth for the current selection; unselected modules retain the `legacy`
+default.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -80,11 +81,7 @@ Bicep variable sync copies only the five execution fields: tenant, Bicep
 client, subscription pool, management group, and persistent subscription.
 It leaves all legacy values untouched. For temporary BAMI testing, it derives
 the repository variable `TEST_BAMI_MODULE_PATHS` from the central groups and
-publishes that JSON array last:
-
-```json
-["avm/res/dev-test-lab/lab"]
-```
+publishes that JSON array last.
 
 The array contains only canonical module paths whose resolved `testTenant` is
 `bami`. Missing or `[]` means legacy. Consumers directly check array membership

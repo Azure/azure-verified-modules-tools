@@ -47,3 +47,13 @@ variable "github_repository_id" {
   type        = string
   description = "ID of the GitHub repository."
 }
+
+variable "repository_sync_repository_id" {
+  type        = string
+  description = "Verified numeric ID of the tools repository running repository sync."
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.repository_sync_repository_id))
+    error_message = "repository_sync_repository_id must be a positive decimal GitHub repository ID."
+  }
+}
