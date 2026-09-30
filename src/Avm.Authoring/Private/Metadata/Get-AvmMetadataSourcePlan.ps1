@@ -15,10 +15,7 @@ function Get-AvmMetadataSourcePlan {
     $sourcePath = Join-Path -Path $Path -ChildPath 'main.bicep'
     $source = Get-Content -LiteralPath $sourcePath -Raw
     $code = Get-AvmBicepCommentFreeSource -Source $source
-    $literals = Get-AvmBicepMetadataLiteral -Source $source
-    if ($literals.description -cne $Metadata.moduleDescription) {
-        throw [System.ArgumentException]::new('The metadata description must match the existing main.bicep description.')
-    }
+    $null = Get-AvmBicepMetadataLiteral -Source $source
     if (-not $Metadata.Contains('telemetryIdPrefix')) {
         if ($Metadata.canonicalType -cne 'helper' -and
             [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {

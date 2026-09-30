@@ -167,6 +167,33 @@ metadata description = 'Literal \${value} and \\ path\nnext line'
     }
 }
 
+Describe 'Bicep metadata source planning' {
+    It 'preserves an independent authored description while updating telemetry' {
+        InModuleScope Avm.Authoring {
+            Mock Get-Content {
+                @'
+metadata name = 'Authored module name'
+metadata description = 'Authored deployment details.'
+resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
+  name: '46d3xbcp.res.123abcd.${uniqueString(resourceGroup().id)}'
+}
+'@
+            }
+            Mock Get-AvmBicepTelemetrySourcePrefix { '46d3xbcp.res.123abcd' }
+
+            $plans = @(Get-AvmMetadataSourcePlan -Path 'example' -Metadata @{
+                    moduleDescription = 'Catalog summary.'
+                    canonicalType = 'Microsoft.Storage/storageAccounts'
+                    telemetryIdPrefix = '46d3xbcp.res.123abcd'
+                })
+
+            $plans | Should -HaveCount 1
+            $plans[0].Content | Should -Match "metadata description = 'Authored deployment details\.'"
+            $plans[0].Content | Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        }
+    }
+}
+
 Describe 'Metadata ARM resource classification' {
     It 'classifies the complete case-sensitive canonical value <Canonical>' -TestCases @(
         @{ Canonical = 'Oracle.Database/cloudExadataInfrastructures'; Expected = $true }

@@ -617,13 +617,13 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
         Test-Path -LiteralPath $wrongPath | Should -BeTrue
     }
 
-    It 'preserves an authored source and version while adding only missing scaffold files' {
+    It 'preserves an independently described source and version while adding only missing scaffold files' {
         $fixture = New-InitializationFixture
         $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.123abcd'
         $null = New-Item -ItemType Directory -Path $fixture.Path
         $sourcePath = Join-Path $fixture.Path 'main.bicep'
         $versionPath = Join-Path $fixture.Path 'version.json'
-        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`nmetadata description = 'Deploys a Storage Account.'`n")
+        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`nmetadata description = 'Authored deployment details.'`n")
         [System.IO.File]::WriteAllText($versionPath, "{`"version`":`"8.3`"}`n")
         $sourceBytes = [System.IO.File]::ReadAllBytes($sourcePath)
         $versionBytes = [System.IO.File]::ReadAllBytes($versionPath)
@@ -638,6 +638,26 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
         )
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBytes
         [System.IO.File]::ReadAllBytes($versionPath) | Should -Be $versionBytes
+        $result.Metadata.moduleDescription | Should -BeExactly 'Deploys a Storage Account.'
+        (Test-AvmModuleMetadata -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
+                -CheckSource -SkipModuleVersionCheck).Status | Should -Be 'pass'
+    }
+
+    It 'rejects missing source metadata literals before scaffolding other files' {
+        $fixture = New-InitializationFixture
+        $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.123abcd'
+        $null = New-Item -ItemType Directory -Path $fixture.Path
+        $sourcePath = Join-Path $fixture.Path 'main.bicep'
+        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`n")
+        $sourceBefore = [System.IO.File]::ReadAllBytes($sourcePath)
+
+        {
+            Initialize-AvmModule -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
+                -InputObject $fixture.InputObject -SkipModuleVersionCheck
+        } | Should -Throw '*main.bicep must declare metadata description*'
+        Test-Path -LiteralPath (Join-Path $fixture.Path 'metadata.json') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $fixture.Path 'version.json') | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBefore
     }
 
     It 'keeps the single authored source prefix when creating missing metadata without rewriting main.bicep' {

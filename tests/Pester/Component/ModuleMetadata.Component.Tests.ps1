@@ -797,7 +797,7 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
-    It 'allows independent Bicep display names while validating the source description' {
+    It 'allows independent Bicep names and descriptions while validating source literals' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
@@ -809,9 +809,72 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $fixture.Data.moduleDescription = 'A different description.'
         Save-MetadataFixture -Fixture $fixture
         $result = Test-AvmModuleMetadata @parameters -CheckSource
-        $result.Status | Should -Be 'fail'
-        $result.Issues[0].File | Should -Be 'main.bicep'
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 0
+        $result.Metadata.moduleDescription | Should -BeExactly 'A different description.'
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
+    }
+
+    It 'still requires the authored Bicep <Case> literal when JSON descriptions differ' -TestCases @(
+        @{ Case = 'name'; Source = "metadata description = 'Authored details.'`n"; Expected = 'metadata name' }
+        @{ Case = 'description'; Source = "metadata name = 'Authored name'`n"; Expected = 'metadata description' }
+        @{ Case = 'literal description'; Source = "metadata name = 'Authored name'`nmetadata description = concat('a', 'b')`n"; Expected = 'metadata description' }
+    ) {
+        param($Source, $Expected)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.moduleDescription = 'Catalog summary.'
+        Save-MetadataFixture -Fixture $fixture
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $Source)
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+        $result.Issues[0].Message | Should -Match ([regex]::Escape($Expected))
+    }
+
+    It 'still requires telemetry metadata for an instrumented Bicep utility with an independent description' {
+        $fixture = New-MetadataFixture -Ecosystem bicep -ModuleType utility
+        $fixture.Data.Remove('telemetryIdPrefix')
+        $fixture.Data.moduleDescription = 'Catalog summary.'
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+    }
+
+    It 'permits telemetry-free metadata-only Bicep children until they have a version' {
+        $fixture = New-MetadataFixture -Ecosystem bicep -ChildModule
+        $fixture.Data.Remove('telemetryIdPrefix')
+        Save-MetadataFixture -Fixture $fixture
+        Remove-Item -LiteralPath $fixture.SourcePath
+        $parameters = $fixture.Parameters
+
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        $versioned = Test-AvmModuleMetadata @parameters -CheckSource
+        $versioned.Status | Should -Be 'fail'
+        $versioned.Issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+        $fixture.Data.telemetryIdPrefix = '46d3xbcp.res.storage-storageaccount'
+        Save-MetadataFixture -Fixture $fixture
+        $withPrefix = Test-AvmModuleMetadata @parameters -CheckSource
+        $withPrefix.Status | Should -Be 'fail'
+        $withPrefix.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+    }
+
+    It 'rejects wrong-cased Bicep source rather than treating it as metadata-only' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        Save-MetadataFixture -Fixture $fixture
+        Remove-Item -LiteralPath $fixture.SourcePath
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'Main.bicep'), "metadata name = 'Authored'`nmetadata description = 'Details.'`n")
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+        $result.Issues[0].Message | Should -Match 'exact casing'
     }
 }
 
@@ -1023,6 +1086,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
     It 'wires only the scoped Bicep telemetry value and is idempotent' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         $fixture.Data.moduleDisplayName = 'Catalog display name'
+        $fixture.Data.moduleDescription = 'Catalog summary distinct from authored source.'
         $parameters = $fixture.Parameters
         $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $result.Changed | Should -BeTrue

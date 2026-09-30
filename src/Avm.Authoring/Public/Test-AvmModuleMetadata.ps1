@@ -19,8 +19,8 @@ function Test-AvmModuleMetadata {
     .PARAMETER InputObject
         Metadata values to validate instead of reading metadata.json.
     .PARAMETER CheckSource
-        Also validate Bicep source metadata declarations and compare the
-        description literal to the JSON.
+        Also validate Bicep source metadata literals and telemetry when source
+        exists. A metadata-only scope cannot contain version.json or main.json.
     .PARAMETER SkipModuleVersionCheck
         Skip the standard installed-module version check for offline validation.
     .EXAMPLE
@@ -102,24 +102,35 @@ function Test-AvmModuleMetadata {
     }
 
     if ($issues.Count -eq 0 -and $CheckSource -and $Ecosystem -eq 'bicep') {
-        $sourcePath = Join-Path -Path $Path -ChildPath 'main.bicep'
-        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        $sourceItems = @(
+            if (Test-Path -LiteralPath $Path -PathType Container) {
+                Get-ChildItem -LiteralPath $Path -Force
+            }
+        )
+        $sourceFiles = @($sourceItems | Where-Object { $_.Name -ieq 'main.bicep' })
+        if ($sourceFiles.Count -gt 0 -and
+            ($sourceFiles.Count -ne 1 -or $sourceFiles[0].PSIsContainer -or
+            $sourceFiles[0].Name -cne 'main.bicep' -or
+            ($sourceFiles[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                        -Message 'main.bicep is required for the literal metadata comparison.'))
+                        -Message 'main.bicep must be a regular file with exact casing.'))
+        }
+        elseif ($sourceFiles.Count -eq 0) {
+            $sourceMarkers = @($sourceItems | Where-Object { $_.Name -ieq 'version.json' -or $_.Name -ieq 'main.json' })
+            if ($sourceMarkers.Count -gt 0) {
+                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
+                            -Message 'main.bicep is required when version.json or main.json exists.'))
+            }
         }
         else {
             try {
-                $source = Get-Content -LiteralPath $sourcePath -Raw
-                $literals = Get-AvmBicepMetadataLiteral -Source $source
+                $source = Get-Content -LiteralPath $sourceFiles[0].FullName -Raw
+                $null = Get-AvmBicepMetadataLiteral -Source $source
                 $code = Get-AvmBicepCommentFreeSource -Source $source
                 if ($metadata.canonicalType -cne 'helper' -and -not $metadata.Contains('telemetryIdPrefix') -and
                     [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
                     $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
                                 -Message 'This Bicep module emits telemetry and requires telemetryIdPrefix.'))
-                }
-                if ($literals.description -cne $metadata.moduleDescription) {
-                    $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                                -Message 'metadata description must match metadata.json moduleDescription.'))
                 }
             }
             catch [System.ArgumentException] {
