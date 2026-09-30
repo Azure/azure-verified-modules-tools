@@ -55,10 +55,17 @@ function Remove-AvmBicepTestResourceGroup {
     }
     $group = [string]$shown.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $expectedId = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroupName
+    $ownerKeys = @()
+    if ($group -is [System.Collections.IDictionary] -and
+        $group['tags'] -is [System.Collections.IDictionary]) {
+        $ownerKeys = @($group['tags'].Keys |
+                Where-Object { $_ -is [string] -and $_ -ieq 'avm-e2e-run-id' })
+    }
     if ($group -isnot [System.Collections.IDictionary] -or
         -not [string]::Equals([string]$group['id'], $expectedId, [System.StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals([string]$group['name'], $ResourceGroupName, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $group['tags'] -isnot [System.Collections.IDictionary] -or
+        $ownerKeys.Count -ne 1 -or
+        $ownerKeys[0] -cne 'avm-e2e-run-id' -or
         $group['tags']['avm-e2e-run-id'] -cne $RunId) {
         return [pscustomobject]@{
             Cleaned = $false

@@ -67,20 +67,22 @@ function Get-AvmBicepScopedResourceState {
             "Azure CLI returned an unrelated Bicep e2e resource for '$($Resource.Id)'.")
     }
     $tags = $shown['tags']
-    $ownedGroup = $tags -is [System.Collections.IDictionary]
-    if ($ownedGroup) {
-        $ownedGroup = $tags['avm-e2e-run-id'] -ceq $RunId
+    $ownerKeys = @()
+    if ($tags -is [System.Collections.IDictionary]) {
+        $ownerKeys = @($tags.Keys |
+                Where-Object { $_ -is [string] -and $_ -ieq 'avm-e2e-run-id' })
     }
+    $ownedGroup = $ownerKeys.Count -eq 1 -and $ownerKeys[0] -ceq 'avm-e2e-run-id' -and $tags['avm-e2e-run-id'] -ceq $RunId
     if ($Resource.Kind -eq 'Group' -and -not $ownedGroup) {
         throw [AvmConfigurationException]::new(
             "Refusing to delete Bicep e2e group '$($Resource.Id)' without its verified ownership tag.")
     }
-    if ($Resource.Kind -eq 'Resource' -and
-        $shown['tags'] -is [System.Collections.IDictionary] -and
-        $shown['tags'].Contains('avm-e2e-run-id') -and
-        $shown['tags']['avm-e2e-run-id'] -cne $RunId) {
-        throw [AvmConfigurationException]::new(
-            "Refusing to delete Bicep e2e resource '$($Resource.Id)' with a foreign ownership tag.")
+    if ($Resource.Kind -eq 'Resource' -and $ownerKeys.Count -gt 0) {
+        $ambiguous = $Resource.GroupName -and ($ownerKeys.Count -ne 1 -or $ownerKeys[0] -cne 'avm-e2e-run-id')
+        if ($ambiguous -or $tags[$ownerKeys[0]] -cne $RunId) {
+            throw [AvmConfigurationException]::new(
+                "Refusing to delete Bicep e2e resource '$($Resource.Id)' with a foreign or ambiguous ownership tag.")
+        }
     }
     return [pscustomobject]@{ Exists = $true }
 }

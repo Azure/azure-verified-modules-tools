@@ -148,7 +148,8 @@ function Invoke-AvmBicepTestE2e {
             }
             $template = New-AvmBicepTestTemplate -SourcePath $cases[$index].Path `
                 -DestinationPath $path -BicepPath $bicep.Path -Tokens $tokenMap `
-                -ScopedTokens $scopedTokens -RequireScopedTokens -Confirm:$false
+                -ScopedTokens $scopedTokens -RequireScopedTokens `
+                -OwnedGroupRunId $caseRunId -SourceRoot $Context.Root -Confirm:$false
             $caseParameterPath = $null
             if ($template.Scope -eq 'group') {
                 Assert-AvmBicepTestIsolation -Template $template.Template `
@@ -161,7 +162,12 @@ function Invoke-AvmBicepTestE2e {
                         "Bicep e2e test '$($cases[$index].RelativePath)' requires -ManagementGroupId.")
                 }
                 Assert-AvmBicepScopedTestIsolation -Template $template.Template `
-                    -Scope $template.Scope -SourcePath $cases[$index].RelativePath
+                    -Scope $template.Scope -SourcePath $cases[$index].RelativePath `
+                    -OwnedGroupRunId $caseRunId
+                if ($template.HasGroupDeployment) {
+                    throw [AvmConfigurationException]::new(
+                        "Bicep e2e test '$($cases[$index].RelativePath)' deploys into a resource group from subscription scope; Create is refused until crash recovery and owned teardown are implemented.")
+                }
                 $caseParameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
                     -DestinationPath (Join-Path $runDirectory ('{0}-parameters.json' -f $index)) `
                     -Tokens $scopedTokens -ParameterFile $ParameterFile `

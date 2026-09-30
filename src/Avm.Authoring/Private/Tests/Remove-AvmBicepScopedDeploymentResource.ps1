@@ -27,7 +27,9 @@ function Remove-AvmBicepScopedDeploymentResource {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
-        [string] $ManagementGroupId
+        [string] $ManagementGroupId,
+
+        [string] $OwnedGroupName
     )
 
     Set-StrictMode -Version 3.0
@@ -38,19 +40,71 @@ function Remove-AvmBicepScopedDeploymentResource {
     foreach ($resource in $Plan.Resources) {
         $null = $remaining.Add($resource.Id)
     }
+    if (-not [string]::IsNullOrWhiteSpace($OwnedGroupName)) {
+        foreach ($deployment in $Plan.Deployments) {
+            $null = $remaining.Add($deployment.Id)
+        }
+    }
     try {
+        if (-not [string]::IsNullOrWhiteSpace($OwnedGroupName)) {
+            if ($Scope -ne 'sub' -or $Plan.OwnedGroupName -cne $OwnedGroupName -or
+                @($Plan.Resources | Where-Object {
+                        $_.Kind -eq 'Group' -and
+                        $_.GroupName -ceq $OwnedGroupName
+                    }).Count -ne 1) {
+                throw [AvmConfigurationException]::new(
+                    'Bicep e2e cleanup requires the exact preflighted run-owned group plan.')
+            }
+            foreach ($resource in @($Plan.Resources) + @($Plan.Deployments)) {
+                $verified = Get-AvmBicepScopedResource -ResourceId $resource.Id `
+                    -Scope sub -SubscriptionId $SubscriptionId -RunId $RunId `
+                    -OwnedGroupName $OwnedGroupName
+                if ($verified.Kind -cne $resource.Kind -or
+                    $verified.Type -cne $resource.Type -or
+                    $verified.Name -cne $resource.Name -or
+                    $verified.GroupName -cne $resource.GroupName) {
+                    throw [AvmConfigurationException]::new(
+                        "Bicep e2e cleanup plan contains an unapproved resource '$($resource.Id)'.")
+                }
+            }
+        }
         Assert-AvmBicepScopedAccount -AzPath $AzPath -SubscriptionId $SubscriptionId `
             -TenantId $TenantId -ManagementGroupId $(if ($Scope -eq 'mg') { $ManagementGroupId }) `
             -WorkingDirectory $WorkingDirectory
+        $visited = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
         $observed = @(Get-AvmBicepScopedDeploymentOperation -AzPath $AzPath `
                 -Scope $Scope -SubscriptionId $SubscriptionId `
                 -ManagementGroupId $ManagementGroupId -DeploymentName $DeploymentName `
-                -RunId $RunId -Plan $Plan -Pending $remaining `
-                -WorkingDirectory $WorkingDirectory)
+                -RunId $RunId -Plan $Plan -Pending $remaining -Visited $visited `
+                -OwnedGroupName $OwnedGroupName -WorkingDirectory $WorkingDirectory)
         $operationIds = [System.Collections.Generic.HashSet[string]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($resource in $observed) {
             $null = $operationIds.Add($resource.Id)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OwnedGroupName)) {
+            foreach ($resource in $Plan.Resources) {
+                if (-not $operationIds.Contains($resource.Id)) {
+                    throw [AvmProcessException]::new(
+                        "Resource '$($resource.Id)' has no matching scoped Create operation; manual cleanup is required.")
+                }
+            }
+            foreach ($deployment in $Plan.Deployments) {
+                if (-not $visited.Contains($deployment.Id)) {
+                    throw [AvmProcessException]::new(
+                        "Nested deployment '$($deployment.Id)' has no inspected operation history.")
+                }
+                $null = $remaining.Remove($deployment.Id)
+            }
+            $ownedGroup = @($Plan.Resources | Where-Object { $_.Kind -eq 'Group' })[0]
+            $groupState = Get-AvmBicepScopedResourceState -AzPath $AzPath `
+                -Resource $ownedGroup -SubscriptionId $SubscriptionId -RunId $RunId `
+                -WorkingDirectory $WorkingDirectory
+            if (-not $groupState.Exists) {
+                throw [AvmProcessException]::new(
+                    "Cannot verify the run-owned group '$($ownedGroup.Id)' before cleaning its children.")
+            }
         }
         $existing = [System.Collections.Generic.List[object]]::new()
         foreach ($resource in $Plan.Resources) {

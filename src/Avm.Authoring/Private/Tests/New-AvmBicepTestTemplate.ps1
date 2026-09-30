@@ -16,7 +16,11 @@ function New-AvmBicepTestTemplate {
 
         [System.Collections.Generic.Dictionary[string, string]] $ScopedTokens,
 
-        [switch] $RequireScopedTokens
+        [switch] $RequireScopedTokens,
+
+        [string] $OwnedGroupRunId,
+
+        [string] $SourceRoot
     )
 
     Set-StrictMode -Version 3.0
@@ -61,13 +65,40 @@ function New-AvmBicepTestTemplate {
     $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
         -SourcePath $SourcePath -Tokens $effectiveTokens
     $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $hasGroupDeployment = $false
+    if ($scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {
+        if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+            throw [AvmConfigurationException]::new(
+                'Bicep e2e group staging requires the module source root.')
+        }
+        $relative = [System.IO.Path]::GetRelativePath(
+            [System.IO.Path]::GetFullPath($SourceRoot),
+            [System.IO.Path]::GetFullPath($DestinationPath))
+        $parentPrefix = '..' + [System.IO.Path]::DirectorySeparatorChar
+        if ($relative -eq '.' -or
+            (-not [System.IO.Path]::IsPathRooted($relative) -and
+            $relative -ne '..' -and
+            -not $relative.StartsWith($parentPrefix, [System.StringComparison]::Ordinal))) {
+            throw [AvmConfigurationException]::new(
+                "Bicep e2e group template must be staged outside module source: $DestinationPath")
+        }
+        $ownership = Set-AvmBicepTestGroupOwnership -Template $template `
+            -RunId $OwnedGroupRunId -SourcePath $SourcePath -Confirm:$false
+        $hasGroupDeployment = $ownership.HasGroupDeployment
+        if ($ownership.Tagged) {
+            $content = ConvertTo-Json -InputObject $template -Depth 100 -Compress `
+                -WarningAction Stop -ErrorAction Stop
+            $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        }
+    }
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write temporary ARM test template')) {
         throw [AvmConfigurationException]::new("Temporary ARM test template creation was declined: $DestinationPath")
     }
     [System.IO.File]::WriteAllText($DestinationPath, $content, [System.Text.UTF8Encoding]::new($false))
     return [pscustomobject]@{
-        Path     = $DestinationPath
-        Scope    = $scope
-        Template = $template
+        Path               = $DestinationPath
+        Scope              = $scope
+        Template           = $template
+        HasGroupDeployment = $hasGroupDeployment
     }
 }

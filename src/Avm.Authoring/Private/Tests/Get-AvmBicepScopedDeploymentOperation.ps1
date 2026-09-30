@@ -6,7 +6,7 @@ function Get-AvmBicepScopedDeploymentOperation {
         [string] $AzPath,
 
         [Parameter(Mandatory)]
-        [ValidateSet('sub', 'mg', 'tenant')]
+        [ValidateSet('sub', 'mg', 'tenant', 'group')]
         [string] $Scope,
 
         [Parameter(Mandatory)]
@@ -30,7 +30,11 @@ function Get-AvmBicepScopedDeploymentOperation {
 
         [string] $ManagementGroupId,
 
+        [string] $OwnedGroupName,
+
         [System.Collections.Generic.HashSet[string]] $Visited,
+
+        [System.Collections.Generic.HashSet[string]] $SeenResources,
 
         [int] $Depth = 0
     )
@@ -41,8 +45,16 @@ function Get-AvmBicepScopedDeploymentOperation {
     if ($Depth -ge 64) {
         throw [AvmProcessException]::new('Bicep e2e nested deployment depth exceeded the safety limit.')
     }
+    if ($Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($OwnedGroupName)) {
+        throw [AvmConfigurationException]::new(
+            'Nested Bicep group operations require an explicit run-owned group.')
+    }
     if ($null -eq $Visited) {
         $Visited = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+    }
+    if ($null -eq $SeenResources) {
+        $SeenResources = [System.Collections.Generic.HashSet[string]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
     }
     $deploymentInput = @{
@@ -53,11 +65,15 @@ function Get-AvmBicepScopedDeploymentOperation {
         DeploymentName    = $DeploymentName
         WorkingDirectory  = $WorkingDirectory
     }
+    if ($Scope -eq 'group') {
+        $deploymentInput.ResourceGroupName = $OwnedGroupName
+    }
     $deploymentId = Get-AvmBicepScopedDeploymentId -Scope $Scope `
         -SubscriptionId $SubscriptionId -ManagementGroupId $ManagementGroupId `
-        -DeploymentName $DeploymentName
+        -ResourceGroupName $OwnedGroupName -DeploymentName $DeploymentName
     if (-not $Visited.Add($deploymentId)) {
-        return
+        throw [AvmProcessException]::new(
+            "Deployment '$deploymentId' was visited twice; refusing ambiguous operations.")
     }
     $deployment = Get-AvmBicepScopedDeployment @deploymentInput
     if ($null -eq $deployment -or $deployment.State -notin @('Succeeded', 'Failed', 'Canceled')) {
@@ -71,6 +87,9 @@ function Get-AvmBicepScopedDeploymentOperation {
         ))
     if ($Scope -eq 'mg') {
         $arguments.AddRange([string[]]@('--management-group-id', $ManagementGroupId))
+    }
+    elseif ($Scope -eq 'group') {
+        $arguments.AddRange([string[]]@('--resource-group', $OwnedGroupName))
     }
     $result = Invoke-AvmProcess -FilePath $AzPath -ArgumentList $arguments.ToArray() `
         -WorkingDirectory $WorkingDirectory -IgnoreExitCode
@@ -116,6 +135,12 @@ function Get-AvmBicepScopedDeploymentOperation {
             $null -eq $properties['targetResource']) {
             continue
         }
+        if (-not [string]::IsNullOrWhiteSpace($OwnedGroupName) -and
+            ($properties['provisioningState'] -isnot [string] -or
+            $properties['provisioningState'] -cnotin @('Succeeded', 'Failed', 'Canceled'))) {
+            throw [AvmProcessException]::new(
+                "Deployment '$deploymentId' returned a nonterminal group operation.")
+        }
         $target = $properties['targetResource']
         if ($target -is [System.Collections.IDictionary] -and
             -not [string]::IsNullOrWhiteSpace([string]$target['id'])) {
@@ -130,11 +155,18 @@ function Get-AvmBicepScopedDeploymentOperation {
         }
         $resource = Get-AvmBicepScopedResource -ResourceId ([string]$target['id']) `
             -Scope $Scope -SubscriptionId $SubscriptionId -ManagementGroupId $ManagementGroupId `
-            -RunId $RunId
+            -RunId $RunId -OwnedGroupName $OwnedGroupName
         if (-not [string]::Equals([string]$target['resourceType'], $resource.Type,
                 [System.StringComparison]::OrdinalIgnoreCase)) {
             throw [AvmProcessException]::new(
                 "Deployment '$deploymentId' returned a mismatched type for '$($resource.Id)'.")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OwnedGroupName) -and
+            $target.Contains('resourceName') -and
+            -not [string]::Equals([string]$target['resourceName'], $resource.Name,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw [AvmProcessException]::new(
+                "Deployment '$deploymentId' returned a mismatched resource name for '$($resource.Id)'.")
         }
         $predicted = @(
             if ($resource.Kind -eq 'Deployment') { $Plan.Deployments } else { $Plan.Resources }
@@ -146,16 +178,22 @@ function Get-AvmBicepScopedDeploymentOperation {
                 "Deployment '$deploymentId' changed '$($resource.Id)' without an exact Create prediction.")
         }
         if ($resource.Kind -eq 'Deployment') {
+            $nestedScope = if ($resource.GroupName) { 'group' } else { $Scope }
             foreach ($nested in @(Get-AvmBicepScopedDeploymentOperation -AzPath $AzPath `
-                        -Scope $Scope -SubscriptionId $SubscriptionId `
+                        -Scope $nestedScope -SubscriptionId $SubscriptionId `
                         -ManagementGroupId $ManagementGroupId -DeploymentName $resource.Name `
                         -RunId $RunId -Plan $Plan -WorkingDirectory $WorkingDirectory `
-                        -Pending $Pending -Visited $Visited -Depth ($Depth + 1))) {
+                        -OwnedGroupName $OwnedGroupName -Pending $Pending `
+                        -Visited $Visited -SeenResources $SeenResources -Depth ($Depth + 1))) {
                 $observed.Add($nested)
             }
             $null = $Pending.Remove($resource.Id)
         }
         else {
+            if (-not $SeenResources.Add($resource.Id)) {
+                throw [AvmProcessException]::new(
+                    "Deployment '$deploymentId' repeated a Create operation for '$($resource.Id)'.")
+            }
             $observed.Add($resource)
         }
     }

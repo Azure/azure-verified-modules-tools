@@ -28,8 +28,13 @@ function Invoke-AvmTestE2e {
         using literal Incremental mode and only reviewed inline properties.
         ARM 2.0 symbolic resources are inspected under the same allowlist;
         only the exact outputs-only AVM telemetry template may be empty.
-        Cross-scope, linked, scripted, assignment, alias and other resource
-        types are rejected. A Create-only, expanded what-if prediction,
+        A subscription template that creates a group and deploys an inline
+        module into it is staged with a run-owned group tag in temporary ARM
+        JSON, never in module source, but is currently refused before Azure
+        access. Its nested group resources and cleanup still require durable
+        recovery before Create can be enabled. Other cross-scope, linked,
+        scripted, assignment, alias and unreviewed resource types are rejected.
+        A Create-only, expanded what-if prediction,
         preflight nonexistence, run-unique name, recorded deployment operation,
         and live resource identity must all agree before deletion. Failed
         ownership or deletion leaves the case failed with CleanupPending IDs

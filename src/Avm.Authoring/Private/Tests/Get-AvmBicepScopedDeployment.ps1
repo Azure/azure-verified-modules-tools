@@ -6,7 +6,7 @@ function Get-AvmBicepScopedDeployment {
         [string] $AzPath,
 
         [Parameter(Mandatory)]
-        [ValidateSet('sub', 'mg', 'tenant')]
+        [ValidateSet('sub', 'mg', 'tenant', 'group')]
         [string] $Scope,
 
         [Parameter(Mandatory)]
@@ -18,7 +18,9 @@ function Get-AvmBicepScopedDeployment {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
-        [string] $ManagementGroupId
+        [string] $ManagementGroupId,
+
+        [string] $ResourceGroupName
     )
 
     Set-StrictMode -Version 3.0
@@ -31,6 +33,9 @@ function Get-AvmBicepScopedDeployment {
         ))
     if ($Scope -eq 'mg') {
         $arguments.AddRange([string[]]@('--management-group-id', $ManagementGroupId))
+    }
+    elseif ($Scope -eq 'group') {
+        $arguments.AddRange([string[]]@('--resource-group', $ResourceGroupName))
     }
     $result = Invoke-AvmProcess -FilePath $AzPath -ArgumentList $arguments.ToArray() `
         -WorkingDirectory $WorkingDirectory -IgnoreExitCode
@@ -50,7 +55,7 @@ function Get-AvmBicepScopedDeployment {
     $deployment = [string]$result.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $expectedId = Get-AvmBicepScopedDeploymentId -Scope $Scope `
         -SubscriptionId $SubscriptionId -ManagementGroupId $ManagementGroupId `
-        -DeploymentName $DeploymentName
+        -ResourceGroupName $ResourceGroupName -DeploymentName $DeploymentName
     if ($deployment -isnot [System.Collections.IDictionary] -or
         -not [string]::Equals([string]$deployment['id'], $expectedId,
             [System.StringComparison]::OrdinalIgnoreCase) -or

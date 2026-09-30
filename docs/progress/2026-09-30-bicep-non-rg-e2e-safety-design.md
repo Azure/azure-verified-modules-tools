@@ -1,5 +1,15 @@
 # Non-resource-group Bicep end-to-end safety design
 
+This historical proposal's dedicated-subscription and new-child-group
+isolation targets were superseded by the configured test-only subscription
+pool and per-run owned groups recorded in
+[Bicep run-owned resource-group preflight](2026-09-30-bicep-owned-cross-scope-preflight.md).
+The legacy CI baseline below remains accurate; this proposal is not the
+runner's current target design. The current runner already supports a narrow
+same-scope higher-level subset. Subscription-to-owned-group deployments
+remain refused before Create while durable recovery and runtime owned-teardown
+guarantees are incomplete.
+
 **Status**: complete
 **Started**: 2026-09-30
 **Updated**: 2026-09-30
@@ -8,9 +18,10 @@
 ## Outcome
 
 Propose an isolation and teardown contract for subscription-, management-group-,
-and tenant-scoped Bicep deployments. This is a design only: `avm test e2e`
-continues to reject all three scopes. Neither tenant-wide access nor automatic
-deletion of higher-level targets is approved by this document.
+and tenant-scoped Bicep deployments. This historical document is a design,
+not authorization for tenant-wide access or automatic deletion of higher-level
+targets. For current supported subsets and exclusions, see
+[Bicep run-owned resource-group preflight](2026-09-30-bicep-owned-cross-scope-preflight.md).
 
 ## Existing registry CI baseline
 
