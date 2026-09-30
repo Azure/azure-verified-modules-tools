@@ -15,9 +15,9 @@ function Invoke-AvmBicepTest {
         as bicep lint:
           <path>(<line>,<col>) : <severity> <code>: <message>
 
-        and exits non-zero when at least one Error diagnostic is emitted.
-        This engine sets -IgnoreExitCode and inspects parsed diagnostics so
-        warnings do not fail the test.
+        and exits non-zero on a failed build. This engine sets
+        -IgnoreExitCode, inspects parsed diagnostics, and reports any
+        nonzero exit without a parsed error so a failed build cannot pass.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -62,18 +62,32 @@ function Invoke-AvmBicepTest {
             -IgnoreExitCode
 
         $stream = if ($r.StdErr) { $r.StdErr } else { '' }
+        $hasError = $false
         foreach ($line in ($stream -split "`r?`n")) {
             if (-not $line) { continue }
             if ($line -match '^(?<path>.+?)\((?<l>\d+),(?<c>\d+)\)\s*:\s*(?<sev>\w+)\s+(?<code>[^:]+)\s*:\s*(?<msg>.*)$') {
+                $severity = $Matches['sev'].ToLowerInvariant()
+                if ($severity -eq 'error') { $hasError = $true }
                 $issues.Add([pscustomobject][ordered]@{
                         File     = $Matches['path']
                         Line     = [int]$Matches['l']
                         Column   = [int]$Matches['c']
-                        Severity = $Matches['sev'].ToLowerInvariant()
+                        Severity = $severity
                         Code     = $Matches['code'].Trim()
                         Message  = $Matches['msg'].Trim()
                     })
             }
+        }
+        if ($r.ExitCode -ne 0 -and -not $hasError) {
+            $detail = if ([string]::IsNullOrWhiteSpace($r.StdErr)) { [string]$r.StdOut } else { [string]$r.StdErr }
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = $file.FullName
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = 'avm.bicep.build-failed'
+                    Message  = "Bicep build exited with code $($r.ExitCode): $detail"
+                })
         }
     }
 
