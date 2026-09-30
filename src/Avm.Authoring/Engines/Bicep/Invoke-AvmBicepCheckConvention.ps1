@@ -5,8 +5,8 @@ function Invoke-AvmBicepCheckConvention {
 
     .DESCRIPTION
         Checks layout, versions, changelogs, compiled ARM templates, checked-in
-        main.json drift, and e2e test sources across root and child modules
-        without modifying them.
+        main.json drift, e2e test sources, workflows, and CODEOWNERS across root
+        and child modules without modifying them.
         Other registry checks still require a failing coverage issue even
         when every implemented rule passes.
 
@@ -181,6 +181,11 @@ function Invoke-AvmBicepCheckConvention {
         foreach ($issue in @(Test-AvmBicepConventionLayout -Root $Context.Root -Scope $scope)) {
             $issues.Add($issue)
         }
+        if ($scope.IsTopLevel) {
+            foreach ($issue in @(Test-AvmBicepConventionWorkflow -Scope $scope)) {
+                $issues.Add($issue)
+            }
+        }
         foreach ($issue in @(Test-AvmBicepConventionVersion -Root $Context.Root -Scope $scope)) {
             $issues.Add($issue)
         }
@@ -190,9 +195,13 @@ function Invoke-AvmBicepCheckConvention {
             $issues.Add($issue)
         }
     }
+    if ($scopes.Count -gt 0) {
+        foreach ($issue in @(Test-AvmBicepConventionCodeowner -RepositoryRoot $scopes[0].RepositoryRoot)) {
+            $issues.Add($issue)
+        }
+    }
 
     $uncovered = @(
-        'workflow and CODEOWNERS checks'
         'publication-aware changelog and parent/child version checks'
         'README regeneration and API-version checks'
         'child publish allowlist and resource-folder singularization'

@@ -59,9 +59,10 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 5
+        $result.UncoveredFamilies.Count | Should -Be 4
         $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
+        $result.UncoveredFamilies | Should -Not -Contain 'workflow and CODEOWNERS checks'
         $result.Issues.Count | Should -Be 1
         $result.Issues[0].Code | Should -Be 'avm.bicep.convention-incomplete'
         $result.Issues[0].Severity | Should -Be 'error'
@@ -70,6 +71,199 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 $ArgumentList[0] -eq 'build' -and $ArgumentList[1] -eq '--stdout'
             }
         }
+    }
+
+    It 'reports a missing module workflow once for its top-level scope' {
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        Remove-Item -LiteralPath $path
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $missing = @($result.Issues | Where-Object Code -eq 'avm.bicep.workflow-file')
+        $missing.Count | Should -Be 1
+        $missing[0].File | Should -Be '.github/workflows/avm.res.mock.widget.yml'
+        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+    }
+
+    It 'rejects malformed YAML without treating the workflow as checked' {
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        [System.IO.File]::WriteAllText($path, 'on: [unterminated')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.workflow-parse' -and
+                $_.File -eq '.github/workflows/avm.res.mock.widget.yml'
+            }).Count | Should -Be 1
+    }
+
+    It 'fails with a named diagnostic when the exact YAML parser is unavailable' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-Module { @() } -ParameterFilter {
+                $ListAvailable -and $Name -eq 'powershell-yaml'
+            }
+        }
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $parserIssue = @($result.Issues | Where-Object Code -eq 'avm.bicep.workflow-parse')
+        $parserIssue.Count | Should -Be 1
+        $parserIssue[0].Message | Should -Match 'Install-PSResource'
+        $result.Status | Should -Be 'fail'
+    }
+
+    It 'checks each top-level workflow separately in a monorepo' {
+        $second = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'gadget'
+        Copy-Item -LiteralPath $script:modulePath -Destination $second -Recurse
+        $workflowDirectory = Join-Path $script:workingRoot '.github' 'workflows'
+        $first = Join-Path $workflowDirectory 'avm.res.mock.widget.yml'
+        $other = Join-Path $workflowDirectory 'avm.res.mock.gadget.yml'
+        $content = [System.IO.File]::ReadAllText($first).Replace('widget', 'gadget')
+        [System.IO.File]::WriteAllText($other, $content)
+        $context = [pscustomobject]@{
+            Kind = 'bicep-monorepo'; Root = $script:workingRoot; Ecosystem = 'bicep'
+        }
+
+        $valid = InModuleScope 'Avm.Authoring' -Parameters @{ C = $context } {
+            param($C)
+            Invoke-AvmBicepCheckConvention -Context $C
+        }
+        @($valid.Issues | Where-Object {
+                $_.Code -like 'avm.bicep.workflow-*' -or $_.Code -like 'avm.bicep.codeowners-*'
+            }).Count | Should -Be 0
+
+        Remove-Item -LiteralPath $other
+        $invalid = InModuleScope 'Avm.Authoring' -Parameters @{ C = $context } {
+            param($C)
+            Invoke-AvmBicepCheckConvention -Context $C
+        }
+        $workflowIssues = @($invalid.Issues | Where-Object Code -eq 'avm.bicep.workflow-file')
+        $workflowIssues.Count | Should -Be 1
+        $workflowIssues[0].File | Should -Be '.github/workflows/avm.res.mock.gadget.yml'
+    }
+
+    It 'names invalid workflow declarations: <Case>' -TestCases @(
+        @{ Case = 'missing environment variable'; Find = 'modulePath: avm/res/mock/widget'; Replacement = 'otherPath: avm/res/mock/widget'; ExpectedCode = 'avm.bicep.workflow-env' }
+        @{ Case = 'wrong module path'; Find = 'modulePath: avm/res/mock/widget'; Replacement = 'modulePath: avm/res/mock/other'; ExpectedCode = 'avm.bicep.workflow-module-path' }
+        @{ Case = 'wrong workflow path'; Find = 'workflowPath: .github/workflows/avm.res.mock.widget.yml'; Replacement = 'workflowPath: .github/workflows/other.yml'; ExpectedCode = 'avm.bicep.workflow-path' }
+        @{ Case = 'missing dispatch input'; Find = 'removeDeployment:'; Replacement = 'otherInput:'; ExpectedCode = 'avm.bicep.workflow-dispatch' }
+        @{ Case = 'disabled static default'; Find = "staticValidation:`n        type: boolean`n        default: true"; Replacement = "staticValidation:`n        type: boolean`n        default: false"; ExpectedCode = 'avm.bicep.workflow-staticValidation-default' }
+        @{ Case = 'missing deployment default'; Find = "deploymentValidation:`n        type: boolean`n        default: true"; Replacement = "deploymentValidation:`n        type: boolean"; ExpectedCode = 'avm.bicep.workflow-deploymentValidation-default' }
+        @{ Case = 'custom location default'; Find = "customLocation:`n        type: string"; Replacement = "customLocation:`n        type: string`n        default: eastus"; ExpectedCode = 'avm.bicep.workflow-custom-location' }
+        @{ Case = 'other push branch'; Find = "      - main`n    paths:"; Replacement = "      - other`n    paths:"; ExpectedCode = 'avm.bicep.workflow-push-branches' }
+        @{ Case = 'missing push event'; Find = "  push:`n    branches:"; Replacement = "  renamedPush:`n    branches:"; ExpectedCode = 'avm.bicep.workflow-push-branches' }
+        @{ Case = 'missing push paths'; Find = '    paths:'; Replacement = '    otherPaths:'; ExpectedCode = 'avm.bicep.workflow-push-paths-missing' }
+        @{ Case = 'missing push filter'; Find = "'!*/**/README.md'"; Replacement = "'!*/**/docs.md'"; ExpectedCode = 'avm.bicep.workflow-push-paths-missing' }
+        @{ Case = 'extra push filter'; Find = "      - '!avm/**/metadata.json'"; Replacement = "      - extra/**`n      - '!avm/**/metadata.json'"; ExpectedCode = 'avm.bicep.workflow-push-paths-excess' }
+        @{ Case = 'tag push trigger'; Find = "  push:`n    branches:"; Replacement = "  push:`n    tags:`n      - 'v*'`n    branches:"; ExpectedCode = 'avm.bicep.workflow-push-options' }
+        @{ Case = 'unreviewed trigger'; Find = '  push:'; Replacement = "  schedule:`n    - cron: '0 0 * * *'`n  push:"; ExpectedCode = 'avm.bicep.workflow-trigger' }
+        @{ Case = 'README filter before positive filter'; Find = "      - avm/res/mock/widget/**`n      - '!*/**/README.md'"; Replacement = "      - '!*/**/README.md'`n      - avm/res/mock/widget/**"; ExpectedCode = 'avm.bicep.workflow-push-paths-order' }
+        @{ Case = 'metadata filter out of order'; Find = "      - '!*/**/README.md'`n      - '!avm/**/metadata.json'"; Replacement = "      - '!avm/**/metadata.json'`n      - '!*/**/README.md'"; ExpectedCode = 'avm.bicep.workflow-push-metadata-last' }
+        @{ Case = 'fork guard missing'; Find = 'Azure/bicep-registry-modules'; Replacement = 'Contoso/example'; ExpectedCode = 'avm.bicep.workflow-condition' }
+        @{ Case = 'cancellation guard missing'; Find = '!cancelled() && '; Replacement = ''; ExpectedCode = 'avm.bicep.workflow-condition' }
+        @{ Case = 'fork guard negated by disjunction'; Find = "github.event_name != 'workflow_dispatch') }}"; Replacement = "github.event_name != 'workflow_dispatch') || true }}"; ExpectedCode = 'avm.bicep.workflow-condition' }
+    ) {
+        param($Case, $Find, $Replacement, $ExpectedCode)
+
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        $original = [System.IO.File]::ReadAllText($path)
+        $original.Contains($Find) | Should -BeTrue
+        [System.IO.File]::WriteAllText($path, $original.Replace($Find, $Replacement))
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain $ExpectedCode
+        $result.Status | Should -Be 'fail'
+    }
+
+    It 'rejects noncanonical workflow directory casing: <Case>' -TestCases @(
+        @{ Case = 'GitHub'; RelativePath = '.github'; NewName = '.GITHUB' }
+        @{ Case = 'workflows'; RelativePath = '.github/workflows'; NewName = 'Workflows' }
+    ) {
+        param($Case, $RelativePath, $NewName)
+
+        $directory = Join-Path $script:workingRoot $RelativePath
+        Rename-Item -LiteralPath $directory -NewName $NewName
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+
+        $result.Issues.Code | Should -Contain 'avm.bicep.workflow-file'
+        if ($Case -eq 'GitHub') {
+            $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-file'
+        }
+    }
+
+    It 'rejects a missing CODEOWNERS file without silently skipping repository governance' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        Remove-Item -LiteralPath $path
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-file')
+        $issue.Count | Should -Be 1
+        $issue[0].File | Should -Be '.github/CODEOWNERS'
+    }
+
+    It 'checks the CODEOWNERS default, ownerless module tree, and final overrides' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        $content = [System.IO.File]::ReadAllText($path).
+            Replace('* @Azure/azure-verified-modules-tooling-contributors', '* @Contoso/team').
+            Replace('/avm/', '/avm/ @Contoso/team').
+            Replace('metadata.json @Azure/azure-verified-modules-engineering-owners', 'metadata.json @Contoso/team')
+        [System.IO.File]::WriteAllText($path, $content)
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-default'
+        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-module'
+        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
+    }
+
+    It 'reports duplicate and module-specific CODEOWNERS patterns with line numbers' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        [System.IO.File]::AppendAllText(
+            $path, "/avm/res/mock/widget/ @Contoso/team`nmetadata.json @Contoso/team`n")
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $moduleRule = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-per-module')
+        $duplicate = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-duplicate')
+        $moduleRule.Count | Should -Be 1
+        $moduleRule[0].Line | Should -BeGreaterThan 2
+        $duplicate.Count | Should -Be 1
+        $duplicate[0].Line | Should -BeGreaterThan $moduleRule[0].Line
+    }
+
+    It 'rejects CODEOWNERS patterns that can override ownerless modules: <Case>' -TestCases @(
+        @{ Case = 'unanchored module entry'; Pattern = 'avm/res/mock/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
+        @{ Case = 'unanchored module glob'; Pattern = 'avm/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
+        @{ Case = 'broad glob'; Pattern = '**/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
+        @{ Case = 'root wildcard'; Pattern = '/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
+    ) {
+        param($Case, $Pattern, $ExpectedCode)
+
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        $content = [System.IO.File]::ReadAllText($path)
+        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
+        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "$Pattern`n$anchor"))
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $issue = @($result.Issues | Where-Object Code -eq $ExpectedCode)
+        $issue.Count | Should -Be 1
+        $issue[0].Line | Should -BeGreaterThan 2
+    }
+
+    It 'allows additional ownership patterns anchored outside the module tree' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        $content = [System.IO.File]::ReadAllText($path)
+        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
+        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "/docs/** @Contoso/team`n$anchor"))
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        @($result.Issues | Where-Object { $_.Code -like 'avm.bicep.codeowners-*' }).Count |
+            Should -Be 0
+    }
+
+    It 'names a CODEOWNERS file that cannot be decoded as UTF-8' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-read')
+        $issue.Count | Should -Be 1
+        $issue[0].File | Should -Be '.github/CODEOWNERS'
     }
 
     It 'names root, child, and e2e compilation failures without skipping the other sources' {

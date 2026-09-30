@@ -50,18 +50,18 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:303 | Every e2e folder has `main.test.bicep` | C: exact regular file/case |
 | M:318 | Required resource tests cannot have `.e2eignore` except allowlisted modules | C |
 | M:354 | `.e2eignore` contains a reason | C |
-| M:415 | Module workflow exists | G |
-| M:424 | Workflow has required environment variables | G |
-| M:435 | Workflow `workflowPath` value is correct | G |
-| M:452 | Workflow `modulePath` value is correct | G |
-| M:469 | Workflow has required dispatch inputs | G |
-| M:489 | `staticValidation` defaults to true | G |
-| M:504 | `deploymentValidation` defaults to true | G |
-| M:519 | `customLocation` has no default | G |
-| M:534 | Only `main` triggers on push | G |
-| M:544 | Required push path filters, with metadata exclusion last | G |
-| M:565 | No excess push path filters | G |
-| M:585 | Automatic execution restricted to upstream repository | G |
+| M:415 | Module workflow exists | C: regular exact-case file and parent directories per top-level module |
+| M:424 | Workflow has required environment variables | C: parsed YAML, no silent absence |
+| M:435 | Workflow `workflowPath` value is correct | C |
+| M:452 | Workflow `modulePath` value is correct | C |
+| M:469 | Workflow has required dispatch inputs | C |
+| M:489 | `staticValidation` defaults to true | C: boolean default |
+| M:504 | `deploymentValidation` defaults to true | C: boolean default |
+| M:519 | `customLocation` has no default | C |
+| M:534 | Only `main` triggers on push | C: rejects tag and additional trigger selectors |
+| M:544 | Required push path filters, with metadata exclusion last | C: enforces canonical order |
+| M:565 | No excess push path filters | C: also rejects duplicate patterns |
+| M:585 | Automatic execution restricted to upstream repository | C: canonical condition includes cancellation; rejects weakened expressions |
 | M:651 | README regeneration leaves no diff | G: `avm docs` is not proven equivalent |
 | M:717 | Checked-in `main.json` matches rebuilt Bicep | C/E: convention and transform compare exact compiled bytes across root, ordinary children and `modules/` children |
 | M:786 | Compiled template is nonempty | C/E: convention builds every source; transform builds modules |
@@ -111,7 +111,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:1990 | `version.json` is major.minor | C |
 | M:2001 | Major version stays zero except NAT gateway | C |
 | M:2022 | Published child increment also increments versioned parents | G |
-| M:2062 | CODEOWNERS default/overrides/unique patterns | G |
+| M:2062 | CODEOWNERS default/overrides/unique patterns | C: extra rules must be anchored outside modules |
 | M:2127 | Multi-scope test references matching scope module | C: source-level declaration |
 | M:2150 | Deploying test declares `serviceShort` | C: compiled resource count gates source check |
 | M:2165 | Defaults test `serviceShort` ends in `min` | C |
@@ -146,6 +146,15 @@ compiled variable, deployment name, and JSON prefix, and enforces the
 condition and nested telemetry output for either form. Literal parity with
 the registry remains partial and explicitly fail-closed; rejecting valid
 scaffolds or claiming the old assertions unchanged would both be misleading.
+
+The [workflow and ownership slice](2026-09-30-bicep-workflow-ownership-checks.md)
+checks the same top-level module workflow declarations and repository-level
+CODEOWNERS precedence as the pinned compliance suite. Workflow YAML is parsed
+with exact-version powershell-yaml, loaded only for Bicep; a missing parser,
+unparseable file, or absent rule produces a named failure. Trigger options,
+filter ordering, condition expressions, and effective module ownership are
+checked beyond the legacy substring/membership assertions so a bypass cannot
+appear covered. The registry's workflows and conditions are not changed.
 
 The M:1696 assertion requests `Changelog.md` in its link, but actual registry
 files and this repository's generated changelogs use `CHANGELOG.md`. The new
@@ -193,7 +202,7 @@ description are independent; this slice does not edit either validation rule.
 The [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md)
 covered e2e compilation and compiled-template assertions. Complete
 publication-aware versions and changelogs, child publish allowlisting,
-resource-folder singularization, workflow/CODEOWNERS, README drift, and
+resource-folder singularization, README drift, and
 advisory API-version checks. Reconcile the scaffold telemetry form with
 registry's literal assertions. A separate publication-aware slice must use authoritative
 MCR tags without inventing local published-version history. The coverage

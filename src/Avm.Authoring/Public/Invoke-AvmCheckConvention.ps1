@@ -7,11 +7,15 @@ function Invoke-AvmCheckConvention {
         Routes to the engine matching the module's ecosystem:
 
           - bicep      -> first-party layout, version, changelog, test-source,
-                          and compiled ARM checks; fails closed until registry parity
+                          compiled ARM, checked-in JSON, workflow, and CODEOWNERS
+                          checks; fails closed until registry parity
           - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
+        Bicep workflow checks require powershell-yaml 0.4.12, loaded only
+        when a module workflow is inspected. Install it separately with
+        Install-PSResource; missing or invalid YAML fails the check.
 
         Routed by the dispatcher: 'avm check convention'.
 
