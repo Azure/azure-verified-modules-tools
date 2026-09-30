@@ -65,6 +65,42 @@ function Assert-AvmPreCommitResult {
     throw "avm pre-commit returned status '$status'.$detail"
 }
 
+function Add-RepositorySyncManagedFiles {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [object]$PreCommitResult
+    )
+
+    $steps = $PreCommitResult.PSObject.Properties['Steps']
+    if ($null -eq $steps) {
+        return
+    }
+    $sync = @($steps.Value | Where-Object { $null -ne $_ -and $_.Step -ceq 'sync' })
+    if ($sync.Count -eq 0) {
+        return
+    }
+    if ($sync.Count -ne 1 -or $sync[0].Status -cne 'pass' -or
+        $null -eq $sync[0].Result -or $null -eq $sync[0].Result.PSObject.Properties['Added']) {
+        throw [System.IO.InvalidDataException]::new('The managed-file sync did not return its added-file list.')
+    }
+
+    $added = @($sync[0].Result.Added)
+    foreach ($path in $added) {
+        if ($path -isnot [string] -or [string]::IsNullOrWhiteSpace($path) -or
+            $path -cmatch '(^/|\\|(^|/)\.\.?(/|$)|(^|/)\.git(/|$)|[\r\n])' -or
+            $path -cmatch '^[A-Za-z]:') {
+            throw [System.IO.InvalidDataException]::new('The managed-file sync returned an unsafe added path.')
+        }
+        $fullPath = Join-Path $Root ($path.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw [System.IO.InvalidDataException]::new("The managed-file sync did not create '$path'.")
+        }
+    }
+    if ($added.Count -gt 0) {
+        $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments (@('add', '--force', '--') + $added)
+    }
+}
+
 function Remove-AvmMetadataFileConflict {
     param(
         [string]$repoRoot,
@@ -165,6 +201,7 @@ function Invoke-AvmPreCommitForRepository {
             ForceFileUpdate = $forceFileUpdate
             CodeownersContent = $codeowners
             AuthoringModulePath = $authoringModulePath
+            StageManagedFiles = (-not $planOnly -or -not [string]::IsNullOrWhiteSpace($candidateOutputDirectory))
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
             -PlanOnly:$planOnly -CandidateOutputDirectory $candidateOutputDirectory -State $prepareState -Prepare {
@@ -178,6 +215,9 @@ function Invoke-AvmPreCommitForRepository {
                     -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade `
                     -modulePath $context.State.AuthoringModulePath
                 Assert-AvmPreCommitResult -preCommitResult $prepared
+                if ($context.State.StageManagedFiles) {
+                    Add-RepositorySyncManagedFiles -Root $context.Root -PreCommitResult $prepared
+                }
                 Set-TerraformCodeowners -RepositoryRoot $context.Root -Content $context.State.CodeownersContent
             }
         if ($candidateOutputDirectory -and $published.HasChanges) {

@@ -285,6 +285,15 @@ function Format-RepositorySyncCandidateCheckResult {
     return $lines.ToArray()
 }
 
+function Get-RepositorySyncCandidateRepoId {
+    param([Parameter(Mandatory)] [string]$Repository)
+
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/terraform-(?:azure|azapi|azurerm)-(?<id>avm-(?:res|ptn|utl)-[a-z0-9-]+)$') {
+        throw [System.IO.InvalidDataException]::new('The candidate repository has no valid AVM Terraform module ID.')
+    }
+    return $Matches['id']
+}
+
 function Invoke-RepositorySyncCandidateValidation {
     param(
         [Parameter(Mandatory)] [string]$Repository,
@@ -316,7 +325,10 @@ function Invoke-RepositorySyncCandidateValidation {
     $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-candidate-validation-' + [guid]::NewGuid().ToString('N'))
     $root = Join-Path $workspace 'repository'
     $null = New-Item -ItemType Directory -Path $root -Force
-    $environmentNames = @('ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID', 'ARM_USE_OIDC', 'ARM_USE_CLI', 'ARM_USE_MSI', 'GH_TOKEN')
+    $environmentNames = @(
+        'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID', 'ARM_USE_OIDC', 'ARM_USE_CLI', 'ARM_USE_MSI',
+        'GH_TOKEN', 'AVM_MANAGED_FILES_REPO_ID', 'AVM_MANAGED_FILES_CONFIG_LOCAL_PATH'
+    )
     $previousEnvironment = @{}
     foreach ($name in $environmentNames) {
         $previousEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
@@ -345,6 +357,9 @@ function Invoke-RepositorySyncCandidateValidation {
         $env:ARM_USE_CLI = 'false'
         $env:ARM_USE_MSI = 'false'
         $env:GH_TOKEN = $null
+        $env:AVM_MANAGED_FILES_REPO_ID = Get-RepositorySyncCandidateRepoId -Repository $Repository
+        $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH = (Resolve-Path -LiteralPath (
+                Join-Path $PSScriptRoot '..' '..' '..' 'repository-config') -ErrorAction Stop).Path
         Write-Host "Validating $Repository in test subscription '$($subscription.name)'."
         $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck
         $unitRoot = Join-Path $workspace 'unit'

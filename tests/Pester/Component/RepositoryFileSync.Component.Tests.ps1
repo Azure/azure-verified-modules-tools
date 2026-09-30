@@ -358,6 +358,39 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
     }
 
+    It 'stages only newly added managed paths before archiving a plan-only candidate' {
+        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $script:managedPath = '.github/skills/avm-tf-azapi/scripts/Get-AzureSchema.ps1'
+        $script:state.LocalPaths = @($script:managedPath, '.github/CODEOWNERS')
+        Mock Invoke-AvmPreCommitWithUpgradeRetry {
+            $path = Join-Path (Get-Location) ($script:managedPath.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+            $null = New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force
+            [System.IO.File]::WriteAllText($path, "Write-Output 'managed'`n")
+            [pscustomobject]@{
+                Status = 'pass'
+                Steps = @([pscustomobject]@{
+                        Step = 'sync'
+                        Status = 'pass'
+                        Result = [pscustomobject]@{ Added = @($script:managedPath) }
+                    })
+            }
+        }
+
+        $candidateDirectory = Join-Path $TestDrive 'managed-file-candidate'
+        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main `
+            -planOnly $true -candidateOutputDirectory $candidateDirectory -issueLog @()
+
+        $result.HasChanges | Should -BeTrue
+        $forced = @($script:state.GitCalls | Where-Object { $_[0] -eq 'add' -and $_ -contains '--force' })
+        $forced | Should -HaveCount 1
+        $forced[0] | Should -Be @('add', '--force', '--', $script:managedPath)
+        $manifest = Get-Content -LiteralPath (Join-Path $candidateDirectory 'candidate.json') -Raw |
+            ConvertFrom-Json -AsHashtable
+        $manifest.changedPaths | Should -Contain $script:managedPath
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
+    }
+
     It 'skips local commits and remote operations when pre-commit produces no changes' {
         $script:state.Repo.full_name = 'Azure/terraform-test'
         $script:state.NoChanges = $true

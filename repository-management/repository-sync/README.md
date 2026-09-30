@@ -120,6 +120,10 @@ continue through their own checks.
 Failed validation logs show the failing check steps and their structured lint,
 policy, and test diagnostics. An absent unit-test tier is reported as skipped,
 not as a passing check.
+Validation uses the module's actual repository ID and the same checked-out
+managed-file configuration as preparation; added managed files are staged
+explicitly even if the module ignores their path. Other ignored files stay
+excluded from the candidate.
 
 Manual plan-only runs perform the same candidate checks without publishing.
 They use the authoring source from the selected workflow branch by default;

@@ -5,6 +5,7 @@ BeforeAll {
     $script:tenant = '11111111-1111-4111-8111-111111111111'
     $script:client = '22222222-2222-4222-8222-222222222222'
     $script:subscription = '33333333-3333-4333-8333-333333333333'
+    $script:repository = 'Azure/terraform-azurerm-avm-res-example'
 
     function New-TestRepositoryCandidate {
         param(
@@ -17,7 +18,7 @@ BeforeAll {
         $null = New-Item -ItemType Directory -Path $Directory -Force
         $data = @{
             schemaVersion = 1
-            repository = 'Azure/terraform-example'
+            repository = $script:repository
             phase = $Phase
             defaultBranch = 'main'
             baseSha = 'a' * 40
@@ -151,6 +152,19 @@ Describe 'Repository candidate failure diagnostics' {
     }
 }
 
+Describe 'Repository sync candidate module identity' {
+    It 'derives the configured module ID from each Terraform provider family' {
+        foreach ($provider in @('azurerm', 'azure', 'azapi')) {
+            Get-RepositorySyncCandidateRepoId -Repository "Azure/terraform-${provider}-avm-ptn-example" |
+                Should -BeExactly 'avm-ptn-example'
+        }
+    }
+
+    It 'rejects non-module repository names instead of inferring an unrelated file group' {
+        { Get-RepositorySyncCandidateRepoId -Repository 'Azure/repository' } | Should -Throw '*valid AVM Terraform module ID*'
+    }
+}
+
 Describe 'Repository sync candidate validation' {
     BeforeEach {
         $script:directory = Join-Path $TestDrive ('candidate-' + [guid]::NewGuid().ToString('N'))
@@ -169,6 +183,8 @@ Describe 'Repository sync candidate validation' {
                 Subscription = $env:ARM_SUBSCRIPTION_ID
                 UseCli = $env:ARM_USE_CLI
                 GhToken = $env:GH_TOKEN
+                ManagedRepoId = $env:AVM_MANAGED_FILES_REPO_ID
+                ManagedConfigDir = $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH
             }
             [pscustomobject]@{ Status = 'pass'; Steps = @() }
         }
@@ -178,9 +194,13 @@ Describe 'Repository sync candidate validation' {
     It 'validates a clean local tree using the module identity before issuing a receipt' {
         $originalClient = [System.Environment]::GetEnvironmentVariable('ARM_CLIENT_ID', 'Process')
         $originalGhToken = [System.Environment]::GetEnvironmentVariable('GH_TOKEN', 'Process')
+        $originalManagedRepoId = [System.Environment]::GetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', 'Process')
+        $originalManagedConfigDir = [System.Environment]::GetEnvironmentVariable('AVM_MANAGED_FILES_CONFIG_LOCAL_PATH', 'Process')
         $env:GH_TOKEN = 'inherited-token-for-test'
+        $env:AVM_MANAGED_FILES_REPO_ID = 'wrong-repo-id'
+        $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH = 'wrong-config-directory'
         try {
-            $result = Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
+            $result = Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
                 -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
                 -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
             $result | Should -BeExactly 'Passed'
@@ -190,6 +210,9 @@ Describe 'Repository sync candidate validation' {
             $script:prCheckEnvironment.Subscription | Should -BeExactly $script:subscription
             $script:prCheckEnvironment.UseCli | Should -BeExactly 'false'
             $script:prCheckEnvironment.GhToken | Should -BeNullOrEmpty
+            $script:prCheckEnvironment.ManagedRepoId | Should -BeExactly 'avm-res-example'
+            $script:prCheckEnvironment.ManagedConfigDir | Should -BeExactly (
+                (Resolve-Path -LiteralPath (Join-Path $script:root 'repository-management' 'repository-config')).Path)
             Should -Invoke Invoke-AvmTestUnit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             if ([string]::IsNullOrEmpty($originalClient)) {
                 $env:ARM_CLIENT_ID | Should -BeNullOrEmpty
@@ -197,11 +220,15 @@ Describe 'Repository sync candidate validation' {
                 $env:ARM_CLIENT_ID | Should -BeExactly $originalClient
             }
             $env:GH_TOKEN | Should -BeExactly 'inherited-token-for-test'
+            $env:AVM_MANAGED_FILES_REPO_ID | Should -BeExactly 'wrong-repo-id'
+            $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH | Should -BeExactly 'wrong-config-directory'
             $receipt = Get-Content -LiteralPath (Join-Path $script:receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
             $receipt.treeSha | Should -BeExactly ('2' * 40)
         }
         finally {
             [System.Environment]::SetEnvironmentVariable('GH_TOKEN', $originalGhToken, 'Process')
+            [System.Environment]::SetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', $originalManagedRepoId, 'Process')
+            [System.Environment]::SetEnvironmentVariable('AVM_MANAGED_FILES_CONFIG_LOCAL_PATH', $originalManagedConfigDir, 'Process')
         }
     }
 
@@ -226,7 +253,7 @@ Describe 'Repository sync candidate validation' {
                     })
             }
         }
-        { Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
             -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
             Should -Throw '*pr-check=fail*'
@@ -238,7 +265,7 @@ Describe 'Repository sync candidate validation' {
     It 'does not issue a receipt when unit tests fail or are skipped' -ForEach @('fail', 'skipped') {
         $script:unitStatus = $_
         Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = $script:unitStatus } }
-        { Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
             -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
             Should -Throw "*unit=$script:unitStatus*"
@@ -247,7 +274,7 @@ Describe 'Repository sync candidate validation' {
 
     It 'skips all checks for an unchanged module' {
         New-TestRepositoryCandidate -Directory $script:directory -HasChanges $false
-        $result = Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
+        $result = Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt -CheckoutModulePath 'unused'
         $result | Should -BeExactly 'NoChange'
         Should -Invoke Invoke-AvmPrCheck -Times 0
@@ -256,9 +283,9 @@ Describe 'Repository sync candidate validation' {
     }
 
     It 'does not turn incomplete preparation into a passing validation' {
-        Set-RepositorySyncCandidatePhase -Directory $script:directory -Repository 'Azure/terraform-example' `
+        Set-RepositorySyncCandidatePhase -Directory $script:directory -Repository $script:repository `
             -Phase initializing -PlanOnly $true
-        { Invoke-RepositorySyncCandidateValidation -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt -CheckoutModulePath 'unused' } |
             Should -Throw '*preparation did not finish*'
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
@@ -270,14 +297,14 @@ Describe 'Repository sync publication safety' {
         $script:directory = Join-Path $TestDrive ('candidate-' + [guid]::NewGuid().ToString('N'))
         $script:receipt = Join-Path $TestDrive ('receipt-' + [guid]::NewGuid().ToString('N'))
         New-TestRepositoryCandidate -Directory $script:directory
-        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository 'Azure/terraform-example'
+        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
         Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt
         Mock Invoke-RepositoryFileSync { throw 'The candidate should not be published.' }
     }
 
     It 'rejects a missing or mismatched validation receipt before publication' {
         [System.IO.File]::WriteAllText((Join-Path $script:receipt 'validation.json'), '{}')
-        { Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*receipt does not match*'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
@@ -285,9 +312,9 @@ Describe 'Repository sync publication safety' {
 
     It 'never publishes a plan-only candidate' {
         New-TestRepositoryCandidate -Directory $script:directory -PlanOnly $true
-        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository 'Azure/terraform-example'
+        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
         Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt
-        { Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*Plan-only candidates cannot be published*'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
@@ -302,16 +329,16 @@ Describe 'Repository sync publication safety' {
             if ($Arguments[0] -eq 'write-tree') { return '3' * 40 }
             return ''
         }
-        { Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-example' `
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*does not produce the validated Git tree*'
     }
 
     It 'skips publication when an unchanged candidate was validated' {
         New-TestRepositoryCandidate -Directory $script:directory -HasChanges $false
-        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository 'Azure/terraform-example'
+        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
         Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt
-        $result = Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-example' `
+        $result = Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt
         $result.Status | Should -BeExactly 'NoChange'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
