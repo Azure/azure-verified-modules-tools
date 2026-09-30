@@ -214,10 +214,13 @@ function Invoke-AvmBicepCheckConvention {
                     -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
             $issues.Add($issue)
         }
+        foreach ($issue in @(Test-AvmBicepConventionPublication `
+                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
+            $issues.Add($issue)
+        }
     }
 
     $uncovered = @(
-        'publication-aware changelog and parent/child version checks'
         'README regeneration and API-version checks'
         'resource-folder singularization beyond naming syntax'
         'registry-literal telemetry syntax and description parity for scaffolded modules'

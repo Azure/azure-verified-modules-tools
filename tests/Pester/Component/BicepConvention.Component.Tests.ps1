@@ -48,6 +48,28 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     StdErr   = ''
                 }
             }
+            Mock Get-AvmBicepPublicationGitState {
+                [pscustomobject]@{ GitPath = 'mock-git'; BaseSha = 'fixture'; ChangedPaths = @() }
+            }
+            Mock Get-AvmBicepPublicationTargetVersion {
+                [pscustomobject]@{
+                    TargetVersion = '0.1.0'
+                    VersionChanged = $true
+                    PreviousVersion = $null
+                    ShouldPublish = $true
+                }
+            }
+            Mock Invoke-WebRequest {
+                $name = $Uri.AbsolutePath.Substring(4).Replace('/tags/list', '')
+                [pscustomobject]@{
+                    StatusCode = 200
+                    Content = '{"name":"' + $name + '","tags":["0.1.0"]}'
+                    Headers = @{}
+                    BaseResponse = [pscustomobject]@{
+                        RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                    }
+                }
+            }
         }
     }
 
@@ -59,7 +81,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 4
+        $result.UncoveredFamilies.Count | Should -Be 3
         $result.UncoveredFamilies | Should -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
         $result.UncoveredFamilies | Should -Not -Contain 'child publish allowlist and resource-folder singularization'
@@ -768,6 +790,164 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Get-AvmBicepConventionScope -Path $P
         }
         $scope | Should -BeNullOrEmpty
+    }
+
+    Context 'Publication-aware changelogs and parent versions' {
+        It 'allows a published older release next to the pending target version' {
+            $path = Join-Path $script:modulePath 'CHANGELOG.md'
+            $existing = [System.IO.File]::ReadAllText($path)
+            $older = "`n## 0.0.1`n`n### Changes`n`n- Previous`n`n### Breaking Changes`n`n- None`n"
+            [System.IO.File]::WriteAllText($path, $existing + $older)
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-WebRequest {
+                    [pscustomobject]@{
+                        StatusCode = 200
+                        Content = '{"name":"bicep/avm/res/mock/widget","tags":["0.0.1"]}'
+                        Headers = @{}
+                        BaseResponse = [pscustomobject]@{
+                            RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                        }
+                    }
+                }
+            }
+
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            @($result.Issues | Where-Object {
+                    $_.Code -like 'avm.bicep.changelog-unpublished*' -or
+                    $_.Code -like 'avm.bicep.changelog-target*'
+                }).Count | Should -Be 0
+            $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+        }
+
+        It 'reports unpublished headings and a missing next target section with file-specific codes' {
+            $path = Join-Path $script:modulePath 'CHANGELOG.md'
+            $text = [System.IO.File]::ReadAllText($path)
+            [System.IO.File]::WriteAllText($path, $text.Replace('## 0.1.0', '## 0.2.0'))
+
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $unpublished = @($result.Issues | Where-Object Code -eq 'avm.bicep.changelog-unpublished-version')
+            $unpublished.Count | Should -Be 1
+            $unpublished[0].File | Should -Be 'avm/res/mock/widget/CHANGELOG.md'
+            $unpublished[0].Line | Should -BeGreaterThan 0
+            $result.Issues.Code | Should -Contain 'avm.bicep.changelog-target-version'
+        }
+
+        It 'accepts an initial version only after an exact MCR not-found response' {
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-WebRequest {
+                    [pscustomobject]@{
+                        StatusCode = 404
+                        Content = '{"errors":[{"code":"NAME_UNKNOWN"}]}'
+                        Headers = @{}
+                        BaseResponse = [pscustomobject]@{
+                            RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                        }
+                    }
+                }
+            }
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            @($result.Issues | Where-Object {
+                    $_.Code -like 'avm.bicep.published-tags-*' -or
+                    $_.Code -like 'avm.bicep.changelog-*'
+                }).Count | Should -Be 0
+        }
+
+        It 'fails closed when MCR is unavailable rather than treating tags as empty' {
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-WebRequest { throw [System.Net.Http.HttpRequestException]::new('MCR unavailable') }
+            }
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.published-tags-unavailable')
+            $issue.Count | Should -Be 1
+            $issue[0].File | Should -Be 'avm/res/mock/widget/CHANGELOG.md'
+            $result.Status | Should -Be 'fail'
+        }
+
+        It 'fails closed without MCR or Git calls when offline' {
+            $original = $env:AVM_OFFLINE
+            try {
+                $env:AVM_OFFLINE = '1'
+                $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+                $result.Issues.Code | Should -Contain 'avm.bicep.published-tags-offline'
+                InModuleScope 'Avm.Authoring' {
+                    Should -Invoke Invoke-WebRequest -Exactly 0
+                    Should -Invoke Get-AvmBicepPublicationGitState -Exactly 0
+                }
+            }
+            finally {
+                if ($null -eq $original) {
+                    Remove-Item Env:AVM_OFFLINE -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:AVM_OFFLINE = $original
+                }
+            }
+        }
+
+        Context 'Changed established child' {
+            BeforeEach {
+                $script:childPath = Join-Path $script:modulePath 'child'
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $script:childPath 'version.json'), '{"version":"0.2"}')
+                $changelog = [System.IO.File]::ReadAllText((Join-Path $script:modulePath 'CHANGELOG.md'))
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $script:childPath 'CHANGELOG.md'),
+                    $changelog.Replace('widget/CHANGELOG.md', 'widget/child/CHANGELOG.md').
+                        Replace('## 0.1.0', '## 0.2.0'))
+                InModuleScope 'Avm.Authoring' {
+                    Mock Get-AvmBicepPublicationTargetVersion {
+                        if ($Scope.ModuleRelativePath.EndsWith('/child')) {
+                            return [pscustomobject]@{
+                                TargetVersion = '0.2.0'; VersionChanged = $true
+                                PreviousVersion = '0.1'; ShouldPublish = $true
+                            }
+                        }
+                        [pscustomobject]@{
+                            TargetVersion = '0.1.1'; VersionChanged = $false
+                            PreviousVersion = '0.1'; ShouldPublish = $true
+                        }
+                    }
+                    Mock Invoke-WebRequest {
+                        $name = $Uri.AbsolutePath.Substring(4).Replace('/tags/list', '')
+                        [pscustomobject]@{
+                            StatusCode = 200
+                            Content = '{"name":"' + $name + '","tags":["0.1.0"]}'
+                            Headers = @{}
+                            BaseResponse = [pscustomobject]@{
+                                RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                            }
+                        }
+                    }
+                }
+            }
+
+            It 'requires the versioned parent to increment when the child resets to a new minor' {
+                $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+                $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.parent-version-not-increased')
+                $issue.Count | Should -Be 1
+                $issue[0].File | Should -Be 'avm/res/mock/widget/version.json'
+                $issue[0].Message | Should -Match 'avm/res/mock/widget/child'
+            }
+
+            It 'accepts a parent increase and matching target changelogs' {
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $script:modulePath 'version.json'), '{"version":"0.2"}')
+                $path = Join-Path $script:modulePath 'CHANGELOG.md'
+                [System.IO.File]::WriteAllText(
+                    $path, [System.IO.File]::ReadAllText($path).Replace('## 0.1.0', '## 0.2.0'))
+                InModuleScope 'Avm.Authoring' {
+                    Mock Get-AvmBicepPublicationTargetVersion {
+                        [pscustomobject]@{
+                            TargetVersion = '0.2.0'; VersionChanged = $true
+                            PreviousVersion = '0.1'; ShouldPublish = $true
+                        }
+                    }
+                }
+                $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+                @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
+                    Should -Be 0
+            }
+        }
     }
 
     It 'reports invalid version values and malformed changelog sections with file positions' {

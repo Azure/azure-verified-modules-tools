@@ -101,16 +101,16 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:1636 | UDT is camelCase with `Type` suffix | C |
 | M:1684 | Versioned changelog is not empty | C |
 | M:1696 | Changelog header/blank lines/canonical link | C: real file casing; see note below |
-| M:1722 | Changelog section for next published version | P: checks semantic headings, not target version |
+| M:1722 | Changelog section for next published version | C: target derived from trusted current upstream main and upstream release tags; pending module/descendant changes require the target heading |
 | M:1757 | Changelog versions descend | C: also checks uniqueness |
 | M:1773 | Exactly one `Changes` section per version | C |
 | M:1810 | Exactly one `Breaking Changes` section per version | C |
 | M:1847 | Changelog sections have content | C: both sections checked |
 | M:1891 | `Changes` precedes `Breaking Changes` | C |
-| M:1928 | Only published/pending versions in changelog | G |
+| M:1928 | Only published/pending versions in changelog | C: complete exact-endpoint MCR tag list (including pagination) or next target; offline, invalid and unavailable history fails |
 | M:1990 | `version.json` is major.minor | C |
 | M:2001 | Major version stays zero except NAT gateway | C |
-| M:2022 | Published child increment also increments versioned parents | G |
+| M:2022 | Published child increment also increments versioned parents | C: changed established child versions require every versioned ancestor to increment major.minor and reset the target patch |
 | M:2062 | CODEOWNERS default/overrides/unique patterns | C: extra rules must be anchored outside modules |
 | M:2127 | Multi-scope test references matching scope module | C: source-level declaration |
 | M:2150 | Deploying test declares `serviceShort` | C: compiled resource count gates source check |
@@ -162,6 +162,17 @@ loads the checked-in registry allowlist when a discovered child has
 linked, malformed or unreadable input fails with a named issue, while
 unversioned children need no allowlist.
 
+The [publication-aware slice](2026-09-30-bicep-publication-convention.md)
+checks the complete MCR version history against each root/child changelog
+and compares version changes to a trusted current upstream main ref. It
+uses read-only upstream release tags to calculate the next patch, including
+the pinned descendant-change publication behavior, and checks changed
+established children against all versioned ancestors. HTTP redirects,
+unrecognized not-found responses, invalid pagination, malformed tags, stale
+Git refs and offline checks fail with named issues. Only an exact registry
+`NAME_UNKNOWN` 404 identifies an unpublished module. No live MCR request
+was made during development.
+
 The M:1696 assertion requests `Changelog.md` in its link, but actual registry
 files and this repository's generated changelogs use `CHANGELOG.md`. The new
 rule checks the real canonical casing; retaining the literal assertion would
@@ -206,14 +217,14 @@ description are independent; this slice does not edit either validation rule.
 ## Follow-up before registry migration
 
 The [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md)
-covered e2e compilation and compiled-template assertions. Complete
-publication-aware versions and changelogs, resource-folder singularization,
-README drift, and
-advisory API-version checks. Reconcile the scaffold telemetry form with
-registry's literal assertions. A separate publication-aware slice must use authoritative
-MCR tags without inventing local published-version history. The coverage
-ledger above is the per-assertion handoff; these are not implicit passes. Preserve the current
-fork-safe and static-validation workflow conditions during any later cutover.
+covered e2e compilation and compiled-template assertions. Publication-aware
+versions and changelogs now use authoritative MCR tags and upstream
+provenance. Complete resource-folder singularization, README drift and
+advisory API-version checks; reconcile both authored telemetry forms with
+the registry's literal assertions. The coverage ledger above is the
+per-assertion handoff; remaining gaps are not implicit passes. Preserve
+the current fork-safe and static-validation workflow conditions during any
+later cutover.
 
 ## Checklist
 
