@@ -72,17 +72,15 @@ Describe 'Invoke-AvmCheckConvention' {
         }
     }
 
-    It 'the bicep engine still throws AvmNotSupportedException for its stub' {
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
-                $null
-            }
-            catch { $_.Exception }
+    It 'reports an actionable failure when the bicep module layout is not known' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{
+                    Ecosystem = 'bicep'; Root = $TestDrive; Kind = 'bicep-module'
+                })
         }
-        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Bicep convention check is not yet wired'
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.scope'
+        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
     }
 
     It 'the terraform engine returns a real envelope and no longer throws AvmNotSupportedException' {

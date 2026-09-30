@@ -34,8 +34,9 @@ function Invoke-AvmPrCheck {
         writes nothing and instead treats any needed add/update/remove
         as Status='fail'. This makes stale governed files a hard CI
         failure so the module is refreshed before merge rather than
-        silently rewritten in CI. For bicep the sync step throws
-        AvmConfigurationException and is skipped.
+        silently rewritten in CI.         For bicep the sync step is unsupported and skipped. A Bicep policy
+        or convention step cannot be skipped: incomplete static coverage
+        fails the run until the required checks are implemented.
 
         The sync step also gates on the managed-files release recorded in
         '.avm/managed-files-version.json': governed files are compared against
@@ -160,6 +161,8 @@ function Invoke-AvmPrCheck {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $requiredBicepCheck = $context.Ecosystem -ceq 'bicep' -and
+        $def.Name -in @('check policy', 'check convention')
         $stepIndex++
         $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -180,15 +183,34 @@ function Invoke-AvmPrCheck {
                 & $def.Cmdlet @stepParameters @extraArgs
             }
 
-            if ($stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status') {
+            $hasStatus = $stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status'
+            if ($hasStatus) {
                 $stepStatus = $stepResult.Status
+            }
+            if ($requiredBicepCheck) {
+                if (-not $hasStatus) {
+                    $stepStatus = 'fail'
+                    $stepError = "Required Bicep $($def.Name) returned no status; keep the registry static-validation jobs until this check runs."
+                }
+                elseif ($stepStatus -eq 'skipped') {
+                    $stepStatus = 'fail'
+                    $stepError = "Required Bicep $($def.Name) returned skipped; keep the registry static-validation jobs until this check runs."
+                }
+                elseif ($stepStatus -notin @('pass', 'fail', 'error')) {
+                    $stepError = "Required Bicep $($def.Name) returned an invalid status; keep the registry static-validation jobs until this check runs."
+                    $stepStatus = 'fail'
+                }
             }
         }
         catch [AvmNotSupportedException] {
-            # Verb genuinely does not apply to this ecosystem. Continue the
-            # chain; do not flip overall status.
-            $stepStatus = 'skipped'
-            $stepError = $_.Exception.Message
+            if ($requiredBicepCheck) {
+                $stepStatus = 'fail'
+                $stepError = "Required Bicep $($def.Name) is not implemented: $($_.Exception.Message)"
+            }
+            else {
+                $stepStatus = 'skipped'
+                $stepError = $_.Exception.Message
+            }
         }
         catch [AvmConfigurationException] {
             # The repo is misconfigured, not unsupported. This must fail rather

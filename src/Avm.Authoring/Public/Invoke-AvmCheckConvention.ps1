@@ -6,13 +6,9 @@ function Invoke-AvmCheckConvention {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepCheckConvention      (compliance Pester suite a la module.tests.ps1; stubbed)
-          - terraform  -> Invoke-AvmTerraformCheckConvention  ('grept run' against the AVM rule pack; stubbed)
-
-        Both engines are intentionally stubbed in this PoC slice so the
-        public verb dispatcher and engine plumbing land first. The
-        engines will throw AvmConfigurationException with a clear
-        "next slice" message until the real implementations land.
+          - bicep      -> first-party layout, version, changelog, and test-source
+                          checks; fails closed while other registry checks remain
+          - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
@@ -41,7 +37,7 @@ function Invoke-AvmCheckConvention {
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, Issues. (When implemented.)
+        Status, Issues.
 
     .EXAMPLE
         avm check convention

@@ -4,27 +4,22 @@ function Invoke-AvmBicepCheckPolicy {
         Run policy checks against a Bicep module.
 
     .DESCRIPTION
-        Engine implementation called by Invoke-AvmCheckPolicy when the
-        module context is Ecosystem='bicep'. The canonical implementation
-        invokes PSRule.Rules.Azure in-process against the compiled ARM
-        JSON of the module's main.bicep, normalises the rule output into
-        a structured Issue collection, and returns a pass/fail summary.
-        That is a substantial follow-on slice; the engine is
-        intentionally stubbed for the PoC.
-
-        Track the work via the bicep-check-policy slice in
-        docs/avm-consolidation-plan.md.
+        Policy evaluation is not yet implemented. Report a failing,
+        structured diagnostic rather than allowing pr-check to skip this
+        required stage. The registry's PSRule checks use tokenized
+        defaults and waf-aligned tests with two required and two advisory
+        baselines; checking main.json alone would not provide parity.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
         Ecosystem='bicep'.
 
     .PARAMETER AllowPathFallback
-        Reserved for symmetry with the terraform engine.
+        Accepted for dispatcher compatibility.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
-        Issues. (When implemented.)
+        RequiredBaselines, AdvisoryBaselines, and Issues.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -45,6 +40,26 @@ function Invoke-AvmBicepCheckPolicy {
 
     $null = $AllowPathFallback
 
-    throw [AvmNotSupportedException]::new(
-        "Bicep policy check is not yet wired: the in-process PSRule.Rules.Azure invocation is the next bicep-check-policy slice. Track it in docs/avm-consolidation-plan.md.")
+    $required = @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security')
+    $advisory = @('Azure.Default', 'Azure.Pillar.Security')
+
+    return [pscustomobject][ordered]@{
+        Engine            = 'bicep'
+        Tool              = 'PSRule.Rules.Azure (not run)'
+        ToolPath          = $null
+        ToolSource        = 'not-run'
+        Status            = 'fail'
+        RequiredBaselines = $required
+        AdvisoryBaselines = $advisory
+        Issues            = @(
+            [pscustomobject][ordered]@{
+                File     = '.'
+                Line     = 0
+                Column   = 0
+                Severity = 'error'
+                Code     = 'avm.bicep.psrule-incomplete'
+                Message  = 'PSRule policy coverage is incomplete: tokenized defaults and waf-aligned test sources must run Azure.Pillar.Reliability and CB.AVM.WAF.Security (required), plus Azure.Default and Azure.Pillar.Security (advisory). Keep the registry PSRule jobs until this is implemented.'
+            }
+        )
+    }
 }

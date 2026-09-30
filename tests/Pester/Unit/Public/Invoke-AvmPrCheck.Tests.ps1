@@ -334,7 +334,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain' {
+    It 'fails unimplemented Bicep policy and convention while preserving unrelated skips' {
         $dir = Join-Path $TestDrive ("prcheck-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -356,14 +356,70 @@ Describe 'Invoke-AvmPrCheck' {
             Invoke-AvmPrCheck -Path $D
         }
 
-        $result.Status                                  | Should -Be 'pass'
+        $result.Status                                  | Should -Be 'fail'
         $result.Steps.Count                             | Should -Be 9
-        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 4
+        ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 2
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
-        ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'skipped'
-        ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check policy').Error       | Should -Match 'not implemented'
         ($result.Steps | Where-Object Step -eq 'docs').Status              | Should -Be 'pass'
+    }
+
+    It 'fails when a required Bicep static check returns skipped instead of throwing' {
+        $dir = Join-Path $TestDrive ("prcheck-required-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'skipped' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'skipped' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'sync').Status | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'check policy').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check convention').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check policy').Error | Should -Match 'returned skipped'
+    }
+
+    It 'fails when required Bicep static checks return no status or an invalid status' {
+        $dir = Join-Path $TestDrive ("prcheck-required-status-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy {}
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'unknown' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'sync').Status | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'check policy').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check policy').Error | Should -Match 'returned no status'
+        ($result.Steps | Where-Object Step -eq 'check convention').Status | Should -Be 'fail'
+        ($result.Steps | Where-Object Step -eq 'check convention').Error | Should -Match 'invalid status'
     }
 
     It 'flips overall to fail when any step returns Status=fail but continues by default' {

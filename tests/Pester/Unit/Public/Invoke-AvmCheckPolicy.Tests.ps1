@@ -71,16 +71,13 @@ Describe 'Invoke-AvmCheckPolicy' {
         }
     }
 
-    It 'the bicep engine stub still throws AvmNotSupportedException' {
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmBicepCheckPolicy -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
-                $null
-            }
-            catch { $_.Exception }
+    It 'reports unimplemented bicep PSRule coverage as a failing diagnostic' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Invoke-AvmBicepCheckPolicy -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
         }
-        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Bicep policy check is not yet wired'
+        $result.Status | Should -Be 'fail'
+        $result.RequiredBaselines.Count | Should -Be 2
+        $result.AdvisoryBaselines.Count | Should -Be 2
+        $result.Issues[0].Code | Should -Be 'avm.bicep.psrule-incomplete'
     }
 }

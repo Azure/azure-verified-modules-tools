@@ -6,13 +6,9 @@ function Invoke-AvmCheckPolicy {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepCheckPolicy      (PSRule.Rules.Azure; stubbed)
-          - terraform  -> Invoke-AvmTerraformCheckPolicy  (Conftest with APRL + AVMSEC bundles; stubbed)
-
-        Both engines are intentionally stubbed in this PoC slice so the
-        public verb dispatcher and engine plumbing land first. The
-        engines will throw AvmConfigurationException with a clear
-        "next slice" message until the real implementations land.
+          - bicep      -> explicit failure while PSRule.Rules.Azure parity
+                          is incomplete; no required baseline is skipped
+          - terraform  -> Conftest with APRL and AVMSEC bundles
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
@@ -32,11 +28,11 @@ function Invoke-AvmCheckPolicy {
 
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform examples to evaluate at once.
-        Defaults to four. Bicep policy checks currently ignore this value.
+        Defaults to four. Bicep policy checks ignore this value.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, Issues. (When implemented.)
+        Status, Issues.
 
     .EXAMPLE
         avm check policy
