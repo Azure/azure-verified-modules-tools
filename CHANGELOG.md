@@ -21,6 +21,10 @@ section when cutting a release.
 
 ### Added
 
+- `avm test unit` runs Bicep Pester unit tests, optional nested module scopes,
+  and the existing registry compliance suite when available. Tag and name
+  filters, child-process isolation, and separate fail/skipped results make
+  missing or disabled tests visible without changing the build-only `avm test`.
 - `avm test integration --max-retry` defaults to two retries for recognized
   Azure capacity and region-ineligible failures, matching the E2E retry bound.
   Replay requires completed Terraform-owned teardown and preserves test
