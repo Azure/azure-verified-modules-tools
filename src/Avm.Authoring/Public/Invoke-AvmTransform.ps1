@@ -1,12 +1,12 @@
 function Invoke-AvmTransform {
     <#
     .SYNOPSIS
-        Regenerate the module's README + test scaffolding from its source.
+        Transform the module's authored source into governed artifacts.
 
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepTransform      (Set-AVMModule.ps1 replacement; stubbed)
+          - bicep      -> Invoke-AvmBicepTransform      (compiled main.json)
           - terraform  -> Invoke-AvmTerraformTransform  (mapotf transform + clean-backup)
 
         The Terraform engine is wired against the pinned mapotf binary and
@@ -21,9 +21,9 @@ function Invoke-AvmTransform {
         -WhatIf previews the Terraform transformation without changing files.
         A consumer repository can override a profile under
         config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
-        The Bicep engine remains intentionally stubbed in
-        this slice and throws AvmConfigurationException with a clear "next
-        slice" message.
+        The Bicep engine compiles root and child main.bicep sources into
+        main.json. README generation and repeatable test scaffolding remain
+        separate follow-on slices.
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
@@ -42,10 +42,9 @@ function Invoke-AvmTransform {
         lock-pinned version.
 
     .PARAMETER CheckDrift
-        When set, the Terraform engine runs the transform but treats any
-        file it changes as a failure (one Issue per changed file) instead of
-        a silent fix. Used by the pr-check chain to flag modules that did not
-        run pre-commit. Ignored by the Bicep engine.
+        When set, compare generated artifacts without leaving module-file
+        changes. Bicep compares build output directly; Terraform restores
+        mapotf changes after detecting drift.
 
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform root, module, example, or test
@@ -61,7 +60,8 @@ function Invoke-AvmTransform {
     .EXAMPLE
         Invoke-AvmTransform -Path C:\repos\my-tf-module -Ecosystem terraform
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'The Bicep and Terraform engines own ShouldProcess and receive the caller WhatIf preference.')]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Position = 0)]
@@ -89,7 +89,7 @@ function Invoke-AvmTransform {
 
     switch ($context.Ecosystem) {
         'bicep' {
-            Invoke-AvmBicepTransform -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmBicepTransform -Context $context -AllowPathFallback:$AllowPathFallback -CheckDrift:$CheckDrift
         }
         'terraform' {
             $apply = $PSCmdlet.ShouldProcess($context.Root, 'Apply Terraform mapotf transforms')

@@ -658,15 +658,7 @@ function Test-AvmManagedFilesInteractive {
     [OutputType([bool])]
     param()
 
-    try {
-        if (-not [string]::IsNullOrEmpty($env:CI)) { return $false }
-        if ([System.Console]::IsInputRedirected) { return $false }
-    }
-    catch {
-        return $false
-    }
-
-    return $true
+    return Test-AvmInteractiveHost
 }
 
 function Resolve-AvmManagedFilesRepoId {

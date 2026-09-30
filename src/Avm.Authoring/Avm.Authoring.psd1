@@ -9,10 +9,13 @@
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
+        'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
+        'Get-AvmCatalogTelemetryPrefix',
         'Get-AvmModuleContext',
         'Get-AvmTool',
         'Get-AvmVersion',
+        'Initialize-AvmModule',
         'Initialize-AvmModuleMetadata',
         'Install-AvmTool',
         'New-AvmTelemetryIdPrefix',

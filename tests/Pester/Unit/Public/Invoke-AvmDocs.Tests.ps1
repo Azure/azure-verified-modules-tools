@@ -108,7 +108,7 @@ Describe 'Invoke-AvmDocs' {
         }
     }
 
-    It 'never forwards -CheckDrift to the bicep engine, which does not accept it' {
+    It 'forwards -CheckDrift to the Bicep engine without writing' {
         $dir = Join-Path $TestDrive ("docs-drift-bicep-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
@@ -118,9 +118,36 @@ Describe 'Invoke-AvmDocs' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmBicepDocs { throw [AvmNotSupportedException]::new('bicep docs is not implemented') }
-            { Invoke-AvmDocs -Path $D -CheckDrift } | Should -Throw -ExceptionType ([AvmNotSupportedException])
-            Should -Invoke Invoke-AvmBicepDocs -Exactly 1 -ParameterFilter { -not $PSBoundParameters.ContainsKey('CheckDrift') }
+            Mock Invoke-AvmBicepDocs {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'fail'; FilesProcessed = 1; Changed = @(); Issues = @() }
+            }
+            (Invoke-AvmDocs -Path $D -CheckDrift).Status | Should -Be 'fail'
+            Should -Invoke Invoke-AvmBicepDocs -Exactly 1 -ParameterFilter { $CheckDrift }
+        }
+    }
+
+    It 'forwards -WhatIf to Bicep and refuses Terraform until its engine supports it' {
+        $dir = Join-Path $TestDrive 'docs-whatif'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmBicepDocs {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'skipped'; FilesProcessed = 1; Changed = @() }
+            }
+            (Invoke-AvmDocs -Path $D -WhatIf).Status | Should -Be 'skipped'
+            Should -Invoke Invoke-AvmBicepDocs -Exactly 1 -ParameterFilter { $WhatIf }
+        }
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform' }
+            }
+            Mock Invoke-AvmTerraformDocs { throw 'would rewrite Terraform files' }
+            { Invoke-AvmDocs -Path $D -WhatIf } | Should -Throw '*does not support -WhatIf*'
+            Should -Invoke Invoke-AvmTerraformDocs -Exactly 0
         }
     }
 }

@@ -55,6 +55,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Classify the current directory as a Bicep or Terraform module.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('init')
+            Cmdlet  = 'Initialize-AvmModule'
+            Summary = 'Initialize local Bicep modules or metadata-only Terraform modules; -Proposed writes only Bicep metadata.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('metadata', 'validate')
             Cmdlet  = 'Test-AvmModuleMetadata'
             Summary = 'Validate root or child module metadata against the shared schema.'
@@ -105,6 +110,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Generate or refresh README docs via the resolved engine.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('docs', 'export-notes')
+            Cmdlet  = 'Export-AvmReadmeNote'
+            Summary = 'Extract an existing Bicep README Notes section into README.notes.md once.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('sync')
             Cmdlet  = 'Invoke-AvmSync'
             Summary = 'Sync managed files from the AVM governance source (terraform).'
@@ -112,7 +122,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('transform')
             Cmdlet  = 'Invoke-AvmTransform'
-            Summary = 'Apply the mapotf pre-commit transforms to the current module.'
+            Summary = 'Compile Bicep main.json or apply Terraform mapotf transforms to the current module.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('check', 'policy')
@@ -127,7 +137,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, test, docs).'
+            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')

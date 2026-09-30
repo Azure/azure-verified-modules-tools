@@ -38,6 +38,12 @@ function Get-AvmMetadataSourcePlan {
         throw [System.ArgumentException]::new('main.bicep already defines avmTelemetryIdPrefix differently; review its source manually.')
     }
 
+    $authoredPrefix = Get-AvmBicepTelemetrySourcePrefix -Path $Path
+    if ($authoredPrefix -and $authoredPrefix -cne $Metadata.telemetryIdPrefix) {
+        throw [System.ArgumentException]::new(
+            "metadata telemetryIdPrefix '$($Metadata.telemetryIdPrefix)' conflicts with existing main.bicep prefix '$authoredPrefix'. Review its source before using -UpdateSource.")
+    }
+
     $prefixPattern = $headPattern + [regex]::Escape($Metadata.telemetryIdPrefix) + '(?=\.)'
     $prefixMatches = [regex]::Matches($code, $prefixPattern)
     if ($prefixMatches.Count -ne 1) {

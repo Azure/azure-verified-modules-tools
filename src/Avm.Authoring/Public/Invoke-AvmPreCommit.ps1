@@ -2,7 +2,7 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     metadata -> format -> lint -> validate -> docs.
+        bicep:     metadata -> format -> lint -> validate -> transform -> docs.
         terraform: metadata -> sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
@@ -39,7 +39,7 @@ function Invoke-AvmPreCommit {
                         AvmConfigurationException; the chain aborts.
           - 'skipped' : step threw AvmConfigurationException - the engine
                         is a deliberate placeholder for a future slice
-                        (e.g. bicep-docs, terraform transform). The
+                        (e.g. bicep-docs). The
                         chain CONTINUES and overall status is NOT
                         marked failed by a skip.
 
@@ -203,6 +203,7 @@ function Invoke-AvmPreCommit {
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
             [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
             [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
+            [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )
     }
