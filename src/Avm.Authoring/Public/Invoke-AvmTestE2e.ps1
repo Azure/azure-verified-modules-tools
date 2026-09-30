@@ -9,17 +9,26 @@ function Invoke-AvmTestE2e {
         tagged disposable group per example. ARM validate and what-if must
         succeed, and what-if must predict only creations within that group,
         before a deployment is allowed. Successful ARM provisioning is
-        verified from the deployment response. The group is deleted after
-        success or failure, but only after its ownership tag and subscription
-        are verified; failed cleanup is reported with the group name.
+        verified from the deployment response. Case-local *.Tests.ps1 Pester
+        assertions then run in a child process with TestInputData containing
+        DeploymentOutputs (ARM properties.outputs) and ModuleTestFolderPath.
+        The group is deleted after success or failure, but only after its
+        ownership tag and subscription are verified; failed cleanup is
+        reported with the group name.
 
         Subscription, management-group, tenant, cross-scope, linked,
         deployment-script and authorization resources are rejected before
         group creation.
         Use 'avm test integration' to validate and preview those scopes
-        without deploying. Authored post-deployment Pester assertions are not
-        run by this tier. Tokens and additional ARM parameters are staged in
-        temporary JSON files without editing source files.
+        without deploying. Tokens and additional ARM parameters are staged
+        in temporary JSON files without editing source files.
+
+        Bicep AssertionResults distinguish optional absent assertions
+        (Status 'not-present', deployment-only pass) from passing assertions
+        (Status 'pass'). An authored suite fails its example if it has no
+        passing tests or any failed, skipped, inconclusive, filtered, or
+        setup-failed tests. Pester is stopped after 30 minutes so cleanup
+        still runs if authored tests hang.
 
         Terraform walks runnable examples/ and runs init, apply,
         idempotency plan and destroy against a real backend.
@@ -98,7 +107,8 @@ function Invoke-AvmTestE2e {
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Issues. Bicep also reports RunsTotal,
-        RunsPassed, RunsFailed, RunsSkipped, CleanupPending and WhatIfChanges.
+        RunsPassed, RunsFailed, RunsSkipped, AssertionResults (per deployed
+        example), CleanupPending and WhatIfChanges.
 
     .EXAMPLE
         avm test e2e

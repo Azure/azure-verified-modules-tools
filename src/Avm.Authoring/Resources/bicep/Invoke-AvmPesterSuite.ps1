@@ -16,12 +16,26 @@ Import-Module Pester -MinimumVersion 5.5.0 -ErrorAction Stop
 $inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
     ConvertFrom-Json -AsHashtable -ErrorAction Stop
 
+$containerData = switch ($inputData.Mode) {
+    'Unit' {
+        @{
+            moduleFolderPaths = [string[]]$inputData.ModulePaths
+            repoRootPath      = [string]$inputData.RepositoryRoot
+        }
+    }
+    'E2e' {
+        if ($inputData.TestInputData -isnot [System.Collections.IDictionary]) {
+            throw [System.ArgumentException]::new('E2e Pester input requires TestInputData.')
+        }
+        @{ TestInputData = $inputData.TestInputData }
+    }
+    default {
+        throw [System.ArgumentException]::new("Unsupported Bicep Pester mode '$($inputData.Mode)'.")
+    }
+}
 $configuration = New-PesterConfiguration
 $configuration.Run.Container = @(
-    New-PesterContainer -Path ([string[]]$inputData.Files) -Data @{
-        moduleFolderPaths = [string[]]$inputData.ModulePaths
-        repoRootPath      = [string]$inputData.RepositoryRoot
-    }
+    New-PesterContainer -Path ([string[]]$inputData.Files) -Data $containerData
 )
 $configuration.Run.PassThru = $true
 $configuration.Output.Verbosity = 'None'

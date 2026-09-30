@@ -120,54 +120,9 @@ function Invoke-AvmBicepTestUnit {
         $envVars['PATH'] = [System.IO.Path]::GetDirectoryName($bicep.Path) + [System.IO.Path]::PathSeparator + $env:PATH
     }
 
-    $runnerPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
-        -AdditionalChildPath '..', 'Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1'
-    $runDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) `
-        -ChildPath ('avm-pester-{0}' -f [guid]::NewGuid().ToString('N'))
-    $null = New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop
-    $inputPath = Join-Path $runDirectory 'input.json'
-    $resultPath = Join-Path $runDirectory 'result.json'
-    try {
-        $inputData = [pscustomobject]@{
-            Files          = $files.ToArray()
-            ModulePaths    = $modulePaths
-            RepositoryRoot = $repoRoot
-            Tag            = $Tag
-            TestName       = $TestName
-        }
-        [System.IO.File]::WriteAllText(
-            $inputPath, ($inputData | ConvertTo-Json -Depth 5 -Compress),
-            [System.Text.UTF8Encoding]::new($false))
-
-        $pwshPath = [System.Environment]::ProcessPath
-        if ([string]::IsNullOrWhiteSpace($pwshPath)) {
-            $pwshPath = (Get-Command -Name 'pwsh' -CommandType Application -ErrorAction Stop).Source
-        }
-        $processResult = Invoke-AvmProcess -FilePath $pwshPath `
-            -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $runnerPath, '-InputPath', $inputPath, '-ResultPath', $resultPath) `
-            -WorkingDirectory $repoRoot -EnvVars $envVars -IgnoreExitCode
-        if ($processResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
-            $detail = Add-AvmProcessFailureDetail `
-                -Message "Bicep Pester runner failed (exit $($processResult.ExitCode))." `
-                -StdOut $processResult.StdOut -StdErr $processResult.StdErr
-            throw [AvmProcessException]::new($detail)
-        }
-        $summary = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 |
-            ConvertFrom-Json -AsHashtable -ErrorAction Stop
-        foreach ($key in @('Version', 'Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive', 'Filtered', 'Issues')) {
-            if (-not $summary.Contains($key)) {
-                throw [AvmProcessException]::new("Bicep Pester runner returned a summary without '$key'.")
-            }
-        }
-    }
-    finally {
-        foreach ($path in @($inputPath, $resultPath)) {
-            if (Test-Path -LiteralPath $path -PathType Leaf) {
-                Remove-Item -LiteralPath $path -Force
-            }
-        }
-        Remove-Item -LiteralPath $runDirectory -Force
-    }
+    $summary = Invoke-AvmBicepPesterSuite -Files $files.ToArray() `
+        -ModulePaths $modulePaths -RepositoryRoot $repoRoot `
+        -Tag $Tag -TestName $TestName -WorkingDirectory $repoRoot -EnvVars $envVars
 
     $issues = @($summary.Issues | ForEach-Object { [pscustomobject]$_ })
     $executed = [int]$summary.Passed + [int]$summary.Failed + [int]$summary.Skipped + [int]$summary.Inconclusive

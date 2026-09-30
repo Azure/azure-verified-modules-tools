@@ -40,6 +40,11 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
             WhatIfType          = 'Create'
             DeploymentState     = 'Succeeded'
             DeploymentOutput    = $null
+            DeploymentOutputs   = @{ account = @{ type = 'String'; value = 'deployed-account' } }
+            PesterResult        = $null
+            PesterExit          = 0
+            PesterTimeout       = $false
+            PesterInput         = $null
             ResourceIdOverride  = $null
             CompiledJson        = ''
             TemporaryFile       = ''
@@ -57,10 +62,11 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                 [pscustomobject]@{ Source = 'fake-az' }
             } -ParameterFilter { $Name -eq 'az' }
             Mock Invoke-AvmProcess {
-                param($FilePath, $ArgumentList)
+                param($FilePath, $ArgumentList, $TimeoutSec)
                 $script:bicepE2eState.Calls.Add([pscustomobject]@{
-                        FilePath  = $FilePath
-                        Arguments = [string[]]$ArgumentList
+                        FilePath   = $FilePath
+                        Arguments  = [string[]]$ArgumentList
+                        TimeoutSec = $TimeoutSec
                     })
                 if ($FilePath -eq 'fake-bicep') {
                     $template = @{
@@ -72,6 +78,35 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                         StdOut   = $template | ConvertTo-Json -Depth 20 -Compress
                         StdErr   = ''
                     }
+                }
+                if ($FilePath -eq [System.Environment]::ProcessPath) {
+                    $inputIndex = [array]::IndexOf($ArgumentList, '-InputPath')
+                    $resultIndex = [array]::IndexOf($ArgumentList, '-ResultPath')
+                    $script:bicepE2eState.PesterInput = Get-Content `
+                        -LiteralPath $ArgumentList[$inputIndex + 1] -Raw -Encoding utf8 |
+                        ConvertFrom-Json -AsHashtable
+                    if ($script:bicepE2eState.PesterTimeout) {
+                        throw [System.TimeoutException]::new('Fake Pester timeout')
+                    }
+                    if ($script:bicepE2eState.PesterExit -ne 0) {
+                        return [pscustomobject]@{
+                            ExitCode = 1; StdOut = ''; StdErr = 'Fake Pester setup error'
+                        }
+                    }
+                    $summary = if ($null -ne $script:bicepE2eState.PesterResult) {
+                        $script:bicepE2eState.PesterResult
+                    }
+                    else {
+                        @{
+                            Version = '5.7.1'; Total = 1; Passed = 1; Failed = 0
+                            Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+                        }
+                    }
+                    [System.IO.File]::WriteAllText(
+                        $ArgumentList[$resultIndex + 1],
+                        ($summary | ConvertTo-Json -Depth 8 -Compress),
+                        [System.Text.UTF8Encoding]::new($false))
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }
                 $nameIndex = [array]::IndexOf($ArgumentList, '--name')
                 $name = if ($nameIndex -ge 0) { $ArgumentList[$nameIndex + 1] } else { '' }
@@ -169,7 +204,10 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
                     $deployment = @{
                         id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Resources/deployments/$deploymentName"
                         name = $deploymentName
-                        properties = @{ provisioningState = $script:bicepE2eState.DeploymentState }
+                        properties = @{
+                            provisioningState = $script:bicepE2eState.DeploymentState
+                            outputs           = $script:bicepE2eState.DeploymentOutputs
+                        }
                     } | ConvertTo-Json -Depth 8 -Compress
                     $output = if ($ArgumentList[2] -eq 'what-if') {
                         $preview
@@ -200,6 +238,9 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $result.RunsTotal | Should -Be 1
         $result.RunsPassed | Should -Be 1
         $result.RunsFailed | Should -Be 0
+        $result.AssertionResults.Count | Should -Be 1
+        $result.AssertionResults[0].Status | Should -Be 'not-present'
+        $result.AssertionResults[0].RunsPassed | Should -Be 0
         $result.CleanupPending.Count | Should -Be 0
         $result.WhatIfChanges.Count | Should -Be 1
         $script:state.Groups.Count | Should -Be 0
@@ -224,6 +265,241 @@ Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
         $create.Arguments | Should -Contain 'Incremental'
         $create.Arguments | Should -Contain $script:subscription
         $create.Arguments | Should -Not -Contain 'private-value'
+        @($script:state.Calls | Where-Object {
+                $_.FilePath -eq [System.Environment]::ProcessPath
+            }).Count | Should -Be 0
+    }
+
+    It 'runs case-local Pester after deployment and passes ARM outputs without leaking them into argv' {
+        $caseDirectory = Split-Path -Parent $script:sourcePath
+        $testPath = Join-Path $caseDirectory 'deployed.tests.ps1'
+        Set-Content -LiteralPath $testPath `
+            -Value "Describe 'deployed' { It 'passes' { `$true | Should -BeTrue } }" `
+            -Encoding utf8NoBOM
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'pass'
+        $result.RunsPassed | Should -Be 1
+        $result.AssertionResults.Count | Should -Be 1
+        $result.AssertionResults[0].Case | Should -Be 'tests/e2e/defaults'
+        $result.AssertionResults[0].Status | Should -Be 'pass'
+        $result.AssertionResults[0].FilesProcessed | Should -Be 1
+        $result.AssertionResults[0].RunsPassed | Should -Be 1
+        $script:state.PesterInput.Mode | Should -Be 'E2e'
+        $script:state.PesterInput.Files | Should -Be @($testPath)
+        $script:state.PesterInput.TestInputData.ModuleTestFolderPath |
+            Should -Be $caseDirectory
+        $script:state.PesterInput.TestInputData.DeploymentOutputs.account.value |
+            Should -Be 'deployed-account'
+        $script:state.Groups.Count | Should -Be 0
+        ($script:state.Calls | Where-Object {
+                $_.FilePath -eq [System.Environment]::ProcessPath
+            } | Select-Object -First 1).TimeoutSec | Should -Be 1800
+        $sequence = @($script:state.Calls | ForEach-Object {
+                if ($_.FilePath -eq [System.Environment]::ProcessPath) { 'pester' }
+                elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
+                else { $_.Arguments[1] }
+            })
+        [array]::IndexOf($sequence, 'create') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'pester'))
+        [array]::IndexOf($sequence, 'pester') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
+        @($script:state.Calls | Where-Object {
+                $_.FilePath -eq [System.Environment]::ProcessPath -and
+                $_.Arguments -contains 'deployed-account'
+            }).Count | Should -Be 0
+    }
+
+    It 'fails a Pester assertion and preserves its diagnostic while deleting the owned group' {
+        $caseDirectory = Split-Path -Parent $script:sourcePath
+        $testPath = Join-Path $caseDirectory 'deployed.Tests.ps1'
+        Set-Content -LiteralPath $testPath -Value 'authored assertion' -Encoding utf8NoBOM
+        $script:state.PesterResult = @{
+            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
+            Skipped = 0; Inconclusive = 0; Filtered = 0
+            Issues = @(@{
+                    File = $testPath; Line = 7; Column = 0; Severity = 'error'
+                    Code = 'avm.bicep.pester-failed'; Message = 'deployed: Expected resource to exist.'
+                })
+        }
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsPassed | Should -Be 0
+        $result.RunsFailed | Should -Be 1
+        $result.AssertionResults[0].Status | Should -Be 'fail'
+        $result.AssertionResults[0].RunsFailed | Should -Be 1
+        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-assertion-failed'
+        $result.Issues[0].File | Should -Be $testPath
+        $result.Issues[0].Line | Should -Be 7
+        $result.Issues[0].Message | Should -Match 'tests/e2e/defaults.*Expected resource'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Groups.Count | Should -Be 0
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 1
+    }
+
+    It 'never treats skipped, empty or filtered authored Pester suites as passed' -ForEach @(
+        @{
+            Summary = @{
+                Version = '5.7.1'; Total = 0; Passed = 0; Failed = 0
+                Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+            }
+            Code = 'avm.bicep.e2e-assertion-empty'
+        }
+        @{
+            Summary = @{
+                Version = '5.7.1'; Total = 2; Passed = 1; Failed = 0
+                Skipped = 1; Inconclusive = 0; Filtered = 0; Issues = @()
+            }
+            Code = 'avm.bicep.e2e-assertion-incomplete'
+        }
+        @{
+            Summary = @{
+                Version = '5.7.1'; Total = 1; Passed = 0; Failed = 0
+                Skipped = 0; Inconclusive = 0; Filtered = 1; Issues = @()
+            }
+            Code = 'avm.bicep.e2e-assertion-empty'
+        }
+        @{
+            Summary = @{
+                Version = '5.7.1'; Total = 1; Passed = 0; Failed = 0
+                Skipped = 1; Inconclusive = 0; Filtered = 0
+                Issues = @(@{
+                        File = ''; Line = 2; Column = 0; Severity = 'error'
+                        Code = 'avm.bicep.pester-skipped'; Message = 'deployed: Pester reported Skipped.'
+                    })
+            }
+            Code = 'avm.bicep.e2e-assertion-skipped'
+        }
+    ) {
+        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        $script:state.PesterResult = $Summary
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.AssertionResults[0].Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be $Code
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Groups.Count | Should -Be 0
+    }
+
+    It 'fails and cleans up when the Pester runner errors, returns invalid data or times out' -ForEach @(
+        @{ Kind = 'exit'; Code = 'assertion-runner-failed' }
+        @{ Kind = 'malformed'; Code = 'assertion-runner-failed' }
+        @{ Kind = 'timeout'; Code = 'assertion-timeout' }
+    ) {
+        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        switch ($Kind) {
+            'exit' { $script:state.PesterExit = 1 }
+            'malformed' { $script:state.PesterResult = 'not-json' }
+            'timeout' { $script:state.PesterTimeout = $true }
+        }
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.AssertionResults[0].Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be "avm.bicep.e2e-$Code"
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Groups.Count | Should -Be 0
+    }
+
+    It 'retains both assertion and cleanup errors when ownership cannot be verified' {
+        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        $script:state.PesterResult = @{
+            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
+            Skipped = 0; Inconclusive = 0; Filtered = 0
+            Issues = @(@{
+                    File = ''; Line = 0; Column = 0; Severity = 'error'
+                    Code = 'avm.bicep.pester-failed'; Message = 'Deployed resource was absent.'
+                })
+        }
+        $script:state.ShowMismatch = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-assertion-failed'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        $result.CleanupPending.Count | Should -Be 1
+        $script:state.Groups.Count | Should -Be 1
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 0
+    }
+
+    It 'rejects invalid deployment outputs before running assertions and still deletes the group' {
+        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        $script:state.DeploymentOutputs = 'not-an-output-object'
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-assertion-runner-failed'
+        $result.Issues[0].Message | Should -Match 'invalid outputs'
+        $script:state.PesterInput | Should -BeNullOrEmpty
+        $script:state.Groups.Count | Should -Be 0
+    }
+
+    It 'continues to a separate group after a failed assertion was cleaned up' {
+        $second = Join-Path $script:root 'tests' 'e2e' 'second'
+        $null = New-Item -ItemType Directory -Path $second -Force
+        Set-Content -LiteralPath (Join-Path $second 'main.test.bicep') `
+            -Value "param namePrefix string = 'demo'" -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        $script:state.PesterResult = @{
+            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
+            Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+        }
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsTotal | Should -Be 2
+        $result.RunsFailed | Should -Be 1
+        $result.RunsPassed | Should -Be 1
+        $result.AssertionResults.Status | Should -Be @('fail', 'not-present')
+        $script:state.Groups.Count | Should -Be 0
+        @($script:state.Calls | Where-Object {
+                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
+            }).Count | Should -Be 2
+    }
+
+    It 'does not run nested examples assertions against the parent example' {
+        $parentAssertion = Join-Path (Split-Path $script:sourcePath) 'parent.tests.ps1'
+        Set-Content -LiteralPath $parentAssertion -Value 'parent' -Encoding utf8NoBOM
+        $nested = Join-Path (Split-Path $script:sourcePath) 'child'
+        $null = New-Item -ItemType Directory -Path $nested -Force
+        Set-Content -LiteralPath (Join-Path $nested 'main.test.bicep') `
+            -Value 'param namePrefix string' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $nested 'child.tests.ps1') `
+            -Value 'child' -Encoding utf8NoBOM
+        $result = Invoke-AvmTestE2e -Path $script:root -Example defaults `
+            -SubscriptionId $script:subscription -Location 'westus' `
+            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'pass'
+        $result.AssertionResults[0].FilesProcessed | Should -Be 1
+        $script:state.PesterInput.Files | Should -Be @($parentAssertion)
+        $script:state.Groups.Count | Should -Be 0
     }
 
     It 'lists runnable paths without tools, credentials or version lookup' {

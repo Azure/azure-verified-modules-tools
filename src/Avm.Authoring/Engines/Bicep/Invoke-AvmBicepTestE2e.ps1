@@ -47,20 +47,21 @@ function Invoke-AvmBicepTestE2e {
     $cases = @(Select-AvmBicepTestCase -Cases $discovered -Example $Example)
     $ignored = @($discovered | Where-Object { $_.Ignored }).Count
     $empty = [ordered]@{
-        Engine         = 'bicep'
-        Tool           = 'az'
-        ToolPath       = $null
-        ToolSource     = 'PATH'
-        Status         = 'skipped'
-        FilesProcessed = 0
-        IgnoredFiles   = $ignored
-        RunsTotal      = 0
-        RunsPassed     = 0
-        RunsFailed     = 0
-        RunsSkipped    = 0
-        CleanupPending = @()
-        WhatIfChanges  = @()
-        Issues         = @()
+        Engine           = 'bicep'
+        Tool             = 'az'
+        ToolPath         = $null
+        ToolSource       = 'PATH'
+        Status           = 'skipped'
+        FilesProcessed   = 0
+        IgnoredFiles     = $ignored
+        RunsTotal        = 0
+        RunsPassed       = 0
+        RunsFailed       = 0
+        RunsSkipped      = 0
+        AssertionResults = @()
+        CleanupPending   = @()
+        WhatIfChanges    = @()
+        Issues           = @()
     }
     if ($cases.Count -eq 0) {
         Write-AvmLog 'no runnable Bicep tests/e2e examples found' -Level Warning
@@ -96,6 +97,7 @@ function Invoke-AvmBicepTestE2e {
     if ($null -eq $az) {
         throw [AvmConfigurationException]::new('Azure CLI (az) is required for Bicep e2e tests.')
     }
+    $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context
     $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root `
         -SubscriptionId $SubscriptionId -TokenFile $TokenFile -Tokens $Tokens
     $runDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) `
@@ -105,6 +107,7 @@ function Invoke-AvmBicepTestE2e {
     $issues = [System.Collections.Generic.List[object]]::new()
     $changes = [System.Collections.Generic.List[object]]::new()
     $pending = [System.Collections.Generic.List[string]]::new()
+    $assertions = [System.Collections.Generic.List[object]]::new()
     $passed = 0
     $failed = 0
     $attempted = 0
@@ -123,9 +126,11 @@ function Invoke-AvmBicepTestE2e {
             }
             Assert-AvmBicepTestIsolation -Template $template.Template `
                 -SourcePath $cases[$index].RelativePath
+            $assertionFiles = @(Get-AvmBicepE2eAssertionFile -CasePath $cases[$index].Path)
             $compiled.Add([pscustomobject]@{
-                    Case         = $cases[$index]
-                    TemplatePath = $path
+                    Case           = $cases[$index]
+                    TemplatePath   = $path
+                    AssertionFiles = [string[]]$assertionFiles
                 })
         }
 
@@ -253,6 +258,98 @@ function Invoke-AvmBicepTestE2e {
                     $failed++
                     continue
                 }
+                $assertionResult = [ordered]@{
+                    Case             = $item.Case.RelativeDirectory
+                    Status           = 'not-present'
+                    FilesProcessed   = $item.AssertionFiles.Count
+                    RunsTotal        = 0
+                    RunsPassed       = 0
+                    RunsFailed       = 0
+                    RunsSkipped      = 0
+                    RunsInconclusive = 0
+                    RunsFiltered     = 0
+                }
+                if ($item.AssertionFiles.Count -gt 0) {
+                    try {
+                        $deployment = [string]$deployed.StdOut |
+                            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+                        $outputs = $deployment['properties']['outputs']
+                        if ($null -ne $outputs -and
+                            $outputs -isnot [System.Collections.IDictionary]) {
+                            throw [AvmProcessException]::new(
+                                "ARM deployment '$deploymentName' returned invalid outputs.")
+                        }
+                        $testInputData = @{
+                            DeploymentOutputs    = $outputs
+                            ModuleTestFolderPath = [System.IO.Path]::GetDirectoryName($item.Case.Path)
+                        }
+                        $summary = Invoke-AvmBicepPesterSuite -Mode E2e `
+                            -Files $item.AssertionFiles -TestInputData $testInputData `
+                            -WorkingDirectory $repoRoot -TimeoutSec 1800
+                    }
+                    catch [AvmProcessException] {
+                        $assertionResult.Status = 'fail'
+                        $assertions.Add([pscustomobject]$assertionResult)
+                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
+                            -Code 'assertion-runner-failed' `
+                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' could not run: $($_.Exception.Message)"
+                        $failed++
+                        continue
+                    }
+                    catch [System.TimeoutException] {
+                        $assertionResult.Status = 'fail'
+                        $assertions.Add([pscustomobject]$assertionResult)
+                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
+                            -Code 'assertion-timeout' `
+                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' timed out: $($_.Exception.Message)"
+                        $failed++
+                        continue
+                    }
+                    $assertionResult.RunsTotal = [int]$summary.Total
+                    $assertionResult.RunsPassed = [int]$summary.Passed
+                    $assertionResult.RunsFailed = [int]$summary.Failed
+                    $assertionResult.RunsSkipped = [int]$summary.Skipped
+                    $assertionResult.RunsInconclusive = [int]$summary.Inconclusive
+                    $assertionResult.RunsFiltered = [int]$summary.Filtered
+                    $assertionResult.Status = if ($summary.Passed -gt 0 -and
+                        $summary.Total -eq $summary.Passed -and $summary.Failed -eq 0 -and
+                        $summary.Skipped -eq 0 -and $summary.Inconclusive -eq 0 -and
+                        $summary.Filtered -eq 0 -and $summary.Issues.Count -eq 0) {
+                        'pass'
+                    }
+                    else {
+                        'fail'
+                    }
+                    foreach ($diagnostic in @($summary.Issues)) {
+                        $file = if ([string]::IsNullOrWhiteSpace([string]$diagnostic.File)) {
+                            $item.Case.RelativePath
+                        }
+                        else {
+                            [string]$diagnostic.File
+                        }
+                        $code = ([string]$diagnostic.Code).Replace(
+                            'avm.bicep.pester-', 'assertion-')
+                        Add-AvmBicepTestIssue -Issues $issues -File $file -Code $code `
+                            -Line ([int]$diagnostic.Line) `
+                            -Message "$($item.Case.RelativeDirectory): $($diagnostic.Message)"
+                    }
+                    if ($assertionResult.Status -eq 'fail' -and $summary.Issues.Count -eq 0) {
+                        $code = if ($summary.Total -eq 0 -or $summary.Passed -eq 0) {
+                            'assertion-empty'
+                        }
+                        else {
+                            'assertion-incomplete'
+                        }
+                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
+                            -Code $code `
+                            -Message "Post-deployment assertions in '$($item.Case.RelativeDirectory)' were not all passed (passed $($summary.Passed), total $($summary.Total), skipped $($summary.Skipped), inconclusive $($summary.Inconclusive), filtered $($summary.Filtered))."
+                    }
+                }
+                $assertions.Add([pscustomobject]$assertionResult)
+                if ($assertionResult.Status -eq 'fail') {
+                    $failed++
+                    continue
+                }
                 $passed++
                 $casePassed = $true
             }
@@ -310,21 +407,22 @@ function Invoke-AvmBicepTestE2e {
     }
 
     return [pscustomobject][ordered]@{
-        Engine         = 'bicep'
-        Tool           = 'az'
-        ToolPath       = $az.Source
-        ToolSource     = 'PATH'
-        BicepTool      = "bicep/$($bicep.Version)"
-        Status         = if ($failed -gt 0 -or $pending.Count -gt 0) { 'fail' } elseif ($passed -gt 0) { 'pass' } else { 'skipped' }
-        FilesProcessed = $attempted
-        IgnoredFiles   = $ignored
-        RunsTotal      = $attempted
-        RunsPassed     = $passed
-        RunsFailed     = $failed
-        RunsSkipped    = $cases.Count - $attempted
-        CleanupPending = $pending.ToArray()
-        WhatIfChanges  = $changes.ToArray()
-        Issues         = $issues.ToArray()
+        Engine           = 'bicep'
+        Tool             = 'az'
+        ToolPath         = $az.Source
+        ToolSource       = 'PATH'
+        BicepTool        = "bicep/$($bicep.Version)"
+        Status           = if ($failed -gt 0 -or $pending.Count -gt 0) { 'fail' } elseif ($passed -gt 0) { 'pass' } else { 'skipped' }
+        FilesProcessed   = $attempted
+        IgnoredFiles     = $ignored
+        RunsTotal        = $attempted
+        RunsPassed       = $passed
+        RunsFailed       = $failed
+        RunsSkipped      = $cases.Count - $attempted
+        AssertionResults = $assertions.ToArray()
+        CleanupPending   = $pending.ToArray()
+        WhatIfChanges    = $changes.ToArray()
+        Issues           = $issues.ToArray()
     }
 }
 
@@ -342,12 +440,14 @@ function Add-AvmBicepTestIssue {
         [string] $Code,
 
         [Parameter(Mandatory)]
-        [string] $Message
+        [string] $Message,
+
+        [int] $Line = 0
     )
 
     $Issues.Add([pscustomobject][ordered]@{
             File     = $File
-            Line     = 0
+            Line     = $Line
             Column   = 0
             Severity = 'error'
             Code     = "avm.bicep.e2e-$Code"
