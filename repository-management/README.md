@@ -42,9 +42,10 @@ the existing cleanup policy.
 
 `testTenant` accepts only `legacy` or `bami`. The
 [Terraform configuration](repository-config/config.json) defaults to `legacy`
-and selects `bami` for the existing canary groups without changing their
-membership or managed-file promotion. Higher `order` wins; later declaration
-wins a tie. Missing settings retain `legacy`.
+and is the source of truth for tenant selection. Groups can select `bami`
+independently of managed-file promotion; tenant-only groups declare no
+`managedFiles`. Higher `order` wins; later declaration wins a tie. Missing
+settings retain `legacy`.
 
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
@@ -121,7 +122,7 @@ runner still passes it to the action. Do not use `permission-variables` or omit
 the explicit scope.
 
 The retired Bicep CODEOWNERS job and its merge behavior are not part of this
-workflow. Selected Terraform canaries also attempt BAMI preparation during
+workflow. BAMI-selected Terraform repositories also attempt preparation during
 normal sync, including scheduled applies, subject to their existing prerequisites.
 
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)

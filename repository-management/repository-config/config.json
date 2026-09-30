@@ -85,6 +85,16 @@
       ]
     },
     {
+      "name": "bami-rollout",
+      "order": 5,
+      "testTenant": "bami",
+      "repositories": [
+        "avm-res-network-applicationsecuritygroup",
+        "avm-res-network-ipgroup",
+        "avm-res-network-routetable"
+      ]
+    },
+    {
       "name": "azure-verified-modules-tier-1",
       "repositories": [
         "avm-ptn-example-repo"
