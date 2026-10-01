@@ -156,6 +156,7 @@ Describe 'Terraform integration retry classification' {
         @{ Summary = 'Error creating/updating resource'; Detail = '403 Forbidden: SkuNotAvailable' }
         @{ Summary = 'Error creating/updating resource'; Detail = '401 Unauthorized: SkuNotAvailable' }
         @{ Summary = 'Error creating/updating resource'; Detail = 'RequestDisallowedByAzure: denied by policy' }
+        @{ Summary = 'Error creating/updating resource'; Detail = '403 Forbidden: RequestDisallowedByPolicy: Resource was disallowed by policy.' }
         @{ Summary = 'Error creating/updating resource'; Detail = '403: request denied; https://aka.ms/locationineligible' }
         @{ Summary = 'Error creating/updating resource'; Detail = 'Unknown permanent service error' }
         @{ Summary = 'Error creating/updating resource'; Detail = 'OperationNotAllowed: cannot delete nested resources' }

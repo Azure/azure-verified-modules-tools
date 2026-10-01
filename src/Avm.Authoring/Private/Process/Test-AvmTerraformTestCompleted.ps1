@@ -129,9 +129,9 @@ function Test-AvmTerraformTestCompleted {
                     $message -match '\b(AuthorizationFailed|LinkedAuthorizationFailed|DenyAssignmentAuthorizationFailed|AuthenticationFailed|InvalidAuthenticationToken|InvalidAuthenticationTokenTenant|AuthorizationPermissionMismatch|Unauthorized|AADSTS\d+|401)\b') {
                     return $false
                 }
-                $locationIneligible = ($message -match '\bRequestDisallowedByAzure\b') -and ($message -match '\baka\.ms/locationineligible\b')
-                if ($message -match '\b(403|Forbidden|RequestDisallowedByAzure)\b' -and -not $locationIneligible) { return $false }
-                if (-not $locationIneligible -and -not (Test-AvmTerraformTransientError -Output $message -BuiltInOnly)) {
+                if ($message -match '\b(403|Forbidden|RequestDisallowedByAzure)\b' -and
+                    -not (Test-AvmTerraformLocationIneligibleError -Output $message)) { return $false }
+                if (-not (Test-AvmTerraformTransientError -Output $message -BuiltInOnly)) {
                     return $false
                 }
                 $null = $errors.Add($key)
