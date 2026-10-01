@@ -61,7 +61,7 @@ A successful supply-chain attack against any of these dependencies must, by cons
 | ---------- | ---------------------------------------- | ----------- |
 | `git`      | Module discovery, governance scripts     | 2.40+       |
 | `gh`       | Optional — required only for `avm governance` | 2.40+   |
-| `az`       | Optional — required only for `avm test integration` and `avm test e2e` | 2.60+ |
+| `az`       | Optional — required for `avm register-features` and Azure-backed test tiers | 2.60+ |
 | .NET SDK   | Optional — required only if Phase 3 Hybrid mode is enabled locally | 9.0+ |
 
 Everything else (Terraform, TFLint, `terraform-docs`, Conftest, `avmfix`, `mapotf`, `grept`, Bicep) is installed and managed by the CLI per §10.
@@ -326,6 +326,14 @@ only ever reads it:
     .disable                     # zero-byte sentinel — CLI refuses to run if present
 ```
 
+Module roots may separately contain `.required-features.json`, a hand-authored
+JSON array of `"Namespace/FeatureName"` strings. `avm register-features`
+reads this file only; an absent or empty array does nothing. The command
+requires an explicit subscription GUID, validates every entry before calling
+Azure CLI, verifies that the CLI is selected to that subscription, and never
+unregisters a feature. The protected Terraform integration and e2e jobs run it
+only when the manifest is nonempty.
+
 Rules:
 
 - `managed-files-version.json` is the sole file in `.avm/` the CLI writes; see
@@ -470,15 +478,28 @@ independent and are not required to match.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
-`avm init` is the one-time local entry point. Callers supply
+`avm init` is the one-time entry point. Callers supply
 `-Ecosystem`, `-ModuleType`, and `-Path`; `-Proposed` is Bicep-only and creates
 only `metadata.json`, even when the module and provider directories do not
-exist yet. Terraform initialization likewise creates only local metadata and
-its containing directory, never a remote repository. Full Bicep
+exist yet. Full Bicep
 initialization scaffolds the root's metadata.json, main.bicep, version.json,
 CHANGELOG.md, and defaults/WAF-aligned tests/e2e sources; children receive
-only metadata.json and main.bicep. Neither mode creates main.json, README.md,
-a remote repository, or a deployment. Existing files remain unmodified.
+only metadata.json and main.bicep. Bicep initialization creates neither
+main.json, README.md, a remote repository, nor a deployment. Existing files
+remain unmodified.
+Terraform root initialization creates and sets up the `Azure/<repository>`
+GitHub repository named by `-Path`, as a sequence of resumable stages that
+each query the current local and GitHub state first: write metadata.json to
+the folder, create the public repository, wait for open source portal setup
+and JIT elevation, grant the module contributors (push) and readers (triage)
+teams, publish the first commit to `main`, request the AVM app installations
+in `microsoft/github-operations` unless the repository is listed there or an
+open request exists, and clone the repository into an empty folder. The first
+commit is built in a temporary clone from the portal's seed files,
+metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
+and `avm pre-commit` output; no other local content is published. Interrupted
+or non-interactive runs stop with instructions and resume on the next run.
+Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child
 `main.bicep` into `main.json` through the pinned Bicep CLI. It leaves
 unchanged output bytes and timestamps alone. A proposed module with only
@@ -582,10 +603,19 @@ Terraform repository discovery reads validated root metadata from each
 repository's default branch. Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
-New-repository creation initializes metadata before the first commit without a
-tools-local CSV registration. Its initial push temporarily changes only
-`rulesets-default-opt-in`, preserving the prior value in a recovery record and
-verifying restoration on success or failure. Existing repositories use normal
+New-repository creation (`avm init`) initializes metadata before the first
+commit without a tools-local CSV registration. Organization rulesets require
+pull requests on `main` once a repository is marked active, so its initial push
+temporarily sets only `global-rulesets-opt-out` to `true`. The original value
+and the repository ID are recorded in the user's Avm state folder first, then
+the value is restored and verified on success or failure. A later run restores
+a recorded value left by an interrupted run only while the property is still
+`true` and repository sync does not manage the repository; a record for a
+deleted repository of the same name is discarded. A `true` value with no
+record stops the run because its original value is unknown, unless repository
+sync manages the repository; sync's own ruleset also requires pull requests, so
+such a repository without module files is not pushed to directly.
+Existing repositories use normal
 reviewed updates; generated public catalog CSVs are unaffected.
 The current one-off Terraform migration is agent-led and metadata-only because
 source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,
@@ -860,6 +890,7 @@ Both call the same implementation. The dispatcher is generated from a single ver
   - `AvmCommandException` (`AVM1040`) — a composite verb reported a failing status.
   - `AvmModuleVersionException` (`AVM1050`) — the installed module is behind the published release.
   - `AvmManagedFilesVersionException` (`AVM1060`) — a new major managed-files release supersedes the repo's pin.
+  - `AvmException` (`AVM1070`) — Azure feature/provider registration, approval, or readiness failed.
 - Exit codes from the dispatcher:
   - `0` — success.
   - `1` — user error (bad args, bad config, expected condition).

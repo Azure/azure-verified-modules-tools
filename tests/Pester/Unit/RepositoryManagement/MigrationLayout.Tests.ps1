@@ -12,7 +12,6 @@ Describe "Repository management migration layout" {
             "repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1"
             "repository-management/repository-sync/actions/avm-repos/action.yml"
             "repository-management/repository-sync/scripts/lib/RepositoryMetadata.ps1"
-            "repository-management/repository-creation/scripts/New-Repository.ps1"
             ".github/workflows/repository-management-sync.yml"
             ".github/workflows/repository-management-config-test.yml"
         )
@@ -21,6 +20,11 @@ Describe "Repository management migration layout" {
             Test-Path -LiteralPath (Join-Path $script:repoRoot $relativePath) |
                 Should -BeTrue -Because "$relativePath must be migrated"
         }
+    }
+
+    It 'retires the repository creation scripts in favour of avm init' {
+        Test-Path -LiteralPath (Join-Path $script:repoRoot 'repository-management/repository-creation') |
+            Should -BeFalse -Because 'Terraform repositories are created with avm init'
     }
 
     It 'retires the repository inventory CSV without retaining runtime references' {

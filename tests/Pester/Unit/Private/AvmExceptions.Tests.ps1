@@ -82,6 +82,16 @@ Describe 'AvmExceptions' {
         $thrown.Code | Should -Be 'AVM1030'
     }
 
+    It 'AvmGitHubException carries code AVM1070 and the HTTP status' {
+        $thrown = InModuleScope 'Avm.Authoring' {
+            try { throw [AvmGitHubException]::new('not found', 404) } catch { return $_.Exception }
+        }
+        $thrown.GetType().BaseType.Name | Should -Be 'AvmException'
+        $thrown.Code | Should -Be 'AVM1070'
+        $thrown.StatusCode | Should -Be 404
+        $thrown.Message | Should -Be 'not found'
+    }
+
     It 'preserves an inner exception' {
         $thrown = InModuleScope 'Avm.Authoring' {
             $inner = [System.IO.FileNotFoundException]::new('missing')

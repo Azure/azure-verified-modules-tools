@@ -438,26 +438,27 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         [System.IO.File]::ReadAllBytes($source) | Should -Be $before
     }
 
-    It 'initializes local Terraform metadata without source files or remote operations' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'initializes local Terraform child metadata without source files or remote operations' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $result = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource `
+        $result = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
             -InputObject $metadataInput -SkipModuleVersionCheck
 
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -BeTrue
         $result.PlannedFiles | Should -Be @('metadata.json')
         @(Get-ChildItem -LiteralPath $root -Force).Name | Should -Be @('metadata.json')
-        (Test-AvmModuleMetadata -Path $root -Ecosystem terraform -ModuleType resource -SkipModuleVersionCheck).Status |
+        (Test-AvmModuleMetadata -Path $root -Ecosystem terraform -ModuleType resource -ChildModule -SkipModuleVersionCheck).Status |
             Should -Be 'pass'
-        (Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -SkipModuleVersionCheck).Changed |
+        (Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule -SkipModuleVersionCheck).Changed |
             Should -BeFalse
     }
 
@@ -468,17 +469,18 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         Test-Path -LiteralPath $root | Should -BeFalse
     }
 
-    It 'does not create a Terraform directory under WhatIf and rejects -Proposed' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'does not create a Terraform child directory under WhatIf and rejects -Proposed' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $plan = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource `
+        $plan = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
             -InputObject $metadataInput -SkipModuleVersionCheck -WhatIf
         $plan.Changed | Should -BeFalse
         $plan.PlannedFiles | Should -Be @('metadata.json')
@@ -488,17 +490,18 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         Test-Path -LiteralPath $root | Should -BeFalse
     }
 
-    It 'dispatches avm init to the local metadata-only Terraform initializer' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'dispatches avm init for a Terraform child module to the local metadata initializer' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $result = avm -SkipModuleVersionCheck init -Ecosystem terraform -ModuleType resource `
+        $result = avm -SkipModuleVersionCheck init -Ecosystem terraform -ModuleType resource -ChildModule `
             -Path $root -InputObject $metadataInput --passthru
 
         $result.Status | Should -Be 'pass'
