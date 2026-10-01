@@ -12,6 +12,10 @@ drift mode without accepting any other changed bytes. Keep generation
 unchanged, the current-registry README parity family fail-closed, and the
 registry's existing CI untouched.
 
+The later [provenance hardening](2026-10-01-bicep-readme-comment-provenance.md)
+supersedes this slice's Markdown-frame inference; this record preserves the
+original comparison review and its test evidence.
+
 ## Evidence and comparison boundary
 
 The pinned registry commit

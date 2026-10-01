@@ -621,18 +621,20 @@ drift mode and returns generated `{Path, Content}` values for an independent
 comparator. A Bicep compilation failure is reported per module in drift
 mode; a source-less README is explicitly identified rather than reported as
 generated.
-Drift mode can report a warning rather than stale when the only missing bytes
-are complete generated required/non-required grouping-comment pairs in
-usage-example JSON parameter fences accompanied by exactly one Bicep-module
-and one Bicep-parameters section for that example. Sequential example
-headings must agree with the rendered table of contents; authored headings
-cannot split the frame uniqueness check, and unexpected section headings
-leave the README stale. The accepted pairs are derived from the complete
-generated example structure, not a module name or fixed count; partial
-pairs, authored lookalikes, other comments, and any other byte differences
-still fail. Normal generation writes the unchanged renderer output. This
-local comparison behavior does not waive the full-registry qualification
-limit below.
+Drift mode can report a warning rather than stale only when the tracked
+README omits complete generated required/non-required grouping-comment
+pairs. A private, non-writing docs render marks only those comments in
+first-party example JSON values; removing the unpredictable markers must
+reproduce the normal rendered README exactly before the marked pairs can
+qualify. Authored descriptions cannot acquire these markers, even if they
+contain convincing headings, fences, or complete example frames. Partial
+pairs, changed prose, code, types, examples, outputs, and any other byte
+differences still fail. Unused child-example aliases carry no rendered
+markers and are ignored; a half-rendered alias fails closed. The accepted
+pairs are not tied to a module name or fixed count, and normal generation
+writes the unchanged renderer output.
+An unavailable private render reports an error. This local comparison
+behavior does not waive the full-registry qualification limit below.
 Referenced module test examples are validated against the compiled
 parameters of their actual target `main.bicep`, including tests assigned
 to a child README. Unknown names or omitted required parameters fail

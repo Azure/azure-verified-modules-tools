@@ -98,17 +98,56 @@ param location = 'eastus'
         '| resourceId | `string` |' + "`n"
     }
 
+    function New-GeneratedExampleProbe {
+        param([AllowEmptyString()][string] $Content)
+
+        $rendered = $Content
+        $markers = [System.Collections.Generic.List[object]]::new()
+        $blocks = [regex]::Matches($Content, '(?s)```json\n(.*?)\n```')
+        for ($index = $blocks.Count - 1; $index -ge 0; $index--) {
+            $group = $blocks[$index].Groups[1]
+            $requiredMarker = "__TEST_REQUIRED_${index}__"
+            $nonRequiredMarker = "__TEST_NON_REQUIRED_${index}__"
+            $marked = $group.Value.Replace(
+                '    // Required parameters',
+                $requiredMarker + '    // Required parameters').Replace(
+                '    // Non-required parameters',
+                $nonRequiredMarker + '    // Non-required parameters')
+            if ($marked -ceq $group.Value) {
+                continue
+            }
+            $rendered = $rendered.Substring(0, $group.Index) + $marked +
+            $rendered.Substring($group.Index + $group.Length)
+            $markers.Insert(0, [pscustomobject]@{
+                    RequiredMarker    = $requiredMarker
+                    NonRequiredMarker = $nonRequiredMarker
+                })
+        }
+        return [pscustomobject]@{
+            Content = $rendered
+            Markers = $markers.ToArray()
+        }
+    }
+
     function Get-CommentDifferenceCount {
         param(
             [AllowEmptyString()][string] $Generated,
-            [AllowEmptyString()][string] $Tracked
+            [AllowEmptyString()][string] $Tracked,
+            [AllowNull()] $Provenance
         )
 
+        if ($null -eq $Provenance) {
+            $Provenance = New-GeneratedExampleProbe -Content $Generated
+        }
         $bytes = [System.Text.UTF8Encoding]::new($false, $true).GetBytes($Tracked)
-        InModuleScope 'Avm.Authoring' -Parameters @{ Bytes = $bytes; Text = $Generated } {
-            param($Bytes, $Text)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Bytes = $bytes; Text = $Generated
+            Probe = $Provenance.Content; Markers = $Provenance.Markers
+        } {
+            param($Bytes, $Text, $Probe, $Markers)
             Get-AvmBicepDocsExampleCommentDifferenceCount `
-                -CurrentBytes $Bytes -GeneratedContent $Text
+                -CurrentBytes $Bytes -GeneratedContent $Text `
+                -ProbeContent $Probe -Markers $Markers
         }
     }
 }
@@ -155,6 +194,111 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
         }
     }
 
+    Describe 'Get-AvmBicepDocsExampleCommentProbe' {
+        It 'marks only first-party JSON example comments and preserves normal values and output' {
+            $generated = New-GroupedExampleReadme
+            $tracked = New-GroupedExampleReadme -OmitJsonGroups @(1)
+            $fragment = [regex]::Match($generated, '(?s)```json\n(.*?)\n```').Groups[1].Value
+            $values = @{
+                moduleReference = 'avm/res/storage/storage-account'
+                notes           = 'Authored // Required parameters'
+                examples        = ConvertTo-Json -InputObject @{
+                    'tests/e2e/full/main.test.bicep' = @{
+                        IsModule = $true; JsonParameters = $fragment
+                    }
+                } -Compress -Depth 10
+            }
+            $originalExamples = $values.examples
+            $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+                Values = $values; Rendered = $generated
+            } {
+                param($Values, $Rendered)
+                Get-AvmBicepDocsExampleCommentProbe `
+                    -Values $Values -GeneratedContent $Rendered
+            }
+
+            $probe.Markers.Count | Should -Be 1
+            $values.examples | Should -BeExactly $originalExamples
+            $probe.Values.notes | Should -BeExactly $values.notes
+            $marked = ($probe.Values.examples | ConvertFrom-Json -AsHashtable)[
+                'tests/e2e/full/main.test.bicep'].JsonParameters
+            $marked | Should -Match ([regex]::Escape(
+                    $probe.Markers[0].RequiredMarker + '    // Required parameters'))
+            $marked | Should -Match ([regex]::Escape(
+                    $probe.Markers[0].NonRequiredMarker + '    // Non-required parameters'))
+            $privateRender = $generated.Replace($fragment, $marked)
+            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                -Provenance ([pscustomobject]@{
+                    Content = $privateRender; Markers = $probe.Markers
+                }) | Should -Be 2
+        }
+
+        It 'ignores unrendered child aliases but rejects a half-rendered pair' {
+            $generated = New-GroupedExampleReadme
+            $tracked = New-GroupedExampleReadme -OmitJsonGroups @(1)
+            $fragment = [regex]::Match($generated, '(?s)```json\n(.*?)\n```').Groups[1].Value
+            $renderedPath = 'tests/e2e/full/main.test.bicep'
+            $values = @{
+                examples = ConvertTo-Json -InputObject @{
+                    $renderedPath = @{ JsonParameters = $fragment }
+                    'child/tests/e2e/full/main.test.bicep' = @{
+                        JsonParameters = $fragment
+                    }
+                } -Compress -Depth 10
+            }
+            $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+                Values = $values; Rendered = $generated
+            } {
+                param($Values, $Rendered)
+                Get-AvmBicepDocsExampleCommentProbe `
+                    -Values $Values -GeneratedContent $Rendered
+            }
+            $probe.Markers.Count | Should -Be 2
+            $renderedFragment = ($probe.Values.examples | ConvertFrom-Json -AsHashtable)[
+                $renderedPath].JsonParameters
+            $usedMarker = @($probe.Markers | Where-Object {
+                    $renderedFragment.Contains($_.RequiredMarker)
+                })
+            $usedMarker.Count | Should -Be 1
+            $privateRender = $generated.Replace($fragment, $renderedFragment)
+            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                -Provenance ([pscustomobject]@{
+                    Content = $privateRender; Markers = $probe.Markers
+                }) | Should -Be 2
+            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                -Provenance ([pscustomobject]@{
+                    Content = $privateRender.Replace(
+                        $usedMarker[0].NonRequiredMarker, '')
+                    Markers = $probe.Markers
+                }) | Should -Be 0
+        }
+
+        It 'does not instrument incomplete or malformed model pairs' {
+            $generated = New-GroupedExampleReadme
+            $fragment = [regex]::Match($generated, '(?s)```json\n(.*?)\n```').Groups[1].Value
+            foreach ($badFragment in @(
+                    $fragment.Replace('    // Non-required parameters', '    // Other parameters'),
+                    $fragment.Replace('    // Required parameters', '    // Other parameters'),
+                    $fragment.Replace('    // Non-required parameters',
+                        "    // Non-required parameters`n    // Non-required parameters")
+                )) {
+                $values = @{
+                    examples = ConvertTo-Json -InputObject @{
+                        test = @{ JsonParameters = $badFragment }
+                    } -Compress -Depth 10
+                }
+                InModuleScope 'Avm.Authoring' -Parameters @{
+                    Values = $values; Rendered = $generated
+                } {
+                    param($Values, $Rendered)
+                    Get-AvmBicepDocsExampleCommentProbe `
+                        -Values $Values -GeneratedContent $Rendered |
+                        Should -BeNullOrEmpty
+                }
+            }
+        }
+    }
+
     It 'rejects partial or malformed comment-pair omissions and changes to other formats' {
         $generated = New-GroupedExampleReadme
         $requiredOnly = $generated.Replace(
@@ -177,7 +321,7 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
             -Tracked (New-GroupedExampleReadme -OmitJsonGroups @(1)) | Should -Be 0
     }
 
-    It 'requires the exact labeled JSON fence, deployment schema, and example section' {
+    It 'rejects changes to tracked example context and mismatched private renders' {
         $generated = New-GroupedExampleReadme
         $tracked = New-GroupedExampleReadme -OmitJsonGroups @(1)
         $mutations = @(
@@ -190,15 +334,19 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
             @('2019-04-01/deploymentParameters.json#', '2019-04-01/otherSchema.json#')
         )
         foreach ($mutation in $mutations) {
-            $badGenerated = $generated.Replace($mutation[0], $mutation[1])
             $badTracked = $tracked.Replace($mutation[0], $mutation[1])
-            Get-CommentDifferenceCount -Generated $badGenerated -Tracked $badTracked |
+            Get-CommentDifferenceCount -Generated $generated -Tracked $badTracked |
                 Should -Be 0
         }
+        $probe = New-GeneratedExampleProbe -Content $generated
+        $probe.Content = $probe.Content.Replace('"value": "demo"', '"value": "other"')
+        Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+            -Provenance $probe | Should -Be 0
     }
 
     It 'does not mistake a second authored JSON example block for renderer-generated comments' {
-        $generated = New-GroupedExampleReadme
+        $base = New-GroupedExampleReadme
+        $probe = New-GeneratedExampleProbe -Content $base
         $fakeBlock = @'
 <details>
 
@@ -228,14 +376,17 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
         $trackedBlock = $fakeBlock.Replace("    // Required parameters`n", '')
         $trackedBlock = $trackedBlock.Replace("    // Non-required parameters`n", '')
         $anchor = "### Example 1: _Provision storage_`n`n"
-        $tracked = $generated.Replace($anchor, $anchor + $trackedBlock + "`n`n")
-        $generated = $generated.Replace($anchor, $anchor + $fakeBlock + "`n`n")
+        $tracked = $base.Replace($anchor, $anchor + $trackedBlock + "`n`n")
+        $generated = $base.Replace($anchor, $anchor + $fakeBlock + "`n`n")
+        $probe.Content = $probe.Content.Replace($anchor, $anchor + $fakeBlock + "`n`n")
 
-        Get-CommentDifferenceCount -Generated $generated -Tracked $tracked | Should -Be 0
+        Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+            -Provenance $probe | Should -Be 0
     }
 
     It 'rejects authored example frames hidden behind an extra Markdown heading' {
         $base = New-GroupedExampleReadme
+        $baseProbe = New-GeneratedExampleProbe -Content $base
         $anchor = "### Example 1: _Provision storage_`n`n"
         $start = $base.IndexOf('<details>', [System.StringComparison]::Ordinal)
         $end = $base.IndexOf("`n`n## Parameters", $start, [System.StringComparison]::Ordinal)
@@ -251,8 +402,55 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
         foreach ($heading in @('### Appendix', '### Example 2: _Authored_', '## Parameters')) {
             $generated = $base.Replace($anchor, $anchor + $frame + "`n`n$heading`n`n")
             $tracked = $base.Replace($anchor, $anchor + $withoutComments + "`n`n$heading`n`n")
-            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked |
-                Should -Be 0 -Because $heading
+            $probe = [pscustomobject]@{
+                Content = $baseProbe.Content.Replace(
+                    $anchor, $anchor + $frame + "`n`n$heading`n`n")
+                Markers = $baseProbe.Markers
+            }
+            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                -Provenance $probe | Should -Be 0 -Because $heading
+        }
+    }
+
+    It 'allows real missing comments despite authored full frames and Markdown or HTML boundaries' {
+        $base = New-GroupedExampleReadme
+        $baseTracked = New-GroupedExampleReadme -OmitJsonGroups @(1)
+        $baseProbe = New-GeneratedExampleProbe -Content $base
+        $anchor = "### Example 1: _Provision storage_`n`n"
+        $start = $base.IndexOf('<details>', [System.StringComparison]::Ordinal)
+        $end = $base.IndexOf("`n`n## Parameters", $start, [System.StringComparison]::Ordinal)
+        $frame = $base.Substring($start, $end - $start)
+        $authored = "### Appendix`n`n$frame`n`n## Local guidance`n`n" +
+        "<details>`n<summary>Authored details</summary>`n</details>`n`n"
+        $generated = $base.Replace($anchor, $anchor + $authored)
+        $tracked = $baseTracked.Replace($anchor, $anchor + $authored)
+        $probe = [pscustomobject]@{
+            Content = $baseProbe.Content.Replace($anchor, $anchor + $authored)
+            Markers = $baseProbe.Markers
+        }
+        Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+            -Provenance $probe | Should -Be 2
+        $badTracked = $tracked.Replace('### Appendix', '### Different appendix')
+        Get-CommentDifferenceCount -Generated $generated -Tracked $badTracked `
+            -Provenance $probe | Should -Be 0
+    }
+
+    It 'rejects absent, duplicated, or misplaced provenance markers' {
+        $generated = New-GroupedExampleReadme
+        $tracked = New-GroupedExampleReadme -OmitJsonGroups @(1)
+        $probe = New-GeneratedExampleProbe -Content $generated
+        $required = $probe.Markers[0].RequiredMarker
+        $variations = @(
+            $probe.Content.Replace($required, ''),
+            $probe.Content.Replace($required, $required + $required),
+            $probe.Content.Replace($required + '    // Required parameters',
+                '    // Required parameters' + $required)
+        )
+        foreach ($badProbe in $variations) {
+            Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                -Provenance ([pscustomobject]@{
+                    Content = $badProbe; Markers = $probe.Markers
+                }) | Should -Be 0
         }
     }
 
@@ -264,10 +462,14 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
         Get-CommentDifferenceCount -Generated $generated `
             -Tracked ($tracked.Substring(0, $tracked.Length - 10)) | Should -Be 0
 
-        InModuleScope 'Avm.Authoring' -Parameters @{ Generated = $generated } {
-            param($Generated)
+        $probe = New-GeneratedExampleProbe -Content $generated
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Generated = $generated; Probe = $probe
+        } {
+            param($Generated, $Probe)
             Get-AvmBicepDocsExampleCommentDifferenceCount `
-                -CurrentBytes ([byte[]]@(0xFF, 0xFE)) -GeneratedContent $Generated |
+                -CurrentBytes ([byte[]]@(0xFF, 0xFE)) -GeneratedContent $Generated `
+                -ProbeContent $Probe.Content -Markers $Probe.Markers |
                 Should -Be 0
         }
     }

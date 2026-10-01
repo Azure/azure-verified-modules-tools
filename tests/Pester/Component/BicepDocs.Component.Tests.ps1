@@ -114,6 +114,23 @@ __PARAMS__
             "    // Non-required parameters`n    `"location`": {",
             '    "location": {')
     }
+
+    function New-BicepDocsGroupedCustomValues {
+        param([Parameter(Mandatory)][string] $Content)
+
+        $fragment = [regex]::Match($Content, '(?s)```json\n(.*?)\n```').Groups[1].Value
+        return [pscustomobject]@{
+            Fragment = $fragment
+            Values   = @{
+                moduleReference = 'avm/res/storage/storage-account'
+                examples        = ConvertTo-Json -InputObject @{
+                    'tests/e2e/full/main.test.bicep' = @{
+                        IsModule = $true; JsonParameters = $fragment
+                    }
+                } -Compress -Depth 10
+            }
+        }
+    }
 }
 
 AfterAll {
@@ -176,6 +193,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
     It 'warns only for missing generated JSON comments and writes the unmodified renderer output' {
         $fixture = New-BicepDocsFixture -Name 'grouped-json-comments'
         $generated = New-BicepDocsGroupedReadme
+        $custom = New-BicepDocsGroupedCustomValues -Content $generated
         $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
         $rootReadme = Join-Path $fixture.Module 'README.md'
         $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
@@ -184,22 +202,43 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             (Join-Path $fixture.Module 'child' 'README.md'), "# Child`n", $utf8)
         InModuleScope 'Avm.Authoring' -Parameters @{
             F = $fixture; Expected = $generated; Authored = $tracked
+            Custom = $custom
         } {
-            param($F, $Expected, $Authored)
+            param($F, $Expected, $Authored, $Custom)
             $script:expectedReadme = $Expected
+            $script:originalJson = $Custom.Fragment
+            $script:customValues = $Custom.Values
+            $script:renderArgs = [System.Collections.Generic.List[object]]::new()
+            $script:renderPaths = [System.Collections.Generic.List[string]]::new()
+            Mock Get-AvmBicepDocsCustomValue { $script:customValues }
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
             }
             Mock Invoke-AvmProcess {
+                $script:renderArgs.Add(@($ArgumentList))
+                $script:renderPaths.Add($ArgumentList[5])
                 $content = if ($WorkingDirectory -match 'child$') {
                     "# Child`n"
                 }
-                else { $script:expectedReadme }
+                else {
+                    $data = [System.IO.File]::ReadAllText($ArgumentList[5]) |
+                    ConvertFrom-Json -AsHashtable
+                    $examples = $data.examples | ConvertFrom-Json -AsHashtable
+                    $fragment = $examples['tests/e2e/full/main.test.bicep'].JsonParameters
+                    $script:expectedReadme.Replace($script:originalJson, $fragment)
+                }
                 [pscustomobject]@{ ExitCode = 0; StdOut = $content; StdErr = '' }
             }
 
-            $preview = Invoke-AvmDocs -Path $F.Root -CheckDrift `
-                -IncludeRenderedContent -SkipModuleVersionCheck
+            $previousOffline = $env:AVM_OFFLINE
+            try {
+                $env:AVM_OFFLINE = '1'
+                $preview = Invoke-AvmDocs -Path $F.Root -CheckDrift `
+                    -IncludeRenderedContent -SkipModuleVersionCheck
+            }
+            finally {
+                $env:AVM_OFFLINE = $previousOffline
+            }
             $preview.Status | Should -BeExactly 'pass'
             $preview.FilesSelected | Should -Be 2
             $preview.FilesProcessed | Should -Be 2
@@ -208,6 +247,13 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $preview.Issues[0].Severity | Should -BeExactly 'warning'
             $preview.Issues[0].Message | Should -Match '2 generated JSON-example'
             $preview.GeneratedReadmes[0].Content | Should -BeExactly $Expected
+            $script:renderArgs.Count | Should -Be 3
+            foreach ($invocation in $script:renderArgs) {
+                ($invocation -contains '--no-restore') | Should -BeTrue
+            }
+            foreach ($path in $script:renderPaths) {
+                Test-Path -LiteralPath $path | Should -BeFalse
+            }
             [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
                 Should -BeExactly $Authored
 
@@ -235,6 +281,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
     It 'retains render failures and source-less warnings alongside a valid comment exception' {
         $fixture = New-BicepDocsFixture -Name 'grouped-json-incomplete'
         $generated = New-BicepDocsGroupedReadme
+        $custom = New-BicepDocsGroupedCustomValues -Content $generated
         $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
         $rootReadme = Join-Path $fixture.Module 'README.md'
         $static = Join-Path $fixture.Root 'avm' 'ptn' 'aca-lza' 'hosting-environment' 'modules' 'spoke'
@@ -243,9 +290,13 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
         [System.IO.File]::WriteAllText((Join-Path $static 'README.md'), "# Static`n")
         InModuleScope 'Avm.Authoring' -Parameters @{
             F = $fixture; Generated = $generated; Authored = $tracked
+            Custom = $custom
         } {
-            param($F, $Generated, $Authored)
+            param($F, $Generated, $Authored, $Custom)
             $script:expectedReadme = $Generated
+            $script:originalJson = $Custom.Fragment
+            $script:customValues = $Custom.Values
+            Mock Get-AvmBicepDocsCustomValue { $script:customValues }
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
             }
@@ -255,8 +306,15 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
                         ExitCode = 1; StdOut = ''; StdErr = 'BCP190: missing dependency'
                     }
                 }
+                $data = [System.IO.File]::ReadAllText($ArgumentList[5]) |
+                ConvertFrom-Json -AsHashtable
+                $examples = $data.examples | ConvertFrom-Json -AsHashtable
+                $fragment = $examples['tests/e2e/full/main.test.bicep'].JsonParameters
                 [pscustomobject]@{
-                    ExitCode = 0; StdOut = $script:expectedReadme; StdErr = ''
+                    ExitCode = 0
+                    StdOut = $script:expectedReadme.Replace(
+                        $script:originalJson, $fragment)
+                    StdErr = ''
                 }
             }
 
@@ -278,6 +336,136 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             [System.IO.File]::ReadAllText(
                 (Join-Path $F.Root 'avm' 'ptn' 'aca-lza' 'hosting-environment' 'modules' 'spoke' 'README.md')) |
                 Should -BeExactly "# Static`n"
+        }
+    }
+
+    It 'distinguishes generated comments from authored full frames and nested Markdown' {
+        $fixture = New-BicepDocsFixture -Name 'grouped-json-authored-frame'
+        $base = New-BicepDocsGroupedReadme
+        $custom = New-BicepDocsGroupedCustomValues -Content $base
+        $start = $base.IndexOf('<details>', [System.StringComparison]::Ordinal)
+        $end = $base.IndexOf("`n`n## Parameters", $start, [System.StringComparison]::Ordinal)
+        $authoredFrame = $base.Substring($start, $end - $start).Replace(
+            '"value": "demo"', '"value": "authored"')
+        $anchor = "### Example 1: _Provision storage_`n`n"
+        $authored = "### Authored aside`n`n$authoredFrame`n`n" +
+        "## Nested note`n`n<details>`n<summary>Authored</summary>`n</details>`n`n"
+        $generated = $base.Replace($anchor, $anchor + $authored)
+        $fakeJson = [regex]::Match($authoredFrame,
+            '(?s)```json\n(.*?)\n```').Groups[1].Value
+        $tracked = $generated.Replace(
+            $fakeJson, (Remove-BicepDocsJsonGroupingComments -Content $fakeJson))
+        $readme = Join-Path $fixture.Module 'README.md'
+        [System.IO.File]::WriteAllText($readme, $tracked)
+        [System.IO.File]::WriteAllText(
+            (Join-Path $fixture.Module 'child' 'README.md'), "# Child`n")
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            F = $fixture; Generated = $generated; Custom = $custom
+            Tracked = $tracked
+        } {
+            param($F, $Generated, $Custom, $Tracked)
+            $script:expectedReadme = $Generated
+            $script:originalJson = $Custom.Fragment
+            $script:customValues = $Custom.Values
+            Mock Get-AvmBicepDocsCustomValue { $script:customValues }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                if ($WorkingDirectory -match 'child$') {
+                    return [pscustomobject]@{
+                        ExitCode = 0; StdOut = "# Child`n"; StdErr = ''
+                    }
+                }
+                $data = [System.IO.File]::ReadAllText($ArgumentList[5]) |
+                ConvertFrom-Json -AsHashtable
+                $examples = $data.examples | ConvertFrom-Json -AsHashtable
+                $fragment = $examples['tests/e2e/full/main.test.bicep'].JsonParameters
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut  = $script:expectedReadme.Replace(
+                        $script:originalJson, $fragment)
+                    StdErr  = ''
+                }
+            }
+
+            $authoredDrift = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $authoredDrift.Status | Should -BeExactly 'fail'
+            @($authoredDrift.Issues | Where-Object Code -EQ 'avm.bicep.docs-stale').Count |
+                Should -Be 1
+            @($authoredDrift.Issues | Where-Object Code -EQ 'avm.bicep.docs-example-comments').Count |
+                Should -Be 0
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly $Tracked
+
+            $realWithoutComments = $script:originalJson.Replace(
+                "    // Required parameters`n", '').Replace(
+                "    // Non-required parameters`n", '')
+            $realDrift = $Generated.Replace($script:originalJson, $realWithoutComments)
+            [System.IO.File]::WriteAllText((Join-Path $F.Module 'README.md'), $realDrift)
+            $accepted = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $accepted.Status | Should -BeExactly 'pass'
+            @($accepted.Issues | Where-Object Code -EQ 'avm.bicep.docs-example-comments').Count |
+                Should -Be 1
+            $changedProse = $realDrift.Replace('### Authored aside', '### Changed aside')
+            [System.IO.File]::WriteAllText((Join-Path $F.Module 'README.md'), $changedProse)
+            $rejected = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $rejected.Status | Should -BeExactly 'fail'
+            @($rejected.Issues | Where-Object Code -EQ 'avm.bicep.docs-stale').Count |
+                Should -Be 1
+        }
+    }
+
+    It 'fails closed with named diagnostics when the private provenance render fails' {
+        $fixture = New-BicepDocsFixture -Name 'grouped-json-probe-failure'
+        $generated = New-BicepDocsGroupedReadme
+        $custom = New-BicepDocsGroupedCustomValues -Content $generated
+        $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Module 'README.md'), $tracked)
+        [System.IO.File]::WriteAllText(
+            (Join-Path $fixture.Module 'child' 'README.md'), "# Child`n")
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            F = $fixture; Generated = $generated; Custom = $custom
+            Tracked = $tracked
+        } {
+            param($F, $Generated, $Custom, $Tracked)
+            $script:expectedReadme = $Generated
+            $script:originalJson = $Custom.Fragment
+            $script:customValues = $Custom.Values
+            Mock Get-AvmBicepDocsCustomValue { $script:customValues }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                if ($WorkingDirectory -match 'child$') {
+                    return [pscustomobject]@{
+                        ExitCode = 0; StdOut = "# Child`n"; StdErr = ''
+                    }
+                }
+                $data = [System.IO.File]::ReadAllText($ArgumentList[5]) |
+                ConvertFrom-Json -AsHashtable
+                $examples = $data.examples | ConvertFrom-Json -AsHashtable
+                $fragment = $examples['tests/e2e/full/main.test.bicep'].JsonParameters
+                if ($fragment -match '__AVM_DOCS_REQUIRED_') {
+                    return [pscustomobject]@{
+                        ExitCode = 1; StdOut = ''; StdErr = 'BCP190: synthetic probe failure'
+                    }
+                }
+                [pscustomobject]@{
+                    ExitCode = 0; StdOut = $script:expectedReadme; StdErr = ''
+                }
+            }
+
+            $failed = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $failed.Status | Should -BeExactly 'fail'
+            @($failed.Issues | Where-Object Code -EQ 'avm.bicep.docs-provenance-failed').Count |
+                Should -Be 1
+            @($failed.Issues | Where-Object Code -EQ 'avm.bicep.docs-example-comments').Count |
+                Should -Be 0
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly $Tracked
         }
     }
 
