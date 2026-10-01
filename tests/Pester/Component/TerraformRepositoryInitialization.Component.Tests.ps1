@@ -316,6 +316,8 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         Get-TestRemoteLog -Bare $bare | Should -HaveCount 2
         ((Invoke-TestGit @('--git-dir', $bare, 'show', 'main:metadata.json')) -join "`n" | ConvertFrom-Json).telemetryIdPrefix |
             Should -BeExactly '46d3xtrf.res.abc1234'
+        (Invoke-TestGit @('--git-dir', $bare, 'show', 'main:_header.md')) -join "`n" |
+            Should -BeExactly "# Azure Storage Account`n`nDeploys an Azure Storage account." -Because 'a re-run reads the name and description from metadata.json'
         Should -Invoke New-AvmTelemetryIdPrefix -ModuleName Avm.Authoring -Exactly 1
         Should -Invoke Read-Host -ModuleName Avm.Authoring -Exactly 0
 

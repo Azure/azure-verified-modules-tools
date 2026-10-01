@@ -81,6 +81,9 @@ section when cutting a release.
 
 ### Changed
 
+- New `metadata.json` files written by `avm init` and `avm metadata initialize`
+  list their properties in schema order, starting with `$schema`, whatever the
+  order of the supplied values. Existing files are not rewritten.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team

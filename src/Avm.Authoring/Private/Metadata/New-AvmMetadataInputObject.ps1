@@ -31,14 +31,25 @@ function New-AvmMetadataInputObject {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $schemaPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
+        -AdditionalChildPath '..', 'Resources', 'Schemas', 'v1', 'avm-module-metadata.schema.json'
+    $schema = Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json -AsHashtable
     $metadata = [ordered]@{}
     foreach ($key in $InputObject.Keys) {
         $metadata[$key] = $InputObject[$key]
     }
     if (-not $metadata.Contains('$schema')) {
-        $schemaPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
-            -AdditionalChildPath '..', 'Resources', 'Schemas', 'v1', 'avm-module-metadata.schema.json'
-        $metadata['$schema'] = (Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json -AsHashtable)['$id']
+        $metadata['$schema'] = $schema['$id']
+    }
+    $propertyOrder = @($schema['definitions']['root']['properties'].Keys)
+    $inSchemaOrder = {
+        $ordered = [ordered]@{}
+        foreach ($key in @($propertyOrder) + @($metadata.Keys)) {
+            if ($metadata.Contains($key) -and -not $ordered.Contains($key)) {
+                $ordered[$key] = $metadata[$key]
+            }
+        }
+        $ordered
     }
 
     $required = @('moduleDisplayName', 'moduleDescription', 'canonicalType')
@@ -149,7 +160,7 @@ function New-AvmMetadataInputObject {
                 throw [System.ArgumentException]::new(
                     "main.bicep telemetryIdPrefix '$authoredPrefix' is already used by another module. Resolve the collision before initializing metadata.")
             }
-            return $metadata
+            return (& $inSchemaOrder)
         }
     }
     if ($PreserveSourcePrefix -and $metadata.Contains('telemetryIdPrefix')) {
@@ -165,5 +176,5 @@ function New-AvmMetadataInputObject {
         $metadata.telemetryIdPrefix = New-AvmTelemetryIdPrefix -Ecosystem bicep -Kind $kind `
             -KnownPrefix $known -SkipModuleVersionCheck
     }
-    return $metadata
+    return (& $inSchemaOrder)
 }

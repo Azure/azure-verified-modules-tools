@@ -102,6 +102,9 @@ App configuration YAML is edited line by line, removing the runtime
 - [x] Remove the old creation scripts and tests; update README, spec, plan,
   repository-management README, and CHANGELOG.
 - [x] Run the local gate, commit, push, and open a pull request.
+- [x] Test live on `Azure/terraform-azure-avm-res-signalrservice-webpubsub`
+  from this branch's source, and fix what the test found: new `metadata.json`
+  files now list their properties in schema order, starting with `$schema`.
 
 ## Validation
 
@@ -110,15 +113,26 @@ App configuration YAML is edited line by line, removing the runtime
   68 files published, README regenerated, staging directory removed.
 - Targeted tests for the new code: 163 passed, including the component suite
   against a real local git remote.
-- `./build.ps1 pre-commit`: layout and lint clean; 1,993 unit tests passed
-  (9 skipped); 869 component tests passed.
+- `./build.ps1 pre-commit` after the metadata order fix: layout and lint
+  clean; 1,993 unit tests passed (9 skipped); 871 component tests passed.
+- Live test on the webpubsub repository, which the old script had left with
+  only the portal README:
+  - Without JIT elevation, the run wrote `metadata.json` locally and stopped at
+    the administrator access step with no remote changes.
+  - After elevation, the resumed run read the values from `metadata.json`,
+    granted both teams, and pushed the first commit with the opt-out
+    temporarily set and then restored to `false`. It rendered `_header.md`
+    from the display name and description, opened
+    microsoft/github-operations#1900 from the existing fork (the create-first
+    fork call returned it), and cloned the repository.
+  - A further run changed nothing and reused the open app installation pull
+    request.
 
 ## Blockers or dependencies
 
-The public repository setup guide
-(`Azure/Azure-Verified-Modules` `docs/content/contributing/terraform/repository-setup.md`)
-and the internal runbook still describe `New-Repository.ps1`.
+Documentation updates for `avm init` should merge once this is released:
 
-`Azure/terraform-azure-avm-res-signalrservice-webpubsub` still holds only the
-portal README. Once this ships, its operator can run `avm init` in that
-repository's folder to finish it.
+- Internal runbook: azure-cloud-native/Azure-Verified-Modules-Docs#53 on
+  msft.ghe.com.
+- Public repository setup guide: `Azure/Azure-Verified-Modules`
+  `docs/content/contributing/terraform/repository-setup.md`.
