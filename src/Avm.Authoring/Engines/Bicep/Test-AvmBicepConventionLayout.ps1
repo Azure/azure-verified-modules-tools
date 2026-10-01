@@ -40,10 +40,10 @@ function Test-AvmBicepConventionLayout {
     }
 
     if ($Scope.ModuleType -ceq 'res' -and
-        (Split-Path -Path $Scope.Path -Leaf) -cnotmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') {
+        (Split-Path -Path $Scope.Path -Leaf) -cnotmatch '^[a-z0-9]+(?:-+[a-z0-9]+)*$') {
         $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path (Join-Path $Scope.Path 'main.bicep') `
                     -Code 'avm.bicep.resource-folder-name' `
-                    -Message 'Resource module folder names must be lowercase, hyphen-separated words.'))
+                    -Message 'Resource module folder names must use lowercase letters, digits and hyphens.'))
     }
 
     $version = @($items | Where-Object { $_.Name -ieq 'version.json' })

@@ -39,7 +39,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:116 | `README.md` exists with exact casing | C |
 | M:131 | Published child is in publishing allowlist | C: validates the checkout's authoritative file on each check; missing/invalid input fails for versioned children |
 | M:147 | Versioned modules have `CHANGELOG.md` | C |
-| M:157 | Resource folder is singular/lowercase/hyphenated | P: naming syntax, not singularization |
+| M:157 | Resource folder is singular/lowercase/hyphenated | C: actual assertion compares the folder to its own case/hyphen transformation, not to a singular resource type; first-party rule checks lowercase/hyphen naming and permits existing repeated hyphens |
 | M:194 | Root version exists except on multi-scope parent | C |
 | M:209 | Root has `tests/` | C |
 | M:219 | Root has `tests/e2e/` | C |
@@ -148,6 +148,13 @@ telemetry condition and nested output for versioned root and child
 modules. The existing registry literal assertion does not recognize
 the previously shipped authored form; supporting it is an explicit
 compatibility exception until a separate migration is approved.
+
+The [resource-folder slice](2026-10-01-bicep-resource-folder-names.md)
+verifies the actual M:157 naming assertion rather than inferring a
+grammatical singular name that the legacy test never calculates. Plural
+names are valid. The first-party syntax rule still rejects uppercase,
+camel-case and underscores but accepts repeated hyphens to avoid a false
+failure for the existing `configuration--customdnssuffix` child module.
 
 The [workflow and ownership slice](2026-09-30-bicep-workflow-ownership-checks.md)
 checks the same top-level module workflow declarations and repository-level

@@ -88,7 +88,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 2
+        $result.UncoveredFamilies.Count | Should -Be 1
         $result.UncoveredFamilies | Should -Contain 'README regeneration parity against registry output'
         $result.UncoveredFamilies | Should -Not -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
         $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
@@ -884,6 +884,64 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.required-source'
     }
 
+    It 'checks resource root folder naming without rejecting plurals: <Case>' -TestCases @(
+        @{ Case = 'singular'; FolderName = 'widget'; Valid = $true }
+        @{ Case = 'plural'; FolderName = 'widgets'; Valid = $true }
+        @{ Case = 'plural hyphenated'; FolderName = 'storage-accounts'; Valid = $true }
+        @{ Case = 'camel case'; FolderName = 'widgetStore'; Valid = $false }
+        @{ Case = 'uppercase'; FolderName = 'WidgetStore'; Valid = $false }
+        @{ Case = 'underscore'; FolderName = 'widget_store'; Valid = $false }
+        @{ Case = 'existing double hyphen'; FolderName = 'widget--store'; Valid = $true }
+    ) {
+        param($Case, $FolderName, $Valid)
+
+        if ($FolderName -cne 'widget') {
+            Rename-Item -LiteralPath $script:modulePath -NewName $FolderName
+            $script:modulePath = Join-Path (Split-Path $script:modulePath -Parent) $FolderName
+        }
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $names = @($result.Issues | Where-Object Code -eq 'avm.bicep.resource-folder-name')
+        if ($Valid) {
+            $names.Count | Should -Be 0
+        }
+        else {
+            $names.Count | Should -Be 1
+            $names[0].File | Should -Be 'main.bicep'
+            $names[0].Severity | Should -Be 'error'
+        }
+    }
+
+    It 'applies the same naming rule to resource children: <Case>' -TestCases @(
+        @{ Case = 'plural'; FolderName = 'children'; Valid = $true }
+        @{ Case = 'existing double hyphen'; FolderName = 'configuration--customdnssuffix'; Valid = $true }
+        @{ Case = 'uppercase'; FolderName = 'ChildName'; Valid = $false }
+        @{ Case = 'underscore'; FolderName = 'child_name'; Valid = $false }
+    ) {
+        param($Case, $FolderName, $Valid)
+
+        $child = Join-Path $script:modulePath 'child'
+        Rename-Item -LiteralPath $child -NewName $FolderName
+        $child = Join-Path $script:modulePath $FolderName
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $child } {
+            param($P)
+            Get-AvmBicepConventionScope -Path $P
+        }
+        $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
+            R = $script:workingRoot; S = $scope
+        } {
+            param($R, $S)
+            Test-AvmBicepConventionLayout -Root $R -Scope $S
+        })
+        $names = @($issues | Where-Object Code -eq 'avm.bicep.resource-folder-name')
+        if ($Valid) {
+            $names.Count | Should -Be 0
+        }
+        else {
+            $names.Count | Should -Be 1
+            $names[0].File | Should -Be "avm/res/mock/widget/$FolderName/main.bicep"
+        }
+    }
+
     It 'checks nested Bicep modules under a modules directory' {
         $child = Join-Path $script:modulePath 'modules' 'project'
         New-Item -ItemType Directory -Path $child -Force | Out-Null
@@ -987,7 +1045,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
             @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
                 Should -Be 0
-            $result.UncoveredFamilies | Should -Contain 'resource-folder singularization beyond naming syntax'
+            $result.UncoveredFamilies | Should -Not -Contain 'resource-folder singularization beyond naming syntax'
         }
 
         It 'rejects a versioned child absent from the current checkout allowlist' {
