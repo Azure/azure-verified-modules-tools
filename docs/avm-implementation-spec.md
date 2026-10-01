@@ -585,7 +585,8 @@ calls forward the parent's location when the child needs it and no location
 was authored, preserving
 per-item locations in multi-region modules. Instrumented children also
 receive the parent's opt-out, and supported example calls expose and forward
-missing inputs.
+missing inputs. Variable blocks are sorted after missing location inputs are
+created, so the first transform already satisfies drift checks.
 
 `main.telemetry.tf` reads `telemetryIdPrefix` from the module's own
 `metadata.json` at apply time. When telemetry is enabled, it creates an
@@ -630,7 +631,10 @@ or data sources remain in the module. The transform also removes obsolete
 they have no remaining `modtm` resources or data sources, empty `modtm` test
 mocks, and standard references to the old telemetry resource. Non-empty test
 mocks and remaining author-owned `modtm` resources or data sources fail with
-actionable diagnostics instead of being silently rewritten.
+actionable diagnostics instead of being silently rewritten. If the random
+provider was used only by retired telemetry, authors must also remove empty
+`mock_provider "random"` declarations from unit tests that no longer exercise
+random resources; other random mocks remain author-owned.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

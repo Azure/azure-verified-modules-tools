@@ -255,7 +255,10 @@ need `modtm` or a telemetry-only random provider. Modules using other
 empty `modtm` test mocks, test-module provider requirements, and references to
 the retired resource are migrated. Custom
 non-empty mocks and other author-owned `modtm` blocks fail with a
-file-specific error for manual review.
+file-specific error for manual review. When random was used only for
+telemetry, remove empty `mock_provider "random"` declarations from unit
+tests that no longer exercise random resources. Keep mocks for tests that
+still use random; the transform does not rewrite these authored tests.
 
 All Terraform roots except utilities without Azure resources now expose
 `var.location`. Local submodules that deploy Azure resources expose it too,

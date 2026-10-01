@@ -369,7 +369,8 @@ Currently vendored:
   - composed per target by `Invoke-AvmTerraformTransform`. Root and child
   modules with a telemetry prefix run `root,module,common`; children without
   one run `module,common`. A second `module-call,common` pass forwards the
-  opt-out and effective location to local children after their inputs exist.
+  opt-out and effective location to local children after their inputs exist
+  and sorts newly generated location variables with authored inputs.
   Examples run `example,provider-cleanup,common` and test-module directories
   run `provider-cleanup`, followed by any consumer-supplied `test` profile.
   Standard empty `modtm` mocks and references in `.tftest.hcl` are migrated,

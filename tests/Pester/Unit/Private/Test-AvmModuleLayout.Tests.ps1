@@ -181,10 +181,10 @@ Describe 'Module Resources packaging' {
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
                 'sort_outputs.mptf.hcl'
-                'sort_variables.mptf.hcl'
             )
             'module-call' = @(
                 'propagate_telemetry.mptf.hcl'
+                'sort_variables.mptf.hcl'
             )
             root = @(
                 'main_telemetry_tf.mptf.hcl'

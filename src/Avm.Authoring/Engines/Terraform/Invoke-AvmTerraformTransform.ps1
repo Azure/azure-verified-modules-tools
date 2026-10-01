@@ -481,7 +481,8 @@ function Invoke-AvmTerraformTransform {
         root, module, common. Children without a prefix run module, common.
         Module calls then run module-call, common from deepest to root after
         every child has its inputs, forwarding location and enable_telemetry
-        where supported.
+        where supported. That pass sorts variables after missing location
+        inputs are generated, keeping the first transform idempotent.
         Examples run example, provider-cleanup, common after the module calls
         have settled. Standalone test-module directories run provider-cleanup
         and an optional consumer test profile. Empty modtm test mocks and

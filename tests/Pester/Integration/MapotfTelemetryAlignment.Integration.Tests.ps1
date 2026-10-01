@@ -384,6 +384,39 @@ module "azure_helper" {
         Assert-TelemetryTerraformValid -Root $root
     }
 
+    It 'sorts a generated child location among authored required inputs on the first pass' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'azure-helper'
+        New-TelemetryModule -Root $root -WithLocation
+        New-AzureResourceHelper -Root $child
+        Set-Content -LiteralPath (Join-Path $child 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "key_vault_resource_id" {
+  type = string
+}
+
+variable "name" {
+  type = string
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "azure_helper" {
+  source                = "./modules/azure-helper"
+  key_vault_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  name                  = "example"
+}
+'@
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $variables = Get-Content -LiteralPath (Join-Path $child 'variables.tf') -Raw
+        @([regex]::Matches($variables, '(?m)^variable "([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value }) |
+            Should -Be @('key_vault_resource_id', 'location', 'name')
+        $drift = Invoke-TelemetryEngine -Root $root -CheckDrift
+        $drift.Status | Should -Be 'pass'
+        $drift.Changed | Should -BeNullOrEmpty
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
     It 'passes location from root through a nested Azure-resource helper' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $wrapper = Join-Path $root 'modules' 'group' 'wrapper'

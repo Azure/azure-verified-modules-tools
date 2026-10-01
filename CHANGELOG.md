@@ -338,6 +338,9 @@ section when cutting a release.
 
 ### Fixed
 
+- MaPoTF sorts newly added child `location` variables with existing required
+  inputs on the first transform, avoiding a second-pass change during
+  candidate validation.
 - Newly scaffolded Bicep modules use the canonical telemetry parameter
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately
