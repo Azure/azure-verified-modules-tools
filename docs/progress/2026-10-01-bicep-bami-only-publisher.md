@@ -50,6 +50,12 @@ settling, outside/metadata drift, complete/final readback, and no rollback.
 Existing Terraform default, state/candidate, and shared managed-file group
 tests remain in the focused gate.
 
+An additional committed-head rerun exposed an unordered-hashtable JSON
+expectation in the lost-acknowledgement component test. The assertion now
+compares all 28 entries in the publisher's canonical property order, retaining
+exact value and failure checks. The existing analyzer transient-retry path
+also ran successfully; no analyzer or publisher retries were added.
+
 Source-reference, UTF-8/LF, PowerShell parse, and diff-whitespace checks passed.
 The Bicep publishing workflow, Terraform config/state/backend, managed-file
 governance, generic group resolver, labels, and authoring module are unchanged

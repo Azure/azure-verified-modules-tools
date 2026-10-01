@@ -236,7 +236,13 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $script:entryState.WriteNames | Should -HaveCount 5
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
             Should -BeExactly 'malformed-retired-selector'
-        $script:entryState.Variables.TEST_BAMI_SUBSCRIPTION_IDS.value | Should -BeExactly $script:sourceValues.TEST_BAMI_SUBSCRIPTION_IDS
+        $expectedSubscriptions = @(
+            $script:sourceValues.TEST_BAMI_SUBSCRIPTION_IDS | ConvertFrom-Json | ForEach-Object {
+                [ordered]@{ name = $_.name; id = $_.id }
+            }
+        )
+        $script:entryState.Variables.TEST_BAMI_SUBSCRIPTION_IDS.value |
+            Should -BeExactly (ConvertTo-Json -InputObject $expectedSubscriptions -Compress)
     }
 }
 
