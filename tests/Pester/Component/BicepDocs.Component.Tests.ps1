@@ -33,6 +33,87 @@ BeforeAll {
             (Join-Path $root 'bicepconfig.json'), $config, [System.Text.UTF8Encoding]::new($false))
         return [pscustomobject]@{ Root = $root; Module = $module; Template = $template }
     }
+
+    function New-BicepDocsGroupedReadme {
+        $parameters = InModuleScope 'Avm.Authoring' {
+            ConvertTo-AvmBicepDocsExampleParameter -Parameters @{
+                name     = @{ value = 'demo' }
+                location = @{ value = 'eastus' }
+            } -RequiredParameters @('name')
+        }
+        $content = @'
+## Usage examples
+
+- [Provision storage](#example-1-provision-storage)
+
+### Example 1: _Provision storage_
+
+<details>
+
+<summary>via Bicep module</summary>
+
+```bicep
+module example 'br/public:avm/res/storage/storage-account:<version>' = {
+  params: {
+__BICEP__
+  }
+}
+```
+
+</details>
+<p>
+
+<details>
+
+<summary>via JSON parameters file</summary>
+
+```json
+__JSON__
+```
+
+</details>
+<p>
+
+<details>
+
+<summary>via Bicep parameters file</summary>
+
+```bicep-params
+using 'br/public:avm/res/storage/storage-account:<version>'
+__PARAMS__
+```
+
+</details>
+<p>
+
+## Parameters
+
+| Parameter | Type |
+| :-- | :-- |
+| name | `string` |
+| location | `string` |
+
+## Outputs
+
+| Output | Type |
+| :-- | :-- |
+| resourceId | `string` |
+'@
+        $content = $content.ReplaceLineEndings("`n")
+        $content = $content.Replace('__BICEP__', $parameters.BicepParameters)
+        $content = $content.Replace('__JSON__', $parameters.JsonParameters)
+        return $content.Replace('__PARAMS__', $parameters.BicepParameterFile) + "`n"
+    }
+
+    function Remove-BicepDocsJsonGroupingComments {
+        param([Parameter(Mandatory)][string] $Content)
+
+        return $Content.Replace(
+            "  `"parameters`": {`n    // Required parameters`n",
+            "  `"parameters`": {`n").Replace(
+            "    // Non-required parameters`n    `"location`": {",
+            '    "location": {')
+    }
 }
 
 AfterAll {
@@ -89,6 +170,114 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             foreach ($path in $script:customPaths) {
                 Test-Path -LiteralPath $path | Should -BeFalse
             }
+        }
+    }
+
+    It 'warns only for missing generated JSON comments and writes the unmodified renderer output' {
+        $fixture = New-BicepDocsFixture -Name 'grouped-json-comments'
+        $generated = New-BicepDocsGroupedReadme
+        $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
+        $rootReadme = Join-Path $fixture.Module 'README.md'
+        $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        [System.IO.File]::WriteAllText($rootReadme, $tracked, $utf8)
+        [System.IO.File]::WriteAllText(
+            (Join-Path $fixture.Module 'child' 'README.md'), "# Child`n", $utf8)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            F = $fixture; Expected = $generated; Authored = $tracked
+        } {
+            param($F, $Expected, $Authored)
+            $script:expectedReadme = $Expected
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                $content = if ($WorkingDirectory -match 'child$') {
+                    "# Child`n"
+                }
+                else { $script:expectedReadme }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $content; StdErr = '' }
+            }
+
+            $preview = Invoke-AvmDocs -Path $F.Root -CheckDrift `
+                -IncludeRenderedContent -SkipModuleVersionCheck
+            $preview.Status | Should -BeExactly 'pass'
+            $preview.FilesSelected | Should -Be 2
+            $preview.FilesProcessed | Should -Be 2
+            $preview.Issues.Count | Should -Be 1
+            $preview.Issues[0].Code | Should -BeExactly 'avm.bicep.docs-example-comments'
+            $preview.Issues[0].Severity | Should -BeExactly 'warning'
+            $preview.Issues[0].Message | Should -Match '2 generated JSON-example'
+            $preview.GeneratedReadmes[0].Content | Should -BeExactly $Expected
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly $Authored
+
+            $written = Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck
+            $written.Status | Should -BeExactly 'pass'
+            $written.Changed.Count | Should -Be 1
+            [System.Linq.Enumerable]::SequenceEqual(
+                [byte[]][System.IO.File]::ReadAllBytes((Join-Path $F.Module 'README.md')),
+                [byte[]][System.Text.UTF8Encoding]::new($false).GetBytes($Expected)) |
+                Should -BeTrue
+            $clean = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $clean.Issues.Count | Should -Be 0
+
+            $otherDrift = $Authored.Replace('"value": "demo"', '"value": "other"')
+            [System.IO.File]::WriteAllText(
+                (Join-Path $F.Module 'README.md'), $otherDrift,
+                [System.Text.UTF8Encoding]::new($false))
+            $stale = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $stale.Status | Should -BeExactly 'fail'
+            $stale.Issues.Count | Should -Be 1
+            $stale.Issues[0].Code | Should -BeExactly 'avm.bicep.docs-stale'
+        }
+    }
+
+    It 'retains render failures and source-less warnings alongside a valid comment exception' {
+        $fixture = New-BicepDocsFixture -Name 'grouped-json-incomplete'
+        $generated = New-BicepDocsGroupedReadme
+        $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
+        $rootReadme = Join-Path $fixture.Module 'README.md'
+        $static = Join-Path $fixture.Root 'avm' 'ptn' 'aca-lza' 'hosting-environment' 'modules' 'spoke'
+        $null = New-Item -ItemType Directory -Path $static -Force
+        [System.IO.File]::WriteAllText($rootReadme, $tracked)
+        [System.IO.File]::WriteAllText((Join-Path $static 'README.md'), "# Static`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            F = $fixture; Generated = $generated; Authored = $tracked
+        } {
+            param($F, $Generated, $Authored)
+            $script:expectedReadme = $Generated
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                if ($WorkingDirectory -match 'child$') {
+                    return [pscustomobject]@{
+                        ExitCode = 1; StdOut = ''; StdErr = 'BCP190: missing dependency'
+                    }
+                }
+                [pscustomobject]@{
+                    ExitCode = 0; StdOut = $script:expectedReadme; StdErr = ''
+                }
+            }
+
+            $preview = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $preview.Status | Should -BeExactly 'fail'
+            $preview.FilesSelected | Should -Be 2
+            $preview.FilesProcessed | Should -Be 1
+            @($preview.Issues | Where-Object Code -EQ 'avm.bicep.docs-example-comments').Count |
+                Should -Be 1
+            @($preview.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed').Count |
+                Should -Be 1
+            @($preview.Issues | Where-Object Code -EQ 'avm.bicep.docs-no-source').Count |
+                Should -Be 1
+            $preview.NotRendered | Should -Contain 'avm/ptn/aca-lza/hosting-environment/modules/spoke/README.md'
+            { Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck } |
+                Should -Throw '*BCP190: missing dependency*'
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly $Authored
+            [System.IO.File]::ReadAllText(
+                (Join-Path $F.Root 'avm' 'ptn' 'aca-lza' 'hosting-environment' 'modules' 'spoke' 'README.md')) |
+                Should -BeExactly "# Static`n"
         }
     }
 
