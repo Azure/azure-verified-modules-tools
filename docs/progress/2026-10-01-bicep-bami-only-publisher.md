@@ -9,11 +9,16 @@
 
 Replace the held half-library proposal in
 [#211](https://github.com/Azure/azure-verified-modules-tools/pull/211) with
-five-field BAMI execution-variable publication, without a module selector.
+five-field BAMI execution-variable publication for upstream
+`Azure/bicep-registry-modules` module workflows, without a module selector.
 Validate all eight source fields and refuse routine retargeting of any present
 execution value. Initialize missing values only when all present values match.
 Preserve per-write drift checks, bounded GET visibility settling, complete and
 final readback, explicit failure reporting, and plan/ShouldProcess behavior.
+External contributor credential, subscription-pool, and Key Vault configuration
+remains unchanged, including the Key Vault capability and deprecation warning.
+Generic consumer actions, helpers, and standalone platform workflows are not
+removed by the upstream routing change.
 
 ## Checklist
 
@@ -60,6 +65,13 @@ Source-reference, UTF-8/LF, PowerShell parse, and diff-whitespace checks passed.
 The Bicep publishing workflow, Terraform config/state/backend, managed-file
 governance, generic group resolver, labels, and authoring module are unchanged
 from merged main. Only the obsolete config-test path filter changed in workflows.
+
+The documentation-only scope clarification changes this record and the
+repository-management README. Diff-whitespace and UTF-8/LF checks passed;
+all other file blobs, including runtime code, tests, workflows, and the
+historical half-library record, are unchanged from
+`a5cc25c18a457dbefcb72d3da9aa7a6776ee49ad`. No runtime tests were rerun for
+this documentation-only follow-up.
 
 ## Blockers or dependencies
 

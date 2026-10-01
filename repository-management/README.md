@@ -66,9 +66,13 @@ wins; later declaration wins a tie, so explicit legacy exceptions remain
 supported. If no matching group declares `testTenant`, the resolver still
 falls back to `legacy`.
 
-Bicep uses BAMI for all current and future modules, without module groups,
-a module-path tenant selector, or legacy fallback. Manual test-scope inputs
-remain independent of tenant selection.
+Upstream `Azure/bicep-registry-modules` module workflows use BAMI for all
+current and future modules, without per-module canary selectors or an upstream
+legacy fallback. External contributor repositories retain their configurable
+credential, subscription-pool, and Key Vault paths, including the existing
+Key Vault capability and deprecation warning. Generic consumer actions,
+helpers, and standalone platform workflows remain unchanged. Manual test-scope
+inputs remain independent of tenant selection.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -140,9 +144,10 @@ operator-approved `-Apply`; `-PlanOnly:$false` is rejected, and `-Apply -WhatIf`
 is write-free. The script uses eight named environment variables, plus
 `GH_TOKEN`; it accepts no target or configuration override.
 
-All eight source values are required even for plans. BAMI execution is always
-active: any present execution value that differs from the validated projection
-stops publication, including plans, before any write. Missing variables may be
+All eight source values are required even for plans. The publisher treats
+upstream BAMI execution as always active: any present execution value that
+differs from the validated projection stops publication, including plans,
+before any write. Missing variables may be
 initialized only when every present value matches. Retargeting requires
 coordinated maintenance outside this routine publisher; there is no selector
 deactivation route. Each write has a snapshot preflight and readback, followed
