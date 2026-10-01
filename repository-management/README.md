@@ -36,6 +36,38 @@ edit the JSON here instead. The one `githubDescription` override preserves the
 longer specification text while keeping the GitHub label description within
 GitHub's 100-character limit.
 
+## Pull request reviewer routing
+
+`Repos: PR Routing` handles Bicep and active Terraform module repositories in
+the AVM App installation. Terraform discovery shares repository sync's provider
+and module-name rules; archived repositories and tooling/template repositories
+are excluded before the reviewer token is scoped.
+
+Owners come from the published module catalog, with the request head's
+`metadata.json` taking precedence when root metadata changes or a module is
+not yet indexed. Terraform resolves all files, examples, and child modules to
+the repository root's owners; child metadata cannot declare owners. Bicep
+module-path and core-team rules are unchanged. Both ecosystems skip drafts,
+the author, existing review requests, and people who already reviewed, and
+only add missing reviewers and labels.
+
+The fifteen-minute runs search batches of twenty Terraform repositories for
+ready requests updated in the last hour. GitHub cannot match a repository-name
+wildcard in an issue search, so each batch supplies exact `repo:` qualifiers.
+Incomplete results, pagination changes, search failures, or the 1,000-result
+search cap trigger complete per-repository listing instead. The daily sweep
+and manual runs with a zero-minute lookback always list every repository
+directly, avoiding dependence on search indexing. The catalog is read once
+per run; individual request or repository failures do not stop the remainder.
+
+Manual runs default to `what_if: true`. Leave the URL empty for a fleet sweep,
+use a full GitHub URL for a Terraform request, or use a bare number for Bicep.
+The workflow accepts only active installed targets, keeps schedule/manual-only
+triggers and the `avm` environment, and grants its writer token only content
+read, pull-request write, and member read on the selected repositories.
+Merging a workflow change extends scheduled routing; live dry runs or writes
+still require operator approval.
+
 ## Terraform repository metadata
 
 Repository discovery reads and validates each selected repository's root
