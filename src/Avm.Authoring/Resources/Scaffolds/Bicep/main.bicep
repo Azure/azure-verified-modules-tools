@@ -7,7 +7,7 @@ param name string
 @description('Optional. Location for all resources.')
 param location string = resourceGroup().location
 
-@description('Optional. Enable/disable usage telemetry for this module.')
+@description('Optional. Enable/Disable usage telemetry for module.')
 param enableTelemetry bool = true
 
 var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')

@@ -3,7 +3,8 @@
 
 BeforeAll {
     $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
     $script:subscription = '00000000-0000-0000-0000-000000000001'
     $script:tenant = '00000000-0000-0000-0000-000000000002'
     $script:managementGroup = 'test-management-group'

@@ -4,7 +4,7 @@
 BeforeAll {
     $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     $manifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
-    Import-Module -Name $manifest -Force
+    . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') -SourceManifest $manifest
 
     $script:root = Join-Path $TestDrive 'bicep unit module'
     $unit = Join-Path $script:root 'tests' 'unit'

@@ -3,7 +3,8 @@
 
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring')
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    . (Join-Path $PSScriptRoot '..' '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
 }
 
 AfterAll {

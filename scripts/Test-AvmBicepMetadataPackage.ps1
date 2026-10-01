@@ -8,6 +8,16 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string] $RegistryCommit = '6eb8e6ff3fe2910043d184da4192799752271ecf',
 
+    [string] $DocsRegistryPath = '',
+
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string] $DocsRegistryCommit = '82bab0404566557b9fb5efdc9780bb5ce438030b',
+
+    [Parameter(ParameterSetName = 'Run')]
+    [string] $ArtifactDirectory = '',
+
+    [switch] $AllowWorkingTree,
+
     [Parameter(Mandatory, ParameterSetName = 'Probe')]
     [switch] $Probe,
 
@@ -58,12 +68,25 @@ $registryRoot = (Resolve-Path -LiteralPath $RegistryPath).ProviderPath
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
 Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0) -Message 'Unable to read the tools source commit.'
+$sourceStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all -- src/Avm.Authoring)
+Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and ($sourceStatus.Count -eq 0 -or $AllowWorkingTree)) `
+    -Message 'The packaged module source must match the recorded tools commit; use -AllowWorkingTree to explicitly qualify and record uncommitted module changes.'
 $actualCommit = (& git -C $registryRoot rev-parse HEAD).Trim()
 Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $actualCommit -ceq $RegistryCommit) `
     -Message "Registry checkout must be at $RegistryCommit; found $actualCommit."
 $registryStatus = @(& git -C $registryRoot status --porcelain --untracked-files=all)
 Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $registryStatus.Count -eq 0) `
     -Message 'Registry checkout must be clean before the smoke test.'
+$docsRoot = ''
+if ($DocsRegistryPath) {
+    $docsRoot = (Resolve-Path -LiteralPath $DocsRegistryPath).ProviderPath
+    $actualDocsCommit = (& git -C $docsRoot rev-parse HEAD).Trim()
+    Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $actualDocsCommit -ceq $DocsRegistryCommit) `
+        -Message "Docs checkout must be at $DocsRegistryCommit; found $actualDocsCommit."
+    $docsStatus = @(& git -C $docsRoot status --porcelain --untracked-files=all)
+    Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $docsStatus.Count -eq 0) `
+        -Message 'Docs checkout must be clean before the smoke test.'
+}
 
 if ($Probe) {
     $env:AVM_OFFLINE = '1'
@@ -73,6 +96,40 @@ if ($Probe) {
     $module = Import-Module -Name 'Avm.Authoring' -RequiredVersion $ModuleVersion -PassThru -ErrorAction Stop
     Assert-AvmPackageSmoke -Condition ($module.ModuleBase -ceq $expectedModule) `
         -Message "Imported module from '$($module.ModuleBase)', not the extracted package '$expectedModule'."
+    Assert-AvmPackageSmoke -Condition ($module.Path -ceq (Join-Path $expectedModule 'Avm.Authoring.psm1')) `
+        -Message 'The imported root module is not inside the extracted package.'
+    $privateNames = @(
+        'Get-AvmBicepMetadataLiteral', 'Get-AvmMetadataSourcePlan', 'Test-AvmBicepTelemetrySourceWiring',
+        'Test-AvmMetadataModules', 'Invoke-AvmBicepDocs', 'Invoke-AvmBicepCheckPolicy',
+        'Invoke-AvmBicepCheckConvention', 'Invoke-AvmBicepTestUnit', 'Invoke-AvmBicepPesterSuite',
+        'Get-AvmBicepE2ePostHook', 'Invoke-AvmBicepE2ePostHook',
+        'Get-AvmBicepApiSpecList', 'Get-AvmBicepMcrTagList'
+    )
+    $commands = @($module.ExportedFunctions.Values) + @(
+        & $module {
+            param($Names)
+            foreach ($name in $Names) {
+                Get-Command -Name $name -CommandType Function -ErrorAction Stop
+            }
+        } $privateNames
+    )
+    $commandProof = @(
+        foreach ($command in $commands) {
+            $file = $command.ScriptBlock.File
+            Assert-AvmPackageSmoke -Condition (-not [string]::IsNullOrWhiteSpace($file) -and
+                $file.StartsWith($expectedModule + [System.IO.Path]::DirectorySeparatorChar,
+                    [System.StringComparison]::Ordinal)) `
+                -Message "Command '$($command.Name)' is not defined inside the extracted package."
+            [pscustomobject]@{ Name = $command.Name; File = $file }
+        }
+    )
+    Assert-AvmPackageSmoke -Condition ($module.ExportedAliases['avm'].Definition -ceq 'Invoke-Avm') `
+        -Message 'The packaged avm alias does not route to Invoke-Avm.'
+    $runner = Join-AvmPackageSmokePath -Root $expectedModule `
+        -Segments @('Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1')
+    Assert-AvmPackageSmoke -Condition (Test-Path -LiteralPath $runner -PathType Leaf) `
+        -Message 'The package omitted the child Pester runner.'
+    $negativeCases = [System.Collections.Generic.List[object]]::new()
 
     $scopes = @(
         @{ Segments = @('avm', 'res', 'azure-stack-hci', 'cluster'); Child = $false; Source = $true }
@@ -174,6 +231,11 @@ if ($Probe) {
     Assert-AvmPackageSmoke -Condition ($preview.Status -eq 'pass' -and @($preview.PlannedFiles).Count -eq 0 -and
         -not $preview.Changed -and (Get-FileHash -LiteralPath $fixtureSource -Algorithm SHA256).Hash -eq $legacyHash) `
         -Message 'Legacy source changed or produced a write plan under -UpdateSource -WhatIf.'
+    $legacyWrite = Initialize-AvmModuleMetadata -Path $fixture -Ecosystem bicep -ModuleType resource `
+        -UpdateSource -SkipModuleVersionCheck -Confirm:$false
+    Assert-AvmPackageSmoke -Condition ($legacyWrite.Status -eq 'pass' -and -not $legacyWrite.Changed -and
+        (Get-FileHash -LiteralPath $fixtureSource -Algorithm SHA256).Hash -ceq $legacyHash) `
+        -Message 'The packaged initialization command rewrote existing legacy telemetry.'
 
     $literalSource = $source.Replace($canonicalDeclaration, '').Replace($canonicalReference, $metadata.telemetryIdPrefix)
     [System.IO.File]::WriteAllText($fixtureSource, $literalSource, [System.Text.UTF8Encoding]::new($false))
@@ -188,6 +250,11 @@ if ($Probe) {
     Assert-AvmPackageSmoke -Condition ($plannedLiterals['name'] -ceq $originalLiterals['name'] -and
         $plannedLiterals['description'] -ceq $originalLiterals['description']) `
         -Message 'New telemetry wiring altered authored name or description literals.'
+    $wired = Initialize-AvmModuleMetadata -Path $fixture -Ecosystem bicep -ModuleType resource `
+        -UpdateSource -SkipModuleVersionCheck -Confirm:$false
+    Assert-AvmPackageSmoke -Condition ($wired.Status -eq 'pass' -and $wired.Changed -and
+        [System.IO.File]::ReadAllText($fixtureSource) -ceq $generated[0].Content) `
+        -Message 'The packaged initialization command did not apply the canonical source plan.'
 
     $conflictSource = $source.Replace($canonicalDeclaration, "var telemetryIdPrefix = 'overridden'")
     [System.IO.File]::WriteAllText($fixtureSource, $conflictSource, [System.Text.UTF8Encoding]::new($false))
@@ -200,6 +267,7 @@ if ($Probe) {
         if (-not $collisionRejected) { throw }
     }
     Assert-AvmPackageSmoke -Condition $collisionRejected -Message 'Conflicting telemetry variables must fail closed.'
+    $negativeCases.Add([pscustomobject]@{ Case = 'conflicting telemetry variable'; Rejected = $collisionRejected })
 
     foreach ($literalName in @('name', 'description')) {
         $literalPattern = [regex]::new(("(?m)^[\t ]*metadata[\t ]+{0}[^\r\n]*(?:\r?\n)?" -f $literalName))
@@ -210,6 +278,9 @@ if ($Probe) {
         Assert-AvmPackageSmoke -Condition ($invalidLiteral.Status -eq 'fail' -and
             @($invalidLiteral.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_SOURCE' }).Count -gt 0) `
             -Message "A missing Bicep $literalName literal was not rejected."
+        $negativeCases.Add([pscustomobject]@{
+                Case = "missing source $literalName"; Status = $invalidLiteral.Status; Code = 'AVM_METADATA_SOURCE'
+            })
     }
     Remove-Item -LiteralPath $fixtureSource
     foreach ($marker in @('version.json', 'main.json')) {
@@ -220,6 +291,9 @@ if ($Probe) {
         Assert-AvmPackageSmoke -Condition ($missingSource.Status -eq 'fail' -and
             @($missingSource.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_SOURCE' }).Count -gt 0) `
             -Message "Missing source with $marker was not rejected."
+        $negativeCases.Add([pscustomobject]@{
+                Case = "$marker without source"; Status = $missingSource.Status; Code = 'AVM_METADATA_SOURCE'
+            })
         Remove-Item -LiteralPath $markerPath
     }
 
@@ -235,16 +309,48 @@ if ($Probe) {
     Assert-AvmPackageSmoke -Condition ($missingTelemetry.Status -eq 'fail' -and
         @($missingTelemetry.Issues | Where-Object { $_.Code -eq 'AVM_METADATA_TELEMETRY' }).Count -gt 0) `
         -Message 'An instrumented utility without a JSON telemetry prefix was not rejected.'
+    $negativeCases.Add([pscustomobject]@{
+            Case = 'instrumented utility without prefix'; Status = $missingTelemetry.Status; Code = 'AVM_METADATA_TELEMETRY'
+        })
+
+    $docsReport = $null
+    $contractReport = $null
+    if ($docsRoot) {
+        $docsReport = & (Join-Path $PSScriptRoot 'Test-AvmBicepPackageDocs.ps1') `
+            -RegistryPath $docsRoot -RegistryCommit $DocsRegistryCommit `
+            -PackageRoot $expectedModule -ModuleVersion $ModuleVersion
+        $contractPath = Join-Path $ScratchRoot 'contracts.json'
+        $contractProcess = & $module {
+            param($Script, $Root, $Version, $Report)
+            Invoke-AvmProcess -FilePath ([System.Environment]::ProcessPath) -ArgumentList @(
+                '-NoProfile', '-NonInteractive', '-File', $Script,
+                '-InstallRoot', $Root, '-ModuleVersion', $Version, '-ReportPath', $Report
+            ) -IgnoreExitCode
+        } (Join-Path $PSScriptRoot 'Test-AvmBicepPackageContracts.ps1') $InstallRoot $ModuleVersion $contractPath
+        Assert-AvmPackageSmoke -Condition ($contractProcess.ExitCode -eq 0 -and
+            (Test-Path -LiteralPath $contractPath -PathType Leaf)) `
+            -Message "Packaged fixture contracts failed: $($contractProcess.StdErr)`n$($contractProcess.StdOut)"
+        $contractReport = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+    }
 
     $report = [pscustomobject]@{
-        PackageVersion    = $module.Version.ToString()
-        ImportedFrom      = 'isolated versioned PSModulePath'
-        Scopes            = $scopeResults
-        MetadataSteps     = $stepResults
-        LegacyIdempotent  = $true
-        CanonicalNewWires = $true
-        CollisionRejected = $true
-        SourceControls    = 'missing name/description literals, version.json, main.json, telemetry prefix rejected'
+        PackageVersion     = $module.Version.ToString()
+        ImportedFrom       = 'isolated versioned PSModulePath'
+        ModulePath         = $module.Path
+        ModuleBase         = $module.ModuleBase
+        ProcessId          = $PID
+        CommandDefinitions = $commandProof
+        PesterRunner       = $runner
+        PesterRunnerSha256 = (Get-FileHash -LiteralPath $runner -Algorithm SHA256).Hash.ToLowerInvariant()
+        Scopes             = $scopeResults
+        MetadataSteps      = $stepResults
+        LegacyIdempotent   = $true
+        CanonicalNewWires  = $true
+        CollisionRejected  = $true
+        SourceControls     = 'missing name/description literals, version.json, main.json, telemetry prefix rejected'
+        NegativeCases      = $negativeCases.ToArray()
+        RealDocs           = $docsReport
+        FixtureContracts   = $contractReport
     }
     [System.IO.File]::WriteAllText($ReportPath, (ConvertTo-Json -InputObject $report -Depth 8),
         [System.Text.UTF8Encoding]::new($false))
@@ -252,10 +358,6 @@ if ($Probe) {
 }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-bicep-metadata-package-$([guid]::NewGuid().ToString('N'))")
-$previousOffline = $env:AVM_OFFLINE
-$previousAutoInstall = $env:AVM_NO_AUTO_INSTALL
-$env:AVM_OFFLINE = '1'
-$env:AVM_NO_AUTO_INSTALL = '1'
 try {
     $null = New-Item -ItemType Directory -Path $tempRoot
     & (Join-Path $repoRoot 'build.ps1') build
@@ -271,6 +373,36 @@ try {
     $null = New-Item -ItemType Directory -Path $moduleParent
     $installPath = Join-Path $moduleParent $moduleVersion
     Move-Item -LiteralPath (Join-Path $extracted 'Avm.Authoring') -Destination $installPath
+    $stageFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Force)
+    $installedFiles = @(Get-ChildItem -LiteralPath $installPath -File -Recurse -Force)
+    Assert-AvmPackageSmoke -Condition ($stageFiles.Count -eq $installedFiles.Count) `
+        -Message 'The extracted package does not contain every staged module file.'
+    foreach ($file in $stageFiles) {
+        $relative = [System.IO.Path]::GetRelativePath($stage, $file.FullName)
+        $installedFile = Join-Path $installPath $relative
+        Assert-AvmPackageSmoke -Condition ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ceq
+            (Get-FileHash -LiteralPath $installedFile -Algorithm SHA256).Hash) `
+            -Message "The extracted package changed staged bytes at '$relative'."
+    }
+    $dependencies = @()
+    if ($docsRoot) {
+        $dependencies = @(
+            foreach ($name in @('InvokeBuild', 'Pester', 'powershell-yaml')) {
+                $available = @(Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending)
+                $dependency = $available | Where-Object {
+                    ($name -ne 'Pester' -or $_.Version -ge [version]'5.5.0') -and
+                    ($name -ne 'powershell-yaml' -or $_.Version -eq [version]'0.4.12')
+                } | Select-Object -First 1
+                Assert-AvmPackageSmoke -Condition ($null -ne $dependency) `
+                    -Message "Required local test dependency '$name' is missing; run the standard focused selectors first."
+                $dependencyParent = Join-Path $installRoot $name
+                $null = New-Item -ItemType Directory -Path $dependencyParent
+                $dependencyPath = Join-Path $dependencyParent $dependency.Version.ToString()
+                Copy-Item -LiteralPath $dependency.ModuleBase -Destination $dependencyPath -Recurse
+                [pscustomobject]@{ Name = $name; Version = $dependency.Version.ToString(); Path = $dependencyPath }
+            }
+        )
+    }
     $scratchRoot = Join-Path $tempRoot 'scratch'
     $null = New-Item -ItemType Directory -Path $scratchRoot
     $reportPath = Join-Path $tempRoot 'result.json'
@@ -281,44 +413,75 @@ try {
         '-InstallRoot', $installRoot, '-ModuleVersion', $moduleVersion,
         '-ScratchRoot', $scratchRoot, '-ReportPath', $reportPath
     )
+    if ($docsRoot) {
+        $arguments += @('-DocsRegistryPath', $docsRoot, '-DocsRegistryCommit', $DocsRegistryCommit)
+    }
+    if ($AllowWorkingTree) {
+        $arguments += '-AllowWorkingTree'
+    }
     $output = @(& $pwsh @arguments 2>&1)
     Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $reportPath -PathType Leaf)) `
         -Message "Packaged metadata probe failed: $($output -join [System.Environment]::NewLine)"
     $registryStatus = @(& git -C $registryRoot status --porcelain --untracked-files=all)
     Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $registryStatus.Count -eq 0) `
         -Message 'The metadata probe changed the pinned registry checkout.'
+    if ($docsRoot) {
+        $docsStatus = @(& git -C $docsRoot status --porcelain --untracked-files=all)
+        Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0 -and $docsStatus.Count -eq 0) `
+            -Message 'The docs probe changed the pinned registry checkout.'
+    }
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
-    [pscustomobject]@{
-        ToolsCommit       = $sourceCommit
-        RegistryCommit    = $actualCommit
-        PackageKind       = 'local unsigned zip from build.ps1 build; not a signed release'
-        ArchiveSha256     = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-        PackageVersion    = $report.PackageVersion
-        ImportedFrom      = $report.ImportedFrom
-        Scopes            = $report.Scopes
-        MetadataSteps     = $report.MetadataSteps
-        LegacyIdempotent  = $report.LegacyIdempotent
-        CanonicalNewWires = $report.CanonicalNewWires
-        CollisionRejected = $report.CollisionRejected
-        SourceControls    = $report.SourceControls
-        RegistryClean     = $true
-        Offline           = $true
-        FullPreCommitRun  = $false
-    } | ConvertTo-Json -Depth 8
+    $archivePath = $null
+    if ($ArtifactDirectory) {
+        $null = New-Item -ItemType Directory -Path $ArtifactDirectory -Force
+        $archivePath = Join-Path $ArtifactDirectory "Avm.Authoring-$moduleVersion-$($sourceCommit.Substring(0, 7))-local.zip"
+        Assert-AvmPackageSmoke -Condition (-not (Test-Path -LiteralPath $archivePath)) `
+            -Message 'The requested artifact already exists; choose an empty artifact directory.'
+        Copy-Item -LiteralPath $archive -Destination $archivePath
+    }
+    $qualification = [pscustomobject]@{
+        ToolsCommit         = $sourceCommit
+        SourceBoundary      = if ($sourceStatus.Count -eq 0) { 'committed module source' } else { 'explicit working-tree module changes on ToolsCommit' }
+        SourceChanges       = $sourceStatus
+        RegistryCommit      = $actualCommit
+        PackageKind         = 'local unsigned zip from build.ps1 build; not a signed release'
+        ArchiveSha256       = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        ArchivePath         = $archivePath
+        PayloadFiles        = $stageFiles.Count
+        ManifestSha256      = (Get-FileHash -LiteralPath (Join-Path $installPath 'Avm.Authoring.psd1') -Algorithm SHA256).Hash.ToLowerInvariant()
+        PackageVersion      = $report.PackageVersion
+        ImportedFrom        = $report.ImportedFrom
+        ModulePath          = $report.ModulePath
+        ModuleBase          = $report.ModuleBase
+        ProcessId           = $report.ProcessId
+        CommandDefinitions  = $report.CommandDefinitions
+        PesterRunner        = $report.PesterRunner
+        PesterRunnerSha256  = $report.PesterRunnerSha256
+        TestDependencies    = $dependencies
+        Scopes              = $report.Scopes
+        MetadataSteps       = $report.MetadataSteps
+        LegacyIdempotent    = $report.LegacyIdempotent
+        CanonicalNewWires   = $report.CanonicalNewWires
+        CollisionRejected   = $report.CollisionRejected
+        SourceControls      = $report.SourceControls
+        NegativeCases       = $report.NegativeCases
+        RealDocs            = $report.RealDocs
+        FixtureContracts    = $report.FixtureContracts
+        RegistryClean       = $true
+        Offline             = $true
+        FullPreCommitRun    = $false
+        FullRegistryPrCheck = $false
+        PublishedRelease    = $false
+        LiveDeployment      = $false
+    }
+    $json = ConvertTo-Json -InputObject $qualification -Depth 10
+    if ($ArtifactDirectory) {
+        [System.IO.File]::WriteAllText((Join-Path $ArtifactDirectory 'qualification.json'), $json,
+            [System.Text.UTF8Encoding]::new($false))
+    }
+    $json
 }
 finally {
-    if ($null -eq $previousOffline) {
-        Remove-Item Env:AVM_OFFLINE -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:AVM_OFFLINE = $previousOffline
-    }
-    if ($null -eq $previousAutoInstall) {
-        Remove-Item Env:AVM_NO_AUTO_INSTALL -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:AVM_NO_AUTO_INSTALL = $previousAutoInstall
-    }
     if (Test-Path -LiteralPath $tempRoot -PathType Container) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
