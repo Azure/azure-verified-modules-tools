@@ -105,6 +105,19 @@ App configuration YAML is edited line by line, removing the runtime
 - [x] Test live on `Azure/terraform-azure-avm-res-signalrservice-webpubsub`
   from this branch's source, and fix what the test found: new `metadata.json`
   files now list their properties in schema order, starting with `$schema`.
+- [x] Fix the CI failures that the local gate missed:
+  - The component suite set `GIT_CONFIG_COUNT` before `GIT_CONFIG_KEY_0`
+    existed. Locally the calling environment supplied a `GIT_CONFIG_KEY_0`,
+    so git accepted it; on CI every test failed in setup. The suite now
+    ignores inherited git configuration and sets all three variables before
+    its first git call.
+  - CI runs Pester 6, which fails a call when no filtered mock matches,
+    instead of running the real command as Pester 5 does. The suite now
+    passes unmatched `Get-AvmApplicationPath` and `Invoke-AvmProcess` calls
+    to the real commands, and the declined team access test mocks every call.
+  - CI's PSScriptAnalyzer flagged parameters that
+    `Get-AvmTerraformMissingModuleFile` used only inside a nested
+    `Where-Object` block. It now uses them directly.
 
 ## Validation
 
@@ -115,6 +128,9 @@ App configuration YAML is edited line by line, removing the runtime
   against a real local git remote.
 - `./build.ps1 pre-commit` after the metadata order fix: layout and lint
   clean; 1,993 unit tests passed (9 skipped); 871 component tests passed.
+- After the CI fixes, the same gate run under Pester 6.2.0 with no inherited
+  `GIT_CONFIG_*` variables: layout and lint clean; 1,993 unit tests passed
+  (9 skipped); 871 component tests passed.
 - Live test on the webpubsub repository, which the old script had left with
   only the portal README:
   - Without JIT elevation, the run wrote `metadata.json` locally and stopped at

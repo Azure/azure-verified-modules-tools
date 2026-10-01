@@ -28,9 +28,11 @@ function Get-AvmTerraformMissingModuleFile {
 
     $find = {
         param([object[]] $Entries, [string] $Type, [string] $Path)
-        @($Entries | Where-Object {
-                $_ -is [System.Collections.IDictionary] -and $_['type'] -ceq $Type -and (-not $Path -or $_['path'] -ceq $Path)
-            })
+        foreach ($entry in $Entries) {
+            if ($entry -is [System.Collections.IDictionary] -and $entry['type'] -ceq $Type -and (-not $Path -or $entry['path'] -ceq $Path)) {
+                $entry
+            }
+        }
     }
     $missing = @(
         if (@(& $find $Root 'blob' 'terraform.tf' | Where-Object { [long]$_['size'] -gt 0 }).Count -eq 0) { 'terraform.tf' }

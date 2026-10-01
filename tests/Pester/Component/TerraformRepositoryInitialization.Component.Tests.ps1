@@ -4,6 +4,8 @@
 BeforeAll {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
     Import-Module -Name (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
+    $script:realApplicationPath = InModuleScope 'Avm.Authoring' { ${function:Get-AvmApplicationPath} }
+    $script:realProcess = InModuleScope 'Avm.Authoring' { ${function:Invoke-AvmProcess} }
     $script:schemaId = (Get-Content -LiteralPath (Join-Path $moduleRoot 'Resources' 'Schemas' 'v1' 'avm-module-metadata.schema.json') -Raw |
             ConvertFrom-Json).'$id'
     $script:repositoryName = 'terraform-azure-avm-res-storage-storageaccount'
@@ -16,7 +18,7 @@ BeforeAll {
     }
     $script:environmentVariables = @(
         'AVM_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
-        'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'
+        'GIT_CONFIG_PARAMETERS', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'
     )
     $script:savedVariables = @{}
     foreach ($name in $script:environmentVariables) {
@@ -26,7 +28,9 @@ BeforeAll {
     [System.IO.File]::WriteAllText($globalConfig, '')
     $env:GIT_CONFIG_GLOBAL = $globalConfig
     $env:GIT_CONFIG_NOSYSTEM = '1'
-    $env:GIT_CONFIG_COUNT = '1'
+    # Ignore git configuration inherited from the calling environment, so tests run the same everywhere.
+    $env:GIT_CONFIG_COUNT = $null
+    $env:GIT_CONFIG_PARAMETERS = $null
     $env:GIT_AUTHOR_NAME = 'AVM Test'
     $env:GIT_AUTHOR_EMAIL = 'avm-test@example.invalid'
     $env:GIT_COMMITTER_NAME = 'AVM Test'
@@ -97,11 +101,12 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
             Get-AvmRulesetOptOutRecordPath -Repository $Repository
         }
         $bare = Join-Path $TestDrive ('remote-' + [guid]::NewGuid().ToString('N'))
+        $env:GIT_CONFIG_KEY_0 = "url.$([uri]::new($bare).AbsoluteUri).insteadOf"
+        $env:GIT_CONFIG_VALUE_0 = "https://github.com/$($script:repository).git"
+        $env:GIT_CONFIG_COUNT = '1'
         $null = Invoke-TestGit @('init', '--quiet', '--bare', $bare)
         $null = Invoke-TestGit @('--git-dir', $bare, 'symbolic-ref', 'HEAD', 'refs/heads/main')
         Add-TestRemoteCommit -Bare $bare -Files @{ 'README.md' = "# Repository setup required`n" } -Message 'README.md: Setup instructions'
-        $env:GIT_CONFIG_KEY_0 = "url.$([uri]::new($bare).AbsoluteUri).insteadOf"
-        $env:GIT_CONFIG_VALUE_0 = "https://github.com/$($script:repository).git"
 
         $work = Join-Path $TestDrive ('work-' + [guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $work
@@ -235,7 +240,23 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
             }.GetNewClosure())
         Mock -ModuleName Avm.Authoring Get-AvmCatalogTelemetryPrefix { @() }
         Mock -ModuleName Avm.Authoring New-AvmTelemetryIdPrefix { '46d3xtrf.res.abc1234' }
-        Mock -ModuleName Avm.Authoring Get-AvmApplicationPath { 'fake-gh' } -ParameterFilter { $Name -eq 'gh' }
+        # Pester 6 does not fall back to the real command, so unmatched calls are forwarded explicitly.
+        $realApplicationPath = $script:realApplicationPath
+        $realProcess = $script:realProcess
+        Mock -ModuleName Avm.Authoring Get-AvmApplicationPath -MockWith ({
+                param($Name)
+                if ($Name -eq 'gh') {
+                    return 'fake-gh'
+                }
+                & $realApplicationPath -Name $Name
+            }.GetNewClosure())
+        Mock -ModuleName Avm.Authoring Invoke-AvmProcess -MockWith ({
+                param(
+                    [string] $FilePath, [string[]] $ArgumentList, [string] $WorkingDirectory, [hashtable] $EnvVars, [int] $TimeoutSec,
+                    [switch] $IgnoreExitCode, [switch] $StreamOutput, [string] $Label, [scriptblock] $OnStdOutLine, [int[]] $SuccessExitCode
+                )
+                & $realProcess @PSBoundParameters
+            }.GetNewClosure())
         Mock -ModuleName Avm.Authoring Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } } -ParameterFilter {
             $FilePath -eq 'fake-gh'
         }
@@ -584,7 +605,7 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
             'team access' {
                 Mock -ModuleName Avm.Authoring Sync-AvmRepositoryTeamAccess {
                     [pscustomobject]@{ Team = 'azure-verified-modules-module-contributors'; Permission = 'push'; Status = 'planned' }
-                } -ParameterFilter { -not $PlanOnly }
+                }
             }
             'initial content' {
                 Mock -ModuleName Avm.Authoring Publish-AvmTerraformRepositoryContent {
