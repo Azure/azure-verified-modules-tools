@@ -10,7 +10,9 @@ New Terraform repositories are created with `avm init` from
 [Avm.Authoring](../src/Avm.Authoring/README.md#initialize-a-terraform-module-repository),
 which publishes the module's own metadata in its first commit. Repository sync
 takes over once the AVM GitHub App is installed. No separate tooling inventory
-registration is required.
+registration is required. Agents can follow the
+[`avm-tf-module-repository-creation`](../.github/skills/avm-tf-module-repository-creation/SKILL.md)
+skill, which covers the inputs to ask for and the Open Source Portal steps.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.
