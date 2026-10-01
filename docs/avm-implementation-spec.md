@@ -61,7 +61,7 @@ A successful supply-chain attack against any of these dependencies must, by cons
 | ---------- | ---------------------------------------- | ----------- |
 | `git`      | Module discovery, governance scripts     | 2.40+       |
 | `gh`       | Optional — required only for `avm governance` | 2.40+   |
-| `az`       | Optional — required only for `avm test integration` and `avm test e2e` | 2.60+ |
+| `az`       | Optional — required for `avm register-features` and Azure-backed test tiers | 2.60+ |
 | .NET SDK   | Optional — required only if Phase 3 Hybrid mode is enabled locally | 9.0+ |
 
 Everything else (Terraform, TFLint, `terraform-docs`, Conftest, `avmfix`, `mapotf`, `grept`, Bicep) is installed and managed by the CLI per §10.
@@ -325,6 +325,14 @@ only ever reads it:
     context.psd1                 # per-repo context override
     .disable                     # zero-byte sentinel — CLI refuses to run if present
 ```
+
+Module roots may separately contain `.required-features.json`, a hand-authored
+JSON array of `"Namespace/FeatureName"` strings. `avm register-features`
+reads this file only; an absent or empty array does nothing. The command
+requires an explicit subscription GUID, validates every entry before calling
+Azure CLI, verifies that the CLI is selected to that subscription, and never
+unregisters a feature. The protected Terraform integration and e2e jobs run it
+only when the manifest is nonempty.
 
 Rules:
 
@@ -860,6 +868,7 @@ Both call the same implementation. The dispatcher is generated from a single ver
   - `AvmCommandException` (`AVM1040`) — a composite verb reported a failing status.
   - `AvmModuleVersionException` (`AVM1050`) — the installed module is behind the published release.
   - `AvmManagedFilesVersionException` (`AVM1060`) — a new major managed-files release supersedes the repo's pin.
+  - `AvmException` (`AVM1070`) — Azure feature/provider registration, approval, or readiness failed.
 - Exit codes from the dispatcher:
   - `0` — success.
   - `1` — user error (bad args, bad config, expected condition).
