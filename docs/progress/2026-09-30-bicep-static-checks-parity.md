@@ -29,8 +29,10 @@ or [child JSON drift](2026-09-30-bicep-child-compiled-json-drift.md) slice;
 `P` = partially enforced but not equivalent; `G` = gap; `E` = pre-existing
 `avm pr-check` step (metadata or Bicep transform). This table tracks cumulative
 coverage; the outcome and validation below describe the first slice at completion.
-Even when all `C` checks pass, `avm.bicep.convention-incomplete` makes the
-convention step **fail**, rather than silently claiming complete parity.
+The separate required `docs` step checks README regeneration and requires
+every selected source-backed README to render; convention results now depend
+on the severity of their actual issues. Registry CI is not switched by this
+coverage ledger.
 
 | Source | Static compliance assertion | Coverage |
 | --- | --- | --- |
@@ -62,7 +64,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:544 | Required push path filters, with metadata exclusion last | C: enforces canonical order |
 | M:565 | No excess push path filters | C: also rejects duplicate patterns |
 | M:585 | Automatic execution restricted to upstream repository | C: canonical condition includes cancellation; rejects weakened expressions |
-| M:651 | README regeneration leaves no diff | G: [required docs result](2026-10-01-bicep-required-readme-step.md) fails closed; [provenance-based comment comparison](2026-10-01-bicep-readme-comment-provenance.md) allows only generated complete JSON pairs (the pinned Vault snapshot lacks eight lines). [Historical pinned audit](2026-10-01-bicep-readme-current-registry-parity.md) rendered only 574/575 without MCR; registry main has corrected HCI's README reference, but its published dependency and a full current-head render remain unqualified |
+| M:651 | README regeneration leaves no diff | C/E: required [docs result](2026-10-01-bicep-required-readme-step.md) fails on missing/stale/failed or incomplete renders; [provenance comparison](2026-10-01-bicep-readme-comment-provenance.md) allows only producer-owned complete JSON comment pairs. [Current-registry qualification](2026-10-01-bicep-current-registry-readme-qualification.md) rendered 575/575 offline at `82bab040`, independently verified 574 exact README byte matches and only eight omitted generated Vault comment lines; three source-less README blobs remain unchanged and separately reported |
 | M:717 | Checked-in `main.json` matches rebuilt Bicep | C/E: convention and transform compare exact compiled bytes across root, ordinary children and `modules/` children |
 | M:786 | Compiled template is nonempty | C/E: convention builds every source; transform builds modules |
 | M:794 | Compiled ARM schema version is current | C: four scope schemas |
@@ -235,14 +237,14 @@ description are independent; this slice does not edit either validation rule.
 ## Follow-up before registry migration
 
 The [compiled convention slice](2026-09-30-bicep-compiled-convention-checks.md)
-covered e2e compilation and compiled-template assertions. Publication-aware
-versions and changelogs now use authoritative MCR tags and upstream
-provenance. Complete resource-folder singularization, README drift and
-advisory API-version checks; reconcile both authored telemetry forms with
-the registry's literal assertions. The coverage ledger above is the
-per-assertion handoff; remaining gaps are not implicit passes. Preserve
-the current fork-safe and static-validation workflow conditions during any
-later cutover.
+covers e2e compilation and compiled-template assertions. Publication-aware
+versions and changelogs use authoritative MCR tags. The inventory above has
+no remaining required assertion gaps at its pinned source revision. This does
+not replace the registry's catalog gate for published source-pending status,
+module-owned unit tests, deployment validation, or fork-safe workflow
+conditions. Validate the integrated, installable package against real module
+inputs and review the separately owned metadata/test-tier changes before any
+registry CI cutover; do not switch workflows in this slice.
 
 ## Checklist
 

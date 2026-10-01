@@ -6,9 +6,8 @@ function Invoke-AvmBicepCheckConvention {
     .DESCRIPTION
         Checks layout, versions, changelogs, compiled ARM templates, checked-in
         main.json drift, e2e test sources, workflows, and CODEOWNERS across root
-        and child modules without modifying them.
-        Other registry checks still require a failing coverage issue even
-        when every implemented rule passes.
+        and child modules without modifying them. The separate required docs
+        step in pr-check checks README regeneration and render completeness.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -49,6 +48,11 @@ function Invoke-AvmBicepCheckConvention {
             continue
         }
         $scopes.Add($scope)
+    }
+    if ($scopes.Count -eq 0 -and $issues.Count -eq 0) {
+        $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `
+                    -Path $Context.Root -Code 'avm.bicep.scope' `
+                    -Message 'No Bicep module scopes were discovered for convention checks.'))
     }
 
     $serviceShortIndex = @{}
@@ -230,23 +234,21 @@ function Invoke-AvmBicepCheckConvention {
         }
     }
 
-    $uncovered = @(
-        'README regeneration parity against registry output'
-    )
-    $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $Context.Root `
-                -Code 'avm.bicep.convention-incomplete' `
-                -Message ("Bicep convention coverage is incomplete: {0}. Keep the registry compliance job until these checks are implemented." -f ($uncovered -join '; '))))
+    $status = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0) {
+        'fail'
+    }
+    else { 'pass' }
 
     return [pscustomobject][ordered]@{
         Engine            = 'bicep'
         Tool              = 'avm-bicep-convention/1'
         ToolPath          = $null
         ToolSource        = 'builtin'
-        Status            = 'fail'
+        Status            = $status
         ScopesChecked     = $scopes.Count
         CompiledFiles     = $compiledCount
         CompilerSource    = if ($null -ne $tool) { $tool.Source } else { 'not-run' }
-        UncoveredFamilies = $uncovered
+        UncoveredFamilies = @()
         Issues            = $issues.ToArray()
     }
 }

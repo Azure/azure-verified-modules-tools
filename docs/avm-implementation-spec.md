@@ -650,6 +650,15 @@ comment lines absent from the checked-in `avm/res/key-vault/vault/README.md`,
 and separately verifies all source-less README bytes. Report that historical
 exception explicitly; keep the comments in generated output, as the legacy
 generator emits them. Every other byte remains subject to the comparison.
+At registry commit `82bab0404566557b9fb5efdc9780bb5ce438030b`,
+an offline render with the published dependencies and pinned Bicep CLI
+produced all 575 source-backed READMEs. An independent comparison found 574
+byte-identical matches and only the eight proven generated Vault comment
+lines; the three source-less README files matched their tracked Git blobs
+without being counted as rendered. The [qualification record](progress/2026-10-01-bicep-current-registry-readme-qualification.md)
+captures the input digests and diagnostics. The required `avm pr-check` docs
+step enforces later README drift; this qualification alone does not authorize
+removing the registry CI workflow or its other gates.
 
 ### Files inside the user's home
 

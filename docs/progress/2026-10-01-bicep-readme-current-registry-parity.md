@@ -5,6 +5,12 @@
 **Updated**: 2026-10-01
 **Branch**: `jaredfholgate-bicep-static-check-parity`
 
+This record preserves the earlier blocked audit. The later
+[current-registry qualification](2026-10-01-bicep-current-registry-readme-qualification.md)
+verified the published dependency and all 575 source-backed READMEs at
+`82bab0404566557b9fb5efdc9780bb5ce438030b`; its evidence supersedes
+the blocker and counts below.
+
 ## Outcome
 
 Make Bicep build, lint, validation, and README rendering non-restoring under

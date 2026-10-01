@@ -80,7 +80,21 @@ Describe 'Invoke-AvmCheckConvention' {
         }
         $result.Status | Should -Be 'fail'
         $result.Issues.Code | Should -Contain 'avm.bicep.scope'
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+    }
+
+    It 'fails closed when a Bicep monorepo contains no discoverable module scopes' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmMetadataScope { @() }
+            Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{
+                    Ecosystem = 'bicep'; Root = $TestDrive; Kind = 'bicep-monorepo'
+                })
+        }
+        $result.Status | Should -Be 'fail'
+        $result.ScopesChecked | Should -Be 0
+        $result.UncoveredFamilies.Count | Should -Be 0
+        $result.Issues.Count | Should -Be 1
+        $result.Issues[0].Code | Should -Be 'avm.bicep.scope'
+        $result.Issues[0].Severity | Should -Be 'error'
     }
 
     It 'the terraform engine returns a real envelope and no longer throws AvmNotSupportedException' {

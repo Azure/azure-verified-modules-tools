@@ -38,9 +38,9 @@ function Invoke-AvmPrCheck {
         skipped. Bicep policy runs the required and advisory PSRule baselines
         when its repository config and selected test sources are available;
         missing inputs fail the check. Bicep policy, convention, and docs
-        must report inspectable results rather than skipping. Convention
-        coverage is still incomplete and fails the run until the remaining
-        checks are covered.
+        must report inspectable results rather than skipping. The required
+        docs step checks README drift and confirms every selected source-backed
+        README was rendered; source-less READMEs are reported separately.
 
         The sync step also gates on the managed-files release recorded in
         '.avm/managed-files-version.json': governed files are compared against

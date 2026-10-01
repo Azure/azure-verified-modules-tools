@@ -80,23 +80,16 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
-    It 'checks the complete root and child fixture and reports only the known coverage gap' {
+    It 'checks the complete root and child fixture without uncovered convention families' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Engine | Should -Be 'bicep'
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'
-        $result.UncoveredFamilies.Count | Should -Be 1
-        $result.UncoveredFamilies | Should -Contain 'README regeneration parity against registry output'
-        $result.UncoveredFamilies | Should -Not -Contain 'registry-literal telemetry syntax and description parity for scaffolded modules'
-        $result.UncoveredFamilies | Should -Not -Contain 'checked-in main.json drift for children under modules/'
-        $result.UncoveredFamilies | Should -Not -Contain 'child publish allowlist and resource-folder singularization'
-        $result.UncoveredFamilies | Should -Not -Contain 'workflow and CODEOWNERS checks'
-        $result.Issues.Count | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'avm.bicep.convention-incomplete'
-        $result.Issues[0].Severity | Should -Be 'error'
+        $result.UncoveredFamilies.Count | Should -Be 0
+        $result.Issues.Count | Should -Be 0
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 5 -ParameterFilter {
                 $ArgumentList[0] -eq 'build' -and $ArgumentList[1] -eq '--stdout'
@@ -104,7 +97,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
-    It 'reports an outdated compiled resource API as an advisory and retains the unrelated coverage failure' {
+    It 'reports an outdated compiled resource API as an advisory without failing the convention check' {
         InModuleScope 'Avm.Authoring' {
             Mock Get-AvmBicepApiSpecList {
                 @{
@@ -120,9 +113,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.Issues.Code | Should -Contain 'avm.bicep.api-version-outdated'
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
         @($result.Issues | Where-Object Code -eq 'avm.bicep.api-version-outdated' |
                 Where-Object Severity -eq 'warning').Count | Should -BeGreaterThan 0
     }
@@ -151,7 +143,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $missing = @($result.Issues | Where-Object Code -eq 'avm.bicep.workflow-file')
         $missing.Count | Should -Be 1
         $missing[0].File | Should -Be '.github/workflows/avm.res.mock.widget.yml'
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+        $result.Status | Should -Be 'fail'
     }
 
     It 'rejects malformed YAML without treating the workflow as checked' {
@@ -365,7 +357,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $failed.File | Should -Contain 'child/main.bicep'
         $failed.File | Should -Contain 'tests/e2e/waf-aligned/main.test.bicep'
         $failed.Message | Should -Match 'BCP999'
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+        $result.Status | Should -Be 'fail'
     }
 
     It 'fails closed with a named issue when the pinned compiler is unavailable' {
@@ -574,8 +566,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         @($result.Issues | Where-Object Code -like 'avm.bicep.telemetry-*').Count |
             Should -Be 0
-        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $result.Issues.Count | Should -Be 0
+        $result.Status | Should -Be 'pass'
     }
 
     It 'rejects mixed telemetry declarations and a mismatched selector for the source variable' {
@@ -850,7 +842,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.CompiledFiles | Should -Be 2
         @($compiledErrors | Where-Object { $_.File -match '^tests/e2e/[^/]+/main\.test\.bicep$' }).Count |
             Should -Be 3
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+        $result.Status | Should -Be 'fail'
     }
 
     It 'accepts both CRLF and LF line endings in test sources' {
@@ -859,8 +851,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         [System.IO.File]::WriteAllText($testPath, $source.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $result.Issues.Count | Should -Be 0
+        $result.Status | Should -Be 'pass'
     }
 
     It 'does not report a false success when the module does not have a registry layout' {
@@ -871,7 +863,6 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $outside -SkipModuleVersionCheck
         $result.Status | Should -Be 'fail'
         $result.Issues.Code | Should -Contain 'avm.bicep.scope'
-        $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
     }
 
     It 'requires a top-level main.bicep even when only metadata and another Bicep file remain' {
@@ -952,8 +943,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
         $passing = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $passing.ScopesChecked | Should -Be 3
-        @($passing.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $passing.Issues.Count | Should -Be 0
+        $passing.Status | Should -Be 'pass'
 
         Remove-Item -LiteralPath (Join-Path $child 'README.md')
         $failing = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
@@ -972,8 +963,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $artifact = Join-Path $child 'main.json'
         $passing = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $passing.ScopesChecked | Should -Be 3
-        @($passing.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $passing.Issues.Count | Should -Be 0
+        $passing.Status | Should -Be 'pass'
 
         $original = [System.IO.File]::ReadAllText($artifact)
         [System.IO.File]::WriteAllText($artifact, "$original`n", [System.Text.UTF8Encoding]::new($false))
@@ -1003,8 +994,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $result.ScopesChecked | Should -Be 3
         $result.CompiledFiles | Should -Be 5
-        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $result.Issues.Count | Should -Be 0
+        $result.Status | Should -Be 'pass'
     }
 
     It 'identifies missing files and incorrect README casing in root and child scopes' {
@@ -1043,8 +1034,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         It 'accepts a versioned child on the checkout allowlist' {
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
-            @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-                Should -Be 0
+            $result.Issues.Count | Should -Be 0
+            $result.Status | Should -Be 'pass'
             $result.UncoveredFamilies | Should -Not -Contain 'resource-folder singularization beyond naming syntax'
         }
 
@@ -1171,7 +1162,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     $_.Code -like 'avm.bicep.changelog-unpublished*' -or
                     $_.Code -like 'avm.bicep.changelog-target*'
                 }).Count | Should -Be 0
-            $result.Issues.Code | Should -Contain 'avm.bicep.convention-incomplete'
+            $result.Status | Should -Be 'pass'
         }
 
         It 'reports unpublished headings and a missing next target section with file-specific codes' {
@@ -1299,8 +1290,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     }
                 }
                 $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-                @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-                    Should -Be 0
+                $result.Issues.Count | Should -Be 0
+                $result.Status | Should -Be 'pass'
             }
         }
     }
@@ -1383,8 +1374,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 "'../../../main.bicep' = {", "'../../../main.bicep' = if (true) {"))
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object Code -ne 'avm.bicep.convention-incomplete').Count |
-            Should -Be 0
+        $result.Issues.Count | Should -Be 0
+        $result.Status | Should -Be 'pass'
     }
 
     It 'detects duplicate serviceShort values in another module of the repository' {
