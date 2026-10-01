@@ -37,8 +37,8 @@ diagnostic, so its behaviour is unchanged.
 
 ## Validation
 
-- `./build.ps1 pre-commit` passed: layout, lint with no findings, 1,936 unit
-  tests, and 936 component tests.
+- `./build.ps1 pre-commit` passed after merging the latest `main`: layout,
+  lint with no findings, 2,055 unit tests, and 936 component tests.
 - The focused retry tests also passed under Pester 6.2.0, which CI installs:
   131 tests.
 - The new classifier, engine, and component tests fail when the classifier fix
