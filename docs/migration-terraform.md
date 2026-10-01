@@ -190,6 +190,8 @@ A consuming repository must use a released `Avm.Authoring` version with
 `register-features` and a reusable workflow ref containing this gate. Until
 both are available and the protected OIDC identity has the required scope,
 do not approve an integration or e2e run that relies on this file.
+Repositories already referencing the reusable workflow at `@main` require
+no reference edit once the tooling change merges.
 
 Example validation warns when the checkout's root module or a direct
 `modules/*` configuration is not reached by any successfully validated example.

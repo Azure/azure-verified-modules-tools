@@ -34,9 +34,13 @@ the tests; the workflow never unregisters features.
 passed. Focused PowerShell tests exercised manifest parsing, offline preflight,
 per-leg identity/subscription safety, CLI arguments, existing and transitional
 states, permissions, provider propagation, and timeouts using mocked Azure CLI.
-The full `./build.ps1 pre-commit` gate passed: layout and lint, 1,942 unit
-tests passed (9 existing skips), and 975 component tests passed. New source
-and test files use UTF-8 without BOM and LF line endings.
+The full `./build.ps1 pre-commit` gate passed: layout and lint, 1,957 unit
+tests passed (9 existing skips), and 975 component tests passed. An initial
+cross-platform coverage check exposed newly added commands that were exercised
+only by component tests; mock-only, no-filesystem unit tests now exercise
+registration and provider propagation. `./build.ps1 coverage` passed locally
+at 73.87% against the 70% floor. New source and test files use UTF-8 without
+BOM and LF line endings.
 
 No live Azure registration, deployment, workflow dispatch, release, or merge
 was performed or authorized by this slice.
@@ -45,6 +49,8 @@ was performed or authorized by this slice.
 
 The consuming module's
 [change](https://github.com/Azure/terraform-azurerm-avm-ptn-avd-lza-managementplane/pull/193)
-cannot benefit until this tooling is merged and released and the reusable
-workflow is updated on `main`. Protected environment approvals and Azure
-feature/provider registration permissions remain requirements for actual runs.
+already references the reusable workflow at `@main`, so no reference edit is
+needed. It cannot benefit until this tooling is merged to `main` and a
+compatible module version is released. Protected environment approvals and
+Azure feature/provider registration permissions remain requirements for
+actual runs.
