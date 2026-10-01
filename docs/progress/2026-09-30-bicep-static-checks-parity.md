@@ -62,7 +62,7 @@ convention step **fail**, rather than silently claiming complete parity.
 | M:544 | Required push path filters, with metadata exclusion last | C: enforces canonical order |
 | M:565 | No excess push path filters | C: also rejects duplicate patterns |
 | M:585 | Automatic execution restricted to upstream repository | C: canonical condition includes cancellation; rejects weakened expressions |
-| M:651 | README regeneration leaves no diff | G: `avm docs` is not proven equivalent |
+| M:651 | README regeneration leaves no diff | G: current-head audit rendered 574/575 without MCR; 573 exact, Vault eight-comment drift, HCI uncached published dependency and stale reference. See [current README parity](2026-10-01-bicep-readme-current-registry-parity.md) |
 | M:717 | Checked-in `main.json` matches rebuilt Bicep | C/E: convention and transform compare exact compiled bytes across root, ordinary children and `modules/` children |
 | M:786 | Compiled template is nonempty | C/E: convention builds every source; transform builds modules |
 | M:794 | Compiled ARM schema version is current | C: four scope schemas |

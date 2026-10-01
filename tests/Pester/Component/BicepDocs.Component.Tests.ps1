@@ -336,14 +336,69 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
                 [pscustomobject]@{ ExitCode = 0; StdOut = "# Rendered`n"; StdErr = '' }
             }
             $result = Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck
-            $result.Status | Should -BeExactly 'fail'
+            $result.Status | Should -BeExactly 'pass'
             $result.FilesProcessed | Should -Be 3
             $result.NotRendered | Should -Contain 'avm/ptn/aca-lza/hosting-environment/modules/spoke/README.md'
             $result.Issues[0].Code | Should -BeExactly 'avm.bicep.docs-no-source'
-            Test-Path -LiteralPath (Join-Path $F.Module 'README.md') | Should -BeFalse
+            $result.Issues[0].Severity | Should -BeExactly 'warning'
+            [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
+                Should -BeExactly "# Rendered`n"
             [System.IO.File]::ReadAllText(
                 (Join-Path $F.Root 'avm' 'ptn' 'aca-lza' 'hosting-environment' 'modules' 'spoke' 'README.md')) |
                 Should -BeExactly "# Walkthrough`n"
+
+            $drift = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $drift.Status | Should -BeExactly 'pass'
+            $drift.Changed.Count | Should -Be 0
+            $drift.Issues[0].Code | Should -BeExactly 'avm.bicep.docs-no-source'
+            $drift.NotRendered.Count | Should -Be 1
+        }
+    }
+
+    It 'disables Bicep docs restoration in offline mode, including fallback source compilation' {
+        $fixture = New-BicepDocsFixture -Name 'offline-no-restore'
+        $jsonPath = Join-Path $fixture.Module 'main.json'
+        $compiledJson = [System.IO.File]::ReadAllText($jsonPath)
+        Remove-Item -LiteralPath $jsonPath
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            F = $fixture; CompiledJson = $compiledJson
+        } {
+            param($F, $CompiledJson)
+            $script:offlineCompiledJson = $CompiledJson
+            $previous = $env:AVM_OFFLINE
+            try {
+                $env:AVM_OFFLINE = '1'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+                }
+                Mock Invoke-AvmProcess {
+                    if ($ArgumentList[0] -eq 'build') {
+                        return [pscustomobject]@{
+                            ExitCode = 0; StdOut = $script:offlineCompiledJson; StdErr = ''
+                        }
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = "# Rendered`n"; StdErr = '' }
+                }
+                $result = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+                $result.FilesProcessed | Should -Be 2
+                Should -Invoke Invoke-AvmProcess -ParameterFilter {
+                    $ArgumentList[0] -eq 'build' -and $ArgumentList -contains '--no-restore'
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                    $ArgumentList[0] -eq 'docs' -and $ArgumentList -contains '--no-restore'
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                    $ArgumentList -notcontains '--no-restore'
+                }
+            }
+            finally {
+                if ($null -eq $previous) {
+                    Remove-Item Env:AVM_OFFLINE -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:AVM_OFFLINE = $previous
+                }
+            }
         }
     }
 

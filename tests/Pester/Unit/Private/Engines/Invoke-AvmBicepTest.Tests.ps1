@@ -117,6 +117,43 @@ Describe 'Invoke-AvmBicepTest' {
         $result.Issues[0].Message | Should -Match 'module reference'
     }
 
+    It 'skips restoration offline and fails on an uncached external module' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $previous = $env:AVM_OFFLINE
+            try {
+                $env:AVM_OFFLINE = '1'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'mock-bicep'
+                    }
+                }
+                Mock Invoke-AvmProcess {
+                    [pscustomobject]@{
+                        ExitCode = 1; StdOut = ''; StdErr = 'External module is not cached.'
+                    }
+                }
+                $result = Invoke-AvmBicepTest -Context $C
+                $result.Status | Should -BeExactly 'fail'
+                $result.Issues.Count | Should -Be 2
+                $result.Issues[0].Code | Should -BeExactly 'avm.bicep.build-failed'
+                $result.Issues[0].Message | Should -Match 'not cached'
+                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                    $ArgumentList[0] -eq 'build' -and $ArgumentList -contains '--no-restore'
+                }
+            }
+            finally {
+                if ($null -eq $previous) {
+                    Remove-Item Env:AVM_OFFLINE -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:AVM_OFFLINE = $previous
+                }
+            }
+        }
+    }
+
     It 'returns Status=pass when only warnings are emitted' {
         $ctx = $script:context
         $a = $script:fileA

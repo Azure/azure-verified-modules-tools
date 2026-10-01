@@ -14,10 +14,9 @@ function Invoke-AvmBicepLint {
         Each diagnostic line looks like:
           <path>(<line>,<col>) : <severity> <code>: <message>
 
-        bicep lint returns exit code 1 when at least one Error diagnostic
-        was emitted and 0 otherwise (warnings and info do not change the
-        exit code). The engine surfaces that as Status='fail' when any
-        Issue has Severity='error', otherwise 'pass'.
+        Bicep lint errors, including nonzero exits without a parseable
+        diagnostic, fail the check. AVM_OFFLINE=1 disables external module
+        restoration.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -60,27 +59,45 @@ function Invoke-AvmBicepLint {
     foreach ($file in $files) {
         $fileIndex++
         Write-AvmLog ("lint: file {0}/{1} = {2}" -f $fileIndex, $files.Count, $file.FullName) -Level Info | Out-Null
+        $arguments = @('lint', $file.FullName, '--diagnostics-format', 'defaultV2')
+        if ($env:AVM_OFFLINE -eq '1') {
+            $arguments += '--no-restore'
+        }
         $r = Invoke-AvmProcess `
             -FilePath $tool.Path `
-            -ArgumentList @('lint', $file.FullName, '--diagnostics-format', 'defaultV2') `
+            -ArgumentList $arguments `
             -IgnoreExitCode `
             -StreamOutput `
             -Label ("bicep lint {0}" -f $file.Name)
 
         $stream = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+        $hasError = $false
         foreach ($line in ($stream -split "`r?`n")) {
             if (-not $line) { continue }
             # <path>(<l>,<c>) : <severity> <code>: <message>
             if ($line -match '^(?<path>.+?)\((?<l>\d+),(?<c>\d+)\)\s*:\s*(?<sev>\w+)\s+(?<code>[^:]+)\s*:\s*(?<msg>.*)$') {
+                $severity = $Matches['sev'].ToLowerInvariant()
+                if ($severity -eq 'error') { $hasError = $true }
                 $issues.Add([pscustomobject][ordered]@{
                         File     = $Matches['path']
                         Line     = [int]$Matches['l']
                         Column   = [int]$Matches['c']
-                        Severity = $Matches['sev'].ToLowerInvariant()
+                        Severity = $severity
                         Code     = $Matches['code'].Trim()
                         Message  = $Matches['msg'].Trim()
                     })
             }
+        }
+        if ($r.ExitCode -ne 0 -and -not $hasError) {
+            $detail = if ([string]::IsNullOrWhiteSpace($r.StdErr)) { [string]$r.StdOut } else { [string]$r.StdErr }
+            $issues.Add([pscustomobject][ordered]@{
+                    File     = $file.FullName
+                    Line     = 0
+                    Column   = 0
+                    Severity = 'error'
+                    Code     = 'avm.bicep.lint-failed'
+                    Message  = "Bicep lint exited with code $($r.ExitCode): $detail"
+                })
         }
     }
 
