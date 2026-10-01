@@ -478,15 +478,28 @@ independent and are not required to match.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
-`avm init` is the one-time local entry point. Callers supply
+`avm init` is the one-time entry point. Callers supply
 `-Ecosystem`, `-ModuleType`, and `-Path`; `-Proposed` is Bicep-only and creates
 only `metadata.json`, even when the module and provider directories do not
-exist yet. Terraform initialization likewise creates only local metadata and
-its containing directory, never a remote repository. Full Bicep
+exist yet. Full Bicep
 initialization scaffolds the root's metadata.json, main.bicep, version.json,
 CHANGELOG.md, and defaults/WAF-aligned tests/e2e sources; children receive
-only metadata.json and main.bicep. Neither mode creates main.json, README.md,
-a remote repository, or a deployment. Existing files remain unmodified.
+only metadata.json and main.bicep. Bicep initialization creates neither
+main.json, README.md, a remote repository, nor a deployment. Existing files
+remain unmodified.
+Terraform root initialization creates and sets up the `Azure/<repository>`
+GitHub repository named by `-Path`, as a sequence of resumable stages that
+each query the current local and GitHub state first: write metadata.json to
+the folder, create the public repository, wait for open source portal setup
+and JIT elevation, grant the module contributors (push) and readers (triage)
+teams, publish the first commit to `main`, request the AVM app installations
+in `microsoft/github-operations` unless the repository is listed there or an
+open request exists, and clone the repository into an empty folder. The first
+commit is built in a temporary clone from the portal's seed files,
+metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
+and `avm pre-commit` output; no other local content is published. Interrupted
+or non-interactive runs stop with instructions and resume on the next run.
+Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child
 `main.bicep` into `main.json` through the pinned Bicep CLI. It leaves
 unchanged output bytes and timestamps alone. A proposed module with only
@@ -590,10 +603,19 @@ Terraform repository discovery reads validated root metadata from each
 repository's default branch. Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
-New-repository creation initializes metadata before the first commit without a
-tools-local CSV registration. Its initial push temporarily changes only
-`rulesets-default-opt-in`, preserving the prior value in a recovery record and
-verifying restoration on success or failure. Existing repositories use normal
+New-repository creation (`avm init`) initializes metadata before the first
+commit without a tools-local CSV registration. Organization rulesets require
+pull requests on `main` once a repository is marked active, so its initial push
+temporarily sets only `global-rulesets-opt-out` to `true`. The original value
+and the repository ID are recorded in the user's Avm state folder first, then
+the value is restored and verified on success or failure. A later run restores
+a recorded value left by an interrupted run only while the property is still
+`true` and repository sync does not manage the repository; a record for a
+deleted repository of the same name is discarded. A `true` value with no
+record stops the run because its original value is unknown, unless repository
+sync manages the repository; sync's own ruleset also requires pull requests, so
+such a repository without module files is not pushed to directly.
+Existing repositories use normal
 reviewed updates; generated public catalog CSVs are unaffected.
 The current one-off Terraform migration is agent-led and metadata-only because
 source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,

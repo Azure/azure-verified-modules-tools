@@ -57,7 +57,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('init')
             Cmdlet  = 'Initialize-AvmModule'
-            Summary = 'Initialize local Bicep modules or metadata-only Terraform modules; -Proposed writes only Bicep metadata.'
+            Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('metadata', 'validate')
