@@ -82,31 +82,34 @@ without touching candidate identities or state. A later candidate tenant uses
 a different internal key; it does not replace the previous tenant's identities.
 
 Plan-only never applies to obtain a client ID. If the candidate ID is still
-unknown, the run reports `PendingCandidateIdentity` and leaves the consumer
-update pending. Apply uses only a saved plan checked for the complete bounded
-identity scope, no deletes/replacements, and the required delegation deny
-condition. Failed or uncertain applies do not trigger automatic state repair,
-state imports, or apply retries.
+unknown or any identity, federation, or membership change is pending, the run
+reports `PendingCandidateIdentity` and leaves the consumer update pending.
+Apply uses only a saved plan checked for the complete bounded identity,
+federation, provider, and group scope. Identity replacements and unrelated
+deletes remain forbidden; only the exact permission migration/revocation
+below is allowed. Failed or uncertain applies do not trigger automatic state
+repair, state imports, or apply retries.
 
 After validation, both paths log an allow-listed candidate-plan summary:
 repository and tenant identifiers, the seven managed addresses and actions,
-identity and membership scopes, federation bindings, and the full delegation
-condition. Unknown and sensitive fields are marked explicitly. The summary
+an optional eighth Fabric membership, and any bounded migration/revocation
+deletes. It includes identity and membership scopes and federation bindings;
+obsolete Owner deletions also show the previous scope, principal, and
+delegation condition. Unknown and sensitive fields are marked explicitly. The summary
 excludes raw plans, state, variables, output documents, and credentials; it
 uploads no artifact.
 This diagnostic grants no approval and changes no cutover gate. A later apply
 generates and validates its own saved plan, not the earlier preview binary.
 
-Before any operator-approved BAMI run, verify the
-[Owner delegation fix](https://github.com/Azure/azure-verified-modules-tools/pull/111)
-has landed: Owner, User Access Administrator, and RBAC Administrator must all
-be denied for delegation in both write and delete clauses. The current
-candidate plan guard rejects the older condition. Verify controller federation,
-identity/FIC permissions, constrained management-group role assignment, and
-lookup/membership access to
-`grp-sec-avm-tf-end-to-end-testing-entra-readers`. The group exists in BAMI, but
-controller directory-role assignment alone does not establish Graph API
-readiness; lookup and membership operations remain unproved.
+Before any operator-approved BAMI run, verify the bootstrap group's Owner
+assignment retains the
+[nondelegation condition](https://github.com/Azure/azure-verified-modules-tools/pull/111):
+Owner, User Access Administrator, and RBAC Administrator are denied with
+`ForAnyOfAllValues:GuidNotEquals` in both write and delete clauses,
+`conditionVersion = "2.0"`. Verify controller federation, identity/FIC
+permissions, and pinned group read/membership access. Controller directory-role
+assignment alone does not establish Graph API readiness; offline checks do
+not prove the role-only route or effective live permissions.
 
 Coordinate approved reconciliation through the serialized sync workflow.
 Explicit `ARM_*_OVERRIDE` values and environment-level secrets retain their
@@ -114,6 +117,56 @@ existing consumer precedence; audit them when verifying a repository's effective
 test identity. Do not run another writer outside the serialized sync workflow.
 Do not change the backend, move state, grant permissions, or reuse the
 controller as an execution identity to bypass a failed prerequisite.
+
+## BAMI group access and migration
+
+The three group IDs in the [source bundle](../README.md#test-tenant-selection)
+are required even when Fabric access is off. BAMI resolves groups by object ID,
+not the legacy display-name lookup, and requires the expected named, assigned,
+non-mail-enabled security groups in the pinned tenant. Repository sync manages
+only each dedicated test identity's membership edges, never the shared groups'
+complete membership lists or their Azure/directory role assignments.
+The candidate's private `test_group_contract` output exposes only observed
+provider identifiers and allow-listed group metadata, not group members,
+owners, or credentials. `test_identity` and consumer secrets are unchanged.
+
+An illustrative explicit Fabric opt-in, requiring separate approval:
+
+```json
+{
+  "name": "fabric-admin-api-tests",
+  "order": 10,
+  "repositories": ["avm-ptn-fabric-example"],
+  "testCapabilities": { "fabricAdminApis": true }
+}
+```
+
+Missing capability means `false`. Higher `order`, then later declaration,
+wins; explicit `false` revokes only that repository's Fabric edge on an
+approved apply. `true` requires canonical repository IDs and rejects `*`.
+Module names, topics, and BAMI selection never imply Fabric opt-in. This
+capability affects BAMI only; no repository is opted in by this change.
+`avm-bootstrap-fabric-admins` is not a consumer group. Tenant registration,
+licensing, first portal access, and Fabric tenant settings remain bootstrap
+operator work outside repository sync.
+
+The readers edge retains `azuread_group_member.example`, so preserving the
+bootstrap readers object ID avoids membership replacement when its name
+changes. A `moved` block preserves legacy direct Owner state at
+`identity_role_assignment[0]`. Legacy still creates that conditioned assignment;
+BAMI creates no direct Owner assignment and adds `test_identity_owners[0]`
+instead. A future approved saved plan destroys only the obsolete deterministic
+Owner assignment for the same repository principal, pinned management group,
+role, and resource ID. Keep the controller's existing Owner-assignment deletion
+permission until this migration finishes. No `removed { destroy = false }`,
+state removal/import, or whole-group reconciliation is used.
+
+Bootstrap prerequisites and the shared group assignment are delivered in
+[azure-cloud-native/Azure-Verified-Modules-Tooling-BAMI#43](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Tooling-BAMI/pull/43).
+Team operating guidance is maintained in
+[azure-cloud-native/Azure-Verified-Modules-Docs#52](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs/pull/52).
+Merging source does not authorize a workflow run, apply, variable publication,
+or Fabric activation; coordinate those separately with the bootstrap owner.
 
 ## Isolated branch testing
 

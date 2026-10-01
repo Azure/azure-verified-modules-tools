@@ -122,6 +122,7 @@ if ($testTenant.TestTenant -ceq 'bami') {
         Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
         RepositorySyncRepositoryId = $repositorySyncContext.RepositoryId
         PlanOnly = $planOnly
+        FabricAdminApis = $settings.TestCapabilities.fabricAdminApis
     }
     if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
         $candidateParameters.JobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]

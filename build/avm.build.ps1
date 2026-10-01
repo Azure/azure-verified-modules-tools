@@ -348,14 +348,26 @@ task infra {
 task 'test-tenant-terraform' {
     Import-Module $script:manifestPath -Force
     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RetryHelpers.ps1')
-    foreach ($directory in @('terraform', 'bami-identity')) {
+    foreach ($directory in @('terraform', 'bami-identity', [System.IO.Path]::Combine('terraform', 'modules', 'azure'))) {
+        $directoryName = $directory.Replace([string][System.IO.Path]::DirectorySeparatorChar, '-')
         $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
         $formatPaths = @('main.tf', 'variables.tf', 'tests')
         if ($directory -eq 'terraform') {
             $formatPaths += @('locals.tf', 'modules/azure/outputs.tf')
         }
-        else {
+        elseif ($directory -eq 'bami-identity') {
             $formatPaths += @('terraform.tf', 'outputs.tf')
+        }
+        else {
+            $formatPaths += @('locals.tf', 'terraform.tf', 'outputs.tf')
+        }
+        $environment = @{
+            GH_TOKEN = $null; GITHUB_TOKEN = $null; TF_IN_AUTOMATION = 'true'; TF_INPUT = 'false'
+            TF_CLI_ARGS = $null; TF_CLI_ARGS_init = $null; TF_CLI_ARGS_validate = $null
+            TF_CLI_ARGS_test = $null; TF_CLI_ARGS_plan = $null; TF_CLI_ARGS_apply = $null
+        }
+        if ($env:TF_DATA_DIR) {
+            $environment.TF_DATA_DIR = Join-Path $env:TF_DATA_DIR $directoryName
         }
         foreach ($arguments in @(
             (@('fmt', '-check', '-diff') + $formatPaths),
@@ -364,7 +376,7 @@ task 'test-tenant-terraform' {
             @('test', '-json', '-verbose')
         )) {
             $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments -WorkingDirectory $root -TimeoutSec 600 `
-                -EnvVars @{ GH_TOKEN = $null; TF_IN_AUTOMATION = 'true'; TF_INPUT = 'false' }
+                -EnvVars $environment
             if ($result.ExitCode -ne 0) {
                 throw [System.InvalidOperationException]::new("Tenant Terraform $directory $($arguments[0]) failed: $($result.StdOut) $($result.StdErr)")
             }
@@ -373,7 +385,7 @@ task 'test-tenant-terraform' {
                 $resultDirectory = Join-Path $script:outRoot 'test-results'
                 $null = [System.IO.Directory]::CreateDirectory($resultDirectory)
                 [System.IO.File]::WriteAllText(
-                    (Join-Path $resultDirectory "$directory.terraform.jsonl"),
+                    (Join-Path $resultDirectory "$directoryName.terraform.jsonl"),
                     $result.StdOut,
                     [System.Text.UTF8Encoding]::new($false)
                 )
@@ -392,27 +404,59 @@ task 'test-tenant-terraform' {
                     if ($plans.Count -ne 1) {
                         throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider candidate plan.')
                     }
-                    $changes = $plans[0]['test_plan']['resource_changes']
-                    $resources = @($changes | ForEach-Object {
-                        @{ address = $_['address']; mode = $_['mode']; values = $_['change']['after'] }
-                    })
-                    $candidatePlan = @{
-                        errored = $false
-                        resource_changes = $changes
-                        planned_values = @{ root_module = @{ resources = $resources } }
-                    }
-                    try {
-                        Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
-                            -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' `
-                            -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211'
-                        Write-Build Green '  actual candidate plan passes the delegation guard'
-                    }
-                    catch [System.InvalidOperationException] {
-                        if ($_.Exception.Message -notlike 'Candidate activation requires the reviewed Owner/UAA/RBAC Administrator delegation fix*') {
-                            throw
+                    $candidatePlan = $plans[0]['test_plan']
+                    if (-not $candidatePlan.Contains('planned_values')) {
+                        $changes = $candidatePlan['resource_changes']
+                        $resources = @($changes | ForEach-Object {
+                            @{ address = $_['address']; mode = $_['mode']; type = $_['type']; values = $_['change']['after'] }
+                        })
+                        $evidence = $candidatePlan['output_changes']['test_group_contract']['after']
+                        if ($evidence -isnot [System.Collections.IDictionary] -or
+                            $evidence['groups'] -isnot [System.Collections.IDictionary]) {
+                            throw [System.IO.InvalidDataException]::new('The actual mocked plan must expose observed provider and group evidence.')
                         }
-                        Write-Build Yellow '  actual candidate plan correctly BLOCKED: delegation fix remains an activation prerequisite'
+                        $resources += @{
+                            address = 'module.azure.data.azapi_client_config.current'
+                            mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context']
+                        }, @{
+                            address = 'module.azure.data.azuread_client_config.bami[0]'
+                            mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context']
+                        }
+                        foreach ($name in @('entra_readers', 'test_identity_owners', 'fabric_admins')) {
+                            $address = if ($name -ceq 'entra_readers') { 'module.azure.data.azuread_group.entra_readers' } else {
+                                'module.azure.data.azuread_group.test_permissions["' + $name + '"]'
+                            }
+                            $resources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
+                        }
+                        $candidatePlan = @{
+                            errored = $false
+                            resource_changes = $changes
+                            planned_values = @{ root_module = @{ resources = $resources } }
+                        }
                     }
+                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings) -RepositorySync) `
+                        -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
+                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211'
+                    Write-Build Green '  actual candidate plan passes the pinned group and federation guard'
+                }
+                elseif ($directoryName -eq 'terraform-modules-azure') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
+                    $legacyPlans = @($events | Where-Object {
+                            $_['type'] -eq 'test_plan' -and $_['@testrun'] -ceq 'legacy_keeps_direct_owner_and_original_reader_edge'
+                        })
+                    if ($legacyPlans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked legacy assignment plan.')
+                    }
+                    $assignments = @($legacyPlans[0]['test_plan']['resource_changes'] | Where-Object {
+                            $_['address'] -ceq 'azapi_resource.identity_role_assignment[0]'
+                        })
+                    $expectedName = Get-AvmBamiOwnerAssignmentName -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -Settings (New-AvmTestBamiSettings)
+                    if ($assignments.Count -ne 1 -or
+                        $assignments[0]['change']['after']['name'] -cne $expectedName) {
+                        throw [System.IO.InvalidDataException]::new('The migration guard must match the actual Terraform UUIDv5 legacy assignment name.')
+                    }
+                    Write-Build Green '  legacy assignment UUID matches the exact migration guard'
                 }
             }
         }

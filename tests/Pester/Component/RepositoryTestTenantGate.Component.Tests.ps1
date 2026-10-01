@@ -91,7 +91,8 @@ Describe 'Repository sync test tenant selection' -Tag Component {
 
     AfterEach {
         foreach ($environmentName in $script:previousEnvironment.Keys) {
-            [Environment]::SetEnvironmentVariable($environmentName, $script:previousEnvironment[$environmentName])
+            $value = $script:previousEnvironment[$environmentName]
+            [Environment]::SetEnvironmentVariable($environmentName, ($null -eq $value ? [NullString]::Value : $value), 'Process')
         }
     }
 
@@ -108,7 +109,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         param($Event, $Flag, $PlanOnly)
 
         $env:GITHUB_EVENT_NAME = $Event
-        if ($Flag -ceq 'absent') { [Environment]::SetEnvironmentVariable('AVM_BAMI_TEST_TENANT_SYNC_ENABLED', $null) }
+        if ($Flag -ceq 'absent') { [Environment]::SetEnvironmentVariable('AVM_BAMI_TEST_TENANT_SYNC_ENABLED', [NullString]::Value, 'Process') }
         $script:arguments.planOnly = $PlanOnly
         Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
         Mock Clear-TerraformWorkspace {}
@@ -121,7 +122,8 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             $PlanOnly -eq $expectedPlan -and $RepoId -ceq 'avm-ptn-example-repo' -and
             $Repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
             $RepositorySyncRepositoryId -ceq '1239632211' -and
-            $BamiValues.Count -eq 8 -and $BamiValues.TEST_BAMI_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001' -and
+            $BamiValues.Count -eq 11 -and $BamiValues.TEST_BAMI_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001' -and
+            $FabricAdminApis -eq $false -and
             $Backend.TenantId -ceq '44444444-4444-4444-8444-444444444444'
         }
         Should -Invoke Clear-TerraformWorkspace -Exactly 1
@@ -139,6 +141,9 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         @{ Missing = 'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME' }
         @{ Missing = 'TEST_BAMI_BICEP_CLIENT_ID' }
         @{ Missing = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID' }
+        @{ Missing = 'TEST_BAMI_ENTRA_READERS_GROUP_ID' }
+        @{ Missing = 'TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID' }
+        @{ Missing = 'TEST_BAMI_FABRIC_ADMINS_GROUP_ID' }
         @{ Missing = 'all' }
     ) {
         if ($Missing -ceq 'all') { $script:arguments.Remove('bamiSettings') }
@@ -159,6 +164,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         @{ Case = 'shared execution identity'; Change = { param($v) $v.TEST_BAMI_BICEP_CLIENT_ID = $v.TEST_BAMI_CONTROLLER_CLIENT_ID } }
         @{ Case = 'admin in test pool'; Change = { param($v) $v.TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $v.TEST_BAMI_SUBSCRIPTION_IDS[0].id } }
         @{ Case = 'persistent in test pool'; Change = { param($v) $v.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $v.TEST_BAMI_SUBSCRIPTION_IDS[0].id } }
+        @{ Case = 'shared access groups'; Change = { param($v) $v.TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID = $v.TEST_BAMI_ENTRA_READERS_GROUP_ID } }
     ) {
         & $Change $script:arguments.bamiSettings
         Mock Clear-TerraformWorkspace {}
@@ -269,6 +275,39 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
+    It 'forwards only an explicit repository Fabric capability and honors its higher-priority revocation' {
+        $script:config.repositoryGroups += @{
+            name = 'fabric'; order = 10; repositories = @('avm-ptn-example-repo')
+            testCapabilities = @{ fabricAdminApis = $true }
+        }
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
+        Mock Clear-TerraformWorkspace {}
+        $null = & $script:driver @script:arguments
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $FabricAdminApis -eq $true }
+        $script:config.repositoryGroups += @{
+            name = 'revoke'; order = 20; repositories = @('avm-ptn-example-repo')
+            testCapabilities = @{ fabricAdminApis = $false }
+        }
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        $null = & $script:driver @script:arguments
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $FabricAdminApis -eq $false }
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects a wildcard Fabric grant before cleanup, identity preparation, or repository changes' {
+        $script:config.repositoryGroups[0].testCapabilities = @{ fabricAdminApis = $true }
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        { & $script:driver @script:arguments } | Should -Throw '*explicit canonical repository IDs*'
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
     Context 'Full management and file preparation' {
         BeforeEach {
             $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
@@ -336,8 +375,9 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             }
             if ($Tenant -ceq 'bami') {
                 Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
-                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8 -and $RepositorySyncRepositoryId -ceq '1239632211'
+                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 11 -and $RepositorySyncRepositoryId -ceq '1239632211'
                 }
+
             }
             else {
                 Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0

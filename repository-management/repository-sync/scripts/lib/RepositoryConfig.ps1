@@ -11,6 +11,44 @@
 
 . (Join-Path $PSScriptRoot '..' '..' '..' 'shared' 'GroupSettings.ps1')
 
+function Resolve-AvmRepositoryTestCapabilities {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Groups,
+        [Parameter(Mandatory)] [string] $RepositoryId
+    )
+
+    $orderedGroups = @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId)
+    foreach ($entry in $Groups) {
+        $group = ConvertTo-AvmSettingDictionary -Value $entry
+        if (-not $group.Contains('testCapabilities')) { continue }
+        if ($null -eq $group['testCapabilities']) {
+            throw [System.ArgumentException]::new("Repository group '$($group['name'])' testCapabilities must be an object.")
+        }
+        $capabilities = ConvertTo-AvmSettingDictionary -Value $group['testCapabilities']
+        foreach ($key in $capabilities.Keys) {
+            if ($key -cne 'fabricAdminApis' -or $capabilities[$key] -isnot [bool]) {
+                throw [System.ArgumentException]::new("Repository group '$($group['name'])' supports only a boolean testCapabilities.fabricAdminApis.")
+            }
+        }
+        if ($capabilities['fabricAdminApis'] -eq $true -and @($group['repositories'] | Where-Object {
+                    $_ -cnotmatch '^avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*$'
+                }).Count -gt 0) {
+            throw [System.ArgumentException]::new("Repository group '$($group['name'])' Fabric admin APIs require explicit canonical repository IDs, never wildcard selectors.")
+        }
+    }
+    $result = @{ fabricAdminApis = $false }
+    foreach ($entry in $orderedGroups) {
+        if ($entry.Group.Contains('testCapabilities')) {
+            $capabilities = ConvertTo-AvmSettingDictionary -Value $entry.Group['testCapabilities']
+            if ($capabilities.Contains('fabricAdminApis')) {
+                $result.fabricAdminApis = $capabilities['fabricAdminApis']
+            }
+        }
+    }
+    return $result
+}
+
 function Resolve-RepositorySettings {
     param(
         [object]$repositoryConfig,
@@ -137,5 +175,6 @@ function Resolve-RepositorySettings {
         Topics                                          = $repositoryTopics
         WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
+        TestCapabilities                                = Resolve-AvmRepositoryTestCapabilities -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
     }
 }

@@ -148,10 +148,20 @@ environment. There is one current BAMI tenant, not a profile catalog.
 | `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
 | `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
 | `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | Bicep persistent-resource subscription |
+| `TEST_BAMI_ENTRA_READERS_GROUP_ID` | Pinned object ID of `avm-test-entra-readers` |
+| `TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID` | Pinned object ID of `avm-test-identity-owners` |
+| `TEST_BAMI_FABRIC_ADMINS_GROUP_ID` | Pinned object ID of `avm-test-fabric-admins` |
 
 Admin and Persistent must be different subscriptions, and neither may appear
 in the disposable test pool. The shared Bicep-only guard also rejects
 Persistent overlap without copying Admin into the Bicep projection.
+Repository sync requires all eleven fields and three distinct access group
+IDs. It validates the provider tenants and observed group names/types before
+changing individual repository membership edges. The controller never joins
+these test groups. Fabric admin API membership is default-off and requires
+an explicit canonical repository list under
+`repositoryGroups[].testCapabilities.fabricAdminApis`; wildcard grants are
+rejected. See [group access and migration](repository-sync/README.md#bami-group-access-and-migration).
 
 Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
@@ -160,8 +170,9 @@ same-named variables would not override the current consumers' secrets.
 Explicit legacy selections retain the legacy consumer settings. See the
 [candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
-Bicep variable sync maps only the five validated execution fields to generic
-target Variables; the eight-field source bundle above is unchanged.
+Bicep variable sync retains its existing eight-field source and five-field
+execution projections. The three group IDs are repository-sync-only inputs,
+not Bicep target Variables.
 
 | BAMI source field | Consumer target Variable |
 | --- | --- |

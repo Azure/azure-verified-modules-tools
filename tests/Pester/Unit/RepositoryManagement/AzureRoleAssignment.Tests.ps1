@@ -40,13 +40,14 @@ BeforeAll {
 }
 
 Describe 'Repository sync Owner delegation' {
-    It 'retains the conditioned Owner role assignment' {
+    It 'retains the conditioned direct Owner assignment only for legacy configurations' {
         $script:ownerRoleId | Should -Be '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
         $script:assignment | Should -Match (
             'roleDefinitionId\s*=\s*"/providers/Microsoft.Authorization/roleDefinitions/' +
             '\$\{local.role_definition_name_owner\}"'
         )
         $script:assignment | Should -Match 'conditionVersion\s*=\s*"2\.0"'
+        $script:assignment | Should -Match 'count\s*=\s*var.bami_group_settings == null \? 1 : 0'
     }
 
     It 'requires both exclusion gates while leaving unrelated actions unrestricted' {

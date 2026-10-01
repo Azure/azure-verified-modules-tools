@@ -143,11 +143,12 @@ Describe 'Complete BAMI input bundle' {
     }
 
     It 'rejects each missing field rather than falling back to legacy settings' {
-        foreach ($key in @($script:bundle.Keys)) {
+        foreach ($key in @((Get-AvmBamiSettings -Values $script:bundle).Keys)) {
             $partial = $script:bundle.Clone()
             $partial.Remove($key)
             { Get-AvmBamiSettings -Values $partial } | Should -Throw
         }
+
     }
 
     It 'excludes Persistent from a still-unique 28-subscription pool in both modes' {

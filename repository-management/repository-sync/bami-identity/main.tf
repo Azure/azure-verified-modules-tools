@@ -16,4 +16,12 @@ module "azure" {
   github_repository_id          = var.github_repository_id
   repository_sync_repository_id = var.repository_sync_repository_id
   is_protected_repo             = true
+  bami_group_settings = {
+    tenant_id                     = var.tenant_id
+    controller_client_id          = var.controller_client_id
+    entra_readers_group_id        = var.entra_readers_group_id
+    test_identity_owners_group_id = var.test_identity_owners_group_id
+    fabric_admins_group_id        = var.fabric_admins_group_id
+    fabric_admin_apis             = var.fabric_admin_apis
+  }
 }
