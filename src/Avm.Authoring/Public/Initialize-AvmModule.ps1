@@ -1,19 +1,29 @@
 function Initialize-AvmModule {
     <#
     .SYNOPSIS
-        Initialize a Bicep or Terraform module locally.
+        Initialize a Bicep module locally, or create and set up a Terraform module repository.
     .DESCRIPTION
         With -Proposed, creates only metadata.json for an unpublished Bicep
         module, including a missing module directory. Existing metadata is
         validated and left unchanged. Missing required metadata is prompted for
-        only in an interactive terminal. Terraform initialization also creates
-        only metadata.json and its containing directory; add Terraform source
-        manually afterward. Full Bicep initialization creates local source,
-        version, changelog, and root e2e test files without overwriting
+        only in an interactive terminal. Full Bicep initialization creates local
+        source, version, changelog, and root e2e test files without overwriting
         existing files. For nested child paths, it also initializes missing
-        ancestors. This command never creates a remote repository.
+        ancestors. Bicep initialization never creates a remote repository.
+
+        Terraform initialization sets up the Azure/<repository> GitHub
+        repository named by -Path. It writes metadata.json to that directory,
+        creates the repository, waits for open source portal setup and JIT
+        elevation, and grants the module contributors and readers teams. It
+        then publishes metadata.json, the packaged minimal scaffold, and the
+        avm pre-commit output as the first commit on main, requests the AVM app
+        installations, and clones the repository into the directory. Other
+        local files are never published. Every stage checks what already
+        exists, so running the command again resumes an interrupted setup.
+        Terraform -ChildModule initialization creates only metadata.json.
     .PARAMETER Path
-        Module directory to initialize.
+        Module directory to initialize. For a Terraform root module this is the
+        local repository directory, whose name is the repository name.
     .PARAMETER Ecosystem
         Bicep or Terraform.
     .PARAMETER ModuleType
@@ -35,6 +45,8 @@ function Initialize-AvmModule {
         avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
     .EXAMPLE
         avm init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account/blob-service/container -ChildModule -InputObject $childMetadata -AncestorInputObject @{ '.' = $rootMetadata; 'blob-service' = $parentMetadata }
+    .EXAMPLE
+        avm init -Ecosystem terraform -ModuleType resource -Path ./terraform-azure-avm-res-storage-storageaccount
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
@@ -91,6 +103,11 @@ function Initialize-AvmModule {
             PlannedFiles = @($plans | ForEach-Object { [System.IO.Path]::GetRelativePath($root, $_.Path).Replace('\', '/') })
             Metadata     = $initialization.Metadata
         }
+    }
+
+    if ($Ecosystem -eq 'terraform' -and -not $ChildModule) {
+        return Initialize-AvmTerraformRepository -Path $Path -ModuleType $ModuleType -InputObject $InputObject `
+            -SkipModuleVersionCheck:$SkipModuleVersionCheck -WhatIf:$WhatIfPreference
     }
 
     $parameters = @{

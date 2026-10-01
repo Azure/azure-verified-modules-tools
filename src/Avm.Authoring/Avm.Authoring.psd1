@@ -35,6 +35,7 @@
         'Invoke-AvmTestUnit',
         'Invoke-AvmTransform',
         'Get-AvmModuleMetadata',
+        'Register-AvmFeature',
         'Test-AvmModuleMetadata',
         'Update-AvmAuthoring'
     )

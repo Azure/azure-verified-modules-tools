@@ -28,7 +28,7 @@ function Write-AvmResult {
     }
 
     for ($index = 0; $index -lt $lines.Count; $index++) {
-        if ($index -gt 0 -and $lines[$index] -match '^\s+\[(?<status>pass|fail|error|skipped)\]') {
+        if ($index -gt 0 -and $lines[$index] -match '^\s+\[(?<status>[a-z]+)\]') {
             $currentLevel = switch ($Matches.status) {
                 'pass' { 'Pass' }
                 'fail' { 'Fail' }

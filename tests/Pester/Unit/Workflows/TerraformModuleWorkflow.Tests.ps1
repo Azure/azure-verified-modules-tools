@@ -92,6 +92,87 @@ Describe 'terraform-module reusable workflow' {
     }
 }
 
+Describe 'terraform-module required Azure feature registration' {
+    BeforeAll {
+        $workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
+        $script:workflow = Get-Content -LiteralPath $workflowPath -Raw
+        $script:jobs = @{}
+        foreach ($name in @('subscriptions', 'unit-test', 'pr-check', 'integration-test', 'e2e-test')) {
+            $pattern = '(?ms)^  ' + [regex]::Escape($name) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
+            $block = [regex]::Match($script:workflow, $pattern)
+            if (-not $block.Success) {
+                throw "Could not isolate the $name job block."
+            }
+            $script:jobs[$name] = $block.Value
+        }
+    }
+
+    It 'never signs in to Azure or registers features in selector, unit, or pr-check jobs' -ForEach @(
+        @{ Job = 'subscriptions' }
+        @{ Job = 'unit-test' }
+        @{ Job = 'pr-check' }
+    ) {
+        $script:jobs[$Job] | Should -Not -Match 'azure/login@|register-features|Register required features'
+    }
+
+    It 'adds pinned Azure login only to the two protected deployment test jobs' {
+        ([regex]::Matches($script:workflow, 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c')).Count |
+            Should -Be 2
+        $script:jobs['integration-test'] | Should -Match '(?m)^    environment: integration-test\r?$'
+        $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test\r?$'
+        $script:workflow | Should -Not -Match '(?i)feature unregister|provider unregister'
+    }
+
+    It 'uses the effective test identity and the correct selected subscription in <Job>' -ForEach @(
+        @{ Job = 'integration-test'; Selection = 'needs.subscriptions.outputs.subscriptionId' }
+        @{ Job = 'e2e-test'; Selection = 'steps.leg.outputs.subscriptionId' }
+    ) {
+        $block = $script:jobs[$Job]
+        $block | Should -Match 'client-id: \$\{\{ env\.ARM_CLIENT_ID \}\}'
+        $block | Should -Match 'tenant-id: \$\{\{ env\.ARM_TENANT_ID \}\}'
+        $block | Should -Match ('subscription-id: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
+        $block | Should -Match ('SELECTED_SUBSCRIPTION_ID: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
+        ([regex]::Matches($block, "if: steps.required-features.outputs.required == 'true'")).Count |
+            Should -Be 2
+    }
+
+    It 'checks manifest shape and effective subscription offline before allowing Azure login' {
+        $block = $script:jobs['integration-test']
+        $block | Should -Match "Test-Path -LiteralPath '.required-features.json' -PathType Leaf"
+        $block | Should -Match 'ConvertFrom-Json.+-NoEnumerate'
+        $block | Should -Match '\$features.Count -eq 0\) \{ return \}'
+        $block | Should -Match '\$selected -ne \$effective'
+        $block | Should -Match '\$env:ARM_CLIENT_ID'
+        $block | Should -Match '\$env:ARM_TENANT_ID'
+        $block | Should -Match 'avm register-features --subscription-id \$env:SELECTED_SUBSCRIPTION_ID --what-if --passthru'
+        $block | Should -Match '\$preview.FeaturesTotal -ne \$features.Count'
+        $block | Should -Match '''required=true'' \| Out-File -FilePath \$env:GITHUB_OUTPUT'
+        $script:jobs['e2e-test'] | Should -Match 'run: \*check-required-features'
+    }
+
+    It 'installs the module, checks the per-job selection, logs in, registers, then tests in <Job>' -ForEach @(
+        @{ Job = 'integration-test'; Test = 'Run integration tests' }
+        @{ Job = 'e2e-test'; Test = 'Run end-to-end tests' }
+    ) {
+        $block = $script:jobs[$Job]
+        $names = @(
+            'Install Avm.Authoring'
+            'Check required features'
+            'Azure login for required features'
+            'Register required features'
+            $Test
+        )
+        $positions = @($names | ForEach-Object { $block.IndexOf("- name: $_") })
+        foreach ($position in $positions) {
+            $position | Should -BeGreaterOrEqual 0
+        }
+        for ($index = 1; $index -lt $positions.Count; $index++) {
+            $positions[$index] | Should -BeGreaterThan $positions[$index - 1]
+        }
+        $block | Should -Match 'avm register-features --subscription-id \$env:SELECTED_SUBSCRIPTION_ID|run: \*register-required-features'
+    }
+}
+
 Describe 'CI workflow' {
     BeforeAll {
         $script:ciPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'ci.yml'

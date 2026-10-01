@@ -146,6 +146,57 @@ counts describe the final attempt. A failed, skipped, empty, or incomplete
 retry never becomes a pass. Integration targets that execute no runs fail;
 an absent integration tier still reports `skipped`.
 
+### Azure test-subscription features
+
+If an integration test or example needs an Azure subscription feature, add a
+`.required-features.json` file at the **module repository root**. It must be a
+top-level JSON array of `"Namespace/FeatureName"` strings; for encryption at
+host, the complete file is:
+
+```json
+["Microsoft.Compute/EncryptionAtHost"]
+```
+
+The file is optional. A missing file or `[]` causes no Azure CLI login or
+feature changes. Nonempty files are limited to 64 KiB and 32 unique
+(case-insensitive) ASCII feature names. Names must have one provider namespace
+and one feature name, without spaces, extra `/` segments, or command arguments;
+invalid files fail before any Azure CLI call. From the root, a maintainer can
+run `avm register-features --subscription-id <test-subscription-guid>` after
+signing in with `az` and selecting that same **nonproduction** subscription.
+The approved-verb equivalent is
+`Register-AvmFeature -SubscriptionId <test-subscription-guid>`. `-WhatIf`
+validates the file without contacting Azure.
+
+The reusable Terraform workflow checks this file after resolving the effective
+`ARM_*` variables and installing `Avm.Authoring`. Only the protected
+`integration-test` and `examples-test` jobs use OIDC to sign in to Azure and
+run the command, with the **same client and tenant IDs** as Terraform. The
+integration job uses the selected test subscription; each e2e leg uses its
+own selected subscription. An `ARM_SUBSCRIPTION_ID_OVERRIDE` remains effective
+for Terraform, but a mismatch with the selected test subscription fails the
+preflight before Azure login rather than registering an unintended subscription.
+The selector, unit, and pr-check jobs never register features.
+
+The test identity needs `Microsoft.Features/*` access on each selected test
+subscription and permission for the provider's `/register/action`, as described
+by [Azure preview feature registration](https://learn.microsoft.com/azure/azure-resource-manager/management/preview-features)
+and [resource provider registration](https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types#register-resource-provider).
+After registering a feature, the command waits (up to 60 status checks, 10
+seconds apart by default) until it is `Registered`, re-registers its provider
+to propagate the change, and waits for provider readiness. `Pending` features
+need service approval and fail with guidance; CLI permission failures and
+timeouts stop the test rather than treating it as a pass. Registration **persists
+after the test run** and is never undone. Review additions to this file as
+persistent subscription changes, not routine test setup.
+
+A consuming repository must use a released `Avm.Authoring` version with
+`register-features` and a reusable workflow ref containing this gate. Until
+both are available and the protected OIDC identity has the required scope,
+do not approve an integration or e2e run that relies on this file.
+Repositories already referencing the reusable workflow at `@main` require
+no reference edit once the tooling change merges.
+
 Example validation warns when the checkout's root module or a direct
 `modules/*` configuration is not reached by any successfully validated example.
 Direct and transitive local references count; downloaded Registry/Git copies

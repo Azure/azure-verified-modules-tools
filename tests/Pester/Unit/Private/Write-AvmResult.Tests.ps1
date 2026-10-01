@@ -71,6 +71,37 @@ Describe 'Write-AvmResult GitHub summary' {
         }
     }
 
+    It 'does not carry a pass colour onto pending or planned steps' {
+        $oldActions = $env:GITHUB_ACTIONS
+        $oldColorForce = $env:CLICOLOR_FORCE
+        try {
+            $env:GITHUB_ACTIONS = ''
+            $env:CLICOLOR_FORCE = '1'
+            $messages = InModuleScope 'Avm.Authoring' {
+                $captured = @()
+                $result = [pscustomobject]@{
+                    Status = 'pass'
+                    Steps  = @(
+                        [pscustomobject]@{ Step = 'team access'; Status = 'pass' }
+                        [pscustomobject]@{ Step = 'app installation'; Status = 'pending' }
+                        [pscustomobject]@{ Step = 'local clone'; Status = 'planned' }
+                    )
+                }
+                Write-AvmResult -Result $result -Verb 'init' -InformationVariable captured
+                @($captured | ForEach-Object { [string]$_.MessageData })
+            }
+
+            $escape = [char]27
+            @($messages) | Should -Contain "$escape[32m  [pass] team access$escape[0m"
+            @($messages) | Should -Contain '  [pending] app installation'
+            @($messages) | Should -Contain '  [planned] local clone'
+        }
+        finally {
+            $env:GITHUB_ACTIONS = $oldActions
+            $env:CLICOLOR_FORCE = $oldColorForce
+        }
+    }
+
     It 'omits an already-presented issue only from final output and keeps it in the result contract' {
         $probe = InModuleScope 'Avm.Authoring' {
             $issue = [pscustomobject]@{
