@@ -51,6 +51,24 @@ module-path and core-team rules are unchanged. Both ecosystems skip drafts,
 the author, existing review requests, and people who already reviewed, and
 only add missing reviewers and labels.
 
+Reviewers must have repository write access. Routing checks each user or team's
+effective permission and caches the result per repository for the run. An
+ineligible owner is replaced by `Azure/azure-verified-modules-module-owners`,
+with a workflow warning naming the owner, affected request, and reason.
+The same group reviews when the request author is a module's sole owner.
+Eligible co-owners are still requested, and the group is requested only once
+even when several changed modules need it. These fallbacks do not label an
+owned module as orphaned or change any repository permissions.
+
+Completed reviews remain in review history rather than the pending-reviewer
+list, so routing does not re-request those owners. Pending requests are also
+retained, including team requests returned as qualified `organization/team`
+slugs by GitHub CLI. An ineligible fallback group, failed permission lookup,
+or invalid response is an error, not permission to guess or grant access.
+After an edit, routing reads back the new labels and reviewers before reporting
+the request as updated. A successful CLI exit with missing changes fails the
+request instead of producing a false success.
+
 If a requested routing label has not been provisioned yet, the request is
 deferred with a warning rather than failing the sweep. This can happen between
 app installation and the first repository sync. The job summary lists the

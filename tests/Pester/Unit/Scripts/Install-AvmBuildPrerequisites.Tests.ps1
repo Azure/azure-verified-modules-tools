@@ -36,7 +36,10 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             -InitialDelaySeconds 1 `
             -Confirm:$false
 
-        Should -Invoke Install-PSResource -Times 4 -Exactly
+        Should -Invoke Install-PSResource -Times 5 -Exactly
+        Should -Invoke Install-PSResource -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12'
+        }
         Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter {
             $Seconds -eq 1
         }

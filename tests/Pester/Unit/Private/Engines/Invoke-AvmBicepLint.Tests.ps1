@@ -154,6 +154,43 @@ Describe 'Invoke-AvmBicepLint' {
         $result.Issues[0].Code     | Should -Be 'BCP018'
     }
 
+    It 'skips restoration offline and fails on an unparseable lint error' {
+        $ctx = $script:context
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            $previous = $env:AVM_OFFLINE
+            try {
+                $env:AVM_OFFLINE = '1'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{
+                        Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'mock-bicep'
+                    }
+                }
+                Mock Invoke-AvmProcess {
+                    [pscustomobject]@{
+                        ExitCode = 1; StdOut = ''; StdErr = 'External module is not cached.'
+                    }
+                }
+                $result = Invoke-AvmBicepLint -Context $C
+                $result.Status | Should -BeExactly 'fail'
+                $result.Issues.Count | Should -Be 2
+                $result.Issues[0].Code | Should -BeExactly 'avm.bicep.lint-failed'
+                $result.Issues[0].Message | Should -Match 'not cached'
+                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                    $ArgumentList[0] -eq 'lint' -and $ArgumentList -contains '--no-restore'
+                }
+            }
+            finally {
+                if ($null -eq $previous) {
+                    Remove-Item Env:AVM_OFFLINE -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:AVM_OFFLINE = $previous
+                }
+            }
+        }
+    }
+
     It 'skips files inside dot-folders (e.g. .git)' {
         $hidden = Join-Path $script:moduleDir '.git'
         New-Item -ItemType Directory -Path $hidden -Force | Out-Null

@@ -12,7 +12,11 @@ function Get-AvmBicepCompiledJson {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $result = Invoke-AvmProcess -FilePath $ToolPath -ArgumentList @('build', '--stdout', $SourcePath)
+    $arguments = @('build', '--stdout', $SourcePath)
+    if ($env:AVM_OFFLINE -eq '1') {
+        $arguments += '--no-restore'
+    }
+    $result = Invoke-AvmProcess -FilePath $ToolPath -ArgumentList $arguments
     if ($result.ExitCode -ne 0) {
         $message = Add-AvmProcessFailureDetail `
             -Message "Bicep build failed for '$SourcePath' (exit $($result.ExitCode))." `

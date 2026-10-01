@@ -24,6 +24,17 @@ BeforeAll {
     foreach ($name in $script:environmentVariables) {
         $script:savedVariables[$name] = [System.Environment]::GetEnvironmentVariable($name)
     }
+    function Restore-TestGitEnvironment {
+        param([string[]] $Names, [hashtable] $Saved)
+        foreach ($name in $Names) {
+            if ($null -eq $Saved[$name]) {
+                [System.Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+            }
+            else {
+                [System.Environment]::SetEnvironmentVariable($name, $Saved[$name])
+            }
+        }
+    }
     $globalConfig = Join-Path $TestDrive 'gitconfig'
     [System.IO.File]::WriteAllText($globalConfig, '')
     $env:GIT_CONFIG_GLOBAL = $globalConfig
@@ -87,15 +98,57 @@ BeforeAll {
 }
 
 AfterAll {
-    foreach ($name in $script:environmentVariables) {
-        if ($null -eq $script:savedVariables[$name]) {
-            [System.Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+    Restore-TestGitEnvironment -Names $script:environmentVariables -Saved $script:savedVariables
+    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Component: Terraform init Git environment cleanup' -Tag Component {
+    It 'removes originally absent identity overrides before a later local Git fixture commits' {
+        $identityNames = @('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')
+        $before = @{}
+        $absent = @{}
+        foreach ($name in $identityNames) {
+            $before[$name] = [System.Environment]::GetEnvironmentVariable($name)
+            $absent[$name] = $null
         }
-        else {
-            [System.Environment]::SetEnvironmentVariable($name, $script:savedVariables[$name], 'Process')
+        try {
+            Restore-TestGitEnvironment -Names $identityNames -Saved $absent
+            foreach ($name in $identityNames) {
+                Test-Path -LiteralPath "Env:$name" | Should -BeFalse
+            }
+
+            $fixture = Join-Path $TestDrive 'identity-after-cleanup'
+            $null = Invoke-TestGit -Arguments @('init', '--quiet', $fixture)
+            $null = Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.name', 'AVM Local Test')
+            $null = Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.email', 'local@example.invalid')
+            [System.IO.File]::WriteAllText((Join-Path $fixture 'fixture.txt'), 'fixture')
+            $null = Invoke-TestGit -Arguments @('-C', $fixture, 'add', '--all')
+            $null = Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '-m', 'Local fixture')
+            @(Invoke-TestGit -Arguments @('-C', $fixture, 'show', '-s', '--format=%an <%ae>|%cn <%ce>', 'HEAD')) |
+                Should -Be @('AVM Local Test <local@example.invalid>|AVM Local Test <local@example.invalid>')
+        }
+        finally {
+            Restore-TestGitEnvironment -Names $identityNames -Saved $before
         }
     }
-    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+
+    It 'preserves previously present identity overrides, including an empty value' {
+        $name = 'GIT_AUTHOR_NAME'
+        $before = [System.Environment]::GetEnvironmentVariable($name)
+        try {
+            [System.Environment]::SetEnvironmentVariable($name, 'temporary')
+            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = 'original' }
+            [System.Environment]::GetEnvironmentVariable($name) | Should -BeExactly 'original'
+
+            [System.Environment]::SetEnvironmentVariable($name, 'temporary')
+            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = '' }
+            Test-Path -LiteralPath "Env:$name" | Should -BeTrue
+            [System.Environment]::GetEnvironmentVariable($name) | Should -BeExactly ''
+        }
+        finally {
+            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = $before }
+        }
+    }
 }
 
 Describe 'Component: resumable Terraform avm init' -Tag Component {

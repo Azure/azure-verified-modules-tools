@@ -7,6 +7,7 @@ BeforeAll {
     . (Join-Path $lib 'RepositoryFileAccess.ps1')
     . (Join-Path $lib 'ModuleOwners.ps1')
     . (Join-Path $lib 'RunSummary.ps1')
+    . (Join-Path $lib 'PrReviewerRoutingEligibility.ps1')
     . (Join-Path $lib 'PrReviewerRouting.ps1')
 }
 
@@ -192,6 +193,7 @@ Describe 'Get-AvmPrReviewerRoutingCandidates' {
 
 Describe 'Resolve-AvmPrReviewerRouting' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
         $script:catalogIndex = @{
             'avm/res/storage/storage-account' = @{
                 owners = @(@{ handle = 'storage-owner'; type = 'user'; displayName = $null })
@@ -232,11 +234,12 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
     }
 
-    It 'skips the pull request author and already-requested reviewers' {
+    It 'uses the owners group instead of requesting the sole owner as their own reviewer' {
         $script:pr.author.login = 'storage-owner'
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
-        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
+        $routing.SkippedReviewers.Handle | Should -Contain 'storage-owner'
     }
 
     It 'is a no-op once the desired labels and reviewers are already present' {
@@ -265,21 +268,25 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewReviewers | Should -Contain 'Azure/storage-owners'
     }
 
-    It 'skips a team owner that already has a pending review request' {
+    It 'skips a team owner that already has a pending review request: <TeamSlug>' -TestCases @(
+        @{ TeamSlug = 'storage-owners' }
+        @{ TeamSlug = 'Azure/storage-owners' }
+    ) {
+        param($TeamSlug)
         $script:catalogIndex['avm/res/storage/storage-account'].owners = @(@{ handle = 'Azure/storage-owners'; type = 'team'; displayName = 'Storage owners' })
-        $script:pr.reviewRequests = @([pscustomobject]@{ slug = 'storage-owners'; name = 'Storage owners' })
+        $script:pr.reviewRequests = @([pscustomobject]@{ __typename = 'Team'; slug = $TeamSlug; name = 'storage-owners' })
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty
     }
 
-    It 'is a no-op when the pull request author is the module''s sole declared owner' {
+    It 'does not label an author-owned module as orphaned when using the owners group' {
         # Regression: the sole owner must not be misread as "no owners" once
         # filtered out, which would incorrectly apply the orphan label.
         $script:pr.author.login = 'storage-owner'
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
-        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
         $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
     }
 
@@ -372,6 +379,8 @@ Describe 'Resolve-AvmPrReviewerRouting' {
 
 Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
+        Mock Assert-AvmPrReviewerRoutingApplied { }
         $script:pr = [pscustomobject]@{
             author = [pscustomobject]@{ login = 'contributor' }
             number = 1
@@ -527,6 +536,8 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
 
 Describe 'Invoke-AvmPrReviewerRouting summary' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
+        Mock Assert-AvmPrReviewerRoutingApplied { }
         $script:previousSummary = $env:GITHUB_STEP_SUMMARY
         $script:summaryPath = Join-Path $TestDrive 'summary.md'
         Remove-Item -LiteralPath $script:summaryPath -ErrorAction SilentlyContinue

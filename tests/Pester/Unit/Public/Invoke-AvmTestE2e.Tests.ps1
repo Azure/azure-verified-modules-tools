@@ -66,31 +66,54 @@ Describe 'Invoke-AvmTestE2e' {
         }
     }
 
-    It 'rejects a bicep context with AvmNotSupportedException' {
+    It 'routes a bicep context and explicit deployment inputs to the Bicep engine' {
         $dir = Join-Path $TestDrive ("bicep-e2e-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
-                param($D)
-                $ctx = [pscustomobject]@{
-                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
-                }
-                Mock Get-AvmModuleContext { $ctx }
-                Mock Invoke-AvmTerraformTestE2e { throw 'should not be called' }
-                Invoke-AvmTestE2e -Path $D
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $ctx = [pscustomobject]@{
+                Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-        }
-        catch {
-            $err = $_.Exception
-        }
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
+            Mock Get-AvmModuleContext { $ctx }
+            Mock Invoke-AvmTerraformTestE2e { throw 'Terraform must not run' }
+            Mock Invoke-AvmBicepTestE2e {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; RunsPassed = 1 }
+            }
+            $result = Invoke-AvmTestE2e -Path $D -Example 'defaults' -Recurse `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -Location 'westus' -ResourceGroupPrefix 'avm-test' `
+                -Tokens @{ namePrefix = 'demo' } -Parameters @{ sku = 'Standard_LRS' } `
+                -SkipModuleVersionCheck
 
+            $result.Engine | Should -Be 'bicep'
+            Should -Invoke Invoke-AvmBicepTestE2e -Exactly 1 -ParameterFilter {
+                $Example[0] -eq 'defaults' -and $Recurse.IsPresent -and
+                $SubscriptionId -eq '00000000-0000-0000-0000-000000000001' -and
+                $Location -eq 'westus' -and $ResourceGroupPrefix -eq 'avm-test' -and
+                $Tokens.namePrefix -eq 'demo' -and $Parameters.sku -eq 'Standard_LRS'
+            }
+            Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 0
+        }
+    }
+
+    It 'rejects ecosystem-specific options before invoking the wrong engine' {
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformTestE2e -Times 0 -Exactly
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Root = '.'; Ecosystem = $Ecosystem }
+            }
+            Mock Invoke-AvmBicepTestE2e { throw 'Bicep engine must not run' }
+            Mock Invoke-AvmTerraformTestE2e { throw 'Terraform engine must not run' }
+            { Invoke-AvmTestE2e -Ecosystem bicep -MaxRetry 1 -SkipModuleVersionCheck } |
+                Should -Throw -ExpectedMessage '*MaxRetry*only supported for Terraform*'
+            { Invoke-AvmTestE2e -Ecosystem terraform -ResourceGroupPrefix 'avm' `
+                    -SkipModuleVersionCheck } |
+                Should -Throw -ExpectedMessage '*not supported for Terraform*'
+            { Invoke-AvmTestE2e -Ecosystem terraform -WhatIf `
+                    -SkipModuleVersionCheck } |
+                Should -Throw -ExpectedMessage '*not supported for Terraform*'
+            Should -Invoke Invoke-AvmBicepTestE2e -Exactly 0
+            Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 0
         }
     }
 
@@ -147,12 +170,34 @@ Describe 'Invoke-AvmTestE2e per-example targeting (F26/F27)' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
+            Mock Test-AvmModuleVersion { throw 'Offline listing must not query PowerShell Gallery' }
             Mock Invoke-AvmTerraformTestE2e { '["example-a"]' }
             $out = Invoke-AvmTestE2e -Path $D -List
 
             $out | Should -Be '["example-a"]'
             Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 1 -ParameterFilter { $List.IsPresent }
+            Should -Invoke Test-AvmModuleVersion -Exactly 0
+        }
+    }
+
+    It 'lists Bicep cases through the CLI without a Gallery check or Azure tools' {
+        $root = Join-Path $TestDrive ('offline-e2e-' + [guid]::NewGuid().ToString('N'))
+        $caseDir = Join-Path $root 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $caseDir -Force
+        Set-Content -LiteralPath (Join-Path $root 'main.bicep') `
+            -Value 'param name string' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $caseDir 'main.test.bicep') `
+            -Value 'param name string' -Encoding utf8NoBOM
+        InModuleScope 'Avm.Authoring' -Parameters @{ R = $root } {
+            param($R)
+            Mock Test-AvmModuleVersion { throw 'Offline listing must not check the Gallery' }
+            Mock Resolve-AvmTool { throw 'Offline listing must not resolve Bicep' }
+            $result = Invoke-Avm 'test' 'e2e' '--ecosystem' 'bicep' `
+                '--path' $R '--list'
+            $result | Should -Be '["tests/e2e/defaults"]'
+            Should -Invoke Test-AvmModuleVersion -Exactly 0
+            Should -Invoke Resolve-AvmTool -Exactly 0
         }
     }
 

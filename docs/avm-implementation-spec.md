@@ -478,9 +478,13 @@ registration mirror remains unchanged.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies the required Bicep literal name and
-description declarations, description consistency, and source telemetry
-requirements. The Bicep `metadata name` and JSON `moduleDisplayName` are
-independent and are not required to match.
+description declarations and source telemetry requirements when main.bicep
+exists. Bicep `metadata name` and `metadata description` serve different
+purposes from JSON `moduleDisplayName` and `moduleDescription`; neither pair
+must match. A metadata-only Bicep scope may omit main.bicep only when it has
+neither version.json nor main.json at that scope. Source markers without
+metadata are also discovered and rejected. The catalog separately rejects
+source-less modules reported as published by the registry.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
@@ -531,7 +535,9 @@ missing field names. `-Proposed` never cascades and does not accept an
 ancestor map. For new uninstrumented children without a version file,
 telemetry remains optional. New utility roots without telemetry use
 telemetry-free source. Source-authored literal prefixes are preserved when
-metadata is missing, without rewriting the source; conflicts fail.
+metadata is missing, without rewriting the source; conflicts fail. New Bicep
+scaffolds seed their source literals from JSON metadata, but existing source
+names and descriptions are preserved and validated independently.
 Validate metadata, exact path casing, source literals, templates, target
 files, and the whole root-to-child plan before confirmation or any write.
 `-WhatIf` validates and reports the same planned files without writing;
@@ -551,6 +557,11 @@ creating directories or files.
 
 `avm metadata initialize` never overwrites existing files. `-UpdateSource`
 adds a scoped Bicep telemetry load without replacing telemetry transport.
+New source wiring and telemetry-enabled root scaffolds use
+`var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')`
+and `${telemetryIdPrefix}` in the deployment name. Existing source using that
+form or the earlier `avmTelemetryIdPrefix`/`$.telemetryIdPrefix` form is
+preserved without migration; conflicting variable definitions fail.
 When source wiring is requested and no prefix is supplied, initialization
 retains the single, valid prefix already authored in main.bicep, excluding
 that module's own published catalog record from duplicate checks. A prefix
@@ -716,6 +727,20 @@ drift mode and returns generated `{Path, Content}` values for an independent
 comparator. A Bicep compilation failure is reported per module in drift
 mode; a source-less README is explicitly identified rather than reported as
 generated.
+Drift mode can report a warning rather than stale only when the tracked
+README omits complete generated required/non-required grouping-comment
+pairs. A private, non-writing docs render marks only those comments in
+first-party example JSON values; removing the unpredictable markers must
+reproduce the normal rendered README exactly before the marked pairs can
+qualify. Authored descriptions cannot acquire these markers, even if they
+contain convincing headings, fences, or complete example frames. Partial
+pairs, changed prose, code, types, examples, outputs, and any other byte
+differences still fail. Unused child-example aliases carry no rendered
+markers and are ignored; a half-rendered alias fails closed. The accepted
+pairs are not tied to a module name or fixed count, and normal generation
+writes the unchanged renderer output.
+An unavailable private render reports an error. This local comparison
+behavior does not waive the full-registry qualification limit below.
 Referenced module test examples are validated against the compiled
 parameters of their actual target `main.bicep`, including tests assigned
 to a child README. Unknown names or omitted required parameters fail
@@ -731,6 +756,15 @@ comment lines absent from the checked-in `avm/res/key-vault/vault/README.md`,
 and separately verifies all source-less README bytes. Report that historical
 exception explicitly; keep the comments in generated output, as the legacy
 generator emits them. Every other byte remains subject to the comparison.
+At registry commit `82bab0404566557b9fb5efdc9780bb5ce438030b`,
+an offline render with the published dependencies and pinned Bicep CLI
+produced all 575 source-backed READMEs. An independent comparison found 574
+byte-identical matches and only the eight proven generated Vault comment
+lines; the three source-less README files matched their tracked Git blobs
+without being counted as rendered. The [qualification record](progress/2026-10-01-bicep-current-registry-readme-qualification.md)
+captures the input digests and diagnostics. The required `avm pr-check` docs
+step enforces later README drift; this qualification alone does not authorize
+removing the registry CI workflow or its other gates.
 
 ### Files inside the user's home
 

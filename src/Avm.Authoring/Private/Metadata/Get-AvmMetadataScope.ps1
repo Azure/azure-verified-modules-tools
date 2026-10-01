@@ -63,9 +63,10 @@ function Get-AvmMetadataScope {
         $items = @(Get-ChildItem -LiteralPath $path -Force)
         $hasModule = @($items | Where-Object { -not $_.PSIsContainer -and $_.Name -ieq 'main.bicep' }).Count -gt 0
         $hasMetadata = @($items | Where-Object { $_.Name -ieq 'metadata.json' }).Count -gt 0
+        $hasSourceMarker = @($items | Where-Object { $_.Name -ieq 'version.json' -or $_.Name -ieq 'main.json' }).Count -gt 0
         $hasReadme = $IncludeReadmeOnly -and
         @($items | Where-Object { $_.Name -ieq 'README.md' }).Count -gt 0
-        if ($hasModule -or $hasMetadata -or $hasReadme -or
+        if ($hasModule -or $hasMetadata -or $hasSourceMarker -or $hasReadme -or
             ($path -ceq $root -and $Context.Kind -ne 'bicep-monorepo')) {
             $modulePath = [regex]::Match($path, '(?:^|[\\/])avm[\\/](res|ptn|utl)[\\/][^\\/]+[\\/][^\\/]+(?<child>[\\/].+)?$')
             $isChild = if ($modulePath.Success) { $modulePath.Groups['child'].Success } else { $path -cne $root }

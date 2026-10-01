@@ -6,16 +6,19 @@ function Invoke-AvmCheckPolicy {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepCheckPolicy      (PSRule.Rules.Azure; stubbed)
-          - terraform  -> Invoke-AvmTerraformCheckPolicy  (Conftest with APRL + AVMSEC bundles; stubbed)
-
-        Both engines are intentionally stubbed in this PoC slice so the
-        public verb dispatcher and engine plumbing land first. The
-        engines will throw AvmConfigurationException with a clear
-        "next slice" message until the real implementations land.
+          - bicep      -> PSRule.Rules.Azure against tokenized defaults and
+                          waf-aligned tests, with required and advisory baselines
+          - terraform  -> Conftest with APRL and AVMSEC bundles
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
+        Bicep policy checks use repository-local ps-rule.yaml and .ps-rule/
+        under utilities/pipelines/staticValidation/psrule. PSRule 2.9.0 and
+        PSRule.Rules.Azure 1.47.0 must be installed separately. Set
+        VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
+        VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
+        and localToken_* variables for tokens used by the selected tests.
+        Missing inputs or uninspectable results fail rather than skip.
 
         Routed by the dispatcher: 'avm check policy'.
 
@@ -32,11 +35,11 @@ function Invoke-AvmCheckPolicy {
 
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform examples to evaluate at once.
-        Defaults to four. Bicep policy checks currently ignore this value.
+        Defaults to four. Bicep policy checks ignore this value.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, Issues. (When implemented.)
+        Status, Issues.
 
     .EXAMPLE
         avm check policy

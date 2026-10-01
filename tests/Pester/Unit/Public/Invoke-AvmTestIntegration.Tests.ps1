@@ -86,31 +86,51 @@ Describe 'Invoke-AvmTestIntegration' {
         }
     }
 
-    It 'rejects a bicep context with AvmNotSupportedException' {
+    It 'routes a bicep context and forwards ARM scope, tokens and selection' {
         $dir = Join-Path $TestDrive ("bicep-int-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
-                param($D)
-                $ctx = [pscustomobject]@{
-                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
-                }
-                Mock Get-AvmModuleContext { $ctx }
-                Mock Invoke-AvmTerraformTestSuite { throw 'should not be called' }
-                Invoke-AvmTestIntegration -Path $D
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
+            Mock Invoke-AvmBicepTestIntegration {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
+            }
+            Mock Invoke-AvmTerraformTestSuite { throw 'Terraform must not run' }
+            $result = Invoke-AvmTestIntegration -Path $D `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -ResourceGroupName 'existing-test' -TokenFile 'local-tokens.json' `
+                -Operation WhatIf -Example defaults -Recurse
+            $result.Engine | Should -Be 'bicep'
+            Should -Invoke Invoke-AvmBicepTestIntegration -Exactly 1 -ParameterFilter {
+                $Operation -eq 'WhatIf' -and $Recurse -and
+                $Example.Count -eq 1 -and $Example[0] -eq 'defaults' -and
+                $ResourceGroupName -eq 'existing-test' -and
+                $TokenFile -eq 'local-tokens.json'
+            }
+            Should -Invoke Invoke-AvmTerraformTestSuite -Exactly 0
         }
-        catch {
-            $err = $_.Exception
-        }
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
+    }
 
+    It 'rejects Bicep-only switches in Terraform and Terraform-only switches in Bicep' {
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmTerraformTestSuite -Times 0 -Exactly
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' }
+            }
+            Mock Invoke-AvmTerraformTestSuite { throw 'Must not run on invalid options' }
+            { Invoke-AvmTestIntegration -SubscriptionId '00000000-0000-0000-0000-000000000001' } |
+                Should -Throw -ExpectedMessage '*only supported for Bicep*'
+            { Invoke-AvmTestIntegration -Operation Validate } |
+                Should -Throw -ExpectedMessage '*only supported for Bicep*'
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'bicep' }
+            }
+            { Invoke-AvmTestIntegration -NoInit } |
+                Should -Throw -ExpectedMessage '*only supported for Terraform*'
+            { Invoke-AvmTestIntegration -MaxRetry 0 } |
+                Should -Throw -ExpectedMessage '*only supported for Terraform*'
         }
     }
 

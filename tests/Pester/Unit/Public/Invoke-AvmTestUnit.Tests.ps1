@@ -68,31 +68,66 @@ Describe 'Invoke-AvmTestUnit' {
         }
     }
 
-    It 'rejects a bicep context with AvmNotSupportedException' {
+    It 'dispatches a bicep context and forwards the Pester selection' {
         $dir = Join-Path $TestDrive ("bicep-unit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
-                param($D)
-                $ctx = [pscustomobject]@{
-                    Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
-                }
-                Mock Get-AvmModuleContext { $ctx }
-                Mock Invoke-AvmTerraformTestSuite { throw 'should not be called' }
-                Invoke-AvmTestUnit -Path $D
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $ctx = [pscustomobject]@{
+                Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-        }
-        catch {
-            $err = $_.Exception
-        }
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-
-        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmModuleContext { $ctx }
+            Mock Invoke-AvmTerraformTestSuite { throw 'should not be called' }
+            Mock Invoke-AvmBicepTestUnit {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; RunsPassed = 1; Issues = @() }
+            }
+            $result = Invoke-AvmTestUnit -Path $D -Tag 'UDT' -TestName '*parameter*' `
+                -Recurse -CompliancePath 'module.tests.ps1' -RepositoryRoot $D
+            $result.Engine | Should -Be 'bicep'
+            $result.RunsPassed | Should -Be 1
+            Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1 -ParameterFilter {
+                $Tag[0] -eq 'UDT' -and $TestName[0] -eq '*parameter*' -and $Recurse -and
+                $CompliancePath -eq 'module.tests.ps1' -and $RepositoryRoot -eq $D -and
+                -not $IncludeCompliance.IsPresent
+            }
             Should -Invoke Invoke-AvmTerraformTestSuite -Times 0 -Exactly
+        }
+    }
+
+    It 'forwards an explicit compliance opt-in and rejects an empty suite path' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = 'module'; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmBicepTestUnit {
+                [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
+            }
+            Invoke-AvmTestUnit -IncludeCompliance | Out-Null
+            Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1 -ParameterFilter {
+                $IncludeCompliance.IsPresent
+            }
+            { Invoke-AvmTestUnit -CompliancePath '' } |
+                Should -Throw -ExpectedMessage '*CompliancePath cannot be empty*'
+            Should -Invoke Invoke-AvmBicepTestUnit -Exactly 1
+        }
+    }
+
+    It 'rejects options belonging to the other ecosystem instead of ignoring them' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = 'module'; Ecosystem = 'bicep' }
+            }
+            { Invoke-AvmTestUnit -NoInit } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Terraform*'
+
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = 'module'; Ecosystem = 'terraform' }
+            }
+            { Invoke-AvmTestUnit -Tag 'unit' } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Bicep*'
+            { Invoke-AvmTestUnit -IncludeCompliance } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Bicep*'
         }
     }
 
