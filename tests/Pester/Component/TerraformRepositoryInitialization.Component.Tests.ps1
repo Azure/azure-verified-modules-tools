@@ -279,6 +279,7 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
 
     It 'creates, sets up, and publishes a new repository in one interactive run' {
         $fake.Interactive = $true
+        Mock -ModuleName Avm.Authoring Write-AvmLog {}
 
         $result = Initialize-AvmModule @init -InputObject $script:metadataInput
 
@@ -286,8 +287,27 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         $result.Changed | Should -BeTrue
         $result.Repository | Should -BeExactly $script:repository
         @($result.Steps | ForEach-Object { ($_.Step -split ':')[0] }) | Should -Be @(
-            'metadata', 'repository', 'open source portal setup', 'team access', 'initial content', 'app installation', 'local clone')
-        @($result.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pass', 'pending', 'pass')
+            'metadata', 'repository', 'open source portal setup', 'team access', 'initial content', 'app installation', 'local clone',
+            'just-in-time rule', 'direct owners')
+        @($result.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pass', 'pending', 'pass', 'manual', 'manual')
+        $result.Steps[-2].Step | Should -BeExactly ('just-in-time rule: if not already done, tie the repository to ' +
+            'service-AVM-azure-verified-modules-module-owners in the open source portal')
+        $result.Steps[-1].Step | Should -BeExactly ('direct owners: last, make jaredholgate and jatracey the only individual ' +
+            'Direct Owners in the open source portal')
+        Should -Invoke Write-AvmLog -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+            $Message -eq ("Finish the setup of Azure/$($script:repositoryName) in the open source portal: " +
+                "https://repos.opensource.microsoft.com/orgs/Azure/repos/$($script:repositoryName)") -and $Level -eq 'Info'
+        }
+        Should -Invoke Write-AvmLog -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+            $Message -like '*enter the rule ID service-AVM-azure-verified-modules-module-owners*' -and $Level -eq 'Info'
+        }
+        Should -Invoke Write-AvmLog -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+            $Message -like '*email avm@microsoft.com*' -and $Level -eq 'Info'
+        }
+        Should -Invoke Write-AvmLog -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+            $Message -like '*Last, once everything else is done, make jaredholgate and jatracey the only individual Direct Owners.' -and
+            $Level -eq 'Info'
+        }
         $result.AppInstallationPullRequest | Should -Be 'https://github.com/microsoft/github-operations/pull/1'
         $result.Metadata.telemetryIdPrefix | Should -BeExactly '46d3xtrf.res.abc1234'
         $fake.Prompts | Should -Be 1
@@ -346,7 +366,7 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         $fourth = Initialize-AvmModule @init
         $fourth.Status | Should -Be 'pass'
         $fourth.Changed | Should -BeFalse
-        @($fourth.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pending', 'pass')
+        @($fourth.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pending', 'pass', 'manual', 'manual')
         $fourth.Steps[2].Step | Should -Match 'already granted'
         $fourth.Steps[3].Step | Should -Be 'initial content: metadata.json and module files are on main'
         $fourth.Steps[5].Step | Should -Match 'existing clone'
@@ -548,8 +568,9 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         $published = Get-TestRemoteFile -Bare $bare
         $published | Should -Not -Contain 'secrets.auto.tfvars'
         (Invoke-TestGit @('--git-dir', $bare, 'show', 'main:main.tf')) -join "`n" | Should -Match 'azapi_resource'
-        $result.Steps[-1].Status | Should -Be 'skipped'
-        $result.Steps[-1].Step | Should -Match 'holds other files'
+        $clone = @($result.Steps | Where-Object { $_.Step -like 'local clone*' })
+        $clone.Status | Should -Be 'skipped'
+        $clone.Step | Should -Match 'holds other files'
         [System.IO.File]::ReadAllText((Join-Path $path 'main.tf')) | Should -BeExactly "# local work`n"
         Test-Path -LiteralPath (Join-Path $path '.git') | Should -BeFalse
     }
@@ -572,8 +593,8 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -BeFalse
         $result.Metadata.moduleDisplayName | Should -Be 'Azure Storage Account'
-        @($result.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pass', 'pass')
-        $result.Steps[-1].Step | Should -Be "local clone: cloned to $path"
+        @($result.Steps.Status) | Should -Be @('pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'manual', 'manual')
+        $result.Steps[-3].Step | Should -Be "local clone: cloned to $path"
         $fake.Teams['azure-verified-modules-module-readers'] | Should -Be 'admin'
         Test-Path -LiteralPath (Join-Path $path 'terraform.tf') | Should -BeTrue
         Should -Invoke Invoke-AvmPreCommit -ModuleName Avm.Authoring -Exactly 0

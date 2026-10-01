@@ -26,9 +26,16 @@ section when cutting a release.
   open source portal setup and JIT elevation, grants the module contributors
   and readers teams, and publishes a first commit built from a packaged minimal
   scaffold and `avm pre-commit` output. It then requests the AVM app
-  installations and clones the repository. Each stage checks the existing
-  state, so rerunning resumes an interrupted setup. Terraform `-ChildModule`
-  initialization still creates only `metadata.json`.
+  installations, clones the repository, and shows the final manual Open Source
+  Portal steps: tie the repository to the shared AVM just-in-time rule, then,
+  last, leave `jaredholgate` and `jatracey` as the only individual Direct
+  Owners. Each stage checks the existing state, so rerunning resumes an
+  interrupted setup. Terraform `-ChildModule` initialization still creates only
+  `metadata.json`.
+- The `avm-tf-module-repository-creation` agent skill in `.github/skills`
+  guides an agent through creating a Terraform module repository with
+  `avm init`, including the inputs to ask for, the Open Source Portal steps,
+  and the final Direct Owners check.
 - `avm test integration --max-retry` defaults to two retries for recognized
   Azure capacity and region-ineligible failures, matching the E2E retry bound.
   Replay requires completed Terraform-owned teardown and preserves test

@@ -272,6 +272,20 @@ stops the run:
    published `metadata.json`. The clone is made beside the folder and then
    moved into place, so a failed clone leaves the folder as it was. Otherwise
    your files are left untouched.
+1. Show the final Open Source Portal steps, which `avm init` cannot check
+   because the portal offers no API for them. Both are listed with the status
+   `manual` on every completed run:
+   1. Tie the repository to the shared
+      `service-AVM-azure-verified-modules-module-owners` just-in-time rule,
+      which also upgrades it to JIT v2. Do it after the stages above, which
+      need your elevated access. If you cannot propose the tie, email
+      avm@microsoft.com instead.
+   1. **Last, once everything else is done**, make `jaredholgate` and
+      `jatracey` the only individual Direct Owners. While elevated to
+      administrator, select **Change owners** under Direct Owners on the
+      repository overview, remove everyone else, including yourself and
+      whoever created the repository, and keep the
+      `azure-verified-modules-module-owners` fallback security group.
 
 The organization's production ruleset requires pull requests on `main`, even
 for JIT-elevated administrators. The first push therefore runs with the

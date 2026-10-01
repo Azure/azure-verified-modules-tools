@@ -15,6 +15,10 @@ function Initialize-AvmTerraformRepository {
            pre-commit output as the first commit on main.
         7. Request the AVM app installations in microsoft/github-operations.
         8. Clone the repository into the local directory.
+        9. Show the final open source portal steps, which this command cannot
+           check: tie the repository to the shared AVM just-in-time rule, then,
+           last, leave jaredholgate and jatracey as the only individual Direct
+           Owners.
 
         A failed stage is reported in the result and stops the run.
     .PARAMETER Path
@@ -54,6 +58,8 @@ function Initialize-AvmTerraformRepository {
         [pscustomobject]@{ Slug = 'azure-verified-modules-module-contributors'; Permission = 'push' }
         [pscustomobject]@{ Slug = 'azure-verified-modules-module-readers'; Permission = 'triage' }
     )
+    $jitRule = 'service-AVM-azure-verified-modules-module-owners'
+    $directOwners = 'jaredholgate and jatracey'
     $target = Resolve-AvmTerraformRepositoryTarget -Path $Path -ModuleType $ModuleType
     $repository = "$organization/$($target.Name)"
     $repositoryUrl = "https://github.com/$repository"
@@ -349,6 +355,26 @@ function Initialize-AvmTerraformRepository {
         if ($contentReady) {
             $clone = New-AvmTerraformRepositoryClone -Path $target.Root -Repository $repository
             & $addStep 'local clone' $clone.Status $clone.Detail
+
+            # The open source portal offers no API to check these, so the steps are always shown.
+            $state.Stage = 'just-in-time rule'
+            $portal = "https://repos.opensource.microsoft.com/orgs/$organization/repos/$($target.Name)"
+            $lines = @(
+                "Finish the setup of $repository in the open source portal: $portal"
+                "  1. If not already done, tie the repository to the shared AVM just-in-time rule. Select 'Advanced JIT options', then"
+                "     'Propose a new tie', enter the rule ID $jitRule, then select 'Review' and 'Create tie'."
+                '     If you do not have permission, skip this step and email avm@microsoft.com with the repository name.'
+                "  2. Last, once everything else is done, make $directOwners the only individual Direct Owners."
+                "     Elevate to Administrator, select 'Change owners' under Direct Owners, remove everyone else, including"
+                '     yourself and whoever created the repository, keep the azure-verified-modules-module-owners fallback'
+                '     security group, then save.'
+            )
+            foreach ($line in $lines) {
+                Write-AvmLog $line -Level Info
+            }
+            & $addStep 'just-in-time rule' 'manual' "if not already done, tie the repository to $jitRule in the open source portal"
+            $state.Stage = 'direct owners'
+            & $addStep 'direct owners' 'manual' "last, make $directOwners the only individual Direct Owners in the open source portal"
         }
     }
     catch {

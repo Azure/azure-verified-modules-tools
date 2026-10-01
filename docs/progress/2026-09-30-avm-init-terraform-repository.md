@@ -118,6 +118,17 @@ App configuration YAML is edited line by line, removing the runtime
   - CI's PSScriptAnalyzer flagged parameters that
     `Get-AvmTerraformMissingModuleFile` used only inside a nested
     `Where-Object` block. It now uses them directly.
+- [x] Add the just-in-time rule step the live test missed. `avm init` now ends
+  every completed run with a `manual` step and instructions to tie the
+  repository to `service-AVM-azure-verified-modules-module-owners` in the Open
+  Source Portal, or to email avm@microsoft.com without permission. The portal
+  has no API that `avm init` could use to check the tie, and the GitHub custom
+  properties do not change, so the step cannot be verified.
+- [x] Add the Direct Owners step the live test missed. After the tie, a second
+  `manual` step, always the last one, says to make `jaredholgate` and
+  `jatracey` the only individual Direct Owners once everything else is done,
+  removing the operator and whoever created the repository and keeping the
+  `azure-verified-modules-module-owners` fallback security group.
 
 ## Validation
 
@@ -143,6 +154,18 @@ App configuration YAML is edited line by line, removing the runtime
     fork call returned it), and cloned the repository.
   - A further run changed nothing and reused the open app installation pull
     request.
+  - With the operator's approval, the tie to
+    `service-AVM-azure-verified-modules-module-owners` was proposed in the
+    Open Source Portal afterwards. The portal activated it at once, saying a
+    legacy JIT repository needed no approval given the proposer's prior role,
+    and the repository now shows JIT v2.
+  - Last, also with the operator's approval, the module owner who created the
+    repository was removed as a Direct Owner, leaving `jaredholgate` and
+    `jatracey`. After the tie, editing owners needed administrator access
+    through the shared rule's elevation. **Change owners** appears on the
+    repository overview only while elevated, and the Compliance tab shows no
+    editor. The first two owner slots are required, so the remaining owners
+    had to fill them before **Save** was enabled.
 
 ## Blockers or dependencies
 
