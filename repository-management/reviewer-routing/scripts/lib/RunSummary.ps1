@@ -61,6 +61,9 @@ function Write-AvmRunSummary {
 
     .PARAMETER Failures
     Plain-text failure messages, listed in the job summary.
+
+    .PARAMETER Warnings
+    Plain-text warning messages, listed separately from failures.
     #>
     [CmdletBinding()]
     param(
@@ -70,6 +73,7 @@ function Write-AvmRunSummary {
         [AllowEmptyCollection()] [string[]] $TableHeaders = @(),
         [AllowEmptyCollection()] [object[]] $TableRows = @(),
         [AllowEmptyCollection()] [string[]] $Failures = @(),
+        [AllowEmptyCollection()] [string[]] $Warnings = @(),
         [switch] $DryRun
     )
 
@@ -96,13 +100,18 @@ function Write-AvmRunSummary {
             $markdown.Add("| $(@($row) -join ' | ') |")
         }
     }
-    if ($Failures.Count -gt 0) {
-        $markdown.Add('')
-        $markdown.Add('Failures:')
-        $markdown.Add('')
-        foreach ($failure in $Failures) {
-            $text = ($failure -replace '\s+', ' ').Trim().Replace('`', "'")
-            $markdown.Add("- ``$text``")
+    foreach ($section in @(
+            @{ Title = 'Warnings'; Messages = $Warnings }
+            @{ Title = 'Failures'; Messages = $Failures }
+        )) {
+        if ($section.Messages.Count -gt 0) {
+            $markdown.Add('')
+            $markdown.Add("$($section.Title):")
+            $markdown.Add('')
+            foreach ($message in $section.Messages) {
+                $text = ($message -replace '\s+', ' ').Trim().Replace('`', "'")
+                $markdown.Add("- ``$text``")
+            }
         }
     }
     $markdown.Add('')

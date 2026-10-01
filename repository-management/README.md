@@ -51,6 +51,14 @@ module-path and core-team rules are unchanged. Both ecosystems skip drafts,
 the author, existing review requests, and people who already reviewed, and
 only add missing reviewers and labels.
 
+If a requested routing label has not been provisioned yet, the request is
+deferred with a warning rather than failing the sweep. This can happen between
+app installation and the first repository sync. The job summary lists the
+missing label and affected request; a later routing run retries after sync.
+Reviewer routing does not create labels or report the deferred request as
+updated. Other API, permission, and reviewer errors still fail the run after
+the remaining requests have been processed.
+
 The fifteen-minute runs search batches of twenty Terraform repositories for
 ready requests updated in the last hour. GitHub cannot match a repository-name
 wildcard in an issue search, so each batch supplies exact `repo:` qualifiers.

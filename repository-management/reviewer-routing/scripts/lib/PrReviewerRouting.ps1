@@ -262,8 +262,9 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     Routes one pull request and returns its outcome for the run summary.
 
     .OUTPUTS
-    An ordered dictionary with Url, Number, Status (Draft, AlreadyRouted,
-    Updated or WouldUpdate), NewReviewers, NewLabels and ReviewerModules.
+    An ordered dictionary with Url, Number, Status (Draft, Closed,
+    AlreadyRouted, MissingLabel, Updated or WouldUpdate), NewReviewers,
+    NewLabels, ReviewerModules and Warnings.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -282,6 +283,7 @@ function Set-AvmPrReviewerRoutingForPullRequest {
         NewReviewers    = @()
         NewLabels       = @()
         ReviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        Warnings        = @()
     }
     if ($pr.isDraft) {
         Write-Host "Pull request [$($pr.url)] is a draft. Skipping."
@@ -318,7 +320,22 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     }
     $outcome.Status = 'WouldUpdate'
     if ($PSCmdlet.ShouldProcess("Labels [$($routing.NewLabels -join ', ')] and reviewers [$($routing.NewReviewers -join ', ')] on pull request [$($pr.url)]", 'Add')) {
-        $null = Invoke-RepositoryGitHub -Arguments $editArguments
+        try {
+            $null = Invoke-RepositoryGitHub -Arguments $editArguments
+        }
+        catch [System.InvalidOperationException] {
+            $message = $_.Exception.Message.Trim()
+            $missingLabels = @($routing.NewLabels | Where-Object { $message -ceq "GitHub operation failed: '$_' not found" })
+            if ($missingLabels.Count -ne 1) {
+                throw
+            }
+            $warning = "Routing deferred for pull request [$($pr.url)]: label [$($missingLabels[0])] does not exist in [$Repository]. " +
+                'Repository sync must provision the standard labels; a subsequent routing run will retry.'
+            Write-Warning $warning
+            $outcome.Status = 'MissingLabel'
+            $outcome.Warnings = @($warning)
+            return $outcome
+        }
         $outcome.Status = 'Updated'
     }
 
@@ -355,6 +372,11 @@ function Write-AvmPrReviewerRoutingSummary {
     if ($closedCount -gt 0) {
         $overview += " $closedCount no longer open."
     }
+    $missingLabelOutcomes = @($Outcomes | Where-Object { $_.Status -ceq 'MissingLabel' })
+    if ($missingLabelOutcomes.Count -gt 0) {
+        $overview += " $($missingLabelOutcomes.Count) deferred with missing-label warnings."
+    }
+    $warnings = @($missingLabelOutcomes | ForEach-Object { $_.Warnings })
 
     $logLines = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -377,7 +399,7 @@ function Write-AvmPrReviewerRoutingSummary {
 
     Write-AvmRunSummary -Title 'Pull request reviewer routing' -Overview $overview -LogLines $logLines `
         -TableHeaders @('Pull request', $reviewersLabel, $labelsLabel) -TableRows $rows.ToArray() `
-        -Failures $Failures -DryRun:$DryRun
+        -Failures $Failures -Warnings $warnings -DryRun:$DryRun
 }
 
 function Invoke-AvmPrReviewerRouting {
