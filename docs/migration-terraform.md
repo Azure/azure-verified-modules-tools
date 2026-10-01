@@ -169,13 +169,16 @@ The approved-verb equivalent is
 validates the file without contacting Azure.
 
 The reusable Terraform workflow checks this file after resolving the effective
-`ARM_*` variables and installing `Avm.Authoring`. Only the protected
-`integration-test` and `examples-test` jobs use OIDC to sign in to Azure and
-run the command, with the **same client and tenant IDs** as Terraform. The
-integration job uses the selected test subscription; each e2e leg uses its
-own selected subscription. An `ARM_SUBSCRIPTION_ID_OVERRIDE` remains effective
-for Terraform, but a mismatch with the selected test subscription fails the
-preflight before Azure login rather than registering an unintended subscription.
+`ARM_*` variables and installing `Avm.Authoring`. Its "Validate required
+features offline" step checks the entire manifest and selected subscription
+without making Azure calls or registering features. Only the later protected
+`integration-test` and `examples-test` job steps use OIDC to sign in to Azure
+and run the registration command, with the **same client and tenant IDs** as
+Terraform. The integration job uses the selected test subscription; each e2e
+leg uses its own selected subscription. An `ARM_SUBSCRIPTION_ID_OVERRIDE` remains
+effective for Terraform, but a mismatch with the selected test subscription
+fails the preflight before Azure login rather than registering an unintended
+subscription.
 The selector, unit, and pr-check jobs never register features.
 
 The test identity needs `Microsoft.Features/*` access on each selected test

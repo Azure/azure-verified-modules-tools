@@ -403,28 +403,46 @@ Describe 'Terraform workflow required-feature preflight' -Tag Component {
         $script:previousLocation = (Get-Location).Path
         $script:previousSelected = $env:SELECTED_SUBSCRIPTION_ID
         $script:previousOutput = $env:GITHUB_OUTPUT
+        $script:previousClientId = $env:ARM_CLIENT_ID
+        $script:previousTenantId = $env:ARM_TENANT_ID
+        $script:previousModulePath = $env:PSModulePath
         $script:preflightRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:preflightRoot
         Set-Location -LiteralPath $script:preflightRoot
+        $env:PSModulePath = "$(Join-Path $script:repoRoot 'src')$([IO.Path]::PathSeparator)$env:PSModulePath"
         $env:GITHUB_OUTPUT = Join-Path $script:preflightRoot 'output.txt'
         $env:SELECTED_SUBSCRIPTION_ID = $script:subscription
         $env:ARM_SUBSCRIPTION_ID = $script:otherSubscription
+        $env:ARM_CLIENT_ID = 'fake-test-client'
+        $env:ARM_TENANT_ID = 'fake-test-tenant'
+        Mock Test-AvmModuleVersion -ModuleName Avm.Authoring {}
+        Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring {
+            throw 'Feature preflight must not resolve Azure CLI.'
+        }
+        Mock Invoke-AvmAzureCli -ModuleName Avm.Authoring {
+            throw 'Feature preflight must not call Azure CLI.'
+        }
     }
 
     AfterEach {
         Set-Location -LiteralPath $script:previousLocation
         $env:SELECTED_SUBSCRIPTION_ID = $script:previousSelected
         $env:GITHUB_OUTPUT = $script:previousOutput
+        $env:ARM_CLIENT_ID = $script:previousClientId
+        $env:ARM_TENANT_ID = $script:previousTenantId
+        $env:PSModulePath = $script:previousModulePath
     }
 
     It 'does not signal Azure login for a module without the manifest' {
-        & $script:preflight
+        $log = @(& $script:preflight 6>&1) | Out-String
+        $log | Should -Match 'No \.required-features\.json found; feature-specific Azure login and registration will be skipped\.'
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 
     It 'does not signal Azure login for an empty manifest' {
         Set-Content -LiteralPath '.required-features.json' -Value '[]' -Encoding utf8NoBOM
-        & $script:preflight
+        $log = @(& $script:preflight 6>&1) | Out-String
+        $log | Should -Match '\.required-features\.json declares no features; feature-specific Azure login and registration will be skipped\.'
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 
@@ -433,5 +451,37 @@ Describe 'Terraform workflow required-feature preflight' -Tag Component {
             -Value '["Microsoft.Compute/EncryptionAtHost"]' -Encoding utf8NoBOM
         { & $script:preflight } | Should -Throw '*effective ARM_SUBSCRIPTION_ID does not match*'
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'validates every declared feature offline and announces that Azure registration follows login' {
+        Set-Content -LiteralPath 'terraform.tf' -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath '.required-features.json' -Encoding utf8NoBOM -Value (
+            '["Microsoft.Compute/EncryptionAtHost","Microsoft.Network/AllowTestFeature"]'
+        )
+        $env:ARM_SUBSCRIPTION_ID = $script:subscription
+
+        $log = @(& $script:preflight 6>&1) | Out-String
+
+        (Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw).Trim() | Should -BeExactly 'required=true'
+        $log | Should -Match 'Validated all 2 required Azure feature\(s\) in \.required-features\.json'
+        $log | Should -Match "effective selected test subscription $($script:subscription)"
+        $log | Should -Match 'No Azure calls or feature registration occurred; Azure login and registration run in the following steps\.'
+        $log | Should -Not -Match 'register-features: skipped'
+        Should -Invoke Resolve-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
+        Should -Invoke Invoke-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects a later invalid feature before allowing Azure login' {
+        Set-Content -LiteralPath 'terraform.tf' -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath '.required-features.json' -Encoding utf8NoBOM -Value (
+            '["Microsoft.Compute/EncryptionAtHost","Microsoft.Network/Invalid Feature"]'
+        )
+        $env:ARM_SUBSCRIPTION_ID = $script:subscription
+
+        { & $script:preflight } | Should -Throw
+
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+        Should -Invoke Resolve-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
+        Should -Invoke Invoke-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
     }
 }
