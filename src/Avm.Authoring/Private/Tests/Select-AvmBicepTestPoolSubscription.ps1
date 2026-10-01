@@ -16,12 +16,25 @@ function Select-AvmBicepTestPoolSubscription {
 
         [Parameter(Mandatory)]
         [AllowEmptyString()]
-        [string] $PersistentSubscriptionId
+        [string] $PersistentSubscriptionId,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $RunSeed,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int] $CaseIndex
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    if ($RunSeed -cnotmatch '^[0-9a-fA-F]{32}$') {
+        throw [AvmConfigurationException]::new(
+            'BAMI test-pool run seed must be 32 hexadecimal characters shared across the run.')
+    }
+    $seedBytes = [Convert]::FromHexString($RunSeed)
     $identifiers = [ordered]@{
         TenantId                 = $TenantId
         AdminSubscriptionId      = $AdminSubscriptionId
@@ -120,15 +133,27 @@ function Select-AvmBicepTestPoolSubscription {
                 })
         }
 
-        $index = Get-AvmBicepTestPoolIndex -Count $subscriptions.Count
-        if ($index -lt 0 -or $index -ge $subscriptions.Count) {
-            throw [System.InvalidOperationException]::new('BAMI pool selection returned an invalid index.')
+        $ordered = [System.Collections.Generic.SortedDictionary[string, object]]::new(
+            [System.StringComparer]::Ordinal)
+        foreach ($subscription in $subscriptions) {
+            $digest = [System.Security.Cryptography.HMACSHA256]::HashData(
+                $seedBytes, [System.Text.Encoding]::UTF8.GetBytes($subscription.SubscriptionId))
+            $rank = '{0}:{1}' -f [Convert]::ToHexString($digest), $subscription.SubscriptionId
+            $ordered.Add($rank, $subscription)
         }
-        return [pscustomobject]@{
-            Name           = $subscriptions[$index].Name
-            SubscriptionId = $subscriptions[$index].SubscriptionId
-            TenantId       = $identifiers.TenantId
+        $position = $CaseIndex % $subscriptions.Count
+        foreach ($subscription in $ordered.Values) {
+            if ($position -eq 0) {
+                return [pscustomobject]@{
+                    Name           = $subscription.Name
+                    SubscriptionId = $subscription.SubscriptionId
+                    TenantId       = $identifiers.TenantId
+                }
+            }
+            $position--
         }
+        throw [System.InvalidOperationException]::new(
+            'BAMI test-pool permutation did not contain the selected case position.')
     }
     catch [System.Text.Json.JsonException] {
         throw [AvmConfigurationException]::new(

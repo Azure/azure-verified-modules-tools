@@ -14,6 +14,10 @@ reject malformed, duplicate or protected entries, and select a member with a
 uniform random index. Do not treat a structurally valid pool as proof of
 Azure account identity, management-group membership or deployment authority.
 
+The subsequent [case-distribution slice](2026-10-01-bicep-pool-case-distribution.md)
+replaces individual random draws with a shared-seed permutation and case
+index. The validation and candidate-only boundaries in this record remain.
+
 This slice adds no public command parameter, cloud query, runtime Create
 path, workflow variable, selector or registry CI change. In particular,
 the Bicep execution variable bundle does not currently publish the Admin

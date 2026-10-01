@@ -7,6 +7,8 @@ BeforeAll {
     $script:tenant = '00000000-0000-4000-8000-000000001001'
     $script:admin = '00000000-0000-4000-8000-000000001002'
     $script:persistent = '00000000-0000-4000-8000-000000001003'
+    $script:seed = '0123456789abcdef0123456789abcdef'
+    $script:alternateSeed = 'fedcba9876543210fedcba9876543210'
 }
 
 AfterAll {
@@ -24,29 +26,75 @@ Describe 'Bicep BAMI test subscription pool selection' {
         $script:poolJson = ConvertTo-Json -InputObject $script:pool -Compress -Depth 4
     }
 
-    It 'selects a uniform-index candidate from all 28 entries without a cloud call' {
+    It 'selects a valid candidate for a shared seed and case index without a cloud call' {
         InModuleScope 'Avm.Authoring' -Parameters @{
             Json = $script:poolJson; T = $script:tenant
-            A = $script:admin; P = $script:persistent
+            A = $script:admin; P = $script:persistent; Seed = $script:seed
         } {
-            param($Json, $T, $A, $P)
-            Mock Get-AvmBicepTestPoolIndex { 27 }
+            param($Json, $T, $A, $P, $Seed)
             Mock Invoke-AvmProcess { throw 'No cloud calls permitted during selection.' }
             $selected = Select-AvmBicepTestPoolSubscription -PoolJson $Json `
-                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P
-            $selected.Name | Should -BeExactly 'test-28'
-            $selected.SubscriptionId | Should -BeExactly '00000000-0000-4000-8000-000000000028'
+                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                -RunSeed $Seed -CaseIndex 27
+            $selected.Name | Should -Match '^test-(?:[1-9]|1[0-9]|2[0-8])$'
+            $number = [int]$selected.Name.Split('-')[1]
+            $selected.SubscriptionId |
+                Should -BeExactly ('00000000-0000-4000-8000-{0:d12}' -f $number)
             $selected.TenantId | Should -BeExactly $T
-            Should -Invoke Get-AvmBicepTestPoolIndex -Exactly 1 -ParameterFilter { $Count -eq 28 }
+            ($selected.PSObject.Properties.Name -join ',') |
+                Should -BeExactly 'Name,SubscriptionId,TenantId'
             Should -Invoke Invoke-AvmProcess -Exactly 0
         }
     }
 
-    It 'uses a cryptographically generated in-range index' {
+    It 'generates a cryptographically random seed for one entire run' {
         InModuleScope 'Avm.Authoring' {
-            $indices = @(1..100 | ForEach-Object { Get-AvmBicepTestPoolIndex -Count 28 })
-            $indices.Count | Should -Be 100
-            @($indices | Where-Object { $_ -lt 0 -or $_ -ge 28 }).Count | Should -Be 0
+            Get-AvmBicepTestPoolSeed | Should -Match '^[0-9a-f]{32}$'
+        }
+    }
+
+    It 'spreads the first 28 cases across all subscriptions and repeats only on wraparound' {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Json = $script:poolJson; T = $script:tenant
+            A = $script:admin; P = $script:persistent; Seed = $script:seed
+        } {
+            param($Json, $T, $A, $P, $Seed)
+            $ids = @(for ($caseIndex = 0; $caseIndex -lt 56; $caseIndex++) {
+                    (Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                        -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                        -RunSeed $Seed -CaseIndex $caseIndex).SubscriptionId
+                })
+            $ids.Count | Should -Be 56
+            @($ids[0..27] | Select-Object -Unique).Count | Should -Be 28
+            ($ids[0..27] -join ',') | Should -BeExactly ($ids[28..55] -join ',')
+        }
+    }
+
+    It 'replays the same permutation across workers regardless of input ordering' {
+        $reversed = ConvertTo-Json -InputObject @($script:pool[27..0]) -Compress -Depth 4
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Json = $script:poolJson; ReversedJson = $reversed; T = $script:tenant
+            A = $script:admin; P = $script:persistent
+            Seed = $script:seed; OtherSeed = $script:alternateSeed
+        } {
+            param($Json, $ReversedJson, $T, $A, $P, $Seed, $OtherSeed)
+            $original = @(0..27 | ForEach-Object {
+                    (Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                        -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                        -RunSeed $Seed -CaseIndex $_).SubscriptionId
+                })
+            $replayed = @(0..27 | ForEach-Object {
+                    (Select-AvmBicepTestPoolSubscription -PoolJson $ReversedJson `
+                        -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                        -RunSeed $Seed -CaseIndex $_).SubscriptionId
+                })
+            $otherRun = @(0..27 | ForEach-Object {
+                    (Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                        -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                        -RunSeed $OtherSeed -CaseIndex $_).SubscriptionId
+                })
+            ($original -join ',') | Should -BeExactly ($replayed -join ',')
+            ($original -join ',') | Should -Not -BeExactly ($otherRun -join ',')
         }
     }
 
@@ -110,14 +158,16 @@ Describe 'Bicep BAMI test subscription pool selection' {
         }
 
         InModuleScope 'Avm.Authoring' -Parameters @{
-            Json = $json; T = $script:tenant; A = $script:admin; P = $script:persistent
+            Json = $json; T = $script:tenant; A = $script:admin
+            P = $script:persistent; Seed = $script:seed
         } {
-            param($Json, $T, $A, $P)
-            Mock Get-AvmBicepTestPoolIndex { throw 'Invalid pool reached random selection.' }
+            param($Json, $T, $A, $P, $Seed)
+            Mock Invoke-AvmProcess { throw 'Invalid pool reached a cloud call.' }
             { Select-AvmBicepTestPoolSubscription -PoolJson $Json `
-                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P } |
+                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                    -RunSeed $Seed -CaseIndex 0 } |
                 Should -Throw
-            Should -Invoke Get-AvmBicepTestPoolIndex -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 0
         }
     }
 
@@ -139,39 +189,72 @@ Describe 'Bicep BAMI test subscription pool selection' {
             'Admin equals Persistent' { $adminId = $persistentId }
         }
         InModuleScope 'Avm.Authoring' -Parameters @{
-            Json = $script:poolJson; T = $tenantId; A = $adminId; P = $persistentId
+            Json = $script:poolJson; T = $tenantId; A = $adminId
+            P = $persistentId; Seed = $script:seed
         } {
-            param($Json, $T, $A, $P)
-            Mock Get-AvmBicepTestPoolIndex { throw 'Invalid IDs reached random selection.' }
+            param($Json, $T, $A, $P, $Seed)
             { Select-AvmBicepTestPoolSubscription -PoolJson $Json `
-                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P } |
+                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                    -RunSeed $Seed -CaseIndex 0 } |
                 Should -Throw
-            Should -Invoke Get-AvmBicepTestPoolIndex -Exactly 0
         }
     }
 
-    It 'fails closed if the selection helper returns an out-of-range index' {
+    It 'rejects an invalid shared run seed for <Case>' -ForEach @(
+        @{ Case = 'empty seed'; Seed = '' }
+        @{ Case = 'short seed'; Seed = '1234' }
+        @{ Case = 'nonhex seed'; Seed = '0123456789abcdef0123456789abcdeg' }
+        @{ Case = 'padded seed'; Seed = ' 0123456789abcdef0123456789abcdef ' }
+    ) {
         InModuleScope 'Avm.Authoring' -Parameters @{
             Json = $script:poolJson; T = $script:tenant
-            A = $script:admin; P = $script:persistent
+            A = $script:admin; P = $script:persistent; Seed = $Seed
         } {
-            param($Json, $T, $A, $P)
-            Mock Get-AvmBicepTestPoolIndex { 28 }
+            param($Json, $T, $A, $P, $Seed)
             { Select-AvmBicepTestPoolSubscription -PoolJson $Json `
-                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P } |
-                Should -Throw -ExpectedMessage '*invalid index*'
+                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                    -RunSeed $Seed -CaseIndex 0 } |
+                Should -Throw -ExpectedMessage '*run seed must be 32 hexadecimal characters*'
+        }
+    }
+
+    It 'rejects a negative case index instead of wrapping it to another subscription' {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Json = $script:poolJson; T = $script:tenant
+            A = $script:admin; P = $script:persistent; Seed = $script:seed
+        } {
+            param($Json, $T, $A, $P, $Seed)
+            { Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                    -RunSeed $Seed -CaseIndex -1 } | Should -Throw
+        }
+    }
+
+    It 'wraps a large nonnegative case index without overflowing' {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Json = $script:poolJson; T = $script:tenant
+            A = $script:admin; P = $script:persistent; Seed = $script:seed
+        } {
+            param($Json, $T, $A, $P, $Seed)
+            $large = Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                -RunSeed $Seed -CaseIndex ([int]::MaxValue)
+            $expected = Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                -RunSeed $Seed -CaseIndex ([int]::MaxValue % 28)
+            $large.SubscriptionId | Should -BeExactly $expected.SubscriptionId
         }
     }
 
     It 'checks a selected candidate against fake account and management-group identity' {
         InModuleScope 'Avm.Authoring' -Parameters @{
             Json = $script:poolJson; T = $script:tenant
-            A = $script:admin; P = $script:persistent
+            A = $script:admin; P = $script:persistent; Seed = $script:seed
         } {
-            param($Json, $T, $A, $P)
-            Mock Get-AvmBicepTestPoolIndex { 0 }
+            param($Json, $T, $A, $P, $Seed)
             $selected = Select-AvmBicepTestPoolSubscription -PoolJson $Json `
-                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P
+                -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P `
+                -RunSeed $Seed -CaseIndex 0
             $script:fakePoolAccount = [pscustomobject]@{
                 SubscriptionId = $selected.SubscriptionId
                 TenantId       = $selected.TenantId
