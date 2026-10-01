@@ -307,6 +307,26 @@ pull request.
 Declining a `-Confirm` prompt stops the run at that stage. Terraform
 `-ChildModule` initialization creates only the child's `metadata.json`.
 
+### Use an agent
+
+An AI agent such as GitHub Copilot CLI can guide you through the whole setup
+with the
+[`avm-tf-module-repository-creation`](../../.github/skills/avm-tf-module-repository-creation/SKILL.md)
+agent skill. The skill collects the approved values from the module proposal,
+runs `avm init`, relays the Open Source Portal steps, checks the result, and
+finishes with the Direct Owners step. It asks for your approval before it
+creates the repository and before it changes anything in the portal for you.
+
+Install it for your user account with GitHub CLI 2.90.0 or later, then ask
+your agent to create the repository for your approved module:
+
+```pwsh
+gh skill install Azure/azure-verified-modules-tools .github/skills/avm-tf-module-repository-creation --scope user
+```
+
+`gh skill install` takes the skill from the latest release of this repository,
+so it matches the released `avm init`. `gh skill update` updates it later.
+
 ## Local smoke test
 
 The source manifest has version `0.0.0`. For local source commands other than
