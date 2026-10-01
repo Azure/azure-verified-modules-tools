@@ -105,6 +105,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('register-features')
+            Cmdlet  = 'Register-AvmFeature'
+            Summary = 'Ensure required Azure features are registered in a selected test subscription.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('docs')
             Cmdlet  = 'Invoke-AvmDocs'
             Summary = 'Generate or refresh README docs via the resolved engine.'

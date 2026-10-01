@@ -137,6 +137,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
 | `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
 | `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
+| `avm register-features`       | Optional manual preflight for root-declared Azure features               | Register root-declared features only on the explicitly selected test subscription before integration/e2e runs |
 | `avm pre-commit`              | `metadata` → `format` → `lint` → `validate` → `transform` → `docs`      | `metadata` → `sync` → `check convention` → `transform` → `format` → `docs` |
 | `avm pr-check`                | Requires a clean Git worktree, then composes `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
 | `avm publish`                 | `bicep publish` to Public Bicep Registry                                 | Tag-driven publish to Terraform Registry                                   |

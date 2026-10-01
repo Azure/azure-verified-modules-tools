@@ -29,6 +29,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
 | `Public/Export-AvmReadmeNote.ps1`                 | `avm docs export-notes` -> extract authored legacy Notes once without overwriting an existing sidecar. |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
+| `Public/Register-AvmFeature.ps1`                  | `avm register-features` -> register root-declared Azure features on an explicitly selected test subscription. |
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
