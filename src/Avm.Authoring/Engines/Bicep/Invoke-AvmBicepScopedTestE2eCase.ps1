@@ -32,6 +32,7 @@ function Invoke-AvmBicepScopedTestE2eCase {
     $issues = [System.Collections.Generic.List[object]]::new()
     $changes = [System.Collections.Generic.List[object]]::new()
     $assertions = [System.Collections.Generic.List[object]]::new()
+    $postResults = [System.Collections.Generic.List[object]]::new()
     $pending = [System.Collections.Generic.List[string]]::new()
     $casePassed = $false
     $caseFailed = $false
@@ -48,7 +49,8 @@ function Invoke-AvmBicepScopedTestE2eCase {
     if (-not $PSCmdlet.ShouldProcess($target, 'Deploy Bicep test and remove verified owned resources')) {
         return [pscustomobject]@{
             Attempted = 0; Passed = $false; Failed = $false
-            CleanupPending = @(); AssertionResults = @(); WhatIfChanges = @(); Issues = @()
+            CleanupPending = @(); AssertionResults = @(); PostResults = @()
+            WhatIfChanges = @(); Issues = @()
         }
     }
     $attempted = $true
@@ -175,36 +177,50 @@ function Invoke-AvmBicepScopedTestE2eCase {
     finally {
         if ($createAttempted) {
             try {
-                $cleanup = Remove-AvmBicepScopedDeploymentResource -AzPath $AzPath `
-                    -Scope $scope -SubscriptionId $SubscriptionId -TenantId $TenantId `
-                    -ManagementGroupId $scopeGroupId -DeploymentName $deploymentName `
-                    -RunId $Item.RunId -Plan $plan -WorkingDirectory $WorkingDirectory `
-                    -Confirm:$false
-            }
-            catch [AvmProcessException] {
-                $cleanup = [pscustomobject]@{
-                    Cleaned = $false
-                    Pending = @($plan.Resources | ForEach-Object { $_.Id })
-                    Message = $_.Exception.Message
+                $post = Invoke-AvmBicepE2ePostHook -Item $Item `
+                    -ModuleRoot $WorkingDirectory -SubscriptionId $SubscriptionId `
+                    -TenantId $TenantId -ManagementGroupId $scopeGroupId `
+                    -Location $Location -DeploymentName $deploymentName `
+                    -RunId $Item.RunId -Issues $issues
+                $postResults.Add($post)
+                if ($post.Status -eq 'fail') {
+                    $casePassed = $false
+                    $caseFailed = $true
                 }
             }
-            catch [System.TimeoutException] {
-                $cleanup = [pscustomobject]@{
-                    Cleaned = $false
-                    Pending = @($plan.Resources | ForEach-Object { $_.Id })
-                    Message = $_.Exception.Message
+            finally {
+                try {
+                    $cleanup = Remove-AvmBicepScopedDeploymentResource -AzPath $AzPath `
+                        -Scope $scope -SubscriptionId $SubscriptionId -TenantId $TenantId `
+                        -ManagementGroupId $scopeGroupId -DeploymentName $deploymentName `
+                        -RunId $Item.RunId -Plan $plan -WorkingDirectory $WorkingDirectory `
+                        -Confirm:$false
                 }
-            }
-            if (-not $cleanup.Cleaned) {
-                foreach ($id in $cleanup.Pending) {
-                    $pending.Add($id)
+                catch [AvmProcessException] {
+                    $cleanup = [pscustomobject]@{
+                        Cleaned = $false
+                        Pending = @($plan.Resources | ForEach-Object { $_.Id })
+                        Message = $_.Exception.Message
+                    }
                 }
-                $message = "$($cleanup.Message) Deployment '$target' requires manual cleanup verification."
-                Add-AvmBicepTestIssue -Issues $issues -File $casePath `
-                    -Code 'cleanup-failed' -Message $message
-                Write-AvmLog $message -Level Error
-                $casePassed = $false
-                $caseFailed = $true
+                catch [System.TimeoutException] {
+                    $cleanup = [pscustomobject]@{
+                        Cleaned = $false
+                        Pending = @($plan.Resources | ForEach-Object { $_.Id })
+                        Message = $_.Exception.Message
+                    }
+                }
+                if (-not $cleanup.Cleaned) {
+                    foreach ($id in $cleanup.Pending) {
+                        $pending.Add($id)
+                    }
+                    $message = "$($cleanup.Message) Deployment '$target' requires manual cleanup verification."
+                    Add-AvmBicepTestIssue -Issues $issues -File $casePath `
+                        -Code 'cleanup-failed' -Message $message
+                    Write-AvmLog $message -Level Error
+                    $casePassed = $false
+                    $caseFailed = $true
+                }
             }
         }
     }
@@ -214,6 +230,7 @@ function Invoke-AvmBicepScopedTestE2eCase {
         Failed           = $caseFailed
         CleanupPending   = $pending.ToArray()
         AssertionResults = $assertions.ToArray()
+        PostResults      = $postResults.ToArray()
         WhatIfChanges    = $changes.ToArray()
         Issues           = $issues.ToArray()
     }

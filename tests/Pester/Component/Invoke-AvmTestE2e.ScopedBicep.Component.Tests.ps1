@@ -43,6 +43,7 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
             ExistingResource      = $false
             FailedOperation       = ''
             FailedCreate          = $false
+            CreateTimeout         = $false
             CreateWithoutHistory  = $false
             BadOperationId        = $false
             ForeignOperationId    = $false
@@ -52,6 +53,9 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
             ForeignGroupResources = @()
             AssertionFails        = $false
             PesterInput           = $null
+            PostExit              = 0
+            PostTimeout           = $false
+            PostStartFails        = $false
             ResourceId            = ''
             ResourceName          = ''
             NestedName            = ''
@@ -77,12 +81,14 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                 [pscustomobject]@{ Source = 'fake-az' }
             } -ParameterFilter { $Name -eq 'az' }
             Mock Invoke-AvmProcess {
-                param($FilePath, $ArgumentList, $TimeoutSec)
+                param($FilePath, $ArgumentList, $TimeoutSec, $WorkingDirectory, $EnvVars)
                 $state = $script:scopedE2eState
                 $state.Calls.Add([pscustomobject]@{
                         FilePath = $FilePath
                         Arguments = [string[]]$ArgumentList
                         TimeoutSec = $TimeoutSec
+                        WorkingDirectory = $WorkingDirectory
+                        EnvVars = $EnvVars
                     })
                 if ($FilePath -eq 'fake-bicep') {
                     if ($null -ne $state.CompiledTemplateJson) {
@@ -121,6 +127,18 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                     }
                 }
                 if ($FilePath -eq [System.Environment]::ProcessPath) {
+                    $fileIndex = [array]::IndexOf($ArgumentList, '-File')
+                    if ([System.IO.Path]::GetFileName($ArgumentList[$fileIndex + 1]) -ceq 'post.ps1') {
+                        if ($state.PostStartFails) {
+                            throw [AvmProcessException]::new('Fake post hook start failure')
+                        }
+                        if ($state.PostTimeout) {
+                            throw [System.TimeoutException]::new('Fake post hook timeout')
+                        }
+                        return [pscustomobject]@{
+                            ExitCode = $state.PostExit; StdOut = ''; StdErr = ''
+                        }
+                    }
                     $inputIndex = [array]::IndexOf($ArgumentList, '-InputPath')
                     $resultIndex = [array]::IndexOf($ArgumentList, '-ResultPath')
                     $state.PesterInput = Get-Content -LiteralPath $ArgumentList[$inputIndex + 1] `
@@ -130,14 +148,14 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                     $summary = @{
                         Version = '5.7.1'; Total = 1; Passed = $passed; Failed = $failed
                         Skipped = 0; Inconclusive = 0; Filtered = 0
-                        Issues = if ($state.AssertionFails) {
-                            @(@{
-                                    File = $state.PesterInput.Files[0]; Line = 2; Column = 0
-                                    Severity = 'error'; Code = 'avm.bicep.pester-failed'
-                                    Message = 'Expected created definition.'
-                                })
-                        }
-                        else { @() }
+                        Issues = @()
+                    }
+                    if ($state.AssertionFails) {
+                        $summary.Issues = @(@{
+                                File = $state.PesterInput.Files[0]; Line = 2; Column = 0
+                                Severity = 'error'; Code = 'avm.bicep.pester-failed'
+                                Message = 'Expected created definition.'
+                            })
                     }
                     [System.IO.File]::WriteAllText(
                         $ArgumentList[$resultIndex + 1],
@@ -332,7 +350,11 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                             $stored = @{
                                 id = $deploymentId; name = $name
                                 properties = @{
-                                    provisioningState = if ($state.FailedCreate) { 'Failed' } else { 'Succeeded' }
+                                    provisioningState = if ($state.CreateTimeout) {
+                                        'Canceled'
+                                    }
+                                    elseif ($state.FailedCreate) { 'Failed' }
+                                    else { 'Succeeded' }
                                     outputs = @{ result = @{ type = 'String'; value = 'created' } }
                                 }
                             }
@@ -358,6 +380,9 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
                                 id = $state.ResourceId; name = $state.ResourceName
                                 type = $state.ResourceType
                             }
+                        }
+                        if ($state.CreateTimeout) {
+                            throw [System.TimeoutException]::new('Fake cancelled scoped Create')
                         }
                         if ($state.FailedCreate -or $state.CreateWithoutHistory) {
                             return [pscustomobject]@{
@@ -469,6 +494,8 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         $result.CleanupPending.Count | Should -Be 0
         $result.WhatIfChanges.Count | Should -Be 1
         $result.AssertionResults[0].Status | Should -Be 'not-present'
+        $result.PostResults.Count | Should -Be 1
+        $result.PostResults[0].Status | Should -Be 'not-present'
         $script:state.ResourceName | Should -Match '^avm[0-9a-f]{10}-policy$'
         $script:state.Resources.Count | Should -Be 0
         $script:state.Deployments.Count | Should -Be 1
@@ -508,6 +535,8 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         $testPath = Join-Path (Split-Path -Parent $script:source) 'deployed.Tests.ps1'
         Set-Content -LiteralPath $testPath -Value "Describe 'deployed' { It 'fails' { } }" `
             -Encoding utf8NoBOM
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
         $script:state.AssertionFails = $true
         $result = Invoke-AvmTestE2e -Path $script:root `
             -SubscriptionId $script:subscription -TenantId $script:tenant `
@@ -516,11 +545,13 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         $result.Status | Should -Be 'fail'
         $result.RunsFailed | Should -Be 1
         $result.AssertionResults[0].Status | Should -Be 'fail'
+        $result.PostResults[0].Status | Should -Be 'pass'
         $script:state.PesterInput.TestInputData.DeploymentOutputs.result.value |
             Should -Be 'created'
         $script:state.Resources.Count | Should -Be 0
         $sequence = @($script:state.Calls | ForEach-Object {
-                if ($_.FilePath -eq [System.Environment]::ProcessPath) { 'pester' }
+                if ($_.Arguments -contains $postPath) { 'post' }
+                elseif ($_.FilePath -eq [System.Environment]::ProcessPath) { 'pester' }
                 elseif ($_.Arguments[0] -eq 'resource' -and $_.Arguments[1] -eq 'delete') { 'delete' }
                 elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
                 else { $_.Arguments[0] }
@@ -528,7 +559,182 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         [array]::IndexOf($sequence, 'create') |
             Should -BeLessThan ([array]::IndexOf($sequence, 'pester'))
         [array]::IndexOf($sequence, 'pester') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
+        [array]::IndexOf($sequence, 'post') |
             Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
+    }
+
+    It 'runs case-local post.ps1 after assertions and before cleanup for <Scope>' -ForEach @(
+        @{ Scope = 'sub'; Schema = 'subscriptionDeploymentTemplate' }
+        @{ Scope = 'mg'; Schema = 'managementGroupDeploymentTemplate' }
+        @{ Scope = 'tenant'; Schema = 'tenantDeploymentTemplate' }
+    ) {
+        $script:state.Scope = $Scope
+        $script:state.Schema = $Schema
+        $caseDirectory = Split-Path -Parent $script:source
+        $postPath = Join-Path $caseDirectory 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $caseDirectory 'deployed.Tests.ps1') `
+            -Value 'authored assertion' -Encoding utf8NoBOM
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -ManagementGroupId $script:managementGroup -Location 'westus' `
+            -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'pass'
+        $result.RunsPassed | Should -Be 1
+        $result.AssertionResults[0].Status | Should -Be 'pass'
+        $result.PostResults.Count | Should -Be 1
+        $result.PostResults[0].Status | Should -Be 'pass'
+        $result.PostResults[0].ExitCode | Should -Be 0
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Resources.Count | Should -Be 0
+        $hook = @($script:state.Calls | Where-Object {
+                $_.FilePath -eq [System.Environment]::ProcessPath -and
+                $_.Arguments -contains $postPath
+            })
+        $hook.Count | Should -Be 1
+        $hook[0].TimeoutSec | Should -Be 300
+        $hook[0].WorkingDirectory | Should -Be $caseDirectory
+        $hook[0].Arguments | Should -Be @('-NoProfile', '-NonInteractive', '-File', $postPath)
+        $hook[0].EnvVars.AVM_E2E_SCOPE | Should -Be $Scope
+        $hook[0].EnvVars.AVM_E2E_CASE | Should -Be 'tests/e2e/defaults'
+        $hook[0].EnvVars.AVM_E2E_SUBSCRIPTION_ID | Should -Be $script:subscription
+        $hook[0].EnvVars.AVM_E2E_TENANT_ID | Should -Be $script:tenant
+        $hook[0].EnvVars.AVM_E2E_RESOURCE_GROUP_NAME | Should -Be ''
+        $hook[0].EnvVars.AVM_E2E_LOCATION | Should -Be 'westus'
+        $hook[0].EnvVars.AVM_E2E_DEPLOYMENT_NAME |
+            Should -Be ('avm-e2e-' + $hook[0].EnvVars.AVM_E2E_RUN_ID)
+        if ($Scope -eq 'mg') {
+            $hook[0].EnvVars.AVM_E2E_MANAGEMENT_GROUP_ID | Should -Be $script:managementGroup
+        }
+        else {
+            $hook[0].EnvVars.AVM_E2E_MANAGEMENT_GROUP_ID | Should -BeNullOrEmpty
+        }
+        $sequence = @($script:state.Calls | ForEach-Object {
+                if ($_.FilePath -eq [System.Environment]::ProcessPath) {
+                    if ($_.Arguments -contains $postPath) { 'post' } else { 'pester' }
+                }
+                elseif ($_.Arguments[0] -eq 'resource' -and $_.Arguments[1] -eq 'delete') {
+                    'delete'
+                }
+                elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
+                else { $_.Arguments[0] }
+            })
+        [array]::IndexOf($sequence, 'create') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'pester'))
+        [array]::IndexOf($sequence, 'pester') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
+        [array]::IndexOf($sequence, 'post') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
+    }
+
+    It 'runs post.ps1 after a failed scoped Create without suppressing guarded cleanup' {
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        $script:state.FailedCreate = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -Location 'westus' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-deployment-failed'
+        $result.AssertionResults.Count | Should -Be 0
+        $result.PostResults.Count | Should -Be 1
+        $result.PostResults[0].Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Resources.Count | Should -Be 0
+        $sequence = @($script:state.Calls | ForEach-Object {
+                if ($_.Arguments -contains $postPath) { 'post' }
+                elseif ($_.Arguments[0] -eq 'resource' -and
+                    $_.Arguments[1] -eq 'delete') { 'delete' }
+                elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
+                else { $_.Arguments[0] }
+            })
+        [array]::IndexOf($sequence, 'create') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
+        [array]::IndexOf($sequence, 'post') |
+            Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
+    }
+
+    It 'runs post.ps1 after a cancelled scoped Create without losing the original failure' {
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        $script:state.CreateTimeout = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -Location 'westus' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-process-timeout'
+        $result.PostResults[0].Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Resources.Count | Should -Be 0
+        @($script:state.Calls | Where-Object {
+                $_.Arguments -contains $postPath
+            }).Count | Should -Be 1
+    }
+
+    It 'fails a scoped case when post.ps1 <Kind> while keeping cleanup active' -ForEach @(
+        @{ Kind = 'exits nonzero'; Field = 'PostExit'; Value = 7; Code = 'post-hook-failed' }
+        @{ Kind = 'times out'; Field = 'PostTimeout'; Value = $true; Code = 'post-hook-timeout' }
+        @{ Kind = 'cannot start'; Field = 'PostStartFails'; Value = $true; Code = 'post-hook-runner-failed' }
+    ) {
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        $script:state.$Field = $Value
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -Location 'westus' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsPassed | Should -Be 0
+        $result.RunsFailed | Should -Be 1
+        $result.PostResults[0].Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain "avm.bicep.e2e-$Code"
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Resources.Count | Should -Be 0
+        @($script:state.Calls | Where-Object {
+                $_.Arguments -contains $postPath
+            }).Count | Should -Be 1
+    }
+
+    It 'keeps both post-hook and cleanup failures visible without deleting unverified resources' {
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        $script:state.PostExit = 1
+        $script:state.DeleteFails = $true
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -Location 'westus' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-post-hook-failed'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
+        $result.PostResults[0].Status | Should -Be 'fail'
+        $result.CleanupPending | Should -Contain $script:state.ResourceId
+        $script:state.Resources.Count | Should -Be 1
+    }
+
+    It 'refuses a wrongly cased post hook only after Create and still cleans the resource' {
+        Set-Content -LiteralPath (Join-Path (Split-Path -Parent $script:source) 'Post.ps1') `
+            -Value 'wrong casing' -Encoding utf8NoBOM
+        $result = Invoke-AvmTestE2e -Path $script:root `
+            -SubscriptionId $script:subscription -TenantId $script:tenant `
+            -Location 'westus' -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.PostResults[0].Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-post-hook-invalid'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:state.Resources.Count | Should -Be 0
+        @($script:state.Calls | Where-Object {
+                $_.FilePath -eq [System.Environment]::ProcessPath
+            }).Count | Should -Be 0
     }
 
     It 'discovers owned resources and removes them after partial ARM failure' {
@@ -550,6 +756,8 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         @{ Case = 'wrong-tenant'; Scope = 'sub'; Schema = 'subscriptionDeploymentTemplate'; Field = 'CredentialMismatch' }
         @{ Case = 'wrong-group'; Scope = 'mg'; Schema = 'managementGroupDeploymentTemplate'; Field = 'GroupMismatch' }
     ) {
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
         $script:state.Scope = $Scope
         $script:state.Schema = $Schema
         $script:state.$Field = $true
@@ -559,9 +767,30 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
             -SkipModuleVersionCheck
         $result.Status | Should -Be 'fail'
         $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-preflight-unsafe'
+        $result.PostResults.Count | Should -Be 0
         @($script:state.Calls | Where-Object {
                 $_.Arguments[0] -eq 'deployment' -and $_.Arguments[2] -eq 'create'
             }).Count | Should -Be 0
+            @($script:state.Calls | Where-Object {
+                    $_.Arguments -contains $postPath
+                }).Count | Should -Be 0
+    }
+
+    It 'does not run a scoped post hook in WhatIf mode or for ignored cases' {
+            $caseDirectory = Split-Path -Parent $script:source
+            $postPath = Join-Path $caseDirectory 'post.ps1'
+            Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+            $dryRun = Invoke-AvmTestE2e -Path $script:root `
+                -SubscriptionId $script:subscription -TenantId $script:tenant `
+                -Location 'westus' -WhatIf -SkipModuleVersionCheck
+            $dryRun.Status | Should -Be 'skipped'
+            $dryRun.PostResults.Count | Should -Be 0
+            Set-Content -LiteralPath (Join-Path $caseDirectory '.e2eignore') `
+                -Value 'not yet released' -Encoding utf8NoBOM
+            $ignored = Invoke-AvmTestE2e -Path $script:root -SkipModuleVersionCheck
+            $ignored.Status | Should -Be 'skipped'
+            $ignored.PostResults.Count | Should -Be 0
+            $script:state.Calls.Count | Should -Be 0
     }
 
     It 'refuses an existing resource, deployment or unqualified prefix before Create' -ForEach @(
@@ -700,17 +929,23 @@ Describe 'Component: Bicep scoped end-to-end deployments' -Tag Component {
         $script:state.CompiledTemplateJson = Get-Content -LiteralPath $script:pinnedFixturePath `
             -Raw -Encoding utf8
         $script:state.FailedOperation = 'validate'
+        $postPath = Join-Path (Split-Path -Parent $script:source) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
         $result = Invoke-AvmTestE2e -Path $script:root `
             -SubscriptionId $script:subscription -TenantId $script:tenant `
             -ManagementGroupId $script:managementGroup -Location 'westus' `
             -SkipModuleVersionCheck
         $result.Status | Should -Be 'fail'
         $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-validate-failed'
+        $result.PostResults.Count | Should -Be 0
         @($script:state.Calls | Where-Object {
                 $_.FilePath -eq 'fake-az' -and
                 $_.Arguments[0] -eq 'deployment' -and
                 $_.Arguments[2] -eq 'validate'
             }).Count | Should -Be 1
+            @($script:state.Calls | Where-Object {
+                    $_.Arguments -contains $postPath
+                }).Count | Should -Be 0
         @($script:state.Calls | Where-Object {
                 $_.Arguments[0] -eq 'deployment' -and
                 $_.Arguments[2] -eq 'create'

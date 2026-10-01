@@ -35,7 +35,7 @@ function Invoke-AvmTestE2e {
         A subscription template that creates a group and deploys an inline
         module into it is staged with a run-owned group tag in temporary ARM
         JSON, never in module source, but is currently refused before Azure
-        access. Its nested group resources and cleanup still require durable
+        access. Its nested group resources and cleanup still require proven
         recovery before Create can be enabled. Other cross-scope, linked,
         scripted, assignment, alias and unreviewed resource types are rejected.
         A Create-only, expanded what-if prediction,
@@ -54,6 +54,25 @@ function Invoke-AvmTestE2e {
         passing tests or any failed, skipped, inconclusive, filtered, or
         setup-failed tests. Pester is stopped after 30 minutes so cleanup
         still runs if authored tests hang.
+
+        After an ARM Create attempt, a case-local tests/e2e/<case>/post.ps1,
+        when present, runs once in a child PowerShell process after assertions
+        (including on assertion or Create failure) and before guarded cleanup.
+        It does not run during listing, integration preview, dry runs, ignored
+        cases or pre-Create failures. It runs from its case directory with
+        the current test identity's permissions, not a sandbox or privileged
+        reaper. Only nonsensitive AVM_E2E_CASE, AVM_E2E_SCOPE,
+        AVM_E2E_SUBSCRIPTION_ID, AVM_E2E_TENANT_ID,
+        AVM_E2E_MANAGEMENT_GROUP_ID, AVM_E2E_RESOURCE_GROUP_NAME,
+        AVM_E2E_DEPLOYMENT_NAME, AVM_E2E_RUN_ID and AVM_E2E_LOCATION
+        are supplied as environment variables; tokens, parameters, secrets
+        and ARM outputs are not passed as hook arguments or logged by the
+        runner. AVM_E2E_SCOPE is 'group', 'sub', 'mg' or 'tenant';
+        optional scope IDs are empty when not supplied. PostResults
+        distinguish 'not-present', 'pass' and 'fail'.
+        A nonzero exit, unsafe path or 300-second timeout fails the case but
+        never replaces or suppresses ownership-checked ordinary cleanup.
+        A hook is best effort, not post-crash recovery.
 
         Terraform walks runnable examples/ and runs init, apply,
         idempotency plan and destroy against a real backend.
@@ -147,7 +166,8 @@ function Invoke-AvmTestE2e {
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Issues. Bicep also reports RunsTotal,
         RunsPassed, RunsFailed, RunsSkipped, AssertionResults (per deployed
-        example), CleanupPending and WhatIfChanges.
+        example), PostResults (per ARM Create attempt, absent hook reported
+        as 'not-present'), CleanupPending and WhatIfChanges.
 
     .EXAMPLE
         avm test e2e

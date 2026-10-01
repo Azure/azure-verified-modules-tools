@@ -127,6 +127,22 @@ Describe 'Component: Bicep ARM integration tier' -Tag Component {
         $validate.Arguments | Should -Contain '--no-prompt'
     }
 
+    It 'does not run case-local post.ps1 during validation or what-if' {
+        $postPath = Join-Path (Split-Path -Parent $script:sourcePath) 'post.ps1'
+        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
+        $result = Invoke-AvmTestIntegration -Path $script:root `
+            -SubscriptionId $script:subscriptionId -ResourceGroupName 'existing-test' `
+            -Tokens @{ namePrefix = 'avm' } -SkipModuleVersionCheck
+
+        $result.Status | Should -Be 'pass'
+        $result.RunsTotal | Should -Be 2
+        @($script:state.Calls | Where-Object {
+                $_.Arguments -contains $postPath -or
+                $_.FilePath -eq [System.Environment]::ProcessPath -or
+                ($_.Arguments[0] -eq 'deployment' -and $_.Arguments[2] -eq 'create')
+            }).Count | Should -Be 0
+    }
+
     It 'does not create a missing resource group or attempt ARM operations' {
         $script:state.GroupExists = 'false'
         { Invoke-AvmTestIntegration -Path $script:root `

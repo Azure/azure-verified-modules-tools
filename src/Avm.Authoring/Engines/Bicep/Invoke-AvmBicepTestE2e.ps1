@@ -63,6 +63,7 @@ function Invoke-AvmBicepTestE2e {
         RunsFailed       = 0
         RunsSkipped      = 0
         AssertionResults = @()
+        PostResults      = @()
         CleanupPending   = @()
         WhatIfChanges    = @()
         Issues           = @()
@@ -128,6 +129,7 @@ function Invoke-AvmBicepTestE2e {
     $changes = [System.Collections.Generic.List[object]]::new()
     $pending = [System.Collections.Generic.List[string]]::new()
     $assertions = [System.Collections.Generic.List[object]]::new()
+    $postResults = [System.Collections.Generic.List[object]]::new()
     $passed = 0
     $failed = 0
     $attempted = 0
@@ -215,6 +217,9 @@ function Invoke-AvmBicepTestE2e {
                 foreach ($entry in $run.AssertionResults) {
                     $assertions.Add($entry)
                 }
+                foreach ($entry in $run.PostResults) {
+                    $postResults.Add($entry)
+                }
                 foreach ($entry in $run.WhatIfChanges) {
                     $changes.Add($entry)
                 }
@@ -229,9 +234,9 @@ function Invoke-AvmBicepTestE2e {
                 }
                 continue
             }
-            $runId = [guid]::NewGuid().ToString('N')
+            $runId = $item.RunId
             $groupName = '{0}-{1}' -f $ResourceGroupPrefix, $runId
-            $deploymentName = 'avm-e2e-{0}' -f $runId
+            $deploymentName = $item.DeploymentName
             $attemptedGroupCreation = $false
             $deploymentAttempted = $false
             $previewPlan = $null
@@ -376,37 +381,54 @@ function Invoke-AvmBicepTestE2e {
             finally {
                 if ($attemptedGroupCreation) {
                     try {
-                        $cleanup = Remove-AvmBicepTestResourceGroup -AzPath $az.Source `
-                            -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
-                            -RunId $runId -WorkingDirectory $Context.Root `
-                            -ExpectCreated -Plan $previewPlan -DeploymentName $deploymentName `
-                            -DeploymentAttempted:$deploymentAttempted
-                    }
-                    catch [AvmProcessException] {
-                        $cleanup = [pscustomobject]@{
-                            Cleaned = $false; Pending = @(); Message = $_.Exception.Message
-                        }
-                    }
-                    catch [System.TimeoutException] {
-                        $cleanup = [pscustomobject]@{
-                            Cleaned = $false; Pending = @(); Message = $_.Exception.Message
-                        }
-                    }
-                    if (-not $cleanup.Cleaned) {
-                        foreach ($id in $cleanup.Pending) {
-                            if (-not $pending.Contains($id)) {
-                                $pending.Add($id)
+                        if ($deploymentAttempted) {
+                            $post = Invoke-AvmBicepE2ePostHook -Item $item `
+                                -ModuleRoot $Context.Root -SubscriptionId $SubscriptionId `
+                                -TenantId $TenantId -ResourceGroupName $groupName `
+                                -Location $Location -DeploymentName $deploymentName `
+                                -RunId $runId -Issues $issues
+                            $postResults.Add($post)
+                            if ($post.Status -eq 'fail' -and $casePassed) {
+                                $passed--
+                                $failed++
+                                $casePassed = $false
                             }
                         }
-                        $pending.Add($groupName)
-                        $stopForCleanup = $true
-                        $message = "$($cleanup.Message) Resource group '$groupName' may require manual cleanup."
-                        Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                            -Code 'cleanup-failed' -Message $message
-                        Write-AvmLog $message -Level Error
-                        if ($casePassed) {
-                            $passed--
-                            $failed++
+                    }
+                    finally {
+                        try {
+                            $cleanup = Remove-AvmBicepTestResourceGroup -AzPath $az.Source `
+                                -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
+                                -RunId $runId -WorkingDirectory $Context.Root `
+                                -ExpectCreated -Plan $previewPlan -DeploymentName $deploymentName `
+                                -DeploymentAttempted:$deploymentAttempted
+                        }
+                        catch [AvmProcessException] {
+                            $cleanup = [pscustomobject]@{
+                                Cleaned = $false; Pending = @(); Message = $_.Exception.Message
+                            }
+                        }
+                        catch [System.TimeoutException] {
+                            $cleanup = [pscustomobject]@{
+                                Cleaned = $false; Pending = @(); Message = $_.Exception.Message
+                            }
+                        }
+                        if (-not $cleanup.Cleaned) {
+                            foreach ($id in $cleanup.Pending) {
+                                if (-not $pending.Contains($id)) {
+                                    $pending.Add($id)
+                                }
+                            }
+                            $pending.Add($groupName)
+                            $stopForCleanup = $true
+                            $message = "$($cleanup.Message) Resource group '$groupName' may require manual cleanup."
+                            Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
+                                -Code 'cleanup-failed' -Message $message
+                            Write-AvmLog $message -Level Error
+                            if ($casePassed) {
+                                $passed--
+                                $failed++
+                            }
                         }
                     }
                 }
@@ -434,6 +456,7 @@ function Invoke-AvmBicepTestE2e {
         RunsFailed       = $failed
         RunsSkipped      = $cases.Count - $attempted
         AssertionResults = $assertions.ToArray()
+        PostResults      = $postResults.ToArray()
         CleanupPending   = $pending.ToArray()
         WhatIfChanges    = $changes.ToArray()
         Issues           = $issues.ToArray()
