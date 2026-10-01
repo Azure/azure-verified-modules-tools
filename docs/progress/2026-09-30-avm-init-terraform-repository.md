@@ -134,5 +134,7 @@ Documentation updates for `avm init` should merge once this is released:
 
 - Internal runbook: azure-cloud-native/Azure-Verified-Modules-Docs#53 on
   msft.ghe.com.
-- Public repository setup guide: `Azure/Azure-Verified-Modules`
-  `docs/content/contributing/terraform/repository-setup.md`.
+- Public repository setup guide: Azure/Azure-Verified-Modules#3025 (draft),
+  which also simplifies the JIT step to proposing the shared rule tie
+  directly. Azure/Azure-Verified-Modules#2989 describes Terraform `avm init`
+  as local-only and needs the same correction once this ships.
