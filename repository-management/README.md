@@ -1,16 +1,18 @@
 # Repository management
 
-This area owns the managed files, scheduled repository synchronization, and
-operator-driven repository creation used by AVM Terraform repositories, plus
-the shared Bicep/Terraform module catalog.
+This area owns the managed files and scheduled repository synchronization used
+by AVM Terraform repositories, plus the shared Bicep/Terraform module catalog.
 
 [Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
 indexes and source CSV row-removal protection.
 
-Repository sync and [repository creation](repository-creation/README.md) are
-intentionally independent. New repositories initialize their own metadata from
-explicit creation inputs before publishing module files. No separate tooling
-inventory registration is required.
+New Terraform repositories are created with `avm init` from
+[Avm.Authoring](../src/Avm.Authoring/README.md#initialize-a-terraform-module-repository),
+which publishes the module's own metadata in its first commit. Repository sync
+takes over once the AVM GitHub App is installed. No separate tooling inventory
+registration is required. Agents can follow the
+[`avm-tf-module-repository-creation`](../.github/skills/avm-tf-module-repository-creation/SKILL.md)
+skill, which covers the inputs to ask for and the Open Source Portal steps.
 
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.
@@ -18,6 +20,21 @@ the independent state identity, deployment, migration, and rollback.
 The current snapshot came from the legacy Terraform governance repository at commit
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
+
+## Standard GitHub labels
+
+[`labels/avm-standard-github-labels.json`](labels/avm-standard-github-labels.json)
+is the source for AVM standard label names, descriptions, and colors. Terraform
+repository sync reads it locally; the `Repos: Label Sync` workflow reconciles
+the AVM and Bicep repositories daily and when the catalog changes. The workflow
+only creates or updates standard labels, retaining repository-specific labels.
+Manual runs default to a write-free plan.
+
+The same workflow proposes a generated CSV update in the AVM repository. Keep
+its existing CSV URL for the public specification's table and download, but
+edit the JSON here instead. The one `githubDescription` override preserves the
+longer specification text while keeping the GitHub label description within
+GitHub's 100-character limit.
 
 ## Terraform repository metadata
 
@@ -41,10 +58,13 @@ the existing cleanup policy.
 ## Test tenant selection
 
 `testTenant` accepts only `legacy` or `bami`. The
-[Terraform configuration](repository-config/config.json) defaults to `legacy`
-and selects `bami` for the existing canary groups without changing their
-membership or managed-file promotion. Higher `order` wins; later declaration
-wins a tie. Missing settings retain `legacy`.
+[Terraform configuration](repository-config/config.json) defaults to `bami`
+for all repositories discovered by the existing Terraform sync, including new
+and otherwise unlisted repositories. Configuration is the source of truth;
+tenant selection is independent of managed-file promotion. Higher `order`
+wins; later declaration wins a tie, so explicit legacy exceptions remain
+supported. If no matching group declares `testTenant`, the resolver still
+falls back to `legacy`.
 
 [Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
 the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
@@ -74,7 +94,7 @@ Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
-Unselected repositories retain their existing settings. See the
+Explicit legacy selections retain the legacy consumer settings. See the
 [candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
 Bicep variable sync copies only the five execution fields: tenant, Bicep
@@ -121,7 +141,7 @@ runner still passes it to the action. Do not use `permission-variables` or omit
 the explicit scope.
 
 The retired Bicep CODEOWNERS job and its merge behavior are not part of this
-workflow. Selected Terraform canaries also attempt BAMI preparation during
+workflow. BAMI-selected Terraform repositories also attempt preparation during
 normal sync, including scheduled applies, subject to their existing prerequisites.
 
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)

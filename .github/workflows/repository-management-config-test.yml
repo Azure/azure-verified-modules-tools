@@ -5,9 +5,11 @@ on:
   pull_request:
     paths:
       - .github/workflows/repository-management-config-test.yml
+      - .github/workflows/repository-management-label-sync.yml
       - .github/workflows/repository-management-sync.yml
       - .github/workflows/repository-management-bicep-sync.yml
       - repository-management/repository-config/config.json
+      - repository-management/labels/**
       - repository-management/shared/**
       - repository-management/bicep-test-tenant-config/**
       - repository-management/bicep-test-tenant-sync/**

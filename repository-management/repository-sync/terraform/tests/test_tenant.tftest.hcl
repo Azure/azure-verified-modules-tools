@@ -35,11 +35,24 @@ variables {
   module_id                     = "avm-ptn-example-repo"
   module_name                   = "Example"
   repository_sync_repository_id = "1239632211"
-  github_labels_source_path     = "tests/labels.csv"
   test_subscription_ids = [{
     name = "legacy"
     id   = "20000000-0000-4000-8000-000000000003"
   }]
+}
+
+run "standard_labels_are_read_from_tools_json" {
+  command = plan
+
+  assert {
+    condition = (
+      length(local.labels) == 45 &&
+      local.labels["Needs: Module Owner :mega:"].name == "Needs: Module Owner :mega:" &&
+      local.labels["Needs: Module Owner :mega:"].color == "FF0019" &&
+      local.labels["Needs: Module Owner :mega:"].description == "This module needs an owner to develop or maintain it"
+    )
+    error_message = "Terraform must use all 45 local JSON labels and preserve the GitHub-safe description."
+  }
 }
 
 run "legacy_is_unchanged" {

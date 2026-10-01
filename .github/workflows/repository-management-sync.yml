@@ -164,11 +164,6 @@ jobs:
           tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
 
-      - name: Download labels CSV file
-        run: |
-          ./scripts/Get-AvmLabels.ps1
-        shell: pwsh
-
       - name: Run sync for ${{ matrix.repoId }}
         run: |
 

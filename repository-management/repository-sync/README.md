@@ -56,17 +56,20 @@ approval for that consequence before running manual canaries.
 
 ## BAMI candidate identities
 
-The central `testTenant` selection determines which repositories use BAMI;
-there is no additional activation variable or script parameter. BAMI-selected
-repositories require the [complete BAMI bundle](../README.md#test-tenant-selection)
+The central `testTenant` default selects BAMI for all repositories discovered by
+Terraform sync, including new and otherwise unlisted repositories. Higher-order
+explicit legacy exceptions remain supported. There is no additional activation
+variable or script parameter. BAMI-selected repositories require the
+[complete BAMI bundle](../README.md#test-tenant-selection)
 before cleanup, Terraform, or repository mutations. In GitHub Actions they also
 require the trusted Tools repository and `refs/heads/main`. Legacy selections
 retain their normal path without requiring BAMI values.
 
-Selected canaries attempt BAMI preparation during normal trusted-main syncs,
-including scheduled and repository-dispatch applies. Manual `plan_only` still
-defaults to `true`; `false` permits the existing write path. Selecting `legacy`
-in configuration restores the legacy consumer tuple, rather than merely
+All BAMI-selected repositories attempt preparation during normal trusted-main
+syncs, including scheduled and repository-dispatch applies. Manual `plan_only` still
+defaults to `true`; `false` permits the existing coupled candidate-identity apply
+and consumer-secret update. Sync does not run module deployment tests. Selecting
+`legacy` in configuration restores the legacy consumer tuple, rather than merely
 pausing the BAMI path.
 
 The [candidate root](bami-identity/main.tf) reuses the Azure identity module
@@ -85,6 +88,15 @@ identity scope, no deletes/replacements, and the required delegation deny
 condition. Failed or uncertain applies do not trigger automatic state repair,
 state imports, or apply retries.
 
+After validation, both paths log an allow-listed candidate-plan summary:
+repository and tenant identifiers, the seven managed addresses and actions,
+identity and membership scopes, federation bindings, and the full delegation
+condition. Unknown and sensitive fields are marked explicitly. The summary
+excludes raw plans, state, variables, output documents, and credentials; it
+uploads no artifact.
+This diagnostic grants no approval and changes no cutover gate. A later apply
+generates and validates its own saved plan, not the earlier preview binary.
+
 Before any operator-approved BAMI run, verify the
 [Owner delegation fix](https://github.com/Azure/azure-verified-modules-tools/pull/111)
 has landed: Owner, User Access Administrator, and RBAC Administrator must all
@@ -96,10 +108,10 @@ lookup/membership access to
 controller directory-role assignment alone does not establish Graph API
 readiness; lookup and membership operations remain unproved.
 
-Keep scheduled sync paused while approving the first repository-scoped plan
-and cutover. Explicit `ARM_*_OVERRIDE` values and environment-level secrets
-retain their existing consumer precedence; audit them before activating a
-canary. Do not run another writer outside the serialized sync workflow.
+Coordinate approved reconciliation through the serialized sync workflow.
+Explicit `ARM_*_OVERRIDE` values and environment-level secrets retain their
+existing consumer precedence; audit them when verifying a repository's effective
+test identity. Do not run another writer outside the serialized sync workflow.
 Do not change the backend, move state, grant permissions, or reuse the
 controller as an execution identity to bypass a failed prerequisite.
 
