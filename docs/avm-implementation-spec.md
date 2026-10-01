@@ -472,9 +472,13 @@ registration mirror remains unchanged.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies the required Bicep literal name and
-description declarations, description consistency, and source telemetry
-requirements. The Bicep `metadata name` and JSON `moduleDisplayName` are
-independent and are not required to match.
+description declarations and source telemetry requirements when main.bicep
+exists. Bicep `metadata name` and `metadata description` serve different
+purposes from JSON `moduleDisplayName` and `moduleDescription`; neither pair
+must match. A metadata-only Bicep scope may omit main.bicep only when it has
+neither version.json nor main.json at that scope. Source markers without
+metadata are also discovered and rejected. The catalog separately rejects
+source-less modules reported as published by the registry.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
@@ -525,7 +529,9 @@ missing field names. `-Proposed` never cascades and does not accept an
 ancestor map. For new uninstrumented children without a version file,
 telemetry remains optional. New utility roots without telemetry use
 telemetry-free source. Source-authored literal prefixes are preserved when
-metadata is missing, without rewriting the source; conflicts fail.
+metadata is missing, without rewriting the source; conflicts fail. New Bicep
+scaffolds seed their source literals from JSON metadata, but existing source
+names and descriptions are preserved and validated independently.
 Validate metadata, exact path casing, source literals, templates, target
 files, and the whole root-to-child plan before confirmation or any write.
 `-WhatIf` validates and reports the same planned files without writing;
@@ -545,6 +551,11 @@ creating directories or files.
 
 `avm metadata initialize` never overwrites existing files. `-UpdateSource`
 adds a scoped Bicep telemetry load without replacing telemetry transport.
+New source wiring and telemetry-enabled root scaffolds use
+`var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')`
+and `${telemetryIdPrefix}` in the deployment name. Existing source using that
+form or the earlier `avmTelemetryIdPrefix`/`$.telemetryIdPrefix` form is
+preserved without migration; conflicting variable definitions fail.
 When source wiring is requested and no prefix is supplied, initialization
 retains the single, valid prefix already authored in main.bicep, excluding
 that module's own published catalog record from duplicate checks. A prefix

@@ -816,7 +816,7 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         (Test-AvmModuleMetadata @parameters).Status | Should -Be 'fail'
     }
 
-    It 'allows independent Bicep display names while validating the source description' {
+    It 'allows independent Bicep names and descriptions while validating source literals' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         Save-MetadataFixture -Fixture $fixture
         $parameters = $fixture.Parameters
@@ -828,9 +828,72 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $fixture.Data.moduleDescription = 'A different description.'
         Save-MetadataFixture -Fixture $fixture
         $result = Test-AvmModuleMetadata @parameters -CheckSource
-        $result.Status | Should -Be 'fail'
-        $result.Issues[0].File | Should -Be 'main.bicep'
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 0
+        $result.Metadata.moduleDescription | Should -BeExactly 'A different description.'
         (Get-FileHash -LiteralPath $fixture.SourcePath).Hash | Should -Be $before
+    }
+
+    It 'still requires the authored Bicep <Case> literal when JSON descriptions differ' -TestCases @(
+        @{ Case = 'name'; Source = "metadata description = 'Authored details.'`n"; Expected = 'metadata name' }
+        @{ Case = 'description'; Source = "metadata name = 'Authored name'`n"; Expected = 'metadata description' }
+        @{ Case = 'literal description'; Source = "metadata name = 'Authored name'`nmetadata description = concat('a', 'b')`n"; Expected = 'metadata description' }
+    ) {
+        param($Source, $Expected)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.moduleDescription = 'Catalog summary.'
+        Save-MetadataFixture -Fixture $fixture
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $Source)
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+        $result.Issues[0].Message | Should -Match ([regex]::Escape($Expected))
+    }
+
+    It 'still requires telemetry metadata for an instrumented Bicep utility with an independent description' {
+        $fixture = New-MetadataFixture -Ecosystem bicep -ModuleType utility
+        $fixture.Data.Remove('telemetryIdPrefix')
+        $fixture.Data.moduleDescription = 'Catalog summary.'
+        Save-MetadataFixture -Fixture $fixture
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+    }
+
+    It 'permits telemetry-free metadata-only Bicep children until they have a version' {
+        $fixture = New-MetadataFixture -Ecosystem bicep -ChildModule
+        $fixture.Data.Remove('telemetryIdPrefix')
+        Save-MetadataFixture -Fixture $fixture
+        Remove-Item -LiteralPath $fixture.SourcePath
+        $parameters = $fixture.Parameters
+
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        $versioned = Test-AvmModuleMetadata @parameters -CheckSource
+        $versioned.Status | Should -Be 'fail'
+        $versioned.Issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+        $fixture.Data.telemetryIdPrefix = '46d3xbcp.res.storage-storageaccount'
+        Save-MetadataFixture -Fixture $fixture
+        $withPrefix = Test-AvmModuleMetadata @parameters -CheckSource
+        $withPrefix.Status | Should -Be 'fail'
+        $withPrefix.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+    }
+
+    It 'rejects wrong-cased Bicep source rather than treating it as metadata-only' {
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        Save-MetadataFixture -Fixture $fixture
+        Remove-Item -LiteralPath $fixture.SourcePath
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'Main.bicep'), "metadata name = 'Authored'`nmetadata description = 'Details.'`n")
+        $parameters = $fixture.Parameters
+
+        $result = Test-AvmModuleMetadata @parameters -CheckSource
+        $result.Status | Should -Be 'fail'
+        $result.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+        $result.Issues[0].Message | Should -Match 'exact casing'
     }
 }
 
@@ -1042,17 +1105,73 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
     It 'wires only the scoped Bicep telemetry value and is idempotent' {
         $fixture = New-MetadataFixture -Ecosystem bicep
         $fixture.Data.moduleDisplayName = 'Catalog display name'
+        $fixture.Data.moduleDescription = 'Catalog summary distinct from authored source.'
         $parameters = $fixture.Parameters
         $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $result.Changed | Should -BeTrue
         $source = [System.IO.File]::ReadAllText($fixture.SourcePath)
-        $source | Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape(
+                "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape('${telemetryIdPrefix}.'))
+        $source | Should -Not -Match 'avmTelemetryIdPrefix'
         $source | Should -Not -Match ([regex]::Escape("loadJsonContent('metadata.json')"))
         $source | Should -Match ([regex]::Escape("metadata name = 'Storage Accounts'"))
         $source | Should -Match ([regex]::Escape("metadata description = 'Deploys a Storage Account.'"))
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
         (Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource).Changed | Should -BeFalse
         [System.IO.File]::ReadAllText($fixture.SourcePath) | Should -BeExactly $source
+    }
+
+    It 'preserves an existing <Form> telemetry reader and independent source description' -TestCases @(
+        @{
+            Form = 'registry'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+        }
+        @{
+            Form = 'legacy'
+            Declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+        }
+    ) {
+        param($Declaration, $Reference)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $fixture.Data.moduleDescription = 'Catalog description separate from source.'
+        Save-MetadataFixture -Fixture $fixture
+        $source = [System.IO.File]::ReadAllText($fixture.SourcePath)
+        $source = $source.Replace('param enableTelemetry bool = true', "$Declaration`nparam enableTelemetry bool = true")
+        $source = $source.Replace($fixture.Data.telemetryIdPrefix, $Reference)
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $source)
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $metadataBefore = [System.IO.File]::ReadAllBytes($fixture.MetadataPath)
+        $parameters = $fixture.Parameters
+
+        $result = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
+
+        $result.Status | Should -Be 'pass'
+        $result.Changed | Should -BeFalse
+        $result.PlannedFiles | Should -HaveCount 0
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
+        [System.IO.File]::ReadAllBytes($fixture.MetadataPath) | Should -Be $metadataBefore
+        (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
+    }
+
+    It 'rejects a conflicting existing <Form> variable before writing metadata' -TestCases @(
+        @{ Form = 'registry'; VariableName = 'telemetryIdPrefix' }
+        @{ Form = 'legacy'; VariableName = 'avmTelemetryIdPrefix' }
+    ) {
+        param($VariableName)
+        $fixture = New-MetadataFixture -Ecosystem bicep
+        $source = "var $VariableName = 'authored-other-value'`n" +
+        [System.IO.File]::ReadAllText($fixture.SourcePath)
+        [System.IO.File]::WriteAllText($fixture.SourcePath, $source)
+        $before = [System.IO.File]::ReadAllBytes($fixture.SourcePath)
+        $parameters = $fixture.Parameters
+
+        { Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource } |
+            Should -Throw "*already defines $VariableName differently*"
+        Test-Path -LiteralPath $fixture.MetadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($fixture.SourcePath) | Should -Be $before
     }
 
     It 'owner and canonical type changes never rewrite Bicep source after initialization' {
@@ -1089,7 +1208,7 @@ Describe 'Component: non-overwriting metadata initialization' -Tag Component {
 
         $result.Metadata.telemetryIdPrefix | Should -BeExactly $expectedPrefix
         [System.IO.File]::ReadAllText($fixture.SourcePath) |
-            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
         (Test-AvmModuleMetadata @parameters -CheckSource).Status | Should -Be 'pass'
     }
 
@@ -1123,7 +1242,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = if (enableT
         $null = Initialize-AvmModuleMetadata @parameters -InputObject $fixture.Data -UpdateSource
         $updated = [System.IO.File]::ReadAllText($fixture.SourcePath)
         $updated | Should -Match ([regex]::Escape($comment))
-        $updated | Should -Match ([regex]::Escape("// deployment name`n  name: '" + '${avmTelemetryIdPrefix}'))
+        $updated | Should -Match ([regex]::Escape("// deployment name`n  name: '" + '${telemetryIdPrefix}'))
     }
 
     It 'reuses an authored telemetry prefix for an instrumented utility' {

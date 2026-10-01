@@ -15,9 +15,7 @@ function Get-AvmBicepTelemetrySourcePrefix {
     $prefixPattern = $head + '(?<prefix>46d3xbcp\.(?:resourcegraph-query|(?:res|ptn|utl)\.[a-z0-9_-]+))(?=\.)'
     $prefixMatches = [regex]::Matches($source, $prefixPattern)
     if ($prefixMatches.Count -ne 1) {
-        $declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
-        if ($prefixMatches.Count -eq 0 -and $source.Contains($declaration) -and
-            [regex]::IsMatch($source, $head + [regex]::Escape('${avmTelemetryIdPrefix}') + '\.')) {
+        if ($prefixMatches.Count -eq 0 -and (Test-AvmBicepTelemetrySourceWiring -Source $source)) {
             return $null
         }
         throw [System.ArgumentException]::new(
