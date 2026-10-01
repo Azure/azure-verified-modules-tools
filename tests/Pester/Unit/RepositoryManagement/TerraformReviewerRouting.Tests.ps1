@@ -8,6 +8,7 @@ BeforeAll {
     . (Join-Path $lib 'RepositoryFileAccess.ps1')
     . (Join-Path $lib 'ModuleOwners.ps1')
     . (Join-Path $lib 'RunSummary.ps1')
+    . (Join-Path $lib 'PrReviewerRoutingEligibility.ps1')
     . (Join-Path $lib 'PrReviewerRouting.ps1')
     . (Join-Path $lib 'PrReviewerRoutingDiscovery.ps1')
     Set-StrictMode -Version 3.0
@@ -181,6 +182,8 @@ Describe 'Terraform reviewer routing catalog and metadata' {
 
 Describe 'Terraform reviewer routing decisions' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
+        Mock Assert-AvmPrReviewerRoutingApplied { }
         $script:terraformRoutingPr = New-TerraformRoutingPullRequest
         $script:terraformRoutingIndex = @{
             '.' = @{ owners = @(@{ handle = 'root-owner'; type = 'user' }) }
@@ -533,6 +536,8 @@ Describe 'Terraform reviewer routing fleet sweep' {
 
 Describe 'Terraform reviewer routing candidate hydration' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
+        Mock Assert-AvmPrReviewerRoutingApplied { }
         $script:terraformRoutingPr = New-TerraformRoutingPullRequest
         $script:terraformRoutingIndex = @{ '.' = @{ owners = @(@{ handle = 'root-owner'; type = 'user' }) } }
         $script:terraformRoutingStub = [pscustomobject]@{ number = 1; url = $script:terraformRoutingPr.url }
@@ -578,6 +583,8 @@ Describe 'Terraform reviewer routing candidate hydration' {
 
 Describe 'Terraform reviewer routing missing-label fleet warnings' {
     BeforeEach {
+        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
+        Mock Assert-AvmPrReviewerRoutingApplied { }
         $script:terraformMissingLabelPr = New-TerraformRoutingPullRequest
         $script:terraformReadyPr = New-TerraformRoutingPullRequest -Number 2
         $script:terraformReadyPr.url = "https://github.com/$script:secondTerraformRoutingRepository/pull/2"
