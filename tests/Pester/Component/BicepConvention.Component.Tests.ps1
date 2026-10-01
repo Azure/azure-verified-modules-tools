@@ -1116,6 +1116,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         It 'reports unreadable allowlist directories even if repository-wide test discovery fails first' {
             InModuleScope 'Avm.Authoring' {
                 Mock Get-ChildItem {
+                    & (Get-Command -Name Get-ChildItem -CommandType Cmdlet) @PesterBoundParameters
+                }
+                Mock Get-ChildItem {
                     throw [System.UnauthorizedAccessException]::new('Fixture directory is unreadable.')
                 } -ParameterFilter {
                     ($File -and $Recurse -and $Filter -eq 'main.test.bicep' -and
