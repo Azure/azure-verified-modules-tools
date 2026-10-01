@@ -575,3 +575,73 @@ Describe 'Terraform reviewer routing candidate hydration' {
         Should -Invoke Write-AvmPrReviewerRoutingSummary -Exactly 1 -ParameterFilter { $Failures.Count -eq 1 -and $Outcomes.Count -eq 1 }
     }
 }
+
+Describe 'Terraform reviewer routing missing-label fleet warnings' {
+    BeforeEach {
+        $script:terraformMissingLabelPr = New-TerraformRoutingPullRequest
+        $script:terraformReadyPr = New-TerraformRoutingPullRequest -Number 2
+        $script:terraformReadyPr.url = "https://github.com/$script:secondTerraformRoutingRepository/pull/2"
+        Mock Get-AvmReviewerRoutingCatalog {
+            @{
+                modules = @{
+                    'Microsoft.Storage/storageAccounts' = @{
+                        terraform = @(
+                            @{ repository = $script:terraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
+                            @{ repository = $script:secondTerraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
+                        )
+                    }
+                }
+            }
+        }
+        Mock Get-AvmPrReviewerRoutingCandidates {
+            param($Repository)
+            if ($Repository -eq $script:terraformRoutingRepository) {
+                return @($script:terraformMissingLabelPr)
+            }
+            return @($script:terraformReadyPr)
+        }
+        Mock Get-AvmPrReviewerRoutingChangedFiles { @('main.tf') }
+        Mock Write-AvmRunSummary { }
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+            }
+        }
+    }
+
+    It 'does not fail the fleet for a missing label and still routes the other repository' {
+        Invoke-AvmPrReviewerRoutingSweep `
+            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) 3>$null 6>$null
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments -contains 'edit' }
+        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
+            $Title -eq 'Reviewer routing fleet' -and $Failures.Count -eq 0
+        }
+        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
+            $Title -eq 'Pull request reviewer routing' -and $Warnings.Count -eq 1 -and $Failures.Count -eq 0
+        }
+    }
+
+    It 'preserves a real GraphQL failure alongside a missing-label warning' {
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+            }
+            throw [System.InvalidOperationException]::new('GitHub operation failed: GraphQL: Something went wrong while executing your query')
+        }
+        { Invoke-AvmPrReviewerRoutingSweep `
+            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) 3>$null 6>$null } |
+            Should -Throw '*GraphQL*'
+        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
+            $Title -eq 'Reviewer routing fleet' -and $Failures.Count -eq 1 -and $Failures[0] -notlike '*not found*'
+        }
+    }
+
+    It 'preserves WhatIf without attempting a missing-label edit or creating labels' {
+        Invoke-AvmPrReviewerRoutingSweep `
+            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) -WhatIf 6>$null
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0
+        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
+            $Title -eq 'Reviewer routing fleet' -and $DryRun -and $Failures.Count -eq 0
+        }
+    }
+}

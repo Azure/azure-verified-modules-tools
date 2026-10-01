@@ -449,6 +449,80 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
         (Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null).Status |
             Should -Be 'AlreadyRouted'
     }
+
+    It 'warns without reporting a successful edit when the requested label is missing: <Label>' -TestCases @(
+        @{ Label = 'Needs: Module Owner :mega:'; Orphaned = $false }
+        @{ Label = 'Needs: Core Team :genie:'; Orphaned = $true }
+        @{ Label = 'Status: Module Orphaned :yellow_circle:'; Orphaned = $true }
+    ) {
+        param($Label, $Orphaned)
+        if ($Orphaned) {
+            $script:catalogIndex['avm/res/storage/storage-account'].owners = @()
+        }
+        $script:missingLabelMessage = "GitHub operation failed: '$Label' not found`n"
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            throw [System.InvalidOperationException]::new($script:missingLabelMessage)
+        }
+
+        $output = @(Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
+            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 3>&1 6>$null)
+        $warningRecords = @($output | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+        $outcome = $output | Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] }
+
+        $warningRecords -join "`n" | Should -Match ([regex]::Escape("label [$Label] does not exist"))
+        $outcome.Status | Should -Be 'MissingLabel'
+        $outcome.NewReviewers | Should -HaveCount 0
+        $outcome.NewLabels | Should -HaveCount 0
+        $outcome.Warnings | Should -HaveCount 1
+        $outcome.Warnings[0] | Should -Match 'Repository sync must provision'
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'pr' }
+    }
+
+    It 'does not downgrade other edit failures: <Failure>' -TestCases @(
+        @{ Failure = "GitHub operation failed: 'storage-owner' not found" }
+        @{ Failure = "GitHub operation failed: 'unrelated-label' not found" }
+        @{ Failure = 'GitHub operation failed: GraphQL: Something went wrong while executing your query' }
+        @{ Failure = 'GitHub operation failed: Resource not accessible by integration (HTTP 403)' }
+        @{ Failure = "GitHub operation failed: 'Needs: Module Owner :mega:' not found`nGraphQL: another error" }
+    ) {
+        param($Failure)
+        $script:routingEditFailure = $Failure
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            throw [System.InvalidOperationException]::new($script:routingEditFailure)
+        }
+        { Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
+            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null } |
+            Should -Throw
+    }
+
+    It 'retries normal routing on a subsequent run after labels are provisioned' {
+        $script:routingLabelProvisioned = $false
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            if (-not $script:routingLabelProvisioned) {
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+            }
+        }
+        $first = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
+            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 3>$null 6>$null
+        $first.Status | Should -Be 'MissingLabel'
+        $script:routingLabelProvisioned = $true
+        $second = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
+            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null
+        $second.Status | Should -Be 'Updated'
+        $second.NewReviewers | Should -Be @('storage-owner')
+        $second.NewLabels | Should -Be @('Needs: Module Owner :mega:')
+        $second.Warnings | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'pr' }
+    }
 }
 
 Describe 'Invoke-AvmPrReviewerRouting summary' {
@@ -508,6 +582,45 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
         $summary = Get-Content -Raw -LiteralPath $script:summaryPath
         $summary | Should -Match '0 updated, 0 already routed, 0 draft\(s\) skipped, 1 failed\.'
         $summary | Should -Match ([regex]::Escape('- `[https://github.com/Azure/bicep-registry-modules/pull/1]: changed files boom`'))
+    }
+
+    It 'records missing labels as warnings, not failures or completed routing' {
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+        }
+        $null = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 3>$null 6>$null
+
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '0 updated, 0 already routed, 0 draft\(s\) skipped, 0 failed\. 1 deferred with missing-label warnings\.'
+        $summary | Should -Match '(?m)^Warnings:\r?$'
+        $summary | Should -Match ([regex]::Escape($script:pr.url))
+        $summary | Should -Match ([regex]::Escape('label [Needs: Module Owner :mega:] does not exist'))
+        $summary | Should -Not -Match '(?m)^Failures:'
+        $summary | Should -Not -Match '\| Reviewers requested \|'
+    }
+
+    It 'continues routing the remaining requests after a missing-label warning' {
+        $script:secondPr = $script:pr.PSObject.Copy()
+        $script:secondPr.number = 2
+        $script:secondPr.url = 'https://github.com/Azure/bicep-registry-modules/pull/2'
+        Mock Get-AvmPrReviewerRoutingCandidates { @($script:pr, $script:secondPr) }
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[0] -eq 'api') {
+                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
+            }
+            if ($Arguments[2] -eq $script:pr.url) {
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+            }
+        }
+        $null = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 3>$null 6>$null
+
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '2 pull request\(s\) checked.*1 updated.*0 failed\. 1 deferred'
+        $summary | Should -Match ([regex]::Escape('| [#2](https://github.com/Azure/bicep-registry-modules/pull/2) | `storage-owner`'))
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'pr' }
     }
 }
 
