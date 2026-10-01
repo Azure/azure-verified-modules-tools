@@ -281,6 +281,11 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm test e2e` now destroys and retries an example when Azure rejects its
+  randomly selected region with `RequestDisallowedByAzure` and the
+  `aka.ms/locationineligible` explanation, which `avm test integration`
+  already retried. Other `RequestDisallowedByAzure`, policy, and authorization
+  denials still do not trigger a retry.
 - Support real `Oracle.Database` ARM canonical types in metadata schemas,
   validation, fallback discovery, initialization, and catalog output. Preserve
   strict resource syntax, ownership, telemetry, and pattern/utility taxonomy.

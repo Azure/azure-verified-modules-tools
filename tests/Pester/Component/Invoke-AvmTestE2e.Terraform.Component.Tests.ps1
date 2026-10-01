@@ -156,4 +156,30 @@ Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Co
         Test-Path -LiteralPath (Join-Path $hookedDir 'post.marker') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $skippedDir 'pre.marker') | Should -BeFalse
     }
+
+    It 'destroys and redeploys an example in another region after Azure rejects the first region' {
+        $root = Join-Path $TestDrive 'region-retry'
+        $exampleDir = Join-Path $root 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $exampleDir -Force
+        $null = New-Item -ItemType Directory -Path (Join-Path $root 'tests') -Force
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        $tracePath = Join-Path $root 'stub-trace.jsonl'
+        @(
+            'AVM_STUB_TERRAFORM_E2E_REGIONS=["restricted-test-region","eligible-test-region"]'
+            "AVM_STUB_TERRAFORM_TRACE=$tracePath"
+        ) | Set-Content -LiteralPath (Join-Path $exampleDir '.env') -Encoding utf8NoBOM
+
+        $result = Invoke-AvmTestE2e -Path $root -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'pass'
+        $warnings = @($result.Issues | Where-Object Severity -eq 'warning')
+        $warnings.Count | Should -Be 1
+        $warnings[0].Message | Should -Match 'destroyed and retrying \(1 of 2\)'
+        @($result.Issues | Where-Object Severity -eq 'error').Count | Should -Be 0
+        $trace = @(Get-Content -LiteralPath $tracePath | ConvertFrom-Json)
+        ($trace.Command -join ',') | Should -Be 'init,apply,apply-region,destroy,apply,apply-region,plan,destroy'
+        (@($trace | Where-Object Command -eq 'apply-region').Region -join ',') | Should -Be 'restricted-test-region,eligible-test-region'
+        Test-Path -LiteralPath (Join-Path $exampleDir 'stub-e2e-region.txt') | Should -BeFalse
+    }
 }
