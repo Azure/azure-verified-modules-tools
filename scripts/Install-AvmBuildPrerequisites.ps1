@@ -68,6 +68,7 @@ Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
 $packages = [System.Collections.Generic.List[hashtable]]::new()
 $packages.Add(@{ Name = 'InvokeBuild'; Version = '[5.11.0,)' })
 $packages.Add(@{ Name = 'Pester'; Version = '[5.5.0,)' })
+$packages.Add(@{ Name = 'powershell-yaml'; Version = '0.4.12' })
 if ($IncludePSScriptAnalyzer) {
     $packages.Add(@{ Name = 'PSScriptAnalyzer'; Version = '[1.21.0,)' })
 }

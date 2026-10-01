@@ -34,8 +34,13 @@ function Invoke-AvmPrCheck {
         writes nothing and instead treats any needed add/update/remove
         as Status='fail'. This makes stale governed files a hard CI
         failure so the module is refreshed before merge rather than
-        silently rewritten in CI. For bicep the sync step throws
-        AvmConfigurationException and is skipped.
+        silently rewritten in CI. For Bicep the sync step is unsupported and
+        skipped. Bicep policy runs the required and advisory PSRule baselines
+        when its repository config and selected test sources are available;
+        missing inputs fail the check. Bicep policy, convention, and docs
+        must report inspectable results rather than skipping. The required
+        docs step checks README drift and confirms every selected source-backed
+        README was rendered; source-less READMEs are reported separately.
 
         The sync step also gates on the managed-files release recorded in
         '.avm/managed-files-version.json': governed files are compared against
@@ -160,6 +165,8 @@ function Invoke-AvmPrCheck {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $requiredBicepStep = $context.Ecosystem -eq 'bicep' -and
+        $def.Name -in @('check policy', 'check convention', 'docs')
         $stepIndex++
         $stepStart = [datetime]::UtcNow
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -180,15 +187,69 @@ function Invoke-AvmPrCheck {
                 & $def.Cmdlet @stepParameters @extraArgs
             }
 
-            if ($stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status') {
+            $hasStatus = $stepResult -and $stepResult.PSObject.Properties.Name -contains 'Status'
+            if ($hasStatus) {
                 $stepStatus = $stepResult.Status
+            }
+            if ($requiredBicepStep) {
+                if (-not $hasStatus) {
+                    $stepStatus = 'fail'
+                    $stepError = "Required Bicep $($def.Name) returned no status; keep the registry static-validation jobs until this check runs."
+                }
+                elseif ($stepStatus -isnot [string]) {
+                    $stepStatus = 'fail'
+                    $stepError = "Required Bicep $($def.Name) returned an invalid status; keep the registry static-validation jobs until this check runs."
+                }
+                elseif ($stepStatus -eq 'skipped') {
+                    $stepStatus = 'fail'
+                    $stepError = "Required Bicep $($def.Name) returned skipped; keep the registry static-validation jobs until this check runs."
+                }
+                elseif ($stepStatus -notin @('pass', 'fail', 'error')) {
+                    $stepError = "Required Bicep $($def.Name) returned an invalid status; keep the registry static-validation jobs until this check runs."
+                    $stepStatus = 'fail'
+                }
+            }
+            if ($context.Ecosystem -eq 'bicep' -and $def.Name -eq 'docs' -and
+                $stepStatus -eq 'pass') {
+                $fields = @($stepResult.PSObject.Properties.Name)
+                $validShape = 'FilesSelected' -in $fields -and
+                'FilesProcessed' -in $fields -and
+                'NotRendered' -in $fields -and
+                'Issues' -in $fields -and
+                $stepResult.FilesSelected -is [int] -and
+                $stepResult.FilesProcessed -is [int] -and
+                $stepResult.FilesSelected -ge 0 -and
+                $stepResult.FilesProcessed -ge 0 -and
+                $stepResult.NotRendered -is [array] -and
+                $stepResult.Issues -is [array]
+                if (-not $validShape) {
+                    $stepStatus = 'fail'
+                    $stepError = 'avm.bicep.docs-result: Bicep docs reported pass without valid render counts, NotRendered, and Issues; keep the registry README check.'
+                }
+                elseif ($stepResult.FilesSelected -ne $stepResult.FilesProcessed) {
+                    $stepStatus = 'fail'
+                    $stepError = "avm.bicep.docs-result: Bicep docs rendered $($stepResult.FilesProcessed) of $($stepResult.FilesSelected) selected READMEs; keep the registry README check."
+                }
+                elseif (@($stepResult.Issues | Where-Object {
+                            $null -eq $_ -or
+                            $_.PSObject.Properties.Name -notcontains 'Severity' -or
+                            $_.Severity -isnot [string] -or
+                            $_.Severity -notin @('warning', 'notice', 'info')
+                        }).Count -gt 0) {
+                    $stepStatus = 'fail'
+                    $stepError = 'avm.bicep.docs-result: Bicep docs reported pass with an error or unclassified issue; keep the registry README check.'
+                }
             }
         }
         catch [AvmNotSupportedException] {
-            # Verb genuinely does not apply to this ecosystem. Continue the
-            # chain; do not flip overall status.
-            $stepStatus = 'skipped'
-            $stepError = $_.Exception.Message
+            if ($requiredBicepStep) {
+                $stepStatus = 'fail'
+                $stepError = "Required Bicep $($def.Name) is not implemented: $($_.Exception.Message)"
+            }
+            else {
+                $stepStatus = 'skipped'
+                $stepError = $_.Exception.Message
+            }
         }
         catch [AvmConfigurationException] {
             # The repo is misconfigured, not unsupported. This must fail rather

@@ -662,6 +662,20 @@ drift mode and returns generated `{Path, Content}` values for an independent
 comparator. A Bicep compilation failure is reported per module in drift
 mode; a source-less README is explicitly identified rather than reported as
 generated.
+Drift mode can report a warning rather than stale only when the tracked
+README omits complete generated required/non-required grouping-comment
+pairs. A private, non-writing docs render marks only those comments in
+first-party example JSON values; removing the unpredictable markers must
+reproduce the normal rendered README exactly before the marked pairs can
+qualify. Authored descriptions cannot acquire these markers, even if they
+contain convincing headings, fences, or complete example frames. Partial
+pairs, changed prose, code, types, examples, outputs, and any other byte
+differences still fail. Unused child-example aliases carry no rendered
+markers and are ignored; a half-rendered alias fails closed. The accepted
+pairs are not tied to a module name or fixed count, and normal generation
+writes the unchanged renderer output.
+An unavailable private render reports an error. This local comparison
+behavior does not waive the full-registry qualification limit below.
 Referenced module test examples are validated against the compiled
 parameters of their actual target `main.bicep`, including tests assigned
 to a child README. Unknown names or omitted required parameters fail
@@ -677,6 +691,15 @@ comment lines absent from the checked-in `avm/res/key-vault/vault/README.md`,
 and separately verifies all source-less README bytes. Report that historical
 exception explicitly; keep the comments in generated output, as the legacy
 generator emits them. Every other byte remains subject to the comparison.
+At registry commit `82bab0404566557b9fb5efdc9780bb5ce438030b`,
+an offline render with the published dependencies and pinned Bicep CLI
+produced all 575 source-backed READMEs. An independent comparison found 574
+byte-identical matches and only the eight proven generated Vault comment
+lines; the three source-less README files matched their tracked Git blobs
+without being counted as rendered. The [qualification record](progress/2026-10-01-bicep-current-registry-readme-qualification.md)
+captures the input digests and diagnostics. The required `avm pr-check` docs
+step enforces later README drift; this qualification alone does not authorize
+removing the registry CI workflow or its other gates.
 
 ### Files inside the user's home
 
