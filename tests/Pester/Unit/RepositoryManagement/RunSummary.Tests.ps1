@@ -49,6 +49,22 @@ Describe 'Write-AvmRunSummary' {
         $summary | Should -Match '(?m)^- `first line second line`\r?$'
     }
 
+    It 'lists warnings separately without converting them to failures' {
+        Write-AvmRunSummary -Title 'Routing' -Overview '1 deferred' `
+            -Warnings @("missing label`nawaiting sync") 6>$null
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '(?m)^Warnings:\r?$'
+        $summary | Should -Match '(?m)^- `missing label awaiting sync`\r?$'
+        $summary | Should -Not -Match '(?m)^Failures:'
+    }
+
+    It 'keeps warning and failure details in separate sections when both occur' {
+        Write-AvmRunSummary -Title 'Routing' -Overview '1 deferred, 1 failed' `
+            -Warnings @('missing label') -Failures @('permission denied') 6>$null
+        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
+        $summary | Should -Match '(?s)Warnings:\s+- `missing label`\s+Failures:\s+- `permission denied`'
+    }
+
     It 'leaves out the table when there are no rows' {
         Write-AvmRunSummary -Title 'Routing' -Overview '0 checked' -TableHeaders @('Item') 6>$null
         Get-Content -Raw -LiteralPath $script:summaryPath | Should -Not -Match '\|'

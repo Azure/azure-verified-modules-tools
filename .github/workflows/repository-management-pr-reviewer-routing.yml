@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       pull_request_url:
-        description: 'Route a single pull request (URL or number). Leave blank to sweep all open pull requests.'
+        description: 'Route one Bicep or Terraform pull request URL (a bare number selects Bicep). Leave blank to sweep all repositories.'
         default: ''
         type: string
       updated_within_minutes:
@@ -70,6 +70,39 @@ jobs:
           }
           Import-Module Avm.Authoring
 
+      - name: Create read-only repository discovery token
+        id: discovery-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          permission-contents: read
+
+      - name: Discover active routing repositories
+        id: routing-repositories
+        env:
+          GH_TOKEN: ${{ steps.discovery-token.outputs.token }}
+          PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
+        run: |
+          Import-Module Avm.Authoring -Force -ErrorAction Stop
+          Set-StrictMode -Version 3.0
+          $ErrorActionPreference = 'Stop'
+          $sharedLib = Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'repository-sync' 'scripts' 'lib'
+          . (Join-Path $sharedLib 'RetryHelpers.ps1')
+          . (Join-Path $sharedLib 'RepositoryDiscovery.ps1')
+          . (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'reviewer-routing' 'scripts' 'lib' 'PrReviewerRoutingDiscovery.ps1')
+
+          $repositories = @(Get-AvmPrReviewerRoutingRepositories -PullRequestUrl $env:PULL_REQUEST_URL)
+          if ($repositories.Count -gt 500) {
+            throw 'Reviewer routing exceeds the 500-repository token limit. Split the fleet into scoped jobs before routing.'
+          }
+          $tokenRepositories = @($repositories | ForEach-Object { ($_ -split '/')[1] })
+          "repositories=$($tokenRepositories -join ',')" >> $env:GITHUB_OUTPUT
+          "targets=$($repositories -join ',')" >> $env:GITHUB_OUTPUT
+          Write-Output "Selected $($repositories.Count) routing repositories."
+          $global:LASTEXITCODE = 0
+
       - name: Create scoped reviewer routing token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -77,13 +110,15 @@ jobs:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: Azure
-          repositories: bicep-registry-modules
+          repositories: ${{ steps.routing-repositories.outputs.repositories }}
+          permission-contents: read
           permission-pull-requests: write
           permission-members: read
 
       - name: Route pull request reviewers and labels
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ROUTING_REPOSITORIES: ${{ steps.routing-repositories.outputs.targets }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SCHEDULE: ${{ github.event.schedule }}
           PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
@@ -117,7 +152,7 @@ jobs:
           Write-Output "What if: $whatIf"
 
           ./repository-management/reviewer-routing/scripts/Invoke-AvmPrReviewerRouting.ps1 `
-            -Repository 'Azure/bicep-registry-modules' `
+            -Repository ($env:ROUTING_REPOSITORIES -split ',') `
             -PullRequestUrl $env:PULL_REQUEST_URL `
             -UpdatedWithinMinutes $updatedWithinMinutes `
             -WhatIf:$whatIf

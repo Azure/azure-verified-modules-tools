@@ -1,6 +1,6 @@
 # Telemetry main reconciliation
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-01
 **Updated**: 2026-10-01
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -20,9 +20,12 @@ feature-registration command shipped in `Avm.Authoring` 0.20.0.
       and tests superseded on `main`.
 - [x] Verify feature registration remains isolated to protected test jobs and
       both review workflows still preserve their original safety gates.
-- [ ] Bring in the later E2E region-retry change merged into `main` while this
+- [x] Bring in the later E2E region-retry change merged into `main` while this
       reconciliation was running.
-- [ ] Run the local pre-commit gate and focused workflow checks, then commit
+- [x] Preserve the newer Bicep publisher's retired selector configuration,
+      Terraform reviewer routing, and clearer feature preflight logging from
+      current `main`.
+- [x] Run the local pre-commit gate and focused workflow checks, then commit
       and push the existing branch without force.
 
 ## Validation
@@ -40,14 +43,22 @@ empty override on restore. Both affected fixture restorations now use
 `[NullString]::Value` for absent values; the three focused Git fixture
 checks pass. The full gate against the first merged main revision passed:
 layout, lint, 2,104 unit tests (9 existing skips), and 965 component tests.
-Newer main commits still require reconciliation and another gate before
-this slice is complete.
+Newer main commits required another reconciliation and gate. The latest
+`main` at `a0e6d19` merged without
+conflicts; the resulting tree matches it exactly for the Bicep publisher,
+reviewer routing, Terraform E2E region-retry implementation, and reusable
+feature workflow. The retired Bicep selector configuration remains absent,
+and the changelog and migration guide retain the ineligible-region retry.
+`actionlint` passed for the protected Terraform, repository-sync, routing,
+and Bicep configuration workflows. The final pre-commit gate passed layout,
+lint, 2,200 unit tests (9 existing skips), and 969 component tests with no
+failures. The diff against current `main` contains only telemetry-branch
+changes; the newer Bicep, routing, E2E retry, and feature-registration
+implementations are unchanged.
 
 ## Blockers or dependencies
 
-[Azure/azure-verified-modules-tools#208](https://github.com/Azure/azure-verified-modules-tools/pull/208)
-and [Azure/azure-verified-modules-tools#206](https://github.com/Azure/azure-verified-modules-tools/pull/206)
-merged before the `v0.20.0` release, leaving
 [Azure/azure-verified-modules-tools#192](https://github.com/Azure/azure-verified-modules-tools/pull/192)
-conflicted. This is source reconciliation only: no live Azure feature
-registration, repository sync, protected test approval, or pull request merge.
+still requires its normal CI and review before merge and release. This was
+source reconciliation only: no live Azure feature registration, repository
+sync, protected test approval, or pull request merge.

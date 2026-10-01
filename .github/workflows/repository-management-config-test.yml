@@ -11,7 +11,6 @@ on:
       - repository-management/repository-config/config.json
       - repository-management/labels/**
       - repository-management/shared/**
-      - repository-management/bicep-test-tenant-config/**
       - repository-management/bicep-test-tenant-sync/**
       - repository-management/repository-sync/bami-identity/**
       - repository-management/repository-sync/terraform/**

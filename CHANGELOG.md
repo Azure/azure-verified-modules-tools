@@ -320,6 +320,11 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm test e2e` now destroys and retries an example when Azure rejects its
+  randomly selected region with `RequestDisallowedByAzure` and the
+  `aka.ms/locationineligible` explanation, which `avm test integration`
+  already retried. Other `RequestDisallowedByAzure`, policy, and authorization
+  denials still do not trigger a retry.
 - The first push to a new Terraform repository no longer fails with `GH013`
   when the organization's production ruleset applies. `avm init` temporarily
   sets `global-rulesets-opt-out`, which exempts the repository, instead of

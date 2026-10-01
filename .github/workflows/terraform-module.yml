@@ -421,18 +421,24 @@ jobs:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         run: *install-avm-authoring
 
-      - name: Check required features
+      - name: Validate required features offline
         id: required-features
         shell: pwsh
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
         run: &check-required-features |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path -LiteralPath '.required-features.json' -PathType Leaf)) { return }
+          if (-not (Test-Path -LiteralPath '.required-features.json' -PathType Leaf)) {
+              Write-Host 'No .required-features.json found; feature-specific Azure login and registration will be skipped.'
+              return
+          }
 
           $features = ConvertFrom-Json -InputObject (Get-Content -LiteralPath '.required-features.json' -Raw) -NoEnumerate
           if ($features -isnot [array]) { throw '.required-features.json must be a JSON array.' }
-          if ($features.Count -eq 0) { return }
+          if ($features.Count -eq 0) {
+              Write-Host '.required-features.json declares no features; feature-specific Azure login and registration will be skipped.'
+              return
+          }
 
           $selected = [guid]::Empty
           $effective = [guid]::Empty
@@ -447,11 +453,12 @@ jobs:
           }
 
           Import-Module Avm.Authoring
-          $preview = avm register-features --subscription-id $env:SELECTED_SUBSCRIPTION_ID --what-if --passthru
+          $preview = Register-AvmFeature -SubscriptionId $env:SELECTED_SUBSCRIPTION_ID -WhatIf
           if ($preview.FeaturesTotal -ne $features.Count) {
               throw '.required-features.json changed during feature preflight.'
           }
           'required=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Validated all $($preview.FeaturesTotal) required Azure feature(s) in .required-features.json and the effective selected test subscription $selected. No Azure calls or feature registration occurred; Azure login and registration run in the following steps."
 
       - name: Azure login for required features
         if: steps.required-features.outputs.required == 'true'
@@ -653,7 +660,7 @@ jobs:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         run: *install-avm-authoring
 
-      - name: Check required features
+      - name: Validate required features offline
         id: required-features
         shell: pwsh
         env:

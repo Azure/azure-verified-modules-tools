@@ -154,6 +154,30 @@ switch ($args[0]) {
         exit 0
     }
     'apply' {
+        if ($env:AVM_STUB_TERRAFORM_E2E_REGIONS) {
+            # The region stays in state until destroy, like random_integer.region_index.
+            $statePath = Join-Path (Get-Location).Path 'stub-e2e-region.txt'
+            if (-not (Test-Path -LiteralPath $statePath)) {
+                $attemptPath = Join-Path (Get-Location).Path 'stub-e2e-attempt.txt'
+                $attempt = if (Test-Path -LiteralPath $attemptPath) { [int](Get-Content -LiteralPath $attemptPath -Raw) + 1 } else { 1 }
+                Set-Content -LiteralPath $attemptPath -Value $attempt -Encoding utf8NoBOM
+                $regions = @($env:AVM_STUB_TERRAFORM_E2E_REGIONS | ConvertFrom-Json)
+                Set-Content -LiteralPath $statePath -Value $regions[($attempt - 1) % $regions.Count] -Encoding utf8NoBOM
+            }
+            $region = (Get-Content -LiteralPath $statePath -Raw).Trim()
+            [ordered]@{ Command = 'apply-region'; Directory = (Get-Location).Path; Region = $region } |
+                ConvertTo-Json -Compress |
+                Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+            if ($region -eq 'restricted-test-region') {
+                $message = @(
+                    'Error: creating Virtual Network (Subscription: "00000000-0000-0000-0000-000000000000"'
+                    'Resource Group Name: "rg-test"'
+                    'Virtual Network Name: "example"): performing CreateOrUpdate: unexpected status 403 (403 Forbidden) with error: RequestDisallowedByAzure: Resource ''example'' was disallowed by Azure: The selected region is currently not accepting new customers: https://aka.ms/locationineligible.'
+                ) -join "`n"
+                [Console]::Error.WriteLine($message)
+                exit 1
+            }
+        }
         # e2e engine invokes 'apply -auto-approve ...'. Report a clean deploy.
         Write-Output 'Apply complete! Resources: 1 added, 0 changed, 0 destroyed.'
         exit 0
@@ -172,6 +196,9 @@ switch ($args[0]) {
         exit 0
     }
     'destroy' {
+        if ($env:AVM_STUB_TERRAFORM_E2E_REGIONS) {
+            Remove-Item -LiteralPath (Join-Path (Get-Location).Path 'stub-e2e-region.txt') -ErrorAction SilentlyContinue
+        }
         # e2e engine always tears down with 'destroy -auto-approve ...'.
         Write-Output 'Destroy complete! Resources: 1 destroyed.'
         exit 0

@@ -26,7 +26,5 @@ $values = [ordered]@{
     TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
     TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
 }
-$configurationPath = Join-Path $repositoryRoot 'repository-management' 'bicep-test-tenant-config' 'config.json'
-$configuration = Get-Content -LiteralPath $configurationPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable -ErrorAction Stop
 $options = if ($PSCmdlet.ParameterSetName -ceq 'Apply') { @{ Apply = $Apply } } else { @{ PlanOnly = $PlanOnly } }
-Invoke-AvmBicepTestTenantSync -Values $values -Configuration $configuration @options | ConvertTo-Json -Depth 5
+Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5

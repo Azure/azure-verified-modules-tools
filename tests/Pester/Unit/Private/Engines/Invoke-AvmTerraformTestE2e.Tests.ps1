@@ -4,6 +4,12 @@
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+
+    $script:locationIneligibleOutput = @(
+        'Error: creating Virtual Network (Subscription: "00000000-0000-0000-0000-000000000000"'
+        'Resource Group Name: "rg-ewz0"'
+        'Virtual Network Name: "example"): performing CreateOrUpdate: unexpected status 403 (403 Forbidden) with error: RequestDisallowedByAzure: Resource ''example'' was disallowed by Azure: The selected region is currently not accepting new customers: https://aka.ms/locationineligible.'
+    ) -join "`n"
 }
 
 AfterAll {
@@ -490,6 +496,46 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         }
     }
 
+    It 'destroys and re-applies an example after Azure rejects the selected region' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $ctx = $script:context
+        $state = @{ Apply = 0; Labels = [System.Collections.Generic.List[string]]::new() }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; S = $state; Failure = $script:locationIneligibleOutput } {
+            param($C, $S, $Failure)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList, $Label)
+                $S.Labels.Add($Label)
+                if ($ArgumentList[0] -eq 'apply') {
+                    $S.Apply++
+                    if ($S.Apply -eq 1) {
+                        return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = $Failure }
+                    }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status             | Should -Be 'pass'
+        $result.Issues.Count       | Should -Be 1
+        $result.Issues[0].Severity | Should -Be 'warning'
+        $result.Issues[0].Message  | Should -Match 'retrying \(1 of 2\)'
+        ($state.Labels -join ',') | Should -Be (@(
+                'examples/default: terraform init'
+                'examples/default: terraform apply'
+                'examples/default: terraform destroy (retry 1)'
+                'examples/default: terraform apply'
+                'examples/default: terraform plan (idempotency)'
+                'examples/default: terraform destroy'
+            ) -join ',')
+    }
+
     It 'does not retry an apply failure that is not a transient capacity error' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
@@ -639,6 +685,38 @@ Describe 'Test-AvmTerraformTransientError' {
             Test-AvmTerraformTransientError -Output 'Error: Invalid value for variable'                   | Should -BeFalse
             # OperationNotAllowed also covers non-transient delete ordering, so it must not match.
             Test-AvmTerraformTransientError -Output 'OperationNotAllowed: cannot delete resource'         | Should -BeFalse
+        }
+    }
+
+    It 'classifies a region that is not accepting new customers as retryable' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Output = $script:locationIneligibleOutput } {
+            param($Output)
+            Test-AvmTerraformTransientError -Output $Output              | Should -BeTrue
+            Test-AvmTerraformTransientError -Output $Output -BuiltInOnly | Should -BeTrue
+        }
+    }
+
+    It 'does not classify <Name> as retryable' -ForEach @(
+        @{
+            Name   = 'a different RequestDisallowedByAzure denial'
+            Output = 'unexpected status 403 (403 Forbidden) with error: RequestDisallowedByAzure: Resource ''example'' was disallowed by Azure: This policy maintains a set of best available regions where your subscription can deploy resources.'
+        }
+        @{
+            Name   = 'a policy denial'
+            Output = 'unexpected status 403 (403 Forbidden) with error: RequestDisallowedByPolicy: Resource ''example'' was disallowed by policy. Policy identifiers: ''[{"policyAssignment":{"name":"Allowed locations"}}]''.'
+        }
+        @{
+            Name   = 'an authorization failure'
+            Output = 'unexpected status 403 (403 Forbidden) with error: AuthorizationFailed: The client does not have authorization to perform action ''Microsoft.Network/virtualNetworks/write''.'
+        }
+        @{
+            Name   = 'the region-ineligible link without RequestDisallowedByAzure'
+            Output = '403: request denied; https://aka.ms/locationineligible'
+        }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Output = $Output } {
+            param($Output)
+            Test-AvmTerraformTransientError -Output $Output | Should -BeFalse
         }
     }
 

@@ -26,8 +26,9 @@ function Invoke-AvmTestE2e {
         reusable workflow fans the tier out across a matrix), and -List to
         discover the runnable example names as JSON.
 
-        An apply that fails on region or SKU capacity is retried: the example
-        is destroyed and redeployed up to -MaxRetry times. Retries are recorded
+        An apply that fails on region or SKU capacity, or because the selected
+        region is not accepting new customers, is retried: the example is
+        destroyed and redeployed up to -MaxRetry times. Retries are recorded
         as warning-level Issues, so a recovered example stays green while the
         flake remains visible. The idempotency check is never retried.
 
@@ -64,10 +65,11 @@ function Invoke-AvmTestE2e {
 
     .PARAMETER MaxRetry
         How many times to retry an example whose 'terraform apply' failed with
-        a transient capacity or quota error. Defaults to 2 (up to three
-        attempts in total); 0 disables retries. Each retry destroys the example
-        before redeploying, so the region is re-rolled against an empty state.
-        Retries are recorded as warnings and do not fail the run.
+        a transient capacity, quota, or region-ineligible error. Defaults to 2
+        (up to three attempts in total); 0 disables retries. Each retry
+        destroys the example before redeploying, so the region is re-rolled
+        against an empty state. Retries are recorded as warnings and do not
+        fail the run.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
