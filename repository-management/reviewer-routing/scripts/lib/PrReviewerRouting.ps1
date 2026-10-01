@@ -22,7 +22,7 @@ $script:AvmPrReviewerRoutingFallbackTeam = 'Azure/azure-verified-modules-module-
 $script:AvmPrReviewerRoutingNeedsCoreTeamLabel = 'Needs: Core Team :genie:'
 $script:AvmPrReviewerRoutingNeedsModuleOwnerLabel = 'Needs: Module Owner :mega:'
 $script:AvmPrReviewerRoutingOrphanedLabel = 'Status: Module Orphaned :yellow_circle:'
-$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels'
+$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels,state'
 
 function Get-AvmPrReviewerRoutingCandidates {
     <#
@@ -37,11 +37,11 @@ function Get-AvmPrReviewerRoutingCandidates {
     param(
         [Parameter(Mandatory)] [string] $Repository,
         [string] $PullRequestUrl,
-        [int] $UpdatedWithinMinutes = 0
+        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0
     )
 
     if (-not [string]::IsNullOrWhiteSpace($PullRequestUrl)) {
-        $sanitized = $PullRequestUrl.Replace('api.', '').Replace('repos/', '').Replace('pulls/', 'pull/')
+        $sanitized = $PullRequestUrl -replace '^https://api\.github\.com/repos/([^/]+/[^/]+)/pulls/', 'https://github.com/$1/pull/'
         $pullRequest = Invoke-RepositoryGitHub -AsJson -Arguments @(
             'pr', 'view', $sanitized, '--repo', $Repository, '--json', $script:AvmPrReviewerRoutingFields
         )
@@ -52,7 +52,7 @@ function Get-AvmPrReviewerRoutingCandidates {
     }
 
     $pullRequests = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
-        'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
+        'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', ([int]::MaxValue.ToString([cultureinfo]::InvariantCulture)),
         '--json', "$($script:AvmPrReviewerRoutingFields),updatedAt"
     ))
     $pullRequests = @($pullRequests | Where-Object { -not $_.isDraft })
@@ -103,14 +103,15 @@ function Resolve-AvmPrReviewerRouting {
         [Parameter(Mandatory)] [object] $PullRequest,
         [Parameter(Mandatory)] [string] $Repository,
         [Parameter(Mandatory)] [hashtable] $CatalogIndex,
-        [Parameter(Mandatory)] [string[]] $ChangedFilePaths
+        [Parameter(Mandatory)] [string[]] $ChangedFilePaths,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep'
     )
 
     $topLevelModulePaths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     $touchedMetadataModulePaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $coreTeamPaths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($path in $ChangedFilePaths) {
-        $topLevelModulePath = Get-AvmBicepTopLevelModulePath -Path $path
+        $topLevelModulePath = if ($Ecosystem -ceq 'terraform') { '.' } else { Get-AvmBicepTopLevelModulePath -Path $path }
         if ($null -eq $topLevelModulePath -or $path -like '*avm.core.team.tests.ps1' -or $path -like '*.e2eignore') {
             $null = $coreTeamPaths.Add($path)
         }
@@ -118,7 +119,8 @@ function Resolve-AvmPrReviewerRouting {
             continue
         }
         $null = $topLevelModulePaths.Add($topLevelModulePath)
-        if ($path -ceq "$topLevelModulePath/metadata.json") {
+        $metadataPath = if ($topLevelModulePath -ceq '.') { 'metadata.json' } else { "$topLevelModulePath/metadata.json" }
+        if ($path -ceq $metadataPath) {
             $null = $touchedMetadataModulePaths.Add($topLevelModulePath)
         }
     }
@@ -268,7 +270,8 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     param(
         [Parameter(Mandatory)] [object] $PullRequest,
         [Parameter(Mandatory)] [string] $Repository,
-        [Parameter(Mandatory)] [hashtable] $CatalogIndex
+        [Parameter(Mandatory)] [hashtable] $CatalogIndex,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep'
     )
 
     $pr = $PullRequest
@@ -285,9 +288,15 @@ function Set-AvmPrReviewerRoutingForPullRequest {
         $outcome.Status = 'Draft'
         return $outcome
     }
+    if ($pr.PSObject.Properties['state'] -and $pr.state -ine 'open') {
+        Write-Host "Pull request [$($pr.url)] is no longer open. Skipping."
+        $outcome.Status = 'Closed'
+        return $outcome
+    }
 
     $changedFilePaths = @(Get-AvmPrReviewerRoutingChangedFiles -Repository $Repository -Number $pr.number)
-    $routing = Resolve-AvmPrReviewerRouting -PullRequest $pr -Repository $Repository -CatalogIndex $CatalogIndex -ChangedFilePaths $changedFilePaths
+    $routing = Resolve-AvmPrReviewerRouting -PullRequest $pr -Repository $Repository -CatalogIndex $CatalogIndex `
+        -ChangedFilePaths $changedFilePaths -Ecosystem $Ecosystem
 
     # Only write when something actually changes, so a reprocessed pull
     # request is not touched again. An unnecessary write would bump its
@@ -342,6 +351,10 @@ function Write-AvmPrReviewerRoutingSummary {
         "$(@($Outcomes | Where-Object { $_.Status -ceq 'AlreadyRouted' }).Count) already routed, " +
         "$(@($Outcomes | Where-Object { $_.Status -ceq 'Draft' }).Count) draft(s) skipped, " +
         "$($Failures.Count) failed."
+    $closedCount = @($Outcomes | Where-Object { $_.Status -ceq 'Closed' }).Count
+    if ($closedCount -gt 0) {
+        $overview += " $closedCount no longer open."
+    }
 
     $logLines = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -372,13 +385,20 @@ function Invoke-AvmPrReviewerRouting {
     param(
         [Parameter(Mandatory)] [string] $Repository,
         [string] $PullRequestUrl,
-        [int] $UpdatedWithinMinutes = 0
+        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep',
+        [hashtable] $CatalogIndex,
+        [AllowEmptyCollection()] [object[]] $PullRequests
     )
 
     try {
-        $pullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
-        Write-Verbose "Processing [$($pullRequests.Count)] pull request(s) in [$Repository]." -Verbose
-        $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+        if (-not $PSBoundParameters.ContainsKey('PullRequests')) {
+            $PullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
+        }
+        Write-Verbose "Processing [$($PullRequests.Count)] pull request(s) in [$Repository]." -Verbose
+        if (-not $PSBoundParameters.ContainsKey('CatalogIndex')) {
+            $CatalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository -Ecosystem $Ecosystem
+        }
     }
     catch {
         # A pre-loop setup failure is fatal (there is nothing left to sweep), but a bare
@@ -392,16 +412,24 @@ function Invoke-AvmPrReviewerRouting {
 
     $outcomes = [System.Collections.Generic.List[object]]::new()
     $failures = [System.Collections.Generic.List[string]]::new()
-    $total = $pullRequests.Count
+    $total = $PullRequests.Count
     $index = 0
-    foreach ($pr in $pullRequests) {
+    foreach ($pr in $PullRequests) {
         $index++
         # Printed unconditionally, before any network call for this pull request, so a run
         # that dies without an exception (e.g. a process kill) still leaves an unambiguous
         # last-seen item in the log, independent of gh's own argument echo.
         Write-Verbose "[$index/$total] Routing pull request [$($pr.url)]." -Verbose
         try {
-            $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository -CatalogIndex $catalogIndex -WhatIf:$WhatIfPreference
+            if (-not $pr.PSObject.Properties['headRefOid']) {
+                $details = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $pr.url)
+                if ($details.Count -ne 1) {
+                    throw [System.InvalidOperationException]::new("Unable to retrieve one pull request for '$($pr.url)'.")
+                }
+                $pr = $details[0]
+            }
+            $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository `
+                -CatalogIndex $CatalogIndex -Ecosystem $Ecosystem -WhatIf:$WhatIfPreference
             $outcomes.Add($outcome)
         }
         catch {

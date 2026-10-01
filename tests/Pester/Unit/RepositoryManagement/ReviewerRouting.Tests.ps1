@@ -148,6 +148,46 @@ Describe 'Get-AvmPrReviewerRoutingCandidates' {
         $candidates = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules')
         $candidates.number | Should -Be @(1, 3)
     }
+
+    It 'allows complete pagination instead of a fixed 500-request limit' {
+        $null = Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules'
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments -contains '2147483647' -and $Arguments -notcontains '500'
+        }
+    }
+
+    It 'rejects a negative lookback before querying GitHub' {
+        { Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes -1 } |
+            Should -Throw
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0
+    }
+
+    It 'retains repository names ending in API path words in ordinary URLs' -ForEach @(
+        @{ Suffix = 'repos' }
+        @{ Suffix = 'pulls' }
+    ) {
+        $repository = "Azure/terraform-azure-avm-utl-$Suffix"
+        $url = "https://github.com/$repository/pull/42"
+        Mock Invoke-RepositoryGitHub { [pscustomobject]@{ number = 42 } }
+        $null = Get-AvmPrReviewerRoutingCandidates -Repository $repository -PullRequestUrl $url
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments[2] -eq $url -and $Arguments -contains $repository
+        }
+    }
+
+    It 'normalizes only the API URL prefix without rewriting repository names' -ForEach @(
+        @{ Suffix = 'repos' }
+        @{ Suffix = 'pulls' }
+    ) {
+        $repository = "Azure/terraform-azure-avm-utl-$Suffix"
+        $url = "https://github.com/$repository/pull/42"
+        Mock Invoke-RepositoryGitHub { [pscustomobject]@{ number = 42 } }
+        $null = Get-AvmPrReviewerRoutingCandidates -Repository $repository `
+            -PullRequestUrl "https://api.github.com/repos/$repository/pulls/42"
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments[2] -eq $url -and $Arguments -contains $repository
+        }
+    }
 }
 
 Describe 'Resolve-AvmPrReviewerRouting' {
@@ -515,7 +555,7 @@ Describe 'Invoke-AvmPrReviewerRouting entry point diagnostics' {
     }
 
     It 'wraps the sweep invocation in a try/catch that prints a FATAL banner and rethrows' {
-        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmPrReviewerRouting\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
+        $script:entryPointText | Should -Match '(?ms)try\s*\{\s*Invoke-AvmPrReviewerRoutingSweep\b.*?\}\s*catch\s*\{.*?Write-Host\s+"FATAL:.*?Write-Host\s+\$_\.ScriptStackTrace.*?throw\s*\r?\n\}'
     }
 }
 
@@ -615,5 +655,28 @@ Describe 'Reviewer routing workflow safety' {
             $resetIndex | Should -BeGreaterThan $scriptIndex
             $runBody | Should -Match '(?s)\$global:LASTEXITCODE\s*=\s*0\s*\z'
         }
+    }
+
+    It 'discovers targets with a read-only token before scoping review writes' {
+        $discoveryToken = [regex]::Match($script:workflowText,
+            '(?ms)^      - name: Create read-only repository discovery token\r?\n.*?(?=^      - name:)').Value
+        $discoveryToken | Should -Match 'permission-contents:\s*read'
+        $discoveryToken | Should -Not -Match 'permission-\S+:\s*write'
+        $writerToken = [regex]::Match($script:workflowText,
+            '(?ms)^      - name: Create scoped reviewer routing token\r?\n.*?(?=^      - name:)').Value
+        $writerToken | Should -Match 'repositories:\s*\$\{\{\s*steps\.routing-repositories\.outputs\.repositories\s*\}\}'
+        $writerToken | Should -Match 'permission-contents:\s*read'
+        $writerToken | Should -Match 'permission-pull-requests:\s*write'
+        $writerToken | Should -Match 'permission-members:\s*read'
+        $writerToken | Should -Not -Match 'permission-(contents|administration|issues|actions):\s*write'
+    }
+
+    It 'passes discovered targets to the same routing entry point and retains manual dry runs' {
+        $script:workflowText | Should -Match '(?m)^\s{10}ROUTING_REPOSITORIES:\s*\$\{\{\s*steps\.routing-repositories\.outputs\.targets\s*\}\}'
+        $script:workflowText | Should -Match '-Repository\s+\(\$env:ROUTING_REPOSITORIES\s+-split\s+'',''\)'
+        $script:workflowText | Should -Match 'Get-AvmPrReviewerRoutingRepositories -PullRequestUrl \$env:PULL_REQUEST_URL'
+        $script:workflowText | Should -Match 'if \(\$repositories.Count -gt 500\)'
+        $script:workflowText | Should -Match '(?m)^\s{4}environment:\s*avm\s*$'
+        $script:triggerBlock | Should -Match '(?ms)^      what_if:\r?\n.*?^        default:\s*true\s*$'
     }
 }

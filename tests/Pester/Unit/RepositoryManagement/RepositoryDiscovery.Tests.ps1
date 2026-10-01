@@ -353,8 +353,13 @@ Describe "Repository discovery built-in exclusions" {
     }
 
     It 'reads every installation page and returns a stable repository order' {
+        $excludedRepositories = @(1..99 | ForEach-Object {
+                $repository = New-TestRepository -Name "terraform-azurerm-avm-res-archived-$_"
+                $repository.archived = $true
+                $repository
+            })
         $script:discoveryState.Pages['1'] = @{
-            repositories = @((New-TestRepository -Name 'terraform-azurerm-avm-res-normal'))
+            repositories = @((New-TestRepository -Name 'terraform-azurerm-avm-res-normal')) + $excludedRepositories
             total_count = 101
         }
         $script:discoveryState.Pages['2'] = @{

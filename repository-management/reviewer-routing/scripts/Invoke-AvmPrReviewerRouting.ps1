@@ -1,13 +1,13 @@
 #Requires -Version 7.4
 # Requires Environment Variables for GitHub Actions
 # GH_TOKEN
-# Must run gh auth login -h "GitHub.com" and Import-Module Avm.Authoring before running this script
+# Import Avm.Authoring and supply GH_TOKEN or an existing gh login.
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $Repository = 'Azure/bicep-registry-modules',
+    [string[]] $Repository = @('Azure/bicep-registry-modules'),
     [string] $PullRequestUrl = '',
-    [int] $UpdatedWithinMinutes = 0
+    [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0
 )
 
 Set-StrictMode -Version 3.0
@@ -17,15 +17,17 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '.
 $sharedLibDir = Join-Path $repositoryRoot 'repository-management' 'repository-sync' 'scripts' 'lib'
 . (Join-Path $sharedLibDir 'RetryHelpers.ps1')
 . (Join-Path $sharedLibDir 'RepoTree.ps1')
+. (Join-Path $sharedLibDir 'RepositoryDiscovery.ps1')
 
 $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'RepositoryFileAccess.ps1')
 . (Join-Path $libDir 'ModuleOwners.ps1')
 . (Join-Path $libDir 'RunSummary.ps1')
 . (Join-Path $libDir 'PrReviewerRouting.ps1')
+. (Join-Path $libDir 'PrReviewerRoutingDiscovery.ps1')
 
 try {
-    Invoke-AvmPrReviewerRouting -Repository $Repository -PullRequestUrl $PullRequestUrl `
+    Invoke-AvmPrReviewerRoutingSweep -Repository $Repository -PullRequestUrl $PullRequestUrl `
         -UpdatedWithinMinutes $UpdatedWithinMinutes -WhatIf:$WhatIfPreference
 }
 catch {

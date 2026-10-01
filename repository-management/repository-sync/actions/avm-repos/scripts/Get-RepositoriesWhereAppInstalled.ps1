@@ -32,6 +32,7 @@ $manifest = Join-Path $syncRoot '..' '..' 'src' 'Avm.Authoring' 'Avm.Authoring.p
 $null = Import-Module -Name $manifest -Scope Local -Force -ErrorAction Stop
 . (Join-Path $syncRoot 'scripts' 'lib' 'RetryHelpers.ps1')
 . (Join-Path $syncRoot 'scripts' 'lib' 'RepoTree.ps1')
+. (Join-Path $syncRoot 'scripts' 'lib' 'RepositoryDiscovery.ps1')
 . (Join-Path $syncRoot 'scripts' 'lib' 'RepositoryMetadata.ps1')
 
 Write-Host "Generating matrix for AVM repositories"
@@ -40,38 +41,12 @@ $repos = [System.Collections.Generic.List[object]]::new()
 
 Write-Host "Getting repositories from app installation"
 
-$itemsPerPage = 100
-$page = 1
-$incompleteResults = $true
-
-$installedRepositories = @()
-
-while ($incompleteResults)
-{
-  $result = Invoke-RepositorySyncProcess -Command gh -Arguments @(
-    'api', '--hostname', 'github.com', '--method', 'GET',
-    "/installation/repositories?per_page=$itemsPerPage&page=$page"
-  )
-  if ($result.ExitCode -ne 0) {
-    throw [System.InvalidOperationException]::new("Cannot list the app's repositories: $($result.StdErr)")
-  }
-  $response = $result.StdOut | ConvertFrom-Json
-  $installedRepositories += $response.repositories
-  $incompleteResults = $page * $itemsPerPage -lt $response.total_count
-  $page++
-}
+$installedRepositories = @(Get-RepositoryInstalledRepositories)
 
 $issues = [System.Collections.Generic.List[object]]::new()
 
-$moduleTypes = @{
-  "res"      = "resource"
-  "ptn"      = "pattern"
-  "utl"      = "utility"
-}
-
 $finalReposToSkip = $reposToSkip + $additionalReposToSkip
 $providerPattern = ($validProviders | ForEach-Object { [regex]::Escape($_) }) -join '|'
-$repositoryPattern = "^terraform-($providerPattern)-(?<module>avm-(?<kind>res|ptn|utl)-[a-z0-9-]+)$"
 
 Write-Host "Skipping repositories: $(ConvertTo-Json $finalReposToSkip)"
 
@@ -89,8 +64,8 @@ foreach ($installedRepository in $installedRepositories | Sort-Object -Property 
     continue
   }
 
-  $nameMatch = [regex]::Match($installedRepository.name, $repositoryPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-  if (!$nameMatch.Success)
+  $identity = Get-RepositoryTerraformModuleIdentity -Name $installedRepository.name -ValidProviders $validProviders
+  if ($null -eq $identity)
   {
     $issue = @{
       repoId   = $installedRepository.name
@@ -102,12 +77,12 @@ foreach ($installedRepository in $installedRepositories | Sort-Object -Property 
     continue
   }
 
-  $moduleName = $nameMatch.Groups['module'].Value
+  $moduleName = $identity.ModuleName
   if ($repoFilter.Count -gt 0 -and $repoFilter -notcontains $moduleName)
   {
     continue
   }
-  $moduleType = $moduleTypes[$nameMatch.Groups['kind'].Value]
+  $moduleType = $identity.ModuleType
   try
   {
     $metadata = Get-RepositoryModuleMetadata -Repository $installedRepository.full_name `

@@ -1,6 +1,6 @@
 #Requires -Version 7.4
 
-# Resolves the owners of a Bicep AVM module for PR/issue routing.
+# Resolves the owners of a Bicep or Terraform AVM module for PR/issue routing.
 #
 # Two sources, index-first with a fallback:
 #  - The published module catalog (Azure-Verified-Modules v1/modules.json),
@@ -12,10 +12,7 @@
 #    ever stores raw owner handle strings (bare username or @org/team-slug);
 #    catalog enrichment happens later in the catalog pipeline, not here.
 #
-# Only the module's top-level metadata.json can declare owners -- the schema
-# (avm-module-metadata.schema.json) forbids an "owners" property on child
-# module metadata, so unlike the retired bicep-registry-modules script this
-# never needs to walk up through intermediate folders.
+# Only root metadata.json declares owners; child modules inherit them.
 
 $script:AvmReviewerRoutingCatalogRepository = 'Azure/Azure-Verified-Modules'
 $script:AvmReviewerRoutingCatalogPath = 'docs/static/module-indexes/v1/modules.json'
@@ -131,15 +128,14 @@ function ConvertTo-AvmReviewerRoutingMetadataOwner {
     return $result.ToArray()
 }
 
-function Get-AvmReviewerRoutingCatalogIndex {
+function Get-AvmReviewerRoutingCatalog {
     <#
     .SYNOPSIS
-    Fetches and flattens the published module catalog into a modulePath ->
-    catalog-entry index for one repository's Bicep modules.
+    Retrieves the published module catalog shared by a routing sweep.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
-    param([Parameter(Mandatory)] [string] $Repository)
+    param()
 
     $file = Get-AvmRepositoryFileAtRef -Repository $script:AvmReviewerRoutingCatalogRepository `
         -Path $script:AvmReviewerRoutingCatalogPath -Ref $script:AvmReviewerRoutingCatalogRef
@@ -147,15 +143,35 @@ function Get-AvmReviewerRoutingCatalogIndex {
     # "Microsoft.App/Jobs" vs "Microsoft.App/jobs"), which plain
     # ConvertFrom-Json throws on.
     $catalog = $file.Content | ConvertFrom-Json -AsHashtable -Depth 64
-    if ($catalog -isnot [System.Collections.IDictionary] -or -not $catalog.Contains('modules')) {
+    if ($catalog -isnot [System.Collections.IDictionary] -or -not $catalog.Contains('modules') -or
+        $catalog.modules -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('Published module catalog is missing the expected modules map.')
+    }
+    return $catalog
+}
+
+function Get-AvmReviewerRoutingCatalogIndex {
+    <#
+    .SYNOPSIS
+    Builds a modulePath -> catalog-entry index for one repository.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep',
+        [hashtable] $Catalog
+    )
+
+    if ($null -eq $Catalog) {
+        $Catalog = Get-AvmReviewerRoutingCatalog
     }
 
     $index = @{}
-    foreach ($canonicalEntry in $catalog.modules.Values) {
-        foreach ($bicepModule in @($canonicalEntry['bicep'])) {
-            if ($bicepModule.repository -ceq $Repository) {
-                $index[[string]$bicepModule.modulePath] = $bicepModule
+    foreach ($canonicalEntry in $Catalog.modules.Values) {
+        foreach ($module in @($canonicalEntry[$Ecosystem])) {
+            if ($null -ne $module -and $module.repository -ieq $Repository) {
+                $index[[string]$module.modulePath] = $module
             }
         }
     }
@@ -178,13 +194,24 @@ function Get-AvmBicepModuleMetadataOwners {
         [Parameter(Mandatory)] [string] $Ref
     )
 
-    $metadataPath = "$TopLevelModulePath/metadata.json"
-    $file = Get-AvmRepositoryFileAtRef -Repository $Repository -Path $metadataPath -Ref $Ref -AllowMissing
+    return @(Get-AvmModuleMetadataOwners -MetadataPath "$TopLevelModulePath/metadata.json" -Repository $Repository -Ref $Ref)
+}
+
+function Get-AvmModuleMetadataOwners {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)] [string] $MetadataPath,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $Ref
+    )
+
+    $file = Get-AvmRepositoryFileAtRef -Repository $Repository -Path $MetadataPath -Ref $Ref -AllowMissing
     if ($null -eq $file) {
         return @()
     }
     $metadata = $file.Content | ConvertFrom-Json -AsHashtable -Depth 64
-    return @(ConvertTo-AvmReviewerRoutingMetadataOwner -Owners @($metadata['owners']) -Source "$Repository@$Ref`:$metadataPath")
+    return @(ConvertTo-AvmReviewerRoutingMetadataOwner -Owners @($metadata['owners']) -Source "$Repository@$Ref`:$MetadataPath")
 }
 
 function Test-AvmBicepModuleExists {
@@ -215,7 +242,8 @@ function Get-AvmModuleOwners {
     Resolves a module's owners: index-first, metadata.json fallback.
 
     .PARAMETER TopLevelModulePath
-    The module's top-level folder, e.g. 'avm/res/storage/storage-account'.
+    The module's top-level folder, e.g. 'avm/res/storage/storage-account',
+    or '.' for a Terraform repository root.
 
     .PARAMETER ForceMetadataLookup
     Set when the pull request itself changes this module's metadata.json,
@@ -237,6 +265,9 @@ function Get-AvmModuleOwners {
 
     if (-not $ForceMetadataLookup -and $CatalogIndex.Contains($TopLevelModulePath)) {
         return @(ConvertTo-AvmReviewerRoutingOwner -Owners @($CatalogIndex[$TopLevelModulePath]['owners']))
+    }
+    if ($TopLevelModulePath -ceq '.') {
+        return @(Get-AvmModuleMetadataOwners -MetadataPath 'metadata.json' -Repository $Repository -Ref $Ref)
     }
     return @(Get-AvmBicepModuleMetadataOwners -TopLevelModulePath $TopLevelModulePath -Repository $Repository -Ref $Ref)
 }
