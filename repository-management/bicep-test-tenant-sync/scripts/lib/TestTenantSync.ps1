@@ -123,7 +123,14 @@ function Invoke-AvmBicepTestTenantSync {
         throw [System.ArgumentException]::new('Use -Apply explicitly to publish; -PlanOnly:$false is not an apply flag.')
     }
     $bundle = Get-AvmBamiSettings -Values $Values
-    $projection = Get-AvmBamiSettings -Values $bundle -BicepOnly
+    $execution = Get-AvmBamiSettings -Values $bundle -BicepOnly
+    $projection = [ordered]@{
+        VALIDATE_TENANT_ID = $execution.TEST_BAMI_TENANT_ID
+        VALIDATE_CLIENT_ID = $execution.TEST_BAMI_BICEP_CLIENT_ID
+        VALIDATE_PERSISTENT_SUBSCRIPTION_ID = $execution.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        VALIDATE_MANAGEMENT_GROUP_ID = $execution.TEST_BAMI_MANAGEMENT_GROUP_ID
+        VALIDATE_SUBSCRIPTION_IDS = $execution.TEST_BAMI_SUBSCRIPTION_IDS
+    }
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $retargetedNames = @(
         foreach ($name in $projection.Keys) {

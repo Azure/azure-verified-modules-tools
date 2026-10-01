@@ -3,11 +3,11 @@ function Get-AvmBicepTestTenantVariableNames {
     [OutputType([string])]
     param()
 
-    'TEST_BAMI_TENANT_ID'
-    'TEST_BAMI_BICEP_CLIENT_ID'
-    'TEST_BAMI_SUBSCRIPTION_IDS'
-    'TEST_BAMI_MANAGEMENT_GROUP_ID'
-    'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+    'VALIDATE_TENANT_ID'
+    'VALIDATE_CLIENT_ID'
+    'VALIDATE_SUBSCRIPTION_IDS'
+    'VALIDATE_MANAGEMENT_GROUP_ID'
+    'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
 }
 
 function Invoke-AvmBicepTestTenantVariableApi {
@@ -15,8 +15,8 @@ function Invoke-AvmBicepTestTenantVariableApi {
     param(
         [ValidateSet('GET', 'POST', 'PATCH', IgnoreCase = $false)] [string] $Method = 'GET',
         [ValidateSet(
-            'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-            'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID', IgnoreCase = $false
+            'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
+            'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID', IgnoreCase = $false
         )] [string] $Name,
         [AllowEmptyString()] [string] $Value,
         [ValidateRange(1, 10000)] [int] $Page = 1

@@ -7,8 +7,8 @@ BeforeAll {
     . (Join-Path $script:syncScripts 'lib' 'GitHubVariables.ps1')
     . (Join-Path $script:syncScripts 'lib' 'TestTenantSync.ps1')
     $script:executionNames = @(
-        'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-        'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+        'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
+        'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
     )
 
     function New-BicepSyncTestBundle {
@@ -70,7 +70,7 @@ BeforeAll {
     }
 
     function New-BicepSyncApiVariable {
-        param([string] $Name = 'TEST_BAMI_TENANT_ID', [string] $Value = 'fixture-value')
+        param([string] $Name = 'VALIDATE_TENANT_ID', [string] $Value = 'fixture-value')
 
         @{
             name = $Name
@@ -84,7 +84,14 @@ BeforeAll {
 Describe 'Guarded nonsecret Bicep variable publication' {
     BeforeEach {
         $script:values = New-BicepSyncTestBundle
-        $script:projection = Get-AvmBamiSettings -Values $script:values -BicepOnly
+        $execution = Get-AvmBamiSettings -Values $script:values -BicepOnly
+        $script:projection = [ordered]@{
+            VALIDATE_TENANT_ID = $execution.TEST_BAMI_TENANT_ID
+            VALIDATE_CLIENT_ID = $execution.TEST_BAMI_BICEP_CLIENT_ID
+            VALIDATE_PERSISTENT_SUBSCRIPTION_ID = $execution.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+            VALIDATE_MANAGEMENT_GROUP_ID = $execution.TEST_BAMI_MANAGEMENT_GROUP_ID
+            VALIDATE_SUBSCRIPTION_IDS = $execution.TEST_BAMI_SUBSCRIPTION_IDS
+        }
         $script:consumer = [ordered]@{}
         foreach ($variableName in $script:executionNames) { $script:consumer[$variableName] = $null }
         $script:events = [System.Collections.Generic.List[string]]::new()
@@ -134,6 +141,24 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             Should -Throw '*Use -Apply explicitly*'
         Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'maps only the five validated source fields without renaming or mutating the source bundle' {
+        $before = $script:values | ConvertTo-Json -Depth 8 -Compress
+        $bundle = Get-AvmBamiSettings -Values $script:values
+        $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Apply
+        $result.Status | Should -BeExactly 'Published'
+        $script:values | ConvertTo-Json -Depth 8 -Compress | Should -BeExactly $before
+        $bundle.Count | Should -Be 8
+        @($bundle.Keys | Where-Object { $_ -cnotlike 'TEST_BAMI_*' }) | Should -HaveCount 0
+        $sourceNames = @(
+            'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
+            'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+        )
+        for ($i = 0; $i -lt $sourceNames.Count; $i++) {
+            $script:consumer[$script:executionNames[$i]].Value | Should -BeExactly $bundle[$sourceNames[$i]]
+        }
+        @($result.ChangedNames | Sort-Object) | Should -Be @($script:executionNames | Sort-Object)
     }
 
     It 'does not write for an explicitly false apply switch or WhatIf' {
@@ -198,7 +223,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         foreach ($name in $script:executionNames) {
             $script:consumer[$name].Value | Should -BeExactly $script:projection[$name]
         }
-        $subscriptions = $script:consumer.TEST_BAMI_SUBSCRIPTION_IDS.Value
+        $subscriptions = $script:consumer.VALIDATE_SUBSCRIPTION_IDS.Value
         @($subscriptions | ConvertFrom-Json) | Should -HaveCount 28
         $subscriptions | Should -Not -Match '\r|\n'
         $lastWrite = $script:events.IndexOf("write:$($script:attempts[-1].Name)")
@@ -229,7 +254,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     Context 'Acknowledged write readback visibility' {
         BeforeEach {
             Initialize-BicepSyncTestCandidate
-            $script:visibilityName = 'TEST_BAMI_SUBSCRIPTION_IDS'
+            $script:visibilityName = 'VALIDATE_SUBSCRIPTION_IDS'
             $script:consumer[$script:visibilityName] = $null
             $script:visibilityBefore = $null
             $script:visibilityReads = 0
@@ -273,14 +298,14 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             $script:waits | Should -Be @(1..$StaleReads | ForEach-Object { 5 * $_ })
             Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly ($StaleReads + 2)
             Should -Invoke Write-Information -Exactly $StaleReads -ParameterFilter {
-                $MessageData -clike '*readback visibility of TEST_BAMI_SUBSCRIPTION_IDS; retrying only the GET, not the acknowledged write.'
+                $MessageData -clike '*readback visibility of VALIDATE_SUBSCRIPTION_IDS; retrying only the GET, not the acknowledged write.'
             }
         }
 
         It 'stops after four stale readbacks and 30 seconds of waits without retrying writes or rolling back' {
             $script:staleReads = 4
             { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
-                Should -Throw '*Readback mismatch after writing TEST_BAMI_SUBSCRIPTION_IDS*after 4 readback attempt*'
+                Should -Throw '*Readback mismatch after writing VALIDATE_SUBSCRIPTION_IDS*after 4 readback attempt*'
             $script:waits | Should -Be @(5, 10, 15)
             Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 6
             @($script:attempts.Name) | Should -Be @($script:visibilityName)
@@ -288,9 +313,9 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         }
 
         It 'stops on a changed <Name> during a later readback without waiting again' -ForEach @(
-            @{ Name = 'TEST_BAMI_TENANT_ID' }
-            @{ Name = 'TEST_BAMI_BICEP_CLIENT_ID' }
-            @{ Name = 'TEST_BAMI_SUBSCRIPTION_IDS' }
+            @{ Name = 'VALIDATE_TENANT_ID' }
+            @{ Name = 'VALIDATE_CLIENT_ID' }
+            @{ Name = 'VALIDATE_SUBSCRIPTION_IDS' }
         ) {
             $script:driftName = $Name
             $script:onRead = {
@@ -362,17 +387,17 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'refuses each changed execution value and requires coordinated maintenance: <Name>' -ForEach @(
-        @{ Name = 'TEST_BAMI_TENANT_ID'; Value = '77777777-7777-4777-8777-777777777777' }
-        @{ Name = 'TEST_BAMI_BICEP_CLIENT_ID'; Value = '77777777-7777-4777-8777-777777777777' }
-        @{ Name = 'TEST_BAMI_SUBSCRIPTION_IDS'; Value = 'subscriptions' }
-        @{ Name = 'TEST_BAMI_MANAGEMENT_GROUP_ID'; Value = 'other-bami-group' }
-        @{ Name = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'; Value = '77777777-7777-4777-8777-777777777777' }
+        @{ Name = 'VALIDATE_TENANT_ID'; SourceName = 'TEST_BAMI_TENANT_ID'; Value = '77777777-7777-4777-8777-777777777777' }
+        @{ Name = 'VALIDATE_CLIENT_ID'; SourceName = 'TEST_BAMI_BICEP_CLIENT_ID'; Value = '77777777-7777-4777-8777-777777777777' }
+        @{ Name = 'VALIDATE_SUBSCRIPTION_IDS'; SourceName = 'TEST_BAMI_SUBSCRIPTION_IDS'; Value = 'subscriptions' }
+        @{ Name = 'VALIDATE_MANAGEMENT_GROUP_ID'; SourceName = 'TEST_BAMI_MANAGEMENT_GROUP_ID'; Value = 'other-bami-group' }
+        @{ Name = 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'; SourceName = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'; Value = '77777777-7777-4777-8777-777777777777' }
     ) {
         Initialize-BicepSyncTestCandidate
-        if ($Name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
-            $script:values[$Name][0].id = '77777777-7777-4777-8777-777777777777'
+        if ($Name -ceq 'VALIDATE_SUBSCRIPTION_IDS') {
+            $script:values[$SourceName][0].id = '77777777-7777-4777-8777-777777777777'
         }
-        else { $script:values[$Name] = $Value }
+        else { $script:values[$SourceName] = $Value }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
             Should -Throw '*Existing BAMI execution values cannot change*coordinated maintenance*'
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
@@ -403,8 +428,8 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'initializes each missing field without rewriting the matching present values' -ForEach @(
-        'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-        'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+        'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
+        'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
     ) {
         Initialize-BicepSyncTestCandidate
         $script:consumer[$_] = $null
@@ -421,8 +446,8 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'refuses every mismatching present value even in an otherwise absent tuple' -ForEach @(
-        'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-        'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+        'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
+        'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
     ) {
         foreach ($value in @('', 'outside-value')) {
             Set-BicepSyncTestValue -Name $_ -Value $value
@@ -435,7 +460,10 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'rejects retired selector and arbitrary writes before reading or writing the consumer' -ForEach @(
-        'TEST_BAMI_MODULE_PATHS', 'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'arbitrary'
+        'TEST_BAMI_MODULE_PATHS', 'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'arbitrary',
+        'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
+        'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID',
+        'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'ARM_MGMTGROUP_ID'
     ) {
         { Set-AvmBicepTestTenantVariable -Expected $script:consumer -Name $_ -Value 'value' } |
             Should -Throw '*Only the five Bicep execution variables*'
@@ -444,7 +472,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     }
 
     It 'honors ShouldProcess at the individual variable boundary' {
-        { Set-AvmBicepTestTenantVariable -Expected $script:consumer -Name 'TEST_BAMI_TENANT_ID' -Value $script:projection.TEST_BAMI_TENANT_ID -WhatIf } |
+        { Set-AvmBicepTestTenantVariable -Expected $script:consumer -Name 'VALIDATE_TENANT_ID' -Value $script:projection.VALIDATE_TENANT_ID -WhatIf } |
             Should -Throw '*not approved*'
         Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
@@ -517,12 +545,12 @@ Describe 'Guarded nonsecret Bicep variable publication' {
     It 'does not overwrite an outside edit found before the first write' {
         $script:onRead = {
             param($Read)
-            if ($Read -eq 2) { Set-BicepSyncTestValue -Name 'TEST_BAMI_TENANT_ID' -Value 'outside-value' -Revision 'outside' }
+            if ($Read -eq 2) { Set-BicepSyncTestValue -Name 'VALIDATE_TENANT_ID' -Value 'outside-value' -Revision 'outside' }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
             Should -Throw '*changed outside this sync during pre-write*'
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
-        $script:consumer.TEST_BAMI_TENANT_ID.Value | Should -BeExactly 'outside-value'
+        $script:consumer.VALIDATE_TENANT_ID.Value | Should -BeExactly 'outside-value'
     }
 
     It 'detects outside changes between writes before overwriting the next planned value' {
@@ -539,12 +567,12 @@ Describe 'Guarded nonsecret Bicep variable publication' {
 
     It 'detects an outside execution change during a value write without rolling it back' {
         $script:afterWrite = {
-            Set-BicepSyncTestValue -Name 'TEST_BAMI_BICEP_CLIENT_ID' -Value 'outside-value' -Revision 'outside'
+            Set-BicepSyncTestValue -Name 'VALIDATE_CLIENT_ID' -Value 'outside-value' -Revision 'outside'
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
-            Should -Throw '*Partial execution values or outside edits may remain*Readback mismatch*TEST_BAMI_BICEP_CLIENT_ID*'
+            Should -Throw '*Partial execution values or outside edits may remain*Readback mismatch*VALIDATE_CLIENT_ID*'
         $script:attempts | Should -HaveCount 1
-        $script:consumer.TEST_BAMI_BICEP_CLIENT_ID.Value | Should -BeExactly 'outside-value'
+        $script:consumer.VALIDATE_CLIENT_ID.Value | Should -BeExactly 'outside-value'
     }
 
     It 'detects drift at complete and final readback with or without preceding writes' -ForEach @(
@@ -554,18 +582,18 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         @{ Read = 5; ExpectedWrites = 1; Stage = 'final publication readback' }
     ) {
         Initialize-BicepSyncTestCandidate
-        if ($ExpectedWrites -eq 1) { $script:consumer.TEST_BAMI_TENANT_ID = $null }
+        if ($ExpectedWrites -eq 1) { $script:consumer.VALIDATE_TENANT_ID = $null }
         $script:driftRead = $Read
         $script:onRead = {
             param($Read)
             if ($Read -eq $script:driftRead) {
-                Set-BicepSyncTestValue -Name 'TEST_BAMI_BICEP_CLIENT_ID' -Value 'outside-value' -Revision 'outside'
+                Set-BicepSyncTestValue -Name 'VALIDATE_CLIENT_ID' -Value 'outside-value' -Revision 'outside'
             }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
             Should -Throw "*changed outside this sync during ${Stage}*"
         $script:attempts | Should -HaveCount $ExpectedWrites
-        $script:consumer.TEST_BAMI_BICEP_CLIENT_ID.Value | Should -BeExactly 'outside-value'
+        $script:consumer.VALIDATE_CLIENT_ID.Value | Should -BeExactly 'outside-value'
     }
 
     It 'fails honestly if complete or final readback is unavailable after initialization' -ForEach @(12, 13) {
@@ -588,10 +616,10 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $script:changedField = $_
         $script:onRead = {
             param($Read)
-            if ($Read -eq 3) { $script:consumer.TEST_BAMI_TENANT_ID.($script:changedField) = 'outside' }
+            if ($Read -eq 3) { $script:consumer.VALIDATE_TENANT_ID.($script:changedField) = 'outside' }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
-            Should -Throw '*changed outside this sync*TEST_BAMI_TENANT_ID*'
+            Should -Throw '*changed outside this sync*VALIDATE_TENANT_ID*'
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
     }
 
@@ -602,10 +630,10 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             $script:consumer[$Name].CreatedAt = 'outside-recreation'
         }
         $expected = Copy-BicepSyncTestSnapshot -Snapshot $script:consumer
-        { Set-AvmBicepTestTenantVariable -Expected $expected -Name 'TEST_BAMI_TENANT_ID' -Value $script:projection.TEST_BAMI_TENANT_ID } |
-            Should -Throw '*Readback mismatch*TEST_BAMI_TENANT_ID*'
+        { Set-AvmBicepTestTenantVariable -Expected $expected -Name 'VALIDATE_TENANT_ID' -Value $script:projection.VALIDATE_TENANT_ID } |
+            Should -Throw '*Readback mismatch*VALIDATE_TENANT_ID*'
         $script:attempts | Should -HaveCount 1
-        $script:consumer.TEST_BAMI_TENANT_ID.CreatedAt | Should -BeExactly 'outside-recreation'
+        $script:consumer.VALIDATE_TENANT_ID.CreatedAt | Should -BeExactly 'outside-recreation'
         Should -Invoke Start-Sleep -Exactly 0
     }
 
@@ -613,7 +641,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         Initialize-BicepSyncTestCandidate
         $script:onRead = {
             param($Read)
-            if ($Read -eq 2) { $script:consumer.TEST_BAMI_TENANT_ID = $null }
+            if ($Read -eq 2) { $script:consumer.VALIDATE_TENANT_ID = $null }
         }
         { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
             Should -Throw '*changed outside this sync*'
@@ -649,13 +677,13 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
 
     It 'uses POST for creation and PATCH for updates without shell interpolation or extra scopes' -ForEach @('POST', 'PATCH') {
         $payload = 'fixture-group'
-        $null = Invoke-AvmBicepTestTenantVariableApi -Method $_ -Name 'TEST_BAMI_MANAGEMENT_GROUP_ID' -Value $payload
+        $null = Invoke-AvmBicepTestTenantVariableApi -Method $_ -Name 'VALIDATE_MANAGEMENT_GROUP_ID' -Value $payload
         $script:expectedMethod = $_
         $script:expectedEndpoint = 'repos/Azure/bicep-registry-modules/actions/variables'
-        if ($_ -ceq 'PATCH') { $script:expectedEndpoint += '/TEST_BAMI_MANAGEMENT_GROUP_ID' }
+        if ($_ -ceq 'PATCH') { $script:expectedEndpoint += '/VALIDATE_MANAGEMENT_GROUP_ID' }
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
             $Arguments[4] -ceq $script:expectedMethod -and $Arguments[11] -ceq $script:expectedEndpoint -and
-            $Arguments[12] -ceq '--raw-field' -and $Arguments[13] -ceq 'name=TEST_BAMI_MANAGEMENT_GROUP_ID' -and
+            $Arguments[12] -ceq '--raw-field' -and $Arguments[13] -ceq 'name=VALIDATE_MANAGEMENT_GROUP_ID' -and
             $Arguments[14] -ceq '--raw-field' -and $Arguments[15] -ceq 'value=fixture-group' -and
             $Arguments.Count -eq 16 -and ($Arguments -join '|') -cnotmatch 'fixture-installation-token|/secrets'
         }
@@ -666,7 +694,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         { Get-AvmBicepTestTenantSnapshot } | Should -Throw "*HTTP $_*"
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 1
         $caught = $null
-        try { Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'TEST_BAMI_TENANT_ID' -Value 'fixture-value' }
+        try { Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'VALIDATE_TENANT_ID' -Value 'fixture-value' }
         catch { $caught = $_.Exception.Message }
         $caught | Should -Not -BeNullOrEmpty
         $caught | Should -Not -Match 'sensitive-diagnostic-sentinel'
@@ -676,17 +704,20 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
     It 'rejects retired selector, legacy, controller, administration, secret, and noncanonical names' -ForEach @(
         'TEST_BAMI_MODULE_PATHS',
         'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID',
-        'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME', 'GH_TOKEN', 'test_bami_tenant_id', '../secrets/ANY'
+        'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME', 'GH_TOKEN', 'validate_tenant_id', '../secrets/ANY',
+        'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
+        'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID',
+        'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'ARM_MGMTGROUP_ID'
     ) {
         { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name $_ -Value 'fixture-value' } | Should -Throw
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
     It 'refuses invalid request combinations and never deletes variables' {
-        { Invoke-AvmBicepTestTenantVariableApi -Method 'DELETE' -Name 'TEST_BAMI_TENANT_ID' } | Should -Throw
-        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'TEST_BAMI_TENANT_ID' } | Should -Throw '*explicit value*'
-        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'TEST_BAMI_TENANT_ID' -Value 'value' -Page 1 } | Should -Throw '*pagination*'
-        { Invoke-AvmBicepTestTenantVariableApi -Name 'TEST_BAMI_TENANT_ID' } | Should -Throw '*collection*'
+        { Invoke-AvmBicepTestTenantVariableApi -Method 'DELETE' -Name 'VALIDATE_TENANT_ID' } | Should -Throw
+        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'VALIDATE_TENANT_ID' } | Should -Throw '*explicit value*'
+        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'VALIDATE_TENANT_ID' -Value 'value' -Page 1 } | Should -Throw '*pagination*'
+        { Invoke-AvmBicepTestTenantVariableApi -Name 'VALIDATE_TENANT_ID' } | Should -Throw '*collection*'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
@@ -697,30 +728,32 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         $env:AVM_OFFLINE = '1'
         { Invoke-AvmBicepTestTenantVariableApi } | Should -Throw '*AVM_OFFLINE=1*'
         $env:AVM_OFFLINE = '0'
-        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'TEST_BAMI_TENANT_ID' -Value 'value' -WhatIf } |
+        { Invoke-AvmBicepTestTenantVariableApi -Method 'POST' -Name 'VALIDATE_TENANT_ID' -Value 'value' -WhatIf } |
             Should -Throw '*not approved*'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
-    It 'snapshots only the five execution variables and ignores the retired selector value' {
+    It 'snapshots only the five generic variables and ignores old aliases and legacy values' {
+        $unmanaged = @(
+            'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_MODULE_PATHS',
+            'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
+            'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID',
+            'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'ARM_MGMTGROUP_ID'
+        )
         $script:response = New-BicepSyncApiResponse -Data @{
-            total_count = 4
+            total_count = 1 + $unmanaged.Count
             variables = @(
-                (New-BicepSyncApiVariable),
-                (New-BicepSyncApiVariable -Name 'ARM_TENANT_ID' -Value 'legacy-value'),
-                (New-BicepSyncApiVariable -Name 'TEST_BAMI_CONTROLLER_CLIENT_ID' -Value 'controller-value'),
-                (New-BicepSyncApiVariable -Name 'TEST_BAMI_MODULE_PATHS' -Value 'malformed-retired-selector')
+                New-BicepSyncApiVariable
+                foreach ($name in $unmanaged) { New-BicepSyncApiVariable -Name $name -Value 'unmanaged-invalid-value' }
             )
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
         $snapshot.Count | Should -Be 5
         @($snapshot.Keys | Sort-Object) | Should -Be @($script:executionNames | Sort-Object)
-        $snapshot.TEST_BAMI_TENANT_ID.Value | Should -BeExactly 'fixture-value'
-        $snapshot.TEST_BAMI_TENANT_ID.CreatedAt | Should -BeExactly '2026-09-01T00:00:00.0000000Z'
-        $snapshot.TEST_BAMI_TENANT_ID.UpdatedAt | Should -BeExactly '2026-09-15T00:00:00.0000000Z'
-        $snapshot.Contains('ARM_TENANT_ID') | Should -BeFalse
-        $snapshot.Contains('TEST_BAMI_CONTROLLER_CLIENT_ID') | Should -BeFalse
-        $snapshot.Contains('TEST_BAMI_MODULE_PATHS') | Should -BeFalse
+        $snapshot.VALIDATE_TENANT_ID.Value | Should -BeExactly 'fixture-value'
+        $snapshot.VALIDATE_TENANT_ID.CreatedAt | Should -BeExactly '2026-09-01T00:00:00.0000000Z'
+        $snapshot.VALIDATE_TENANT_ID.UpdatedAt | Should -BeExactly '2026-09-15T00:00:00.0000000Z'
+        foreach ($name in $unmanaged) { $snapshot.Contains($name) | Should -BeFalse }
     }
 
     It 'distinguishes genuinely absent variables from unreadable collection responses' {
@@ -741,10 +774,10 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         @{ Case = 'wrong collection type'; Data = @{ total_count = 0; variables = @{} } }
         @{ Case = 'duplicate names'; Data = @{ total_count = 2; variables = @(@{ name = 'LEGACY' }, @{ name = 'legacy' }) } }
         @{ Case = 'missing name'; Data = @{ total_count = 1; variables = @(@{ value = 'value' }) } }
-        @{ Case = 'noncanonical candidate name'; Data = @{ total_count = 1; variables = @(@{ name = 'test_bami_tenant_id'; value = 'value' }) } }
-        @{ Case = 'missing candidate value'; Data = @{ total_count = 1; variables = @(@{ name = 'TEST_BAMI_TENANT_ID' }) } }
-        @{ Case = 'missing timestamp'; Data = @{ total_count = 1; variables = @(@{ name = 'TEST_BAMI_TENANT_ID'; value = 'value' }) } }
-        @{ Case = 'invalid timestamp'; Data = @{ total_count = 1; variables = @(@{ name = 'TEST_BAMI_TENANT_ID'; value = 'value'; created_at = 'not-a-date'; updated_at = 'not-a-date' }) } }
+        @{ Case = 'noncanonical candidate name'; Data = @{ total_count = 1; variables = @(@{ name = 'validate_tenant_id'; value = 'value' }) } }
+        @{ Case = 'missing candidate value'; Data = @{ total_count = 1; variables = @(@{ name = 'VALIDATE_TENANT_ID' }) } }
+        @{ Case = 'missing timestamp'; Data = @{ total_count = 1; variables = @(@{ name = 'VALIDATE_TENANT_ID'; value = 'value' }) } }
+        @{ Case = 'invalid timestamp'; Data = @{ total_count = 1; variables = @(@{ name = 'VALIDATE_TENANT_ID'; value = 'value'; created_at = 'not-a-date'; updated_at = 'not-a-date' }) } }
     ) {
         $script:response = New-BicepSyncApiResponse -Data $Data
         { Get-AvmBicepTestTenantSnapshot } | Should -Throw
@@ -760,12 +793,12 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
             }
             New-BicepSyncApiResponse -Data @{
                 total_count = 101
-                variables = @((New-BicepSyncApiVariable -Name 'TEST_BAMI_MANAGEMENT_GROUP_ID' -Value 'fixture-group'))
+                variables = @((New-BicepSyncApiVariable -Name 'VALIDATE_MANAGEMENT_GROUP_ID' -Value 'fixture-group'))
             }
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.TEST_BAMI_TENANT_ID.Value | Should -BeExactly 'fixture-value'
-        $snapshot.TEST_BAMI_MANAGEMENT_GROUP_ID.Value | Should -BeExactly 'fixture-group'
+        $snapshot.VALIDATE_TENANT_ID.Value | Should -BeExactly 'fixture-value'
+        $snapshot.VALIDATE_MANAGEMENT_GROUP_ID.Value | Should -BeExactly 'fixture-group'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 2
     }
 
@@ -805,7 +838,7 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
     }
 
     It 'reaches the shared process boundary once with argv and no streaming or write retry' {
-        $null = Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'TEST_BAMI_MANAGEMENT_GROUP_ID' -Value 'fixture-group'
+        $null = Invoke-AvmBicepTestTenantVariableApi -Method 'PATCH' -Name 'VALIDATE_MANAGEMENT_GROUP_ID' -Value 'fixture-group'
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             [System.IO.Path]::IsPathRooted($FilePath) -and $ArgumentList -is [string[]] -and
             $ArgumentList[15] -ceq 'value=fixture-group' -and

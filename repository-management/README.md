@@ -66,13 +66,16 @@ wins; later declaration wins a tie, so explicit legacy exceptions remain
 supported. If no matching group declares `testTenant`, the resolver still
 falls back to `legacy`.
 
-Upstream `Azure/bicep-registry-modules` module workflows use BAMI for all
-current and future modules, without per-module canary selectors or an upstream
-legacy fallback. External contributor repositories retain their configurable
-credential, subscription-pool, and Key Vault paths, including the existing
-Key Vault capability and deprecation warning. Generic consumer actions,
-helpers, and standalone platform workflows remain unchanged. Manual test-scope
-inputs remain independent of tenant selection.
+Tools publishes BAMI execution settings for `Azure/bicep-registry-modules`
+using generic `VALIDATE_*` Variables, without per-module canary selectors.
+Consumer bindings use generic Variables first, then Secrets, without a
+repository or provider mode check. External contributors retain configurable
+credentials, subscription pools, and Key Vault paths, including the existing
+Key Vault capability and deprecation warning. The legacy consumer aliases
+`TEST_SUBSCRIPTION_IDS`, `VALIDATE_SUBSCRIPTION_ID`, and `ARM_MGMTGROUP_ID`
+remain supported. The independent `CI_` configuration still resolves Secrets
+before Variables before Key Vault. Manual test-scope inputs remain independent
+of tenant selection. Consumer changes are maintained separately.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -99,12 +102,22 @@ same-named variables would not override the current consumers' secrets.
 Explicit legacy selections retain the legacy consumer settings. See the
 [candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
-Bicep variable sync copies only the five execution fields: tenant, Bicep
-client, subscription pool, management group, and persistent subscription.
-It leaves all unrelated values untouched, including the retired
-`TEST_BAMI_MODULE_PATHS` variable; this publisher neither reads its value for
-routing nor writes or deletes it. The five execution values remain strings,
-including the compact subscription-pool JSON.
+Bicep variable sync maps only the five validated execution fields to generic
+target Variables; the eight-field source bundle above is unchanged.
+
+| BAMI source field | Consumer target Variable |
+| --- | --- |
+| `TEST_BAMI_TENANT_ID` | `VALIDATE_TENANT_ID` |
+| `TEST_BAMI_BICEP_CLIENT_ID` | `VALIDATE_CLIENT_ID` |
+| `TEST_BAMI_SUBSCRIPTION_IDS` | `VALIDATE_SUBSCRIPTION_IDS` |
+| `TEST_BAMI_MANAGEMENT_GROUP_ID` | `VALIDATE_MANAGEMENT_GROUP_ID` |
+| `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | `VALIDATE_PERSISTENT_SUBSCRIPTION_ID` |
+
+Only these five generic Variables are managed. Old `TEST_BAMI_*` aliases,
+the retired `TEST_BAMI_MODULE_PATHS` selector, and legacy customer keys are
+outside the managed snapshot and write allowlist. The publisher neither
+writes nor deletes them and never reads or writes Secrets. The five execution
+values remain strings, including the compact subscription-pool JSON.
 
 Tools rejects incomplete or malformed source bundles before publication.
 Reserved-subscription and identity separation checks are unchanged.
@@ -123,7 +136,7 @@ the Tools-controller credential as the Bicep execution identity.
 The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
 Tools `main`. Scheduled runs use `33 2-23/4 * * *` (02:33, 06:33, 10:33,
 14:33, 18:33 and 22:33 UTC); manual dispatch has no inputs. Both call the
-entry point with `-Apply` and reconcile the five execution variables.
+entry point with `-Apply` and reconcile the five generic execution Variables.
 There is no workflow enable flag, preview flag or global activation variable.
 The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
@@ -145,13 +158,21 @@ is write-free. The script uses eight named environment variables, plus
 `GH_TOKEN`; it accepts no target or configuration override.
 
 All eight source values are required even for plans. The publisher treats
-upstream BAMI execution as always active: any present execution value that
+upstream BAMI execution as always active: any present generic target value that
 differs from the validated projection stops publication, including plans,
 before any write. Missing variables may be
 initialized only when every present value matches. Retargeting requires
 coordinated maintenance outside this routine publisher; there is no selector
 deactivation route. Each write has a snapshot preflight and readback, followed
 by complete execution-value verification and a final snapshot check.
+
+Migration is held for coordinated review and live authorization: merge and
+publish the generic-variable publisher first to stage and verify the complete
+five-variable bundle, then switch consumers, then drain old code before
+separately authorized cleanup of obsolete names. Old aliases and maintenance
+inputs remain untouched while staging. If a generic target already contains a
+different value, publication fails closed; there is no migration flag or
+retarget bypass.
 
 Do not run other variable writers alongside the serialized workflow. GitHub
 variables cannot be updated conditionally as one transaction: snapshot checks
