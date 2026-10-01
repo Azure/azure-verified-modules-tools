@@ -3,7 +3,6 @@ BeforeAll {
     . (Join-Path $script:root 'repository-management' 'shared' 'TestTenant.ps1')
     . (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
     . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
-    $script:pathsJson = '["avm/res/dev-test-lab/lab"]'
     $script:config = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-config' 'config.json') | ConvertFrom-Json
 }
 
@@ -128,72 +127,6 @@ Describe 'Central test tenant group resolution' {
     }
 }
 
-Describe 'Tools-owned Bicep configuration' {
-    BeforeAll {
-        $script:fixturePaths = @(
-            'avm/res/test-provider/first-resource'
-            'avm/res/test-provider/second-resource'
-        )
-        $script:fixturePathsJson = ConvertTo-Json -InputObject $script:fixturePaths -Compress
-    }
-
-    BeforeEach {
-        $script:bicep = @{
-            moduleGroups = @(
-                @{ name = 'default'; order = -1; modules = @('*'); testTenant = 'legacy' }
-                @{ name = 'selected'; order = 10; modules = @($script:fixturePaths[1], $script:fixturePaths[0]); testTenant = 'bami' }
-            )
-        }
-    }
-
-    It 'validates the checked-in configuration without fixing its membership' {
-        $configuration = Get-Content -Raw (Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json') |
-            ConvertFrom-Json -AsHashtable
-        { ConvertTo-AvmBicepModulePaths -Configuration $configuration } | Should -Not -Throw
-    }
-
-    It 'compiles selected paths as a sorted JSON array' {
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:fixturePathsJson
-    }
-
-    It 'keeps unrelated modules on the legacy tenant' -ForEach @(
-        'avm/res/test-provider/unselected-resource'
-        'avm/ptn/test-provider/unselected-pattern'
-    ) {
-        Resolve-AvmGroupTestTenant -Groups $script:bicep.moduleGroups -SelectorProperty modules -Item $_ |
-            Should -BeExactly 'legacy'
-    }
-
-    It 'shares group order and declaration precedence' {
-        $script:bicep.moduleGroups += @{ name = 'higher'; order = 20; modules = $script:fixturePaths; testTenant = 'legacy' }
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly '[]'
-        $script:bicep.moduleGroups += @{ name = 'later'; order = 20; modules = $script:fixturePaths; testTenant = 'bami' }
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep | Should -BeExactly $script:fixturePathsJson
-    }
-
-    It 'deduplicates selected paths and omits every resolved legacy path' {
-        $script:bicep.moduleGroups += @(
-            @{ name = 'more'; order = 10; modules = @('avm/res/test-provider/third-resource', $script:fixturePaths[0]); testTenant = 'bami' }
-            @{ name = 'legacy'; modules = @('avm/res/test-provider/legacy-resource'); testTenant = 'legacy' }
-        )
-        $expected = ConvertTo-Json -InputObject @($script:fixturePaths + 'avm/res/test-provider/third-resource') -Compress
-        ConvertTo-AvmBicepModulePaths -Configuration $script:bicep |
-            Should -BeExactly $expected
-    }
-
-    It 'rejects additional settings and nested or wildcard canary selectors' {
-        foreach ($key in @('teams', 'managedFiles', 'profile', 'subscription')) {
-            $changed = $script:bicep | ConvertTo-Json -Depth 10 | ConvertFrom-Json -AsHashtable
-            $changed.moduleGroups[1][$key] = @()
-            { ConvertTo-AvmBicepModulePaths -Configuration $changed } | Should -Throw '*only name*'
-        }
-        foreach ($path in @('avm/res/test-provider/first-resource/.test', 'avm/res/test-provider/*', '*', 'AVM/res/test-provider/first-resource')) {
-            $script:bicep.moduleGroups[1].modules = @($path)
-            { ConvertTo-AvmBicepModulePaths -Configuration $script:bicep } | Should -Throw
-        }
-    }
-}
-
 Describe 'Complete BAMI input bundle' {
     BeforeEach { $script:bundle = New-AvmTestBamiSettings }
 
@@ -263,47 +196,5 @@ Describe 'Complete BAMI input bundle' {
         }
         $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[0] = 'not-an-object'
         { Get-AvmBamiSettings -Values $script:bundle } | Should -Throw
-    }
-}
-
-Describe 'Bicep module-path array validation' {
-    It 'keeps missing and empty arrays inactive without scalar unrolling' {
-        foreach ($json in @('', '  ', '[]')) {
-            $paths = ConvertFrom-AvmBicepModulePaths -Json $json
-            $paths -is [string[]] | Should -BeTrue
-            $paths.Count | Should -Be 0
-        }
-    }
-
-    It 'preserves single and multiple canonical module paths as arrays' {
-        $paths = ConvertFrom-AvmBicepModulePaths -Json $script:pathsJson
-        $paths -is [string[]] | Should -BeTrue
-        $paths.Count | Should -Be 1
-        $paths[0] | Should -BeExactly 'avm/res/dev-test-lab/lab'
-        $paths | Should -Not -Contain 'avm/res/network/virtual-network'
-        $paths = ConvertFrom-AvmBicepModulePaths -Json '["avm/res/dev-test-lab/lab","avm/res/storage/storage-account"]'
-        $paths.Count | Should -Be 2
-    }
-
-    It 'rejects non-array shapes, invalid entries and duplicates' {
-        foreach ($json in @(
-                '{}', 'null', 'invalid', 'true', '42', '"avm/res/dev-test-lab/lab"',
-                '[true]', '[null]', '[{}]', '[[]]',
-                '{"default":"legacy","modules":{}}',
-                '["avm/res/dev-test-lab/lab","avm/res/dev-test-lab/lab"]'
-            )) {
-            { ConvertFrom-AvmBicepModulePaths -Json $json } | Should -Throw
-        }
-    }
-
-    It 'rejects descendants, traversal, absolute and noncanonical array entries' {
-        foreach ($path in @(
-                '/avm/res/dev-test-lab/lab', 'C:\avm\res\dev-test-lab\lab', 'avm\res\dev-test-lab\lab',
-                'avm/res/dev-test-lab/lab/../other', 'avm/res/dev-test-lab/lab/.test',
-                'avm/res/dev-test-lab/lab//test', 'AVM/res/dev-test-lab/lab', 'avm/res/dev-test-lab',
-                'avm/res/dev-test-lab/lab/', 'avm/res/dev-test-lab/*'
-            )) {
-            { ConvertFrom-AvmBicepModulePaths -Json (ConvertTo-Json -InputObject @($path) -Compress) } | Should -Throw
-        }
     }
 }

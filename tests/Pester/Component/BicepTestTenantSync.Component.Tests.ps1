@@ -6,18 +6,6 @@ BeforeAll {
     $run = [regex]::Match($workflow, '(?ms)^        run: \|\n(?<body>.*)\z')
     if (-not $run.Success) { throw 'The Bicep publication run script is missing.' }
     $script:workflowRun = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
-    $script:configurationPath = Join-Path $script:root 'repository-management' 'bicep-test-tenant-config' 'config.json'
-    $script:fixturePaths = @(
-        'avm/res/test-provider/first-resource'
-        'avm/res/test-provider/second-resource'
-    )
-    $script:canarySelector = ConvertTo-Json -InputObject $script:fixturePaths -Compress
-    $script:fixtureConfigurationJson = @{
-        moduleGroups = @(
-            @{ name = 'default'; order = -1; modules = @('*'); testTenant = 'legacy' }
-            @{ name = 'selected'; order = 10; modules = $script:fixturePaths; testTenant = 'bami' }
-        )
-    } | ConvertTo-Json -Depth 5
     $script:sourceValues = [ordered]@{
         TEST_BAMI_TENANT_ID = '11111111-1111-4111-8111-111111111111'
         TEST_BAMI_CONTROLLER_CLIENT_ID = '22222222-2222-4222-8222-222222222222'
@@ -33,6 +21,13 @@ BeforeAll {
         TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = '55555555-5555-4555-8555-555555555555'
     }
     $script:originalEnvironment = @{}
+    $script:sourceByTarget = [ordered]@{
+        VALIDATE_TENANT_ID = 'TEST_BAMI_TENANT_ID'
+        VALIDATE_CLIENT_ID = 'TEST_BAMI_BICEP_CLIENT_ID'
+        VALIDATE_SUBSCRIPTION_IDS = 'TEST_BAMI_SUBSCRIPTION_IDS'
+        VALIDATE_MANAGEMENT_GROUP_ID = 'TEST_BAMI_MANAGEMENT_GROUP_ID'
+        VALIDATE_PERSISTENT_SUBSCRIPTION_ID = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+    }
     foreach ($variableName in (@($script:sourceValues.Keys) + @(
         'GH_TOKEN', 'AVM_OFFLINE', 'AVM_APP_SLUG', 'GITHUB_WORKSPACE',
         'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_EVENT_NAME',
@@ -53,7 +48,7 @@ BeforeAll {
     }
 }
 
-Describe 'Bicep test tenant entry point with fixture configuration and mocked GitHub' -Tag Component {
+Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHub' -Tag Component {
     BeforeEach {
         foreach ($variableName in $script:sourceValues.Keys) {
             [System.Environment]::SetEnvironmentVariable($variableName, $script:sourceValues[$variableName])
@@ -71,18 +66,23 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
             Variables = [ordered]@{
                 ARM_TENANT_ID = New-BicepEntryVariable -Name 'ARM_TENANT_ID' -Value 'legacy-value'
                 TEST_BAMI_CONTROLLER_CLIENT_ID = New-BicepEntryVariable -Name 'TEST_BAMI_CONTROLLER_CLIENT_ID' -Value 'existing-value-not-owned-by-this-sync'
+                TEST_BAMI_MODULE_PATHS = New-BicepEntryVariable -Name 'TEST_BAMI_MODULE_PATHS' -Value 'malformed-retired-selector'
             }
             WriteNames = [System.Collections.Generic.List[string]]::new()
-            LostSelectorResponse = $false
+            LostExecutionResponse = $false
             BlockedExecutable = Join-Path $TestDrive 'gh-must-never-start'
+        }
+        foreach ($name in @($script:sourceByTarget.Values) + @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'ARM_MGMTGROUP_ID')) {
+            $script:entryState.Variables[$name] = New-BicepEntryVariable -Name $name -Value "old-$name"
+        }
+        $script:unmanagedNames = @($script:entryState.Variables.Keys)
+        $script:unmanagedBefore = @{}
+        foreach ($name in $script:unmanagedNames) {
+            $script:unmanagedBefore[$name] = $script:entryState.Variables[$name] | ConvertTo-Json -Compress
         }
         $entryState = $script:entryState
         $newVariable = ${function:New-BicepEntryVariable}
-        $configurationJson = $script:fixtureConfigurationJson
         Mock Import-Module {}
-        Mock Get-Content ({ $configurationJson }.GetNewClosure()) -ParameterFilter {
-            $LiteralPath -eq $script:configurationPath
-        }
         Mock Get-Command ({ [pscustomobject]@{ Source = $entryState.BlockedExecutable } }.GetNewClosure()) -ParameterFilter {
             $Name -ceq 'gh' -and $CommandType -eq 'Application'
         }
@@ -105,18 +105,18 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
             }
             $ArgumentList[4] | Should -BeIn @('POST', 'PATCH')
             $ArgumentList[12] | Should -BeExactly '--raw-field'
-            $ArgumentList[13] | Should -BeLike 'name=TEST_BAMI_*'
+            $ArgumentList[13] | Should -BeLike 'name=VALIDATE_*'
             $ArgumentList[14] | Should -BeExactly '--raw-field'
             $ArgumentList[15] | Should -BeLike 'value=*'
             $variableName = $ArgumentList[13].Substring(5)
             $variableName | Should -BeIn @(
-                'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
-                'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID', 'TEST_BAMI_MODULE_PATHS'
+                'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
+                'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
             )
             $entryState.WriteNames.Add($variableName)
             $entryState.Variables[$variableName] = & $newVariable -Name $variableName `
                 -Value $ArgumentList[15].Substring(6) -Revision $entryState.WriteNames.Count
-            if ($entryState.LostSelectorResponse -and $variableName -ceq 'TEST_BAMI_MODULE_PATHS') {
+            if ($entryState.LostExecutionResponse -and $variableName -ceq 'VALIDATE_SUBSCRIPTION_IDS') {
                 return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Response lost (HTTP 502)' }
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
@@ -126,6 +126,11 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
     AfterEach {
         foreach ($variableName in $script:originalEnvironment.Keys) {
             [System.Environment]::SetEnvironmentVariable($variableName, $script:originalEnvironment[$variableName])
+        }
+        foreach ($name in $script:unmanagedNames) {
+            @($script:entryState.WriteNames) | Should -Not -Contain $name
+            $script:entryState.Variables[$name] | ConvertTo-Json -Compress |
+                Should -BeExactly $script:unmanagedBefore[$name]
         }
     }
 
@@ -138,25 +143,26 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
         finally { Pop-Location }
         $result.Status | Should -BeExactly 'Planned'
         $result.PlanOnly | Should -BeTrue
-        $result.ChangedNames | Should -HaveCount 6
+        $result.ChangedNames | Should -HaveCount 5
         $script:entryState.WriteNames | Should -HaveCount 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
-    It 'applies the configured selector last and leaves all unrelated variables untouched' {
+    It 'publishes only five execution fields and leaves all unrelated variables untouched' {
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $script:entryState.WriteNames | Should -HaveCount 6
-        $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_PATHS'
+        $script:entryState.WriteNames | Should -HaveCount 5
+        @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
-            Should -BeExactly $script:canarySelector
+            Should -BeExactly 'malformed-retired-selector'
         foreach ($variableName in @(
-            'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID',
-            'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+            'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID',
+            'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
         )) {
-            $script:entryState.Variables[$variableName].value | Should -BeExactly $script:sourceValues[$variableName]
+            $script:entryState.Variables[$variableName].value |
+                Should -BeExactly $script:sourceValues[$script:sourceByTarget[$variableName]]
         }
-        $subscriptions = $script:entryState.Variables.TEST_BAMI_SUBSCRIPTION_IDS.value | ConvertFrom-Json -AsHashtable
+        $subscriptions = $script:entryState.Variables.VALIDATE_SUBSCRIPTION_IDS.value | ConvertFrom-Json -AsHashtable
         $subscriptions | Should -HaveCount 28
         @($subscriptions[0].Keys | Sort-Object) | Should -Be @('id', 'name')
         $script:entryState.Variables.ARM_TENANT_ID.value | Should -BeExactly 'legacy-value'
@@ -166,16 +172,34 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
         $result | ConvertTo-Json -Depth 5 | Should -Not -Match 'fixture-installation-token|11111111|22222222|33333333|rg-bami-test'
     }
 
-    It 'expands an active selection without rewriting execution values' {
+    It 'returns NoChange for matching execution values regardless of a retired selector change' {
         $null = & $script:entryPath -Apply
         $script:entryState.WriteNames.Clear()
-        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = ConvertTo-Json -InputObject @($script:fixturePaths[0]) -Compress
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = '[]'
+        $script:unmanagedBefore.TEST_BAMI_MODULE_PATHS =
+            $script:entryState.Variables.TEST_BAMI_MODULE_PATHS | ConvertTo-Json -Compress
 
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'NoChange'
+        $result.ChangedNames | Should -HaveCount 0
+        $script:entryState.WriteNames | Should -HaveCount 0
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly '[]'
+    }
+
+    It 'fills a missing execution field but refuses a conflicting present value without partial initialization' {
+        $script:entryState.Variables.VALIDATE_TENANT_ID = New-BicepEntryVariable `
+            -Name 'VALIDATE_TENANT_ID' -Value $script:sourceValues.TEST_BAMI_TENANT_ID
+        $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $result.ChangedNames | Should -Be @('TEST_BAMI_MODULE_PATHS')
-        @($script:entryState.WriteNames) | Should -Be @('TEST_BAMI_MODULE_PATHS')
-        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly $script:canarySelector
+        $script:entryState.WriteNames | Should -HaveCount 4
+        @($script:entryState.WriteNames) | Should -Not -Contain 'VALIDATE_TENANT_ID'
+
+        $script:entryState.WriteNames.Clear()
+        $script:entryState.Variables.Remove('VALIDATE_CLIENT_ID')
+        $script:entryState.Variables.VALIDATE_TENANT_ID.value = '77777777-7777-4777-8777-777777777777'
+        { & $script:entryPath -Apply } | Should -Throw '*Existing BAMI execution values cannot change*coordinated maintenance*'
+        $script:entryState.WriteNames | Should -HaveCount 0
+        $script:entryState.Variables.Contains('VALIDATE_CLIENT_ID') | Should -BeFalse
     }
 
     It 'publishes from the actual <EventName> workflow command with no inputs and retired flag <FlagState>' -ForEach @(
@@ -191,11 +215,11 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
         $result.Status | Should -BeExactly 'Published'
         $result.PlanOnly | Should -BeFalse
         $result.Target | Should -BeExactly 'Azure/bicep-registry-modules'
-        $script:entryState.WriteNames | Should -HaveCount 6
-        $script:entryState.WriteNames[-1] | Should -BeExactly 'TEST_BAMI_MODULE_PATHS'
-        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly $script:canarySelector
+        $script:entryState.WriteNames | Should -HaveCount 5
+        @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
+        $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly 'malformed-retired-selector'
         $script:entryState.Variables.ARM_TENANT_ID.value | Should -BeExactly 'legacy-value'
-        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 15 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 13 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
     It 'rejects an incorrect or missing App slug before the workflow can publish' -ForEach @(
@@ -228,13 +252,20 @@ Describe 'Bicep test tenant entry point with fixture configuration and mocked Gi
         $script:entryState.WriteNames | Should -HaveCount 0
     }
 
-    It 'does not turn a lost selector response into a successful entry-point result' {
-        $script:entryState.LostSelectorResponse = $true
+    It 'does not turn a lost execution-variable response into a successful entry-point result' {
+        $script:entryState.LostExecutionResponse = $true
         { & $script:entryPath -Apply } |
-            Should -Throw '*Readback confirms the requested selector and unchanged execution values are present*'
-        $script:entryState.WriteNames | Should -HaveCount 6
+            Should -Throw '*Readback confirms the requested execution value is present and other execution values are unchanged*'
+        $script:entryState.WriteNames | Should -HaveCount 5
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
-            Should -BeExactly $script:canarySelector
+            Should -BeExactly 'malformed-retired-selector'
+        $expectedSubscriptions = @(
+            $script:sourceValues.TEST_BAMI_SUBSCRIPTION_IDS | ConvertFrom-Json | ForEach-Object {
+                [ordered]@{ name = $_.name; id = $_.id }
+            }
+        )
+        $script:entryState.Variables.VALIDATE_SUBSCRIPTION_IDS.value |
+            Should -BeExactly (ConvertTo-Json -InputObject $expectedSubscriptions -Compress)
     }
 }
 
@@ -274,21 +305,20 @@ if ($method -ceq 'GET') {
         if ($state.Readbacks -eq 1) { $variable = $state.Previous }
     }
     $variables = @(
-        @{ name = 'TEST_BAMI_MODULE_PATHS'; value = '[]'; created_at = '2026-09-01T00:00:00Z'; updated_at = '2026-09-01T00:00:00Z' }
         if ($null -ne $variable) { $variable }
     )
     $response = @{ total_count = $variables.Count; variables = $variables }
 }
 elseif ($method -cin @('POST', 'PATCH')) {
-    if ($method -ceq 'PATCH') { $endpoint += '/TEST_BAMI_SUBSCRIPTION_IDS' }
+    if ($method -ceq 'PATCH') { $endpoint += '/VALIDATE_SUBSCRIPTION_IDS' }
     if ($arguments.Count -ne 16 -or $arguments[11] -cne $endpoint -or
-        $arguments[12] -cne '--raw-field' -or $arguments[13] -cne 'name=TEST_BAMI_SUBSCRIPTION_IDS' -or
+        $arguments[12] -cne '--raw-field' -or $arguments[13] -cne 'name=VALIDATE_SUBSCRIPTION_IDS' -or
         $arguments[14] -cne '--raw-field' -or -not $arguments[15].StartsWith('value=')) { throw 'Unexpected write.' }
     $state.Writes++
     $state.Request = $arguments
     $state.Previous = $state.Variable
     $state.Variable = @{
-        name = 'TEST_BAMI_SUBSCRIPTION_IDS'
+        name = 'VALIDATE_SUBSCRIPTION_IDS'
         value = $arguments[15].Substring(6)
         created_at = if ($null -ne $state.Previous) { $state.Previous.created_at } else { '2026-09-24T00:00:00Z' }
         updated_at = '2026-09-24T00:00:00Z'
@@ -328,7 +358,7 @@ if ($method -ceq 'GET') { $response | ConvertTo-Json -Depth 10 -Compress }
     ) {
         $value = $script:sourceValues.TEST_BAMI_SUBSCRIPTION_IDS
         $state = @{
-            Variable = if ($Method -ceq 'PATCH') { New-BicepEntryVariable -Name 'TEST_BAMI_SUBSCRIPTION_IDS' -Value $value.Replace('bami-sub-1"', 'previous-sub-1"') } else { $null }
+            Variable = if ($Method -ceq 'PATCH') { New-BicepEntryVariable -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $value.Replace('bami-sub-1"', 'previous-sub-1"') } else { $null }
             Previous = $null
             Writes = 0
             Reads = 0
@@ -337,10 +367,11 @@ if ($method -ceq 'GET') { $response | ConvertTo-Json -Depth 10 -Compress }
         }
         $state | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:boundaryStatePath -Encoding utf8NoBOM
         $expected = Get-AvmBicepTestTenantSnapshot
-        $actual = Set-AvmBicepTestTenantVariable -Expected $expected -Name 'TEST_BAMI_SUBSCRIPTION_IDS' -Value $value
-        $actual.TEST_BAMI_SUBSCRIPTION_IDS.Value | Should -BeExactly $value
-        @($actual.TEST_BAMI_SUBSCRIPTION_IDS.Value | ConvertFrom-Json) | Should -HaveCount 28
-        $actual.TEST_BAMI_MODULE_PATHS.Value | Should -BeExactly '[]'
+        $actual = Set-AvmBicepTestTenantVariable -Expected $expected -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $value
+        $actual.VALIDATE_SUBSCRIPTION_IDS.Value | Should -BeExactly $value
+        @($actual.VALIDATE_SUBSCRIPTION_IDS.Value | ConvertFrom-Json) | Should -HaveCount 28
+        $actual.Count | Should -Be 5
+        $actual.Contains('TEST_BAMI_MODULE_PATHS') | Should -BeFalse
         $state = Get-Content -LiteralPath $script:boundaryStatePath -Raw | ConvertFrom-Json -AsHashtable
         $state.Request[4] | Should -BeExactly $Method
         $state.Request[15] | Should -BeExactly "value=$value"
