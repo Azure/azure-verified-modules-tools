@@ -7,8 +7,14 @@
 
 ## Outcome
 
+**Historical, superseded on 2026-10-01.** The user replaced this held
+half-library proposal with BAMI-only execution for all current and future
+Bicep modules. The original roster was never published by this slice.
+See [Bicep BAMI-only publisher](2026-10-01-bicep-bami-only-publisher.md);
+the original preparation and validation record below is retained for audit.
+
 Prepared exactly 97 new source candidates in the
-[central configuration](../../repository-management/bicep-test-tenant-config/config.json).
+[then-current configuration](https://github.com/Azure/azure-verified-modules-tools/blob/1b729b59da832c80d394c1536c3a6706c01c30f8/repository-management/bicep-test-tenant-config/config.json).
 All 16 existing selections, group order/semantics, and the `legacy` Bicep
 default remain. Terraform configuration is unchanged.
 

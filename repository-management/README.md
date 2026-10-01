@@ -66,11 +66,9 @@ wins; later declaration wins a tie, so explicit legacy exceptions remain
 supported. If no matching group declares `testTenant`, the resolver still
 falls back to `legacy`.
 
-[Bicep configuration](bicep-test-tenant-config/config.json) lives here, not in
-the Bicep repository. Its `moduleGroups` use `name`, `order`, `modules`, and
-only one behavioral setting: `testTenant`. That configuration is the source
-of truth for the current selection; unselected modules retain the `legacy`
-default.
+Bicep uses BAMI for all current and future modules, without module groups,
+a module-path tenant selector, or legacy fallback. Manual test-scope inputs
+remain independent of tenant selection.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -99,37 +97,29 @@ Explicit legacy selections retain the legacy consumer settings. See the
 
 Bicep variable sync copies only the five execution fields: tenant, Bicep
 client, subscription pool, management group, and persistent subscription.
-It leaves all legacy values untouched. For temporary BAMI testing, it derives
-the repository variable `TEST_BAMI_MODULE_PATHS` from the central groups and
-publishes that JSON array last.
+It leaves all unrelated values untouched, including the retired
+`TEST_BAMI_MODULE_PATHS` variable; this publisher neither reads its value for
+routing nor writes or deletes it. The five execution values remain strings,
+including the compact subscription-pool JSON.
 
-The array contains only canonical module paths whose resolved `testTenant` is
-`bami`. Missing or `[]` means legacy. Consumers directly check array membership
-for their canonical module path and alias the existing execution variables;
-there is no runtime Tools resolver action, consumer routing file, or per-module
-workflow-file synchronization. Selecting `legacy` in the central groups removes
-the path from the array. The five execution values remain strings, including
-the compact subscription-pool JSON.
-
-Tools rejects malformed arrays, duplicate/noncanonical paths, and incomplete
-candidate bundles before publication. Reserved-subscription and identity
-separation checks are unchanged. These checks do not prove that separately
+Tools rejects incomplete or malformed source bundles before publication.
+Reserved-subscription and identity separation checks are unchanged.
+These checks do not prove that separately
 published source values came from the same publication; a complete but mixed
 bundle may still pass structural validation.
 Successful variable readback is not proof of Azure authentication or permissions.
 Bicep activation also requires its own execution-identity federated credential
 for the intended subject
 `repository_owner_id:6844498:repository_id:447791597:environment:avm-validation`.
-That credential and runtime login remain unproved; do not reuse the
-Tools-controller credential or enable publication to bypass an unverified
-authentication prerequisite.
+Source validation does not verify that credential or runtime login; never reuse
+the Tools-controller credential as the Bicep execution identity.
 
 ### Bicep variable publication
 
 The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
 Tools `main`. Scheduled runs use `33 2-23/4 * * *` (02:33, 06:33, 10:33,
 14:33, 18:33 and 22:33 UTC); manual dispatch has no inputs. Both call the
-entry point with `-Apply` and publish the centrally selected module paths.
+entry point with `-Apply` and reconcile the five execution variables.
 There is no workflow enable flag, preview flag or global activation variable.
 The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
@@ -147,31 +137,30 @@ normal sync, including scheduled applies, subject to their existing prerequisite
 [Invoke-BicepTestTenantSync.ps1](bicep-test-tenant-sync/scripts/Invoke-BicepTestTenantSync.ps1)
 defaults to a read-only plan. Standalone publication requires an explicit,
 operator-approved `-Apply`; `-PlanOnly:$false` is rejected, and `-Apply -WhatIf`
-is write-free. The script uses the fixed central config and eight named
-environment variables, plus `GH_TOKEN`; it accepts no target or config-path
-override.
+is write-free. The script uses eight named environment variables, plus
+`GH_TOKEN`; it accepts no target or configuration override.
 
-All eight values are required even for plans and deactivation. The publisher
-checks snapshots around writes, verifies all five execution values, publishes
-the module-path array last, and verifies the result. A nonempty existing array
-freezes the execution values. Retargeting requires first publishing `[]` from
-an all-legacy central selection; that deactivation changes only the array and
-preserves the existing execution values. A subsequent inactive run can publish
-the new bundle and desired selection.
+All eight source values are required even for plans. BAMI execution is always
+active: any present execution value that differs from the validated projection
+stops publication, including plans, before any write. Missing variables may be
+initialized only when every present value matches. Retargeting requires
+coordinated maintenance outside this routine publisher; there is no selector
+deactivation route. Each write has a snapshot preflight and readback, followed
+by complete execution-value verification and a final snapshot check.
 
 Do not run other variable writers alongside the serialized workflow. GitHub
 variables cannot be updated conditionally as one transaction: snapshot checks
 detect observed edits but cannot eliminate races between reads and writes.
 Failures never trigger write retries or rollback. Even a matching readback
 after a lost response is reported as an error, so a failed run may already have
-published the selector. Inspect the consumer before retrying. `Published`
+written some execution values. Inspect the consumer before retrying. `Published`
 means verified variable contents, not working Azure authentication.
 
 After an acknowledged write, an unchanged pre-write snapshot permits at most
 three additional GETs after 5, 10 and 15 seconds. Other observed changes,
 unexpected values or timestamps, failed reads and unacknowledged writes still
 stop immediately. Every read retains the same strict comparison; this bounded
-wait does not retry writes or bypass selector-last verification.
+wait does not retry writes or bypass complete and final verification.
 
 ## Terraform CODEOWNERS
 
