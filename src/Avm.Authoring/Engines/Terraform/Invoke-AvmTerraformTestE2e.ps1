@@ -43,9 +43,10 @@ function Invoke-AvmTerraformTestE2e {
                   up to -MaxRetry retries on a transient failure. e2e deploys
                   real infrastructure, so an apply fails intermittently on
                   region/SKU capacity rather than on a module defect. When the
-                  combined apply output matches the capacity/quota patterns in
-                  Test-AvmTerraformTransientError, the example is destroyed and
-                  redeployed. Destroying first is required, not cosmetic:
+                  combined apply output matches the capacity, quota, or
+                  region-ineligible patterns in Test-AvmTerraformTransientError,
+                  the example is destroyed and redeployed. Destroying first is
+                  required, not cosmetic:
                   example names come from module.naming and do not depend on
                   the region, so re-planning in place would replace the
                   resource group under the same name while name-only dependents
@@ -100,8 +101,8 @@ function Invoke-AvmTerraformTestE2e {
 
     .PARAMETER MaxRetry
         How many times to retry an example whose 'terraform apply' failed with
-        a transient capacity/quota error. Defaults to 2 (up to three attempts
-        in total). 0 disables retries.
+        a transient capacity, quota, or region-ineligible error. Defaults to 2
+        (up to three attempts in total). 0 disables retries.
 
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,

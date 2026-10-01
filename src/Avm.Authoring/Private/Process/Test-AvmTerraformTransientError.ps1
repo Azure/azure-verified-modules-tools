@@ -5,7 +5,9 @@ function Test-AvmTerraformTransientError {
 
     .DESCRIPTION
         Matches availability-specific wording, not broad codes such as
-        OperationNotAllowed. E2E callers may add AVM_E2E_RETRY_PATTERN.
+        OperationNotAllowed, plus the region-ineligible denial recognized by
+        Test-AvmTerraformLocationIneligibleError. E2E callers may add
+        AVM_E2E_RETRY_PATTERN.
 
     .PARAMETER Output
         Terraform error output to classify.
@@ -25,6 +27,10 @@ function Test-AvmTerraformTransientError {
 
     if ([string]::IsNullOrWhiteSpace($Output)) {
         return $false
+    }
+
+    if (Test-AvmTerraformLocationIneligibleError -Output $Output) {
+        return $true
     }
 
     $patterns = @(

@@ -88,8 +88,11 @@ function Invoke-AvmTestE2e {
         Use -Example to select one or more cases. -List emits JSON names
         without resolving tools, credentials or a subscription.
 
-        For Terraform only, an apply that fails on region or SKU capacity is
-        destroyed and retried up to -MaxRetry times. The idempotency check is
+        For Terraform only, an apply that fails on transient capacity, quota
+        or region-ineligible errors (including a region not accepting new
+        customers) is retried after successful destroy, up to -MaxRetry times.
+        Retries are recorded as warning-level Issues, so a recovered example
+        stays green while the flake remains visible. The idempotency check is
         never retried. Bicep examples never automatically retry deployment.
 
         This verb is a standalone command; it needs credentials, so it is NOT
@@ -118,8 +121,12 @@ function Invoke-AvmTestE2e {
         (Terraform), excluding .e2eignore. No Azure or tool access is needed.
 
     .PARAMETER MaxRetry
-        Terraform-only transient apply retry budget, default 2. Bicep never
-        retries a destructive deployment automatically.
+        Terraform-only retry budget for transient capacity, quota or
+        region-ineligible apply failures. Defaults to 2 (up to three attempts
+        in total); 0 disables retries. Each retry requires completed teardown
+        before redeployment so the region is re-rolled against an empty state.
+        A recovered example reports its retries as warnings, not failures.
+        Bicep never retries a destructive deployment automatically.
 
     .PARAMETER Recurse
         Bicep-only: include nested module test scopes.
