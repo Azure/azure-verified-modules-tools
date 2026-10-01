@@ -273,6 +273,147 @@ Describe 'Get-AvmBicepDocsExampleCommentDifferenceCount' {
                 }) | Should -Be 0
         }
 
+        It 'preserves varied values and Unicode while ignoring authored frames and marker-like text' {
+            $unicode = 'caf' + [char]0x00E9 + ' ' + [char]0x03B2
+            $exampleParams = @{
+                name     = @{ value = $unicode }
+                count    = @{ value = 7 }
+                enabled  = @{ value = $true }
+                labels   = @{ value = @{ nested = 'before' } }
+                replicas = @{ value = @('alpha', 'beta') }
+            }
+            $fragments = InModuleScope 'Avm.Authoring' -Parameters @{
+                ExampleParams = $exampleParams
+            } {
+                param($ExampleParams)
+                ConvertTo-AvmBicepDocsExampleParameter -Parameters $ExampleParams `
+                    -RequiredParameters @('name')
+            }
+            $fragment = $fragments.JsonParameters
+            $authoredMarker = '__AVM_DOCS_REQUIRED_00000000000000000000000000000000_0__'
+            $template = @'
+## Usage examples
+
+### Example 1: _Actual source_
+
+__UNICODE__ in authored prose.
+- [Authored heading](#example-2-authored-heading)
+### Example 2: _Authored heading_
+<details>
+<summary>via Bicep module</summary>
+```bicep
+module authored 'br/public:avm/res/storage/storage-account:<version>' = {}
+```
+</details>
+<p>
+<details>
+<summary>via JSON parameters file</summary>
+```json
+__AUTHORED_FRAGMENT__
+```
+</details>
+<p>
+<details>
+<summary>via Bicep parameters file</summary>
+```bicep-params
+using 'br/public:avm/res/storage/storage-account:<version>'
+```
+</details>
+
+## Authored section
+<details><summary>Authored HTML</summary></details>
+{{ example_data.JsonParameters }}
+__AUTHORED_MARKER__
+
+<details>
+<summary>via JSON parameters file</summary>
+```json
+__REAL_FRAGMENT__
+```
+</details>
+
+## Parameters
+'@
+            $template = $template.ReplaceLineEndings("`n").Replace(
+                '__UNICODE__', $unicode).Replace(
+                '__AUTHORED_MARKER__', $authoredMarker)
+            $generated = $template.Replace('__AUTHORED_FRAGMENT__', $fragment).Replace(
+                '__REAL_FRAGMENT__', $fragment)
+            $values = @{
+                notes    = "Authored $unicode $authoredMarker"
+                examples = ConvertTo-Json -InputObject @{
+                    'tests/e2e/full/main.test.bicep' = @{
+                        JsonParameters = $fragment
+                    }
+                } -Compress -Depth 99
+            }
+            $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+                Values = $values; Rendered = $generated
+            } {
+                param($Values, $Rendered)
+                Get-AvmBicepDocsExampleCommentProbe `
+                    -Values $Values -GeneratedContent $Rendered
+            }
+            $probe.Values.notes | Should -BeExactly $values.notes
+            $marked = ($probe.Values.examples | ConvertFrom-Json -AsHashtable)[
+                'tests/e2e/full/main.test.bicep'].JsonParameters
+            $privateRender = $template.Replace(
+                '__AUTHORED_FRAGMENT__', $fragment).Replace(
+                '__REAL_FRAGMENT__', $marked)
+            $cleaned = $privateRender.Replace($probe.Markers[0].RequiredMarker, '')
+            $cleaned = $cleaned.Replace($probe.Markers[0].NonRequiredMarker, '')
+            [System.Linq.Enumerable]::SequenceEqual(
+                [byte[]][System.Text.UTF8Encoding]::new($false).GetBytes($cleaned),
+                [byte[]][System.Text.UTF8Encoding]::new($false).GetBytes($generated)) |
+                Should -BeTrue
+
+            $withoutComments = $fragment.Replace(
+                "    // Required parameters`n", '').Replace(
+                "    // Non-required parameters`n", '')
+            $realOmission = $template.Replace(
+                '__AUTHORED_FRAGMENT__', $fragment).Replace(
+                '__REAL_FRAGMENT__', $withoutComments)
+            $fakeOmission = $template.Replace(
+                '__AUTHORED_FRAGMENT__', $withoutComments).Replace(
+                '__REAL_FRAGMENT__', $fragment)
+            $provenance = [pscustomobject]@{
+                Content = $privateRender; Markers = $probe.Markers
+            }
+            Get-CommentDifferenceCount -Generated $generated -Tracked $realOmission `
+                -Provenance $provenance | Should -Be 2
+            Get-CommentDifferenceCount -Generated $generated -Tracked $fakeOmission `
+                -Provenance $provenance | Should -Be 0
+
+            $valueMutations = @(
+                @('"value": 7', '"value": 8'),
+                @('"value": true', '"value": false'),
+                @('"nested": "before"', '"nested": "after"'),
+                @('"alpha"', '"delta"')
+            )
+            foreach ($mutation in $valueMutations) {
+                $changed = $withoutComments.Replace($mutation[0], $mutation[1])
+                $changed.Equals($withoutComments, [System.StringComparison]::Ordinal) |
+                    Should -BeFalse
+                $tracked = $template.Replace(
+                    '__AUTHORED_FRAGMENT__', $fragment).Replace(
+                    '__REAL_FRAGMENT__', $changed)
+                Get-CommentDifferenceCount -Generated $generated -Tracked $tracked `
+                    -Provenance $provenance | Should -Be 0
+            }
+            Get-CommentDifferenceCount -Generated $generated `
+                -Tracked $realOmission.Replace("`n", "`r`n") `
+                -Provenance $provenance | Should -Be 0
+            Get-CommentDifferenceCount -Generated $generated -Tracked $realOmission `
+                -Provenance ([pscustomobject]@{
+                    Content = $privateRender.Replace("`n", "`r`n")
+                    Markers = $probe.Markers
+                }) | Should -Be 0
+            $differentUnicode = 'cafe' + [char]0x0301 + ' ' + [char]0x03B2
+            Get-CommentDifferenceCount -Generated $generated `
+                -Tracked $realOmission.Replace($unicode, $differentUnicode) `
+                -Provenance $provenance | Should -Be 0
+        }
+
         It 'does not instrument incomplete or malformed model pairs' {
             $generated = New-GroupedExampleReadme
             $fragment = [regex]::Match($generated, '(?s)```json\n(.*?)\n```').Groups[1].Value
