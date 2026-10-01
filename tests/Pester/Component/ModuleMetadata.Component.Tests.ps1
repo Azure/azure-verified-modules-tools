@@ -239,6 +239,25 @@ Describe 'Component: child helper metadata' -Tag Component {
     }
 }
 
+Describe 'Component: metadata property order' -Tag Component {
+    It 'writes new <Kind> metadata in schema order whatever the input order' -TestCases @(
+        @{ Kind = 'root'; Child = $false; Expected = @('$schema', 'moduleDisplayName', 'moduleDescription', 'canonicalType', 'owners', 'telemetryIdPrefix', 'alternativeNames', 'comments') }
+        @{ Kind = 'child'; Child = $true; Expected = @('$schema', 'moduleDisplayName', 'moduleDescription', 'canonicalType', 'telemetryIdPrefix') }
+    ) {
+        param($Kind, $Child, $Expected)
+        $fixture = New-MetadataFixture -ChildModule:$Child
+        $keys = @($fixture.Data.Keys | Where-Object { $_ -ne '$schema' })
+        $reversed = [ordered]@{}
+        foreach ($key in $keys[($keys.Count - 1)..0]) {
+            $reversed[$key] = $fixture.Data[$key]
+        }
+        $parameters = $fixture.Parameters
+
+        $null = Initialize-AvmModuleMetadata @parameters -InputObject $reversed
+
+        @((Get-Content -LiteralPath $fixture.MetadataPath -Raw | ConvertFrom-Json -AsHashtable).Keys) | Should -Be $Expected
+    }
+}
 Describe 'Component: Oracle metadata compatibility' -Tag Component {
     It 'initializes and preserves <Canonical> for <Ecosystem>, child=<Child>' -TestCases @(
         foreach ($ecosystem in @('bicep', 'terraform')) {

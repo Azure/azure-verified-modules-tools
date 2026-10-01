@@ -57,7 +57,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('init')
             Cmdlet  = 'Initialize-AvmModule'
-            Summary = 'Initialize local Bicep modules or metadata-only Terraform modules; -Proposed writes only Bicep metadata.'
+            Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('metadata', 'validate')
@@ -103,6 +103,11 @@ function Get-AvmVerbRegistry {
             Path    = [string[]]@('test', 'e2e')
             Cmdlet  = 'Invoke-AvmTestE2e'
             Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('register-features')
+            Cmdlet  = 'Register-AvmFeature'
+            Summary = 'Ensure required Azure features are registered in a selected test subscription.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('docs')

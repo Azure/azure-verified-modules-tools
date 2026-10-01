@@ -12,8 +12,31 @@ Describe 'Repository sync staging of added managed files' -Tag Component {
         [System.IO.File]::WriteAllText((Join-Path $script:root '.gitignore'), "scripts`n*.tfvars`n")
         git -C $script:root init --quiet -b main
         git -C $script:root add -- .gitignore
-        git -C $script:root -c user.name='AVM test' -c user.email='avm-test@users.noreply.github.com' `
-            commit --quiet -m 'Base'
+        $identityNames = @('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')
+        $previousIdentity = @{}
+        foreach ($name in $identityNames) {
+            $previousIdentity[$name] = [System.Environment]::GetEnvironmentVariable($name)
+        }
+        try {
+            $env:GIT_AUTHOR_NAME = 'AVM test'
+            $env:GIT_AUTHOR_EMAIL = 'avm-test@example.invalid'
+            $env:GIT_COMMITTER_NAME = $env:GIT_AUTHOR_NAME
+            $env:GIT_COMMITTER_EMAIL = $env:GIT_AUTHOR_EMAIL
+            git -C $script:root commit --quiet -m 'Base'
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Failed to commit the managed-file staging fixture.'
+            }
+        }
+        finally {
+            foreach ($name in $identityNames) {
+                if ($null -eq $previousIdentity[$name]) {
+                    [System.Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+                }
+                else {
+                    [System.Environment]::SetEnvironmentVariable($name, $previousIdentity[$name], 'Process')
+                }
+            }
+        }
         $managed = Join-Path $script:root ($script:managedPath.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $managed) -Force
         [System.IO.File]::WriteAllText($managed, "Write-Output 'managed'`n")

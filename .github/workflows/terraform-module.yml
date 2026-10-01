@@ -421,6 +421,56 @@ jobs:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         run: *install-avm-authoring
 
+      - name: Check required features
+        id: required-features
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+        run: &check-required-features |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath '.required-features.json' -PathType Leaf)) { return }
+
+          $features = ConvertFrom-Json -InputObject (Get-Content -LiteralPath '.required-features.json' -Raw) -NoEnumerate
+          if ($features -isnot [array]) { throw '.required-features.json must be a JSON array.' }
+          if ($features.Count -eq 0) { return }
+
+          $selected = [guid]::Empty
+          $effective = [guid]::Empty
+          if (-not [guid]::TryParseExact($env:SELECTED_SUBSCRIPTION_ID, 'D', [ref]$selected) -or
+              -not [guid]::TryParseExact($env:ARM_SUBSCRIPTION_ID, 'D', [ref]$effective) -or
+              $selected -eq [guid]::Empty -or $selected -ne $effective) {
+              throw 'The effective ARM_SUBSCRIPTION_ID does not match the selected test subscription; refusing feature registration.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:ARM_CLIENT_ID) -or
+              [string]::IsNullOrWhiteSpace($env:ARM_TENANT_ID)) {
+              throw 'Feature registration requires the effective ARM_CLIENT_ID and ARM_TENANT_ID used by the tests.'
+          }
+
+          Import-Module Avm.Authoring
+          $preview = avm register-features --subscription-id $env:SELECTED_SUBSCRIPTION_ID --what-if --passthru
+          if ($preview.FeaturesTotal -ne $features.Count) {
+              throw '.required-features.json changed during feature preflight.'
+          }
+          'required=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Azure login for required features
+        if: steps.required-features.outputs.required == 'true'
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ needs.subscriptions.outputs.subscriptionId }}
+
+      - name: Register required features
+        if: steps.required-features.outputs.required == 'true'
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+        run: &register-required-features |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          avm register-features --subscription-id $env:SELECTED_SUBSCRIPTION_ID
+
       - name: Run integration tests
         shell: pwsh
         run: |
@@ -602,6 +652,28 @@ jobs:
         env:
           AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         run: *install-avm-authoring
+
+      - name: Check required features
+        id: required-features
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
+        run: *check-required-features
+
+      - name: Azure login for required features
+        if: steps.required-features.outputs.required == 'true'
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ steps.leg.outputs.subscriptionId }}
+
+      - name: Register required features
+        if: steps.required-features.outputs.required == 'true'
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
+        run: *register-required-features
 
       - name: Run end-to-end tests
         shell: pwsh
