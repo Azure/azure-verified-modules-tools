@@ -35,7 +35,8 @@ section when cutting a release.
 - The `avm-tf-module-repository-creation` agent skill in `.github/skills`
   guides an agent through creating a Terraform module repository with
   `avm init`, including the inputs to ask for, the Open Source Portal steps,
-  and the final Direct Owners check.
+  and the final Direct Owners check. Install it with
+  `gh skill install Azure/azure-verified-modules-tools .github/skills/avm-tf-module-repository-creation --scope user`.
 - `avm test integration --max-retry` defaults to two retries for recognized
   Azure capacity and region-ineligible failures, matching the E2E retry bound.
   Replay requires completed Terraform-owned teardown and preserves test

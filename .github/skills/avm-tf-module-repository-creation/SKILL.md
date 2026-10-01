@@ -7,7 +7,7 @@ description: Use when asked to create, set up, or finish setting up a new Azure 
 
 `avm init -Ecosystem terraform` from the `Avm.Authoring` PowerShell module creates and sets up the repository. Each stage checks GitHub and the local folder first, so running the same command again continues an interrupted setup. Your job is to collect approved inputs, run the command, relay the manual steps to the user, and verify the result.
 
-The operator guide is <https://azure.github.io/Azure-Verified-Modules/contributing/terraform/repository-setup/>, and each stage is described in [the Avm.Authoring README](../../../src/Avm.Authoring/README.md#initialize-a-terraform-module-repository).
+The operator guide is <https://azure.github.io/Azure-Verified-Modules/contributing/terraform/repository-setup/>, and each stage is described in [the Avm.Authoring README](https://github.com/Azure/azure-verified-modules-tools/blob/main/src/Avm.Authoring/README.md#initialize-a-terraform-module-repository).
 
 ## Rules
 
