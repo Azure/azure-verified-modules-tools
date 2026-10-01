@@ -42,7 +42,8 @@ function Invoke-AvmDocs {
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Changed, Issues.
+        Status, FilesProcessed, Changed, Issues. Bicep results also include
+        FilesSelected and NotRendered.
 
     .EXAMPLE
         avm docs

@@ -63,7 +63,12 @@ Describe 'Invoke-AvmPrCheck' {
                 Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
                 Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
                 Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-                Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+                Mock Invoke-AvmDocs {
+                    [pscustomobject]@{
+                        Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                        FilesProcessed = 0; NotRendered = @(); Issues = @()
+                    }
+                }
 
                 $defaultOutput = @(Invoke-AvmPrCheck -Path $D 3>&1 6>&1)
 
@@ -280,7 +285,13 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @('README.md')
+                    Issues = @([pscustomobject]@{ Severity = 'warning'; Code = 'avm.bicep.docs-no-source' })
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -289,6 +300,8 @@ Describe 'Invoke-AvmPrCheck' {
         $result.Steps.Count               | Should -Be 9
         $result.Steps.Step | Should -Be @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         $result.Steps[1].Status           | Should -Be 'skipped'
+        ($result.Steps | Where-Object Step -eq 'docs').Result.NotRendered |
+            Should -Contain 'README.md'
         InModuleScope Avm.Authoring {
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
                 $Context.Ecosystem -eq 'bicep'
@@ -352,7 +365,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { throw [AvmNotSupportedException]::new('check policy not wired yet') }
             Mock Invoke-AvmCheckConvention { throw [AvmNotSupportedException]::new('check convention not wired yet') }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -383,7 +401,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'skipped' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'skipped' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Status = 'pass'; FilesSelected = 0; FilesProcessed = 0
+                    NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -410,7 +433,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy {}
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'unknown' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Status = 'pass'; FilesSelected = 0; FilesProcessed = 0
+                    NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -420,6 +448,156 @@ Describe 'Invoke-AvmPrCheck' {
         ($result.Steps | Where-Object Step -eq 'check policy').Error | Should -Match 'returned no status'
         ($result.Steps | Where-Object Step -eq 'check convention').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'check convention').Error | Should -Match 'invalid status'
+    }
+
+    It 'fails when Bicep docs are <Case>' -TestCases @(
+        @{ Case = 'unsupported'; Mode = 'unsupported'; Ecosystem = 'bicep'; Expected = 'not implemented' }
+        @{ Case = 'skipped'; Mode = 'skipped'; Ecosystem = 'bicep'; Expected = 'returned skipped' }
+        @{ Case = 'missing'; Mode = 'missing'; Ecosystem = 'bicep'; Expected = 'returned no status' }
+        @{ Case = 'invalid'; Mode = 'invalid'; Ecosystem = 'bicep'; Expected = 'invalid status' }
+        @{ Case = 'an array status'; Mode = 'array'; Ecosystem = 'bicep'; Expected = 'invalid status' }
+        @{ Case = 'skipped under mixed-case Bicep'; Mode = 'skipped'; Ecosystem = 'Bicep'; Expected = 'returned skipped' }
+    ) {
+        param($Case, $Mode, $Ecosystem, $Expected)
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; M = $Mode; E = $Ecosystem } {
+            param($D, $M, $E)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = $E }
+            }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                switch ($M) {
+                    'unsupported' { throw [AvmNotSupportedException]::new('Bicep docs unavailable') }
+                    'skipped' { [pscustomobject]@{ Status = 'skipped' } }
+                    'missing' { $null }
+                    'invalid' { [pscustomobject]@{ Status = 'unknown' } }
+                    'array' { [pscustomobject]@{ Status = @('pass') } }
+                }
+            }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -BeExactly 'fail'
+        ($result.Steps | Where-Object Step -eq 'sync').Status | Should -BeExactly 'skipped'
+        $docs = $result.Steps | Where-Object Step -eq 'docs'
+        $docs.Status | Should -BeExactly 'fail'
+        $docs.Error | Should -Match $Expected
+    }
+
+    It 'fails when passing Bicep docs have <Case>' -TestCases @(
+        @{ Case = 'missing shape'; Expected = 'valid render counts' }
+        @{ Case = 'partial render'; Expected = 'rendered 1 of 2' }
+        @{ Case = 'negative counts'; Expected = 'valid render counts' }
+        @{ Case = 'error issue'; Expected = 'error or unclassified issue' }
+        @{ Case = 'unclassified issue'; Expected = 'error or unclassified issue' }
+        @{ Case = 'null issue severity'; Expected = 'error or unclassified issue' }
+        @{ Case = 'unknown issue severity'; Expected = 'error or unclassified issue' }
+        @{ Case = 'array issue severity'; Expected = 'error or unclassified issue' }
+    ) {
+        param($Case, $Expected)
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; C = $Case } {
+            param($D, $C)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                switch ($C) {
+                    'missing shape' { [pscustomobject]@{ Status = 'pass' } }
+                    'partial render' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 2; FilesProcessed = 1
+                            NotRendered = @(); Issues = @()
+                        }
+                    }
+                    'negative counts' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = -1; FilesProcessed = -1
+                            NotRendered = @(); Issues = @()
+                        }
+                    }
+                    'error issue' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                            NotRendered = @(); Issues = @([pscustomobject]@{ Severity = 'error' })
+                        }
+                    }
+                    'unclassified issue' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                            NotRendered = @(); Issues = @([pscustomobject]@{ Message = 'unknown' })
+                        }
+                    }
+                    'null issue severity' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                            NotRendered = @(); Issues = @([pscustomobject]@{ Severity = $null })
+                        }
+                    }
+                    'unknown issue severity' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                            NotRendered = @(); Issues = @([pscustomobject]@{ Severity = 'unknown' })
+                        }
+                    }
+                    'array issue severity' {
+                        [pscustomobject]@{
+                            Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                            NotRendered = @(); Issues = @([pscustomobject]@{ Severity = @('warning') })
+                        }
+                    }
+                }
+            }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -BeExactly 'fail'
+        $docs = $result.Steps | Where-Object Step -eq 'docs'
+        $docs.Status | Should -BeExactly 'fail'
+        $docs.Error | Should -Match $Expected
+    }
+
+    It 'keeps Bicep policy and convention required with a mixed-case ecosystem' {
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'Bicep' }
+            }
+            Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'skipped' } }
+            Mock Invoke-AvmCheckConvention { throw [AvmNotSupportedException]::new('not supported') }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Status = 'pass'; FilesSelected = 1; FilesProcessed = 1
+                    NotRendered = @(); Issues = @()
+                }
+            }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -BeExactly 'fail'
+        ($result.Steps | Where-Object Step -eq 'check policy').Status | Should -BeExactly 'fail'
+        ($result.Steps | Where-Object Step -eq 'check convention').Status | Should -BeExactly 'fail'
+        ($result.Steps | Where-Object Step -eq 'docs').Status | Should -BeExactly 'pass'
     }
 
     It 'flips overall to fail when any step returns Status=fail but continues by default' {
@@ -440,7 +618,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -468,7 +651,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D -StopOnFail
         }
 
@@ -503,7 +691,12 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
             Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-            Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
+            Mock Invoke-AvmDocs {
+                [pscustomobject]@{
+                    Engine = 'bicep'; Status = 'pass'; FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @(); Issues = @()
+                }
+            }
             Invoke-AvmPrCheck -Path $D
         }
 
@@ -647,6 +840,29 @@ Describe 'Invoke-AvmPrCheck' {
         ($result.Steps | Where-Object Step -eq 'check convention').Status  | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'docs').Status              | Should -Be 'pass'
     }
+
+    It 'preserves an unsupported Terraform docs step as skipped' {
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform' }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs { throw [AvmNotSupportedException]::new('not applicable') }
+            Invoke-AvmPrCheck -Path $D
+        }
+
+        $result.Status | Should -BeExactly 'pass'
+        ($result.Steps | Where-Object Step -eq 'docs').Status | Should -BeExactly 'skipped'
+    }
+
     It 'does not run the unit tier as part of pre-commit, which stays offline and init-free' {
         $dir = Join-Path $TestDrive ("precommit-nounit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

@@ -93,9 +93,12 @@ fully inspectable current-head comparison.
 
 The frozen renderer comparison in
 [Bicep README generation](2026-09-28-bicep-readme-generation.md) does not
-qualify current registry main. Update or explicitly review the current
-Vault and HCI READMEs upstream; the Vault comment difference must not be
-silently exempted. An authoritative published `machine:0.6.0` dependency
-must be available for an unmodified, current-head comparison before
-removing the coverage failure. No live MCR/Azure request was made in
-this development slice.
+qualify current registry main. The exact Vault eight-comment difference
+is an explicitly documented comparison exception in the implementation
+spec, but `avm docs -CheckDrift` still flags that tracked README as stale;
+no broad drift exemption was added. The HCI reference change is an
+unapproved difference requiring an upstream README correction. An
+authoritative published `machine:0.6.0` dependency must be available
+for an unmodified, current-head comparison before removing the
+coverage failure. No live MCR/Azure request was made in this development
+slice.
