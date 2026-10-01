@@ -35,6 +35,9 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
 | `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
+| `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; registry compliance is an explicit opt-in. |
+| `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
+| `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Deploys isolated Bicep resource-group examples or a narrowly allowlisted higher-scope subset with ownership-checked cleanup. |
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Renders Bicep READMEs through the pinned CLI and a repository-selected Scriban template. |
 | `Engines/Terraform/Format-AvmTerraformModule.ps1` | Runs `terraform fmt -recursive` over the module root.                              |
 | `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |

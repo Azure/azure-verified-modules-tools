@@ -21,6 +21,24 @@ section when cutting a release.
 
 ### Added
 
+- `avm test e2e` validates and previews eligible Bicep examples before Create.
+  Resource-group cases use tagged disposable groups; a narrow subset of
+  subscription, management-group and tenant cases requires explicit targets
+  and ownership checks. Optional case-local Pester assertions run after a
+  successful deployment, and `post.ps1` runs once after each attempted Create,
+  including failure, before guarded cleanup. Results report absent or failed
+  hooks and assertions; incomplete ownership or cleanup fails the case.
+  Unsupported deployment shapes, Terraform e2e and legacy registry CI are
+  unchanged.
+- `avm test integration` validates and previews Bicep `tests/e2e` examples
+  with an explicit Azure subscription. Tokens are substituted only in a
+  temporary compiled template, `.e2eignore` is honored, and resource-group
+  targets require an existing group. Terraform integration is unchanged.
+- `avm test unit` runs Bicep module-owned Pester tests/unit by default, with
+  optional nested scopes and explicit `-IncludeCompliance` or
+  `-CompliancePath` for the registry compliance suite during migration. Tag
+  and name filters, child-process isolation, and separate fail/skipped results
+  make missing or disabled tests visible without changing build-only `avm test`.
 - `avm init -Ecosystem terraform` creates and sets up the module's GitHub
   repository: it writes `metadata.json`, creates the repository, pauses for
   open source portal setup and JIT elevation, grants the module contributors

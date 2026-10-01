@@ -92,17 +92,17 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('test', 'unit')
             Cmdlet  = 'Invoke-AvmTestUnit'
-            Summary = 'Run the terraform unit test tier (tests/unit).'
+            Summary = 'Run Bicep Pester or Terraform unit tests (tests/unit).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('test', 'integration')
             Cmdlet  = 'Invoke-AvmTestIntegration'
-            Summary = 'Run the terraform integration test tier (tests/integration).'
+            Summary = 'Run Bicep ARM validate/what-if or Terraform integration tests.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('test', 'e2e')
             Cmdlet  = 'Invoke-AvmTestE2e'
-            Summary = 'Run the terraform e2e test tier (deploy/idempotency/destroy per example).'
+            Summary = 'Deploy isolated Bicep examples or run Terraform e2e tests.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('register-features')
