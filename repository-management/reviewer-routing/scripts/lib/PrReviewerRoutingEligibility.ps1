@@ -13,10 +13,10 @@ function Get-AvmPrReviewerRoutingReviewState {
             $null = $requestedUsers.Add([string]$request.login)
         }
         elseif ($request.PSObject.Properties['slug'] -and $request.slug) {
-            $null = $requestedTeams.Add([string]$request.slug)
+            $null = $requestedTeams.Add(([string]$request.slug -split '/')[-1])
         }
         elseif ($request.PSObject.Properties['name'] -and $request.name) {
-            $null = $requestedTeams.Add([string]$request.name)
+            $null = $requestedTeams.Add(([string]$request.name -split '/')[-1])
         }
     }
     foreach ($review in $PullRequest.reviews) {

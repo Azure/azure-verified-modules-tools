@@ -37,6 +37,38 @@ BeforeAll {
     }
 }
 
+Describe 'Get-AvmPrReviewerRoutingReviewState' {
+    It 'normalizes a pending team identifier: <InputCase>' -TestCases @(
+        @{ InputCase = 'qualified CLI slug'; Request = [pscustomobject]@{ __typename = 'Team'; name = 'azure-verified-modules-module-owners'; slug = 'Azure/azure-verified-modules-module-owners' } }
+        @{ InputCase = 'bare slug'; Request = [pscustomobject]@{ __typename = 'Team'; slug = 'azure-verified-modules-module-owners' } }
+        @{ InputCase = 'qualified name fallback'; Request = [pscustomobject]@{ name = 'Azure/azure-verified-modules-module-owners' } }
+        @{ InputCase = 'bare name fallback'; Request = [pscustomobject]@{ name = 'azure-verified-modules-module-owners' } }
+    ) {
+        param($InputCase, $Request)
+        $pr = New-EligibilityPullRequest
+        $pr.reviewRequests = @($Request)
+        $state = Get-AvmPrReviewerRoutingReviewState -PullRequest $pr
+        $state.RequestedTeams.Count | Should -Be 1
+        $state.RequestedTeams.Contains('azure-verified-modules-module-owners') | Should -BeTrue
+        $state.RequestedTeams.Contains('Azure/azure-verified-modules-module-owners') | Should -BeFalse
+        $state.RequestedUsers.Count | Should -Be 0
+    }
+
+    It 'deduplicates qualified and bare team requests without changing user identities' {
+        $pr = New-EligibilityPullRequest
+        $pr.reviewRequests = @(
+            [pscustomobject]@{ __typename = 'Team'; name = 'azure-verified-modules-module-owners'; slug = 'Azure/azure-verified-modules-module-owners' }
+            [pscustomobject]@{ slug = 'AZURE-VERIFIED-MODULES-MODULE-OWNERS' }
+            [pscustomobject]@{ __typename = 'User'; login = 'owner-user' }
+        )
+        $state = Get-AvmPrReviewerRoutingReviewState -PullRequest $pr
+        $state.RequestedTeams.Count | Should -Be 1
+        $state.RequestedTeams.Contains('azure-verified-modules-module-owners') | Should -BeTrue
+        $state.RequestedUsers.Count | Should -Be 1
+        $state.RequestedUsers.Contains('owner-user') | Should -BeTrue
+    }
+}
+
 Describe 'Get-AvmPrReviewerRoutingEligibility' {
     BeforeEach {
         $script:eligibilityResponse = [pscustomobject]@{
@@ -256,8 +288,16 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.Warnings | Should -HaveCount 1
     }
 
-    It 'does not request an already-pending fallback group again, but still warns about the owner' {
-        $script:eligibilityPr.reviewRequests = @([pscustomobject]@{ slug = 'azure-verified-modules-module-owners' })
+    It 'does not request an already-pending fallback group again: <TeamSlug>' -TestCases @(
+        @{ TeamSlug = 'azure-verified-modules-module-owners' }
+        @{ TeamSlug = 'Azure/azure-verified-modules-module-owners' }
+    ) {
+        param($TeamSlug)
+        $script:eligibilityPr.reviewRequests = @([pscustomobject]@{
+                __typename = 'Team'
+                name = 'azure-verified-modules-module-owners'
+                slug = $TeamSlug
+            })
         $script:eligibilityPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
         $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:eligibilityPr `
             -Repository $script:eligibilityRepository -CatalogIndex $script:eligibilityIndex -Ecosystem terraform 3>$null 6>$null
@@ -405,8 +445,16 @@ Describe 'Assert-AvmPrReviewerRoutingApplied' {
         Should -Invoke Get-AvmPrReviewerRoutingCandidates -Exactly 1 -ParameterFilter { $PullRequestUrl -eq $script:verificationBefore.url }
     }
 
-    It 'accepts the owners group only when its team request appears' {
-        $script:verificationAfter.reviewRequests = @([pscustomobject]@{ slug = 'azure-verified-modules-module-owners' })
+    It 'accepts the owners group when its team request appears: <TeamSlug>' -TestCases @(
+        @{ TeamSlug = 'azure-verified-modules-module-owners' }
+        @{ TeamSlug = 'Azure/azure-verified-modules-module-owners' }
+    ) {
+        param($TeamSlug)
+        $script:verificationAfter.reviewRequests = @([pscustomobject]@{
+                __typename = 'Team'
+                name = 'azure-verified-modules-module-owners'
+                slug = $TeamSlug
+            })
         $script:verificationRouting.NewReviewers = @($script:ownersGroup)
         $script:verificationRouting.ReviewerTypes = @{ $script:ownersGroup = 'team' }
         Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
@@ -477,7 +525,11 @@ Describe 'Reviewer eligibility routing API round trip' {
             }
             if ($Arguments[1] -eq 'edit') {
                 if (-not $script:roundTripDropReviewer) {
-                    $script:roundTripPr.reviewRequests = @([pscustomobject]@{ slug = 'azure-verified-modules-module-owners' })
+                    $script:roundTripPr.reviewRequests = @([pscustomobject]@{
+                            __typename = 'Team'
+                            name = 'azure-verified-modules-module-owners'
+                            slug = 'Azure/azure-verified-modules-module-owners'
+                        })
                 }
                 $script:roundTripPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
                 return $script:roundTripPr.url

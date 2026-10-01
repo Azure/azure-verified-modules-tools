@@ -268,9 +268,13 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewReviewers | Should -Contain 'Azure/storage-owners'
     }
 
-    It 'skips a team owner that already has a pending review request' {
+    It 'skips a team owner that already has a pending review request: <TeamSlug>' -TestCases @(
+        @{ TeamSlug = 'storage-owners' }
+        @{ TeamSlug = 'Azure/storage-owners' }
+    ) {
+        param($TeamSlug)
         $script:catalogIndex['avm/res/storage/storage-account'].owners = @(@{ handle = 'Azure/storage-owners'; type = 'team'; displayName = 'Storage owners' })
-        $script:pr.reviewRequests = @([pscustomobject]@{ slug = 'storage-owners'; name = 'Storage owners' })
+        $script:pr.reviewRequests = @([pscustomobject]@{ __typename = 'Team'; slug = $TeamSlug; name = 'storage-owners' })
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty

@@ -62,8 +62,9 @@ owned module as orphaned or change any repository permissions.
 
 Completed reviews remain in review history rather than the pending-reviewer
 list, so routing does not re-request those owners. Pending requests are also
-retained. An ineligible fallback group, failed permission lookup, or invalid
-response is an error, not permission to guess or grant access.
+retained, including team requests returned as qualified `organization/team`
+slugs by GitHub CLI. An ineligible fallback group, failed permission lookup,
+or invalid response is an error, not permission to guess or grant access.
 After an edit, routing reads back the new labels and reviewers before reporting
 the request as updated. A successful CLI exit with missing changes fails the
 request instead of producing a false success.
