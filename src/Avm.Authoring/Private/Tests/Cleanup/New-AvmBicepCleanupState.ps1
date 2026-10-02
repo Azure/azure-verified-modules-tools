@@ -11,7 +11,9 @@ function New-AvmBicepCleanupState {
         [Parameter(Mandatory)]
         [string] $Environment,
 
-        [string] $Path
+        [string] $Path,
+
+        [string] $RunId = [guid]::NewGuid().ToString('N')
     )
 
     Set-StrictMode -Version 3.0
@@ -19,7 +21,7 @@ function New-AvmBicepCleanupState {
 
     $state = @{
         schemaVersion       = 1
-        runId               = [guid]::NewGuid().ToString('N')
+        runId               = $RunId
         tenantId            = $TenantId.ToString('D')
         subscriptionId      = $SubscriptionId.ToString('D')
         environment         = $Environment

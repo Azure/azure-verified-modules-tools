@@ -20,7 +20,9 @@ function New-AvmBicepTestTemplate {
 
         [string] $OwnedGroupRunId,
 
-        [string] $SourceRoot
+        [string] $SourceRoot,
+
+        [switch] $DeferResourceLocation
     )
 
     Set-StrictMode -Version 3.0
@@ -63,7 +65,7 @@ function New-AvmBicepTestTemplate {
         $Tokens
     }
     $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
-        -SourcePath $SourcePath -Tokens $effectiveTokens
+        -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
     $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $hasGroupDeployment = $false
     if ($scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {

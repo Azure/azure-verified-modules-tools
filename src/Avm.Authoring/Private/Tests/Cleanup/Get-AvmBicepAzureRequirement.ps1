@@ -19,6 +19,17 @@ function Get-AvmBicepAzureRequirement {
                 'Get-AzResource'                       = @('ResourceId', 'ExpandProperties')
                 'Remove-AzResource'                    = @('ResourceId', 'Force')
                 'Get-AzResourceGroup'                  = @('Name')
+                'New-AzResourceGroup'                  = @('Name', 'Location', 'Tag')
+                'Get-AzResourceProvider'               = @('ProviderNamespace')
+                'Get-AzLocation'                       = @()
+                'Test-AzResourceGroupDeployment'       = @('ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode')
+                'Test-AzSubscriptionDeployment'        = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'Test-AzManagementGroupDeployment'     = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'Test-AzTenantDeployment'              = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'New-AzResourceGroupDeployment'        = @('Name', 'ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode', 'Force')
+                'New-AzSubscriptionDeployment'         = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'New-AzManagementGroupDeployment'      = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'New-AzTenantDeployment'               = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
                 'Remove-AzResourceGroup'               = @('Name', 'Force')
                 'Get-AzResourceLock'                   = @('Scope', 'LockName')
                 'Remove-AzResourceLock'                = @('LockId', 'Force')
@@ -41,6 +52,7 @@ function Get-AvmBicepAzureRequirement {
             Commands = @{
                 'Remove-AzKeyVaultAccessPolicy' = @('VaultName', 'ObjectId')
                 'Get-AzKeyVault'                = @('InRemovedState')
+                'Get-AzKeyVaultSecret'          = @('VaultName', 'Name')
                 'Remove-AzKeyVault'             = @('ResourceId', 'InRemovedState', 'Force', 'Location')
             }
         }

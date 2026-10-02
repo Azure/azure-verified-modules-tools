@@ -64,19 +64,24 @@ development gate passed 2,646 unit tests and 1,293 component tests, with
 nine unit skips and one component skip. Both slices are retained in draft
 [tools #219](https://github.com/Azure/azure-verified-modules-tools/pull/219).
 
-The adapted helpers are not yet wired into the e2e runner. They do not
-change its current restrictions or constitute full workflow parity.
+The [native execution input slice](2026-10-02-bicep-native-execution-inputs.md)
+adds typed CI inputs, native deployment helpers, bounded retries,
+same-process assertion/hook support and public `avm test cleanup` recovery.
+Its ordinary full gate passed 2,710 unit controls and 1,315 component
+controls, with nine unit skips and one component skip. The adapted helpers
+are not yet wired into the e2e runner. They do not change its current
+restrictions or constitute full workflow parity.
 Runner integration must record owned groups and attempted deployment IDs
 before submission, retain state outside temporary templates/parameters,
-preserve assertions then post-hook then cleanup, and expose recovery to
-local and Actions callers. Execution retries, region selection,
-subscription-pool selection and typed CI parameter handling also remain.
+preserve assertions then post-hook then cleanup, and connect execution
+retries, region selection, subscription-pool selection and typed CI
+parameter handling. Hosted completion must permit caller-owned sign-in
+renewal without a credential bridge.
 
 Before claiming parity, verify the legacy provider-container expansion
 path: the current cleanup parser requires complete resource IDs. Runtime
-parameter maps also still use ordinary `.Keys` in
-`New-AvmBicepTestParameterFile`; add the authored `keys` parameter regression
-there as well as the already-covered README behavior from
+parameter and token maps now preserve authored `keys` and `count` names,
+with file-backed controls complementing the README behavior from
 [Azure/bicep-registry-modules#7442](https://github.com/Azure/bicep-registry-modules/pull/7442).
 Do not remove existing execution guards until equivalent target handling
 and recovery are wired and exercised on unmodified registry cases.

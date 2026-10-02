@@ -1,20 +1,25 @@
 #Requires -Version 7.4
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'File')]
 param(
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'File')]
     [string] $InputPath,
 
-    [Parameter(Mandatory)]
-    [string] $ResultPath
+    [Parameter(Mandatory, ParameterSetName = 'File')]
+    [string] $ResultPath,
+
+    [Parameter(Mandatory, ParameterSetName = 'Object')]
+    [System.Collections.IDictionary] $InputData
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Import-Module Pester -MinimumVersion 5.5.0 -ErrorAction Stop
-$inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
-    ConvertFrom-Json -AsHashtable -ErrorAction Stop
+if ($PSCmdlet.ParameterSetName -eq 'File') {
+    $inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
+        ConvertFrom-Json -AsHashtable -ErrorAction Stop
+}
 
 $containerData = switch ($inputData.Mode) {
     'Unit' {
@@ -38,6 +43,8 @@ $configuration.Run.Container = @(
     New-PesterContainer -Path ([string[]]$inputData.Files) -Data $containerData
 )
 $configuration.Run.PassThru = $true
+$configuration.Run.Exit = $false
+$configuration.Run.Throw = $false
 $configuration.Output.Verbosity = 'None'
 if ($inputData.Tag.Count -gt 0) {
     $configuration.Filter.Tag = [string[]]$inputData.Tag
@@ -93,7 +100,7 @@ if ($result.Result -ne 'Passed' -and $issues.Count -eq 0) {
         })
 }
 
-$summary = [pscustomobject][ordered]@{
+$summary = [ordered]@{
     Version      = [string]$result.Version
     Total        = [int]$result.TotalCount
     Passed       = [int]$result.PassedCount
@@ -104,7 +111,12 @@ $summary = [pscustomobject][ordered]@{
     Issues       = $issues.ToArray()
 }
 
-[System.IO.File]::WriteAllText(
-    $ResultPath,
-    ($summary | ConvertTo-Json -Depth 8 -Compress),
-    [System.Text.UTF8Encoding]::new($false))
+if ($PSCmdlet.ParameterSetName -eq 'File') {
+    [System.IO.File]::WriteAllText(
+        $ResultPath,
+        ($summary | ConvertTo-Json -Depth 8 -Compress),
+        [System.Text.UTF8Encoding]::new($false))
+}
+else {
+    return $summary
+}

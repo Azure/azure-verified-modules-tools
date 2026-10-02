@@ -57,6 +57,16 @@ function Invoke-AvmBicepCleanup {
         Assert-AvmBicepAzureIdentity -AzPath $az.Source -SubscriptionId $SubscriptionId -TenantId $TenantId
         $state['status'] = 'CleanupPending'
         Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false
+        $readiness = Get-AvmBicepPendingDeployment -State $state `
+            -RetryLimit $discoveryOptions.SearchRetryLimit -RetryInterval $discoveryOptions.SearchRetryInterval
+        Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false
+        if ($readiness.Pending.Count -gt 0) {
+            foreach ($issue in $readiness.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
+            return [pscustomobject]@{
+                Cleaned = $false; Status = 'fail'; Pending = $readiness.Pending
+                Issues = $readiness.Issues; StatePath = $StatePath
+            }
+        }
 
         $issues = [System.Collections.Generic.List[object]]::new()
         $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

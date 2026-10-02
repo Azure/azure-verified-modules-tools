@@ -22,7 +22,7 @@ function Get-AvmBicepTestTokenMap {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if (-not [string]::IsNullOrWhiteSpace($TokenFile) -and $Tokens.Count -gt 0) {
+    if (-not [string]::IsNullOrWhiteSpace($TokenFile) -and $Tokens.psbase.Count -gt 0) {
         throw [AvmConfigurationException]::new('Use either -TokenFile or -Tokens, not both.')
     }
     $provided = $Tokens
@@ -59,7 +59,7 @@ function Get-AvmBicepTestTokenMap {
         $values.Add('avmE2eRunId', $RunId)
         $values.Add('avmE2eSuffix', $RunId.Substring(0, 10))
     }
-    foreach ($name in $provided.Keys) {
+    foreach ($name in $provided.psbase.Keys) {
         if ($name -isnot [string] -or $name -cnotmatch '^[A-Za-z][A-Za-z0-9_]*$') {
             throw [AvmConfigurationException]::new(
                 "Bicep test token names must start with a letter and contain only letters, digits or underscores: $name")
