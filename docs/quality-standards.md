@@ -364,7 +364,9 @@ Currently vendored:
   enabled for ordinary resources; only the generated tagless telemetry
   deployment receives a block-scoped TFLint exception. Mapotf drops comments
   in `asraw` blocks, so the transform engine inserts the exception after
-  mapotf writes the resource.
+  mapotf writes the resource. All three profiles pin attested AVM ruleset
+  v1.2.0. The root resource-ID requirement uses the validated repository
+  class; child and example profiles disable that root-only rule.
 - `Resources/mapotf/{common,module,root,module-call,example,provider-cleanup}/*.mptf.hcl`
   - composed per target by `Invoke-AvmTerraformTransform`. Root and child
   modules with a telemetry prefix run `root,module,common`; children without

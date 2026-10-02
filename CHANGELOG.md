@@ -338,6 +338,11 @@ section when cutting a release.
 
 ### Fixed
 
+- TFLint uses attested AVM ruleset v1.2.0 and requires `resource_id` only
+  for resource roots. Validated pattern and utility roots receive their
+  module class automatically; child and example scopes are excluded.
+  Conflicting identities, class overrides, and incompatible plugin pins
+  fail explicitly instead of weakening resource-root checks.
 - MaPoTF sorts newly added child `location` variables with existing required
   inputs on the first transform, avoiding a second-pass change during
   candidate validation.

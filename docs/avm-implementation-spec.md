@@ -614,11 +614,22 @@ The deployment identity needs `Microsoft.Resources/deployments/read`,
 
 The generated AzAPI resource sets `response_export_values = []`. Only this
 tagless telemetry deployment receives a scoped inline TFLint exemption
-from the generic `tags = var.tags` rule; that rule remains enabled for every
+from the generic AzAPI tagging rule; that rule remains enabled for every
 other AzAPI resource. The lint warning audit skips only that exact directive
 above a tagless generated telemetry deployment; other inline ignores still
 warn. The packaged root TFLint profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
+
+The packaged AVM TFLint ruleset is pinned to attested release v1.2.0.
+`avm_output_resource_id_required` applies only to resource roots. The lint
+engine derives a root class from the repository ID, AVM folder name, Git
+origin, and any declared context scope; conflicting classes fail. Pattern
+and utility classes also require valid metadata before their generated root
+configuration receives `module_class`. An unknown identity stays on the
+resource default, even if its telemetry prefix says otherwise. Child and
+example profiles disable this root-only rule. Class settings cannot
+contradict the resolved identity, and older custom plugin pins fail with
+upgrade guidance. Authored rule-disabling overrides retain their warnings.
 
 The old `modtm_telemetry.telemetry` and `random_uuid.telemetry` instances are
 retired through `removed` blocks with `destroy = false`, so upgrading does

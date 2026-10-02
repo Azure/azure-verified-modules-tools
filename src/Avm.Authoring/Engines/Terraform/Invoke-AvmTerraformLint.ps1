@@ -593,10 +593,12 @@ function Invoke-AvmTerraformLint {
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
     )
+    $rootModuleClass = Get-AvmTflintRootModuleClass -Context $Context
     $configSet = New-AvmTflintConfigSet `
         -Root $Context.Root `
         -BaseConfigDir $baseConfigDir `
-        -Scopes $sourceScopes
+        -Scopes $sourceScopes `
+        -RootModuleClass $rootModuleClass
     foreach ($warning in (Get-AvmTflintOverrideWarning `
                 -Root $Context.Root `
                 -OverridePaths $configSet.OverridePaths)) {

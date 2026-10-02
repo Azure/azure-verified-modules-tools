@@ -13,6 +13,24 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
         $script:originalAvmHome = $env:AVM_HOME
         $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
         Import-Module $script:moduleManifest -Force
+        if ($env:AVM_OFFLINE -ne '1') {
+            Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
+            Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
+        }
+    }
+
+    BeforeEach {
+        $script:originalRepoId = [System.Environment]::GetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', 'Process')
+        [System.Environment]::SetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', [NullString]::Value, 'Process')
+    }
+
+    AfterEach {
+        if ($null -eq $script:originalRepoId) {
+            [System.Environment]::SetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', [NullString]::Value, 'Process')
+        }
+        else {
+            [System.Environment]::SetEnvironmentVariable('AVM_MANAGED_FILES_REPO_ID', $script:originalRepoId, 'Process')
+        }
     }
 
     AfterAll {
@@ -26,9 +44,6 @@ Describe 'Integration: TFLint AVM plugin attestation' -Tag 'Integration' {
     }
 
     It 'installs and executes the pinned AVM ruleset with artifact attestation' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
-        Install-AvmTool -Name tflint -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
-        Install-AvmTool -Name terraform -InformationAction Continue -ErrorAction Stop -SkipModuleVersionCheck
-
         $requiredRoot = Join-Path $TestDrive 'required-interfaces'
         New-Item -ItemType Directory -Path $requiredRoot -Force | Out-Null
 @'
@@ -64,11 +79,13 @@ variable "ignore_body_changes" {
         $canonicalRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' 'terraform-azure-avm-res-mock'
         $deprecatedRoot = Join-Path $TestDrive 'deprecated-interface'
         Copy-Item -LiteralPath $canonicalRoot -Destination $deprecatedRoot -Recurse -Force
-        $badTagsRoot = Join-Path $TestDrive 'nonstandard-resource-tags'
+        $badTagsRoot = Join-Path $TestDrive 'missing-resource-tags'
         Copy-Item -LiteralPath $canonicalRoot -Destination $badTagsRoot -Recurse -Force
         $badTagsPath = Join-Path $badTagsRoot 'main.tf'
-        $badTagsContent = (Get-Content -LiteralPath $badTagsPath -Raw).
-            Replace('tags                   = var.tags', 'tags                   = {}')
+        $badTagsContent = Get-Content -LiteralPath $badTagsPath -Raw
+        $tagAttribute = '(?m)^  tags[ \t]*=[ \t]*var\.tags[ \t]*\r?\n'
+        [regex]::Matches($badTagsContent, $tagAttribute).Count | Should -Be 2
+        $badTagsContent = [regex]::Replace($badTagsContent, $tagAttribute, '')
         Set-Content -LiteralPath $badTagsPath -Value $badTagsContent -Encoding utf8NoBOM -NoNewline
         @'
 
@@ -100,7 +117,7 @@ output "deprecated_lock" {
             $tool = Resolve-AvmTool -Name 'tflint'
             $init = Invoke-AvmProcess `
                 -FilePath $tool.Path `
-                -ArgumentList @('--init', '--config', $Config) `
+                -ArgumentList @('--init', '--no-color', '--config', $Config) `
                 -WorkingDirectory $Required `
                 -IgnoreExitCode
             $version = Invoke-AvmProcess `
@@ -235,5 +252,102 @@ output "deprecated_lock" {
         ($run.CanonicalWarnings -join "`n") | Should -Not -Match 'main\.telemetry\.tf'
         @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty
+    }
+
+    It 'applies the released resource-ID rule to <Case>' -TestCases @(
+        @{ Case = 'resource without output'; Leaf = 'terraform-azure-avm-res-class'; MetadataClass = 'resource'; ExpectedClass = 'resource'; RepoId = ''; Origin = ''; HasOutput = $false; ExpectedIssues = 1 }
+        @{ Case = 'resource with output'; Leaf = 'terraform-azure-avm-res-class'; MetadataClass = 'resource'; ExpectedClass = 'resource'; RepoId = ''; Origin = ''; HasOutput = $true; ExpectedIssues = 0 }
+        @{ Case = 'named pattern'; Leaf = 'terraform-azure-avm-ptn-class'; MetadataClass = 'pattern'; ExpectedClass = 'pattern'; RepoId = ''; Origin = ''; HasOutput = $false; ExpectedIssues = 0 }
+        @{ Case = 'extracted pattern candidate'; Leaf = 'candidate'; MetadataClass = 'pattern'; ExpectedClass = 'pattern'; RepoId = 'avm-ptn-class'; Origin = ''; HasOutput = $false; ExpectedIssues = 0 }
+        @{ Case = 'utility Git checkout'; Leaf = 'checkout'; MetadataClass = 'utility'; ExpectedClass = 'utility'; RepoId = ''; Origin = 'https://github.com/Azure/terraform-azurerm-avm-utl-regions.git'; HasOutput = $false; ExpectedIssues = 0 }
+        @{ Case = 'unknown checkout with pattern metadata'; Leaf = 'unknown'; MetadataClass = 'pattern'; ExpectedClass = 'resource'; RepoId = ''; Origin = ''; HasOutput = $false; ExpectedIssues = 1 }
+    ) -Skip:($env:AVM_OFFLINE -eq '1') {
+        param($Case, $Leaf, $MetadataClass, $ExpectedClass, $RepoId, $Origin, $HasOutput, $ExpectedIssues)
+
+        $root = Join-Path $TestDrive ($Leaf + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $child = Join-Path $root 'modules' 'child'
+        $example = Join-Path $root 'examples' 'default'
+        foreach ($directory in @($root, $child, $example)) {
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            'terraform { required_version = ">= 1.9.0" }' |
+                Set-Content -LiteralPath (Join-Path $directory 'main.tf') -Encoding utf8NoBOM
+        }
+        $canonicalTypes = @{
+            resource = 'Microsoft.Resources/resourceGroups'
+            pattern = 'fixture-pattern'
+            utility = 'regions'
+        }
+        $kinds = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }
+        $metadata = [ordered]@{
+            '$schema' = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+            moduleDisplayName = 'TFLint class fixture'
+            moduleDescription = 'Exercises the released resource-only output rule.'
+            canonicalType = $canonicalTypes[$MetadataClass]
+            owners = @('module-owner')
+        }
+        if ($MetadataClass -ne 'utility') {
+            $metadata.telemetryIdPrefix = '46d3xtrf.' + $kinds[$MetadataClass] + '.a1b2c3d'
+        }
+        ConvertTo-Json -InputObject $metadata -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $root 'metadata.json') -Encoding utf8NoBOM
+        if ($HasOutput) {
+            'output "resource_id" { value = "fixture-resource-id" }' |
+                Set-Content -LiteralPath (Join-Path $root 'outputs.tf') -Encoding utf8NoBOM
+        }
+        if ($RepoId) {
+            $env:AVM_MANAGED_FILES_REPO_ID = $RepoId
+        }
+
+        $result = InModuleScope Avm.Authoring -Parameters @{
+            Root = $root; Origin = $Origin; Base = (Split-Path -Parent $script:configPath)
+        } {
+            param($Root, $Origin, $Base)
+            if ($Origin) {
+                $git = Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+                $null = Invoke-AvmProcess -FilePath $git.Source -WorkingDirectory $Root -ArgumentList @('init', '--quiet')
+                $null = Invoke-AvmProcess -FilePath $git.Source -WorkingDirectory $Root `
+                    -ArgumentList @('config', 'remote.origin.url', $Origin)
+            }
+            $moduleClass = Get-AvmTflintRootModuleClass `
+                -Context ([pscustomobject]@{ Root = $Root; Ecosystem = 'terraform' })
+            $sourceScopes = @(Get-AvmTflintScope -Root $Root -ConfigDir $Base)
+            $configSet = New-AvmTflintConfigSet -Root $Root -BaseConfigDir $Base `
+                -Scopes $sourceScopes -RootModuleClass $moduleClass
+            $runs = [System.Collections.Generic.List[object]]::new()
+            try {
+                $tool = Resolve-AvmTool -Name tflint
+                $initialization = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root `
+                    -ArgumentList @('--init', '--no-color', '--config', (Join-Path $configSet.ConfigDir 'avm.tflint.hcl')) -IgnoreExitCode
+                if ($initialization.ExitCode -ne 0) {
+                    throw "TFLint plugin initialization failed: $($initialization.StdErr)`n$($initialization.StdOut)"
+                }
+                foreach ($scope in Get-AvmTflintScope -Root $Root -ConfigDir $configSet.ConfigDir) {
+                    $arguments = @('--config', $scope.Config, '--format=json', '--no-color')
+                    if ($scope.RelPath -eq '.') {
+                        $arguments += '--only=avm_output_resource_id_required'
+                    }
+                    $run = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $scope.Dir `
+                        -ArgumentList $arguments -IgnoreExitCode
+                    $runs.Add([pscustomobject]@{ Scope = $scope.RelPath; Run = $run })
+                }
+            }
+            finally {
+                if ($configSet.StageDir) {
+                    Remove-Item -LiteralPath $configSet.StageDir -Recurse -Force -ErrorAction Stop
+                }
+            }
+            [pscustomobject]@{ ModuleClass = $moduleClass; Runs = $runs.ToArray() }
+        }
+
+        $result.ModuleClass | Should -BeExactly $ExpectedClass
+        $result.Runs | Should -HaveCount 3
+        foreach ($entry in $result.Runs) {
+            $entry.Run.ExitCode | Should -BeIn @(0, 2) -Because "$($entry.Scope): $($entry.Run.StdErr)`n$($entry.Run.StdOut)"
+            $payload = $entry.Run.StdOut | ConvertFrom-Json
+            @($payload.errors) | Should -HaveCount 0
+            $issues = @($payload.issues | Where-Object { $_.rule.name -eq 'avm_output_resource_id_required' })
+            $count = if ($entry.Scope -eq '.') { $ExpectedIssues } else { 0 }
+            $issues | Should -HaveCount $count -Because "$Case in scope $($entry.Scope)"
+        }
     }
 }

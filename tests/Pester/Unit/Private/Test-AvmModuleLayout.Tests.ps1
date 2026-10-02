@@ -88,7 +88,7 @@ Describe 'Module Resources packaging' {
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
-            $content | Should -Match 'version\s*=\s*"1\.0\.0"'
+            $content | Should -Match 'version\s*=\s*"1\.2\.0"'
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
             $content | Should -Not -Match 'disabled_by_default\s*='
@@ -127,13 +127,14 @@ Describe 'Module Resources packaging' {
                 'avm_azapi_resource_tags_required',
                 'avm_azapi_replace_triggers_refs_valid',
                 'avm_terraform_configuration_file_required',
-                'avm_terraform_module_source_required',
-                'avm_output_resource_id_required'
+                'avm_terraform_module_source_required'
             )) {
             $root | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
             $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
         }
 
+        $root | Should -Not -Match 'rule\s+"avm_output_resource_id_required"'
+        $module | Should -Match '(?s)rule\s+"avm_output_resource_id_required"\s*\{\s*enabled\s*=\s*false\s*\}'
         $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(

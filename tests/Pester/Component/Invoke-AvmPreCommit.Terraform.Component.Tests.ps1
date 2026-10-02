@@ -218,10 +218,10 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $tflint = Get-Command tflint -CommandType Application -ErrorAction Stop |
             Select-Object -First 1
 
-        $pins.tflintPlugins.avm | Should -Be '1.0.0'
-        $config | Should -Match 'version\s*=\s*"1\.0\.0"'
+        $pins.tflintPlugins.avm | Should -Be '1.2.0'
+        $config | Should -Match 'version\s*=\s*"1\.2\.0"'
         $config | Should -Not -Match 'replace_triggers_refs\s*='
-        (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.0.0)'
+        (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.2.0)'
     }
 
     It 'pre-commit composes the six-step terraform chain end-to-end (metadata first) via launcher-resolved stubs and built-in checks' {

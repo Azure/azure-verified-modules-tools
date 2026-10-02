@@ -453,6 +453,18 @@ example callers while retaining the same native severity inputs. Standard
 `tflint-ruleset-terraform` rules remain explicitly curated under their unchanged
 names.
 
+The packaged AVM plugin is v1.2.0. Only resource-module roots must expose
+`resource_id`; pattern and utility modules do not need a placeholder output.
+The CLI checks the repository identity and metadata before selecting a
+non-resource class. Unknown identities retain the resource requirement, and
+conflicting identities fail. Child-module and example profiles disable this
+root-only rule.
+
+The generated `module_class` setting applies only to the root. Do not
+override it to contradict the repository identity. Custom profiles that use
+this setting need AVM ruleset v1.2.0 or later; explicit `enabled = false`
+overrides remain supported and produce the existing warning.
+
 Use the existing repository-root files to apply an override to every scope of a
 kind:
 

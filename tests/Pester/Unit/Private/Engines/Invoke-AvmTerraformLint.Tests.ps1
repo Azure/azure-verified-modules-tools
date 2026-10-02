@@ -555,10 +555,14 @@ Describe 'Invoke-AvmTerraformLint' {
         }
 
         $script:lintCache = Join-Path $TestDrive ("lint-cache-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-        InModuleScope 'Avm.Authoring' -Parameters @{ Cache = $script:lintCache } {
-            param($Cache)
+        $configRoot = Join-Path $TestDrive ("lint-config-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'tflint') -Destination $configRoot -Recurse
+        InModuleScope 'Avm.Authoring' -Parameters @{ Cache = $script:lintCache; Config = $configRoot } {
+            param($Cache, $Config)
             $script:lintTestCache = $Cache
+            $script:lintTestConfig = $Config
             Mock Get-AvmFolder { $script:lintTestCache } -ParameterFilter { $Kind -eq 'Cache' }
+            Mock Resolve-AvmTflintConfigDir { $script:lintTestConfig }
             Mock Invoke-AvmProcess -ParameterFilter {
                 $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
             } {
@@ -592,7 +596,6 @@ Describe 'Invoke-AvmTerraformLint' {
                     Source = 'cache'; Path = '/fake/tflint'
                 }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -719,7 +722,6 @@ rule "$($entry.Value)" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -754,7 +756,6 @@ rule "$($entry.Value)" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter {
                 $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
             } {
@@ -925,7 +926,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -965,7 +965,6 @@ rule "scope_rule" {
                     Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name"
                 }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1002,7 +1001,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1041,7 +1039,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter {
                 $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
             } {
@@ -1096,7 +1093,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1126,7 +1122,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1149,7 +1144,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1171,7 +1165,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1198,7 +1191,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1223,7 +1215,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1263,7 +1254,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1295,7 +1285,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1326,7 +1315,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }
@@ -1360,7 +1348,6 @@ rule "scope_rule" {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
             }
-            Mock Resolve-AvmTflintConfigDir { '/cfg' }
             Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
@@ -1382,7 +1369,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'plugin download failed' }
                 }
@@ -1404,7 +1390,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{
                         ExitCode = 1
@@ -1431,7 +1416,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }
@@ -1456,7 +1440,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }
@@ -1486,7 +1469,6 @@ rule "scope_rule" {
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = 'tflint'; Version = '0.64.0'; Source = 'cache'; Path = '/fake/tflint' }
                 }
-                Mock Resolve-AvmTflintConfigDir { '/cfg' }
                 Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
                     [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
                 }
