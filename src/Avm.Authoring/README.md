@@ -29,6 +29,8 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
 | `Public/Export-AvmReadmeNote.ps1`                 | `avm docs export-notes` -> extract authored legacy Notes once without overwriting an existing sidecar. |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
+| `Public/Invoke-AvmTestE2e.ps1`                    | `avm test e2e` -> deploy selected examples, run assertions and clean up. |
+| `Public/Invoke-AvmTestCleanup.ps1`                | `avm test cleanup` -> resume Bicep cleanup from retained local state. |
 | `Public/Register-AvmFeature.ps1`                  | `avm register-features` -> register root-declared Azure features on an explicitly selected test subscription. |
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
@@ -37,7 +39,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
 | `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; registry compliance is an explicit opt-in. |
 | `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
-| `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Deploys isolated Bicep resource-group examples or a narrowly allowlisted higher-scope subset with ownership-checked cleanup. |
+| `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Native deployment, assertions, post hooks and operation-based cleanup at all four ARM scopes. |
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Renders Bicep READMEs through the pinned CLI and a repository-selected Scriban template. |
 | `Engines/Terraform/Format-AvmTerraformModule.ps1` | Runs `terraform fmt -recursive` over the module root.                              |
 | `Engines/Terraform/Invoke-AvmTerraformLint.ps1`   | Runs the vendored TFLint rulesets per root, module, and example scope.              |
@@ -110,6 +112,48 @@ detection. The full authoritative path is rejected if any directory segment is
 a known nested/admin name, with guidance to run from the module root. This can
 also reject a checkout whose higher parent directory happens to use a reserved
 name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
+
+## Bicep deployment tests
+
+`avm pr-check` runs static authoring checks. `avm test unit` runs module-owned
+Pester separately. `avm test e2e` deploys the complete selected test template,
+runs its case-local Pester assertions, runs `post.ps1` if present, and cleans
+up through the native Azure PowerShell handlers. The reaper is a fallback.
+
+Use explicitly authorized test targets and existing matching Azure CLI and
+Azure PowerShell sign-ins. Required Az modules are checked, not installed.
+Cleanup follows deployment operations and can remove resources updated by
+a test as well as resources created by it. Resource-group entry points
+additionally require `--resource-group-prefix`; management-group entry
+points require `--management-group-id`.
+
+```powershell
+avm test e2e --list
+avm test e2e --example defaults --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus
+```
+
+State is retained in a unique OS-temporary JSON file and its path is reported.
+It contains identifiers and cleanup progress, not parameters, outputs or
+credentials. For one selected case, `--cleanup-state-path` selects a new file.
+`--phase Deploy` retains resources for `--phase Complete` after the caller
+renews its sign-ins. Keep the same direct test/module sources, assertions
+and post hook; completion does not fingerprint every imported dependency.
+In Actions, retain state even when deployment fails, and upload it as an
+artifact for recovery after the runner exits. Recovery is possible only
+after that upload finishes.
+
+To resume cleanup without replaying assertions or hooks, pass a trusted
+state file and its explicit target identity:
+
+```powershell
+avm test cleanup --state-path $statePath --subscription-id $testSubscriptionId --tenant-id $testTenantId
+```
+
+Assertions and post hooks run in the current process; cancellation leaves
+state for recovery. `--keep-resources` runs assertions but skips both the
+post hook and cleanup. `--use-ci-inputs` opts into typed CI values and token
+inputs; explicit parameters override them. See
+`Get-Help Invoke-AvmTestE2e -Full` for inputs, retries and phase options.
 
 ## Module metadata
 

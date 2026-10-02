@@ -182,9 +182,10 @@ function Invoke-AvmBicepE2ePostHook {
     }
     catch [System.TimeoutException] {
         $result.Status = 'fail'
+        $detail = if ($InProcess) { 'reported a timeout' } else { 'exceeded its 300-second limit' }
         Add-AvmBicepTestIssue -Issues $Issues -File $Item.Case.RelativePath `
             -Code 'post-hook-timeout' `
-            -Message "Bicep e2e post.ps1 for '$case' exceeded its 300-second limit."
+            -Message "Bicep e2e post.ps1 for '$case' $detail."
     }
     catch {
         if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }

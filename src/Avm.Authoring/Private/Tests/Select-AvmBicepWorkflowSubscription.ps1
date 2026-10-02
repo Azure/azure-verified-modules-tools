@@ -16,7 +16,10 @@ function Select-AvmBicepWorkflowSubscription {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if ([string]::IsNullOrWhiteSpace($PoolJson)) {
+    if (-not [string]::IsNullOrEmpty($PoolJson) -and [string]::IsNullOrWhiteSpace($PoolJson)) {
+        throw [AvmConfigurationException]::new('The test subscription pool must not contain only whitespace.')
+    }
+    if ([string]::IsNullOrEmpty($PoolJson)) {
         $subscriptions = @(@{ id = $FallbackSubscriptionId; name = $FallbackSubscriptionId })
     }
     else {

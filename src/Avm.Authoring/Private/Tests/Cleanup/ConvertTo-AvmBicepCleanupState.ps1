@@ -115,7 +115,7 @@ function ConvertTo-AvmBicepCleanupState {
         @($resources | Where-Object { -not $_['postProcessed'] }).Count -gt 0) {
         throw [AvmConfigurationException]::new('Complete cleanup state cannot contain unfinished resources.')
     }
-    return [ordered]@{
+    $document = [ordered]@{
         schemaVersion       = 1
         runId               = $State['runId']
         tenantId            = $State['tenantId']
@@ -126,4 +126,21 @@ function ConvertTo-AvmBicepCleanupState {
         ownedResourceGroups = $groups.ToArray()
         resources           = $resources.ToArray()
     }
+    if ($State.Contains('case')) {
+        if ($State['case'] -isnot [System.Collections.IDictionary]) {
+            throw [AvmConfigurationException]::new('Cleanup case metadata must be an object.')
+        }
+        $document['case'] = ConvertTo-AvmBicepCleanupCase -Case $State['case']
+        $case = $document['case']
+        foreach ($entry in $deployments) {
+            $expectedId = Get-AvmBicepScopedDeploymentId -Scope $case['scope'] `
+                -SubscriptionId $State['subscriptionId'] -ResourceGroupName $case['resourceGroupName'] `
+                -ManagementGroupId $case['managementGroupId'] -DeploymentName $entry['id'].Split('/')[-1]
+            if ($entry['id'] -ine $expectedId -or
+                $entry['id'].Split('/')[-1] -cnotmatch ('^avm-e2e-' + $State['runId'] + '-t[1-3]$')) {
+                throw [AvmConfigurationException]::new('Cleanup deployment does not belong to its recorded case.')
+            }
+        }
+    }
+    return $document
 }

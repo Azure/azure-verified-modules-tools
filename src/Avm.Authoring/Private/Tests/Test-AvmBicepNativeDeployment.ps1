@@ -14,6 +14,8 @@ function Test-AvmBicepNativeDeployment {
 
         [string] $TokenResourceLocation,
 
+        [switch] $ParameterResourceLocationToken,
+
         [ValidateRange(1, 3)]
         [int] $RetryLimit = 3
     )
@@ -22,8 +24,10 @@ function Test-AvmBicepNativeDeployment {
     $ErrorActionPreference = 'Stop'
 
     $parameters = $DeploymentInput.Parameters
+    $parameterLocation = $parameters['resourceLocation']
+    if ($parameterLocation -ceq '#_resourceLocation_#') { $parameterLocation = '' }
     $pinned = @(
-        @($ResourceLocation, $TokenResourceLocation, $parameters['resourceLocation']) |
+        @($ResourceLocation, $TokenResourceLocation, $parameterLocation) |
             Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
             ForEach-Object { ([string]$_ -replace '\s', '').ToLowerInvariant() } |
             Sort-Object -Unique
@@ -31,7 +35,7 @@ function Test-AvmBicepNativeDeployment {
     if ($pinned.Count -gt 1) {
         throw [AvmConfigurationException]::new('Conflicting resource locations were supplied by parameters, CI inputs or tokens.')
     }
-    $hasToken = $TemplateContent -match '#_resourceLocation_#'
+    $hasToken = $TemplateContent -match '#_resourceLocation_#' -or $ParameterResourceLocationToken
     $hasParameter = $parameters.ContainsKey('resourceLocation')
     $canRetry = $pinned.Count -eq 0 -and $DeploymentInput.Scope -ne 'group' -and ($hasParameter -or $hasToken)
     $attempted = @()
@@ -52,6 +56,7 @@ function Test-AvmBicepNativeDeployment {
         if ($hasParameter) { $inputOptions.Parameters['resourceLocation'] = $selection.Location }
         $map = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $map.Add('resourceLocation', $selection.Location)
+        $inputOptions.Parameters = Resolve-AvmBicepParameterToken -Value $inputOptions.Parameters -Tokens $map
         $content = Resolve-AvmBicepTestToken -Content $TemplateContent -SourcePath $DeploymentInput.TemplatePath -Tokens $map
         if (-not $PSCmdlet.ShouldProcess($DeploymentInput.TemplatePath, "Validate Bicep resources in $($selection.Location)")) {
             return

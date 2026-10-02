@@ -61,6 +61,7 @@ function Get-AvmBicepTestCase {
             [pscustomobject][ordered]@{
                 Name              = $file.Directory.Name
                 Path              = $file.FullName
+                ModuleRoot        = $scope.Path
                 RelativePath      = [System.IO.Path]::GetRelativePath($root, $file.FullName).Replace('\', '/')
                 RelativeDirectory = [System.IO.Path]::GetRelativePath($root, $file.DirectoryName).Replace('\', '/')
                 Ignored           = $markers.Count -gt 0

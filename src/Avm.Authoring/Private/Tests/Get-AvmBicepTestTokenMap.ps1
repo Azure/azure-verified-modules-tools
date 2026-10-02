@@ -16,7 +16,9 @@ function Get-AvmBicepTestTokenMap {
 
         [string] $TokenFile,
 
-        [System.Collections.IDictionary] $Tokens = @{}
+        [System.Collections.IDictionary] $Tokens = @{},
+
+        [System.Collections.IDictionary] $DefaultTokens = @{}
     )
 
     Set-StrictMode -Version 3.0
@@ -59,12 +61,21 @@ function Get-AvmBicepTestTokenMap {
         $values.Add('avmE2eRunId', $RunId)
         $values.Add('avmE2eSuffix', $RunId.Substring(0, 10))
     }
-    foreach ($name in $provided.psbase.Keys) {
+    $merged = @{}
+    foreach ($source in @($DefaultTokens, $provided)) {
+        foreach ($name in $source.psbase.Keys) {
+            if ($merged.ContainsKey($name)) {
+                throw [AvmConfigurationException]::new("Duplicate Bicep test token '$name'.")
+            }
+            $merged[$name] = $source[$name]
+        }
+    }
+    foreach ($name in $merged.psbase.Keys) {
         if ($name -isnot [string] -or $name -cnotmatch '^[A-Za-z][A-Za-z0-9_]*$') {
             throw [AvmConfigurationException]::new(
                 "Bicep test token names must start with a letter and contain only letters, digits or underscores: $name")
         }
-        if ($provided[$name] -isnot [string]) {
+        if ($merged[$name] -isnot [string]) {
             throw [AvmConfigurationException]::new("Bicep test token '$name' must contain a string.")
         }
         if ($name -in @('subscriptionId', 'managementGroupId', 'tenantId') -and
@@ -75,7 +86,7 @@ function Get-AvmBicepTestTokenMap {
         if ($values.ContainsKey($name)) {
             throw [AvmConfigurationException]::new("Duplicate Bicep test token '$name'.")
         }
-        $value = [string]$provided[$name]
+        $value = [string]$merged[$name]
         if ($name -eq 'namePrefix' -and -not [string]::IsNullOrWhiteSpace($RunId)) {
             $value = $value.Replace(
                 '#_avmE2eSuffix_#', $RunId.Substring(0, 10),

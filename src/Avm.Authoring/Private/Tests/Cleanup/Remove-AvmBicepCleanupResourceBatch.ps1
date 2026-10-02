@@ -99,6 +99,7 @@ function Remove-AvmBicepCleanupResourceBatch {
                 else {
                     try {
                         Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
+                            Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                             Remove-AvmBicepResource -ResourceId $resource['id'] -Type $resource['type'] -Confirm:$false
                         } -Confirm:$false
                         $resource['removed'] = $true
@@ -116,6 +117,7 @@ function Remove-AvmBicepCleanupResourceBatch {
                                 ResourceId = $resource['id']; Phase = 'remove'; Message = $_.Exception.Message
                             }
                             Write-AvmLog -Message "Removal failed for '$($resource['id'])': $($_.Exception.Message)" -Level Warning
+                            if ($_.Exception -is [AvmConfigurationException]) { continue }
                         }
                     }
                 }
@@ -123,6 +125,7 @@ function Remove-AvmBicepCleanupResourceBatch {
             }
             try {
                 Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
+                    Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                     Remove-AvmBicepResourceRemainder -ResourceId $resource['id'] -Type $resource['type'] `
                         -ManagedResourceGroupIds $resource['managedResourceGroupIds'] `
                         -OriginalSoftDeleteFeatureState $resource['originalSoftDeleteFeatureState'] -Confirm:$false

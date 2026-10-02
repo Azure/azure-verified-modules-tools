@@ -13,7 +13,9 @@ function New-AvmBicepTestParameterFile {
 
         [string] $ParameterFile,
 
-        [System.Collections.IDictionary] $Parameters = @{}
+        [System.Collections.IDictionary] $Parameters = @{},
+
+        [switch] $DeferResourceLocation
     )
 
     Set-StrictMode -Version 3.0
@@ -60,7 +62,8 @@ function New-AvmBicepTestParameterFile {
         $path = '<PowerShell parameters>'
     }
 
-    $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path -Tokens $Tokens
+    $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path `
+        -Tokens $Tokens -DeferResourceLocation:$DeferResourceLocation
     $parsed = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     if ($parsed -isnot [System.Collections.IDictionary] -or
         $parsed['parameters'] -isnot [System.Collections.IDictionary]) {

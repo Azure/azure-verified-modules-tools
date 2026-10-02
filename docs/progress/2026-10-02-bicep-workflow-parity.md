@@ -31,21 +31,21 @@ Implementation baseline:
 
 ## Checklist
 
-- [ ] Map deployment inputs, scopes, token handling, retries, subscription
+- [x] Map deployment inputs, scopes, token handling, retries, subscription
       selection, assertions, outputs, and cancellation behavior.
-- [ ] Match recursive deployment-operation discovery, including partial
+- [x] Match recursive deployment-operation discovery, including partial
       results and preflight-rejected deployment attempts.
-- [ ] Match lock removal, dependency ordering, resource-specific deletion,
+- [x] Match lock removal, dependency ordering, resource-specific deletion,
       post-removal processing, and cleanup error reporting.
-- [ ] Remove functionality gaps in the new runner without replacing target
+- [x] Remove functionality gaps in the new runner without replacing target
       verification with broad subscription or management-group deletion.
-- [ ] Retain minimal, non-secret local cleanup state where required; make
+- [x] Retain minimal, non-secret local cleanup state where required; make
       its location usable by a caller's artifact-upload step.
-- [ ] Exercise unmodified registry cases and failure paths with explicitly
+- [x] Exercise unmodified registry cases and failure paths with explicitly
       labeled offline coverage.
-- [ ] Update the directly related command help and migration contract.
-- [ ] Run focused checks and the ordinary full development gate.
-- [ ] Commit, push, and open the implementation change for review.
+- [x] Update the directly related command help and migration contract.
+- [x] Run focused checks and the ordinary full development gate.
+- [x] Commit and push the implementation to the existing draft review.
 
 ## Validation
 
@@ -68,23 +68,40 @@ The [native execution input slice](2026-10-02-bicep-native-execution-inputs.md)
 adds typed CI inputs, native deployment helpers, bounded retries,
 same-process assertion/hook support and public `avm test cleanup` recovery.
 Its ordinary full gate passed 2,710 unit controls and 1,315 component
-controls, with nine unit skips and one component skip. The adapted helpers
-are not yet wired into the e2e runner. They do not change its current
-restrictions or constitute full workflow parity.
-Runner integration must record owned groups and attempted deployment IDs
-before submission, retain state outside temporary templates/parameters,
-preserve assertions then post-hook then cleanup, and connect execution
+controls, with nine unit skips and one component skip. Those committed
+helpers did not yet change the e2e runner's restrictions.
+
+The [runner integration](2026-10-02-bicep-workflow-runner-integration.md)
+is locally implemented and qualified against unmodified registry source
+with simulated Azure operations. It records owned groups and attempted
+deployment IDs before submission, retains state outside temporary
+templates/parameters, preserves assertions then post-hook then cleanup,
+and connects execution
 retries, region selection, subscription-pool selection and typed CI
-parameter handling. Hosted completion must permit caller-owned sign-in
+parameter handling. Hosted completion permits caller-owned sign-in
 renewal without a credential bridge.
 
-Before claiming parity, verify the legacy provider-container expansion
-path: the current cleanup parser requires complete resource IDs. Runtime
+Exact provider-container expansion, ownership rechecks, cross-subscription
+cleanup, cancellation recovery and hosted completion have focused controls.
+Six real offline compiler scenarios cover complete subscription-to-group,
+management-group and tenant templates, including authored repeated
+deployments. The unmodified PostgreSQL Pester suite passes correct responses
+and rejects a deliberately incorrect response without preventing cleanup.
+All 5,611 snapshot files retain their bytes. These are real source/compiler
+and assertion results, not live Azure deployment evidence.
+
+Runtime
 parameter and token maps now preserve authored `keys` and `count` names,
 with file-backed controls complementing the README behavior from
 [Azure/bicep-registry-modules#7442](https://github.com/Azure/bicep-registry-modules/pull/7442).
-Do not remove existing execution guards until equivalent target handling
-and recovery are wired and exercised on unmodified registry cases.
+Qualification also corrected JSON scalar preservation and SDK-style
+`Value` access in assertion inputs. The old restrictive engine is removed;
+native target checks, exact attempted IDs and recoverable cleanup remain.
+
+The integrated source passed the ordinary full gate: 2,750 unit tests and
+1,257 component tests, with nine unit skips and one component skip; layout
+and lint passed. Local unsigned distribution qualification and approved
+live Azure qualification remain separate from these source results.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,

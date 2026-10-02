@@ -37,6 +37,9 @@ function Invoke-AvmBicepCleanup {
             "recorded Bicep deployments in $SubscriptionId, tenant $TenantId", 'Resume deployment-owned cleanup')) {
         return [pscustomobject]@{ Cleaned = $false; Status = 'skipped'; Pending = @(); Issues = @(); StatePath = $StatePath }
     }
+    if ($state['status'] -ceq 'Complete') {
+        return [pscustomobject]@{ Cleaned = $true; Status = 'pass'; Pending = @(); Issues = @(); StatePath = $StatePath }
+    }
     Assert-AvmBicepAzureDependency
     $az = Get-Command -Name 'az' -CommandType Application -ErrorAction Stop |
         Select-Object -First 1
@@ -135,6 +138,18 @@ function Invoke-AvmBicepCleanup {
         $state['resources'] = @($records.Values)
         $blocked = [System.Collections.Generic.List[string]]::new()
         foreach ($resource in $state['resources']) {
+            if ($discovery.Issues.Count -gt 0 -and
+                $resource['type'] -in @('Microsoft.Resources/resourceGroups', 'Microsoft.Management/managementGroups')) {
+                $blocked.Add($resource['id'])
+            }
+            if ($state.Contains('case') -and $state['case']['scope'] -eq 'mg' -and
+                $resource['id'] -ieq ('/providers/Microsoft.Management/managementGroups/' + $state['case']['managementGroupId'])) {
+                $blocked.Add($resource['id'])
+                $issues.Add([pscustomobject]@{
+                        ResourceId = $resource['id']; Code = 'ExecutionTargetProtected'
+                        Message = 'The existing management group selected as the execution target cannot be removed.'
+                    })
+            }
             foreach ($groupId in $blockedGroups) {
                 if ($resource['id'] -ieq $groupId -or $resource['id'].StartsWith(
                         $groupId + '/', [System.StringComparison]::OrdinalIgnoreCase)) {

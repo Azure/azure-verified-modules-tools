@@ -132,8 +132,9 @@ Describe 'Bicep native deployment retries' {
             Mock Invoke-AvmBicepNativeArmOperation {
                 $script:persisted[-1] | Should -BeLike "*/$DeploymentName`:Attempted"
                 $Parameters['baseTime'] | Should -Be '2026-10-02 12:34:56Z'
-                if ($DeploymentName -like '*-t1') { return @{ ProvisioningState = 'Failed' } }
-                return @{ ProvisioningState = 'Succeeded'; Outputs = @{ resourceId = @{ value = 'id' } } }
+                $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
+                if ($DeploymentName -like '*-t1') { return @{ Id = $id; ProvisioningState = 'Failed' } }
+                return @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{ resourceId = @{ value = 'id' } } }
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
             $result.Status | Should -Be 'pass'
@@ -174,13 +175,39 @@ Describe 'Bicep native deployment retries' {
                     'timeout' { throw [System.TimeoutException]::new('Timed out.') }
                     'transport' { throw [System.Net.Http.HttpRequestException]::new('Transport failed.') }
                     'null' { return $null }
-                    'running' { return @{ ProvisioningState = 'Running' } }
+                    'running' {
+                        return @{
+                            Id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
+                            ProvisioningState = 'Running'
+                        }
+                    }
                     default { throw [System.InvalidOperationException]::new('Unclassified.') }
                 }
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
             $result.Status | Should -Be 'fail'
             $result.Outcome | Should -Be 'Unknown'
+            $script:state.deployments.Count | Should -Be 1
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'does not accept a terminal response without the exact attempted ID: <ResponseId> <Outcome>' -ForEach @(
+        @{ ResponseId = $null; Outcome = 'Succeeded' }
+        @{ ResponseId = '/another/deployment'; Outcome = 'Succeeded' }
+        @{ ResponseId = $null; Outcome = 'Failed' }
+        @{ ResponseId = '/another/deployment'; Outcome = 'Failed' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ ResponseId = $ResponseId; Outcome = $Outcome } {
+            param($ResponseId, $Outcome)
+            Mock Invoke-AvmBicepNativeArmOperation {
+                [pscustomobject]@{ Id = $ResponseId; ProvisioningState = $Outcome }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+            $result.Status | Should -Be 'fail'
+            $result.Outcome | Should -Be 'Unknown'
+            $script:persisted[-1] | Should -BeLike '*:Unknown'
             $script:state.deployments.Count | Should -Be 1
             Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
             Should -Invoke Start-Sleep -Exactly 0

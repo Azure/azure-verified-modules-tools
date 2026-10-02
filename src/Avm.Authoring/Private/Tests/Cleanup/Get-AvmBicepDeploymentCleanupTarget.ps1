@@ -107,22 +107,23 @@ function Get-AvmBicepDeploymentCleanupTarget {
                         if ($targetId -isnot [string] -or [string]::IsNullOrWhiteSpace($targetId)) {
                             throw [AvmProcessException]::new("Deployment operation has an invalid target ID: $($record.Id)")
                         }
-                        $resource = ConvertTo-AvmBicepCleanupResource -ResourceIds @($targetId)
-                        if ($resource.type -ieq 'Microsoft.Resources/deployments') {
-                            if (-not $records.ContainsKey($targetId)) {
-                                $records.Add($targetId, @{
-                                        Id                = $targetId
-                                        Required          = $false
-                                        PreflightRejected = $false
-                                        Status            = 'Pending'
-                                        ErrorCode         = ''
-                                        ErrorMessage      = ''
-                                    })
-                                $queue.Enqueue($targetId)
+                        foreach ($resource in @(Resolve-AvmBicepCleanupResource -ResourceId $targetId)) {
+                            if ($resource.type -ieq 'Microsoft.Resources/deployments') {
+                                if (-not $records.ContainsKey($resource.resourceId)) {
+                                    $records.Add($resource.resourceId, @{
+                                            Id                = $resource.resourceId
+                                            Required          = $false
+                                            PreflightRejected = $false
+                                            Status            = 'Pending'
+                                            ErrorCode         = ''
+                                            ErrorMessage      = ''
+                                        })
+                                    $queue.Enqueue($resource.resourceId)
+                                }
                             }
-                        }
-                        else {
-                            $null = $resources.Add($targetId)
+                            else {
+                                $null = $resources.Add($resource.resourceId)
+                            }
                         }
                     }
                     $nextPath = Resolve-AvmBicepCleanupNextLink -NextLink (
@@ -134,7 +135,8 @@ function Get-AvmBicepDeploymentCleanupTarget {
                 }
             }
             catch {
-                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') {
+                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation' -or
+                    $_.FullyQualifiedErrorId.Split(',')[0] -eq 'AvmBicepContextRestoreFailed') {
                     throw
                 }
                 $record.Status = 'Failed'

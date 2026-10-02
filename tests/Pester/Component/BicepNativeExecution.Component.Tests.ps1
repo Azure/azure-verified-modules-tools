@@ -286,3 +286,88 @@ $summary = & (Get-Module Avm.Authoring) {
         }
     }
 }
+
+Describe 'Component: Bicep authored deployment output contract' -Tag Component {
+    It 'preserves SDK-style Value access for real discovery and assertions: <InProcess>' -ForEach @(
+        @{ InProcess = $true }
+        @{ InProcess = $false }
+    ) {
+        $directory = Join-Path $TestDrive ('outputs-' + $InProcess)
+        $null = New-Item -ItemType Directory -Path $directory
+        Set-Content -LiteralPath (Join-Path $directory 'outputs.Tests.ps1') -Value @'
+param([hashtable]$TestInputData)
+Describe 'authored output contract' {
+    BeforeAll {
+        $script:resourceId = $TestInputData.DeploymentOutputs.resourceId.Value
+    }
+    It 'discovers configuration <name> with expected value <value>' -TestCases @(
+        $TestInputData.DeploymentOutputs.configurations.Value | ForEach-Object {
+            @{ name = $_.name; value = $_.value }
+        }
+    ) {
+        param($name, $value)
+        $resourceId | Should -BeExactly 'fixture-only'
+        $name | Should -BeIn @('first', 'second')
+        $value | Should -BeIn @('one', 'two')
+    }
+    It 'retains member casing compatibility without changing authored value keys or shapes' {
+        $TestInputData.DeploymentOutputs['keys'].Value | Should -Be @('authored')
+        $TestInputData.DeploymentOutputs['count'].Value | Should -Be 0
+        $TestInputData.DeploymentOutputs.boolean.Value | Should -BeFalse
+        $TestInputData.DeploymentOutputs.nil.Value | Should -BeNullOrEmpty
+        ($TestInputData.DeploymentOutputs.empty.Value -is [array]) | Should -BeTrue
+        $TestInputData.DeploymentOutputs.empty.Value.Count | Should -Be 0
+        ($TestInputData.DeploymentOutputs.nested.Value[0] -is [array]) | Should -BeTrue
+        $TestInputData.DeploymentOutputs.nested.Value[0][0] | Should -BeExactly 'one'
+        $TestInputData.DeploymentOutputs.object.Value['Upper'] | Should -BeExactly 'first'
+        $TestInputData.DeploymentOutputs.object.Value['upper'] | Should -BeExactly 'second'
+        $TestInputData.DeploymentOutputs.resourceId.value | Should -BeExactly 'fixture-only'
+        $TestInputData.DeploymentOutputs.resourceId.Type | Should -BeExactly 'String'
+        $TestInputData.ModuleTestFolderPath | Should -BeExactly $PSScriptRoot
+    }
+}
+'@
+        $driver = Join-Path $directory 'driver.ps1'
+        Set-Content -LiteralPath $driver -Value @'
+param([string]$Manifest, [string]$DirectoryPath, [switch]$InProcess)
+$ErrorActionPreference = 'Stop'
+$PSStyle.OutputRendering = 'PlainText'
+Import-Module $Manifest
+$result = & (Get-Module Avm.Authoring) {
+    param($DirectoryPath, $InProcess)
+    $issues = [Collections.Generic.List[object]]::new()
+    $outputJson = '{"properties":{"outputs":{"resourceId":{"type":"String","value":"fixture-only"},"configurations":{"type":"Array","value":[{"name":"first","value":"one"},{"name":"second","value":"two"}]},"keys":{"type":"Array","value":["authored"]},"count":{"type":"Int","value":0},"boolean":{"type":"Bool","value":false},"nil":{"type":"Object","value":null},"empty":{"type":"Array","value":[]},"nested":{"type":"Array","value":[["one"]]},"object":{"type":"Object","value":{"Upper":"first","upper":"second"}}}}}'
+    $item = [pscustomobject]@{
+        Case = [pscustomobject]@{
+            Path = Join-Path $DirectoryPath 'main.test.bicep'
+            RelativePath = 'tests/e2e/defaults/main.test.bicep'
+            RelativeDirectory = 'tests/e2e/defaults'
+        }
+        AssertionFiles = [string[]]@((Join-Path $DirectoryPath 'outputs.Tests.ps1'))
+    }
+    $assertion = Invoke-AvmBicepTestE2eAssertion -Item $item -DeploymentName 'fixture-only' `
+        -DeploymentOutput $outputJson -RepositoryRoot $DirectoryPath -Issues $issues -InProcess:$InProcess
+    @{ Assertion = $assertion; Issues = $issues.ToArray() }
+} $DirectoryPath ([bool]$InProcess)
+[IO.File]::WriteAllText((Join-Path $DirectoryPath 'summary.json'), ($result | ConvertTo-Json -Depth 12))
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Driver = $driver; Root = $directory; Manifest = $script:sourceManifest; InProcess = $InProcess
+        } {
+            param($Driver, $Root, $Manifest, $InProcess)
+            $arguments = @('-NoProfile', '-NonInteractive', '-File', $Driver,
+                '-Manifest', $Manifest, '-DirectoryPath', $Root)
+            if ($InProcess) { $arguments += '-InProcess' }
+            $null = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList $arguments `
+                -WorkingDirectory $Root -TimeoutSec 60
+            $summary = Get-Content -LiteralPath (Join-Path $Root 'summary.json') -Raw | ConvertFrom-Json
+            $summary.Issues | Should -BeNullOrEmpty
+            $summary.Assertion.Status | Should -Be 'pass'
+            $summary.Assertion.RunsTotal | Should -Be 3
+            $summary.Assertion.RunsPassed | Should -Be 3
+            $summary.Assertion.RunsFailed | Should -Be 0
+            $summary.Assertion.RunsSkipped | Should -Be 0
+            $summary.Assertion.RunsFiltered | Should -Be 0
+        }
+    }
+}

@@ -32,7 +32,23 @@ $containerData = switch ($inputData.Mode) {
         if ($inputData.TestInputData -isnot [System.Collections.IDictionary]) {
             throw [System.ArgumentException]::new('E2e Pester input requires TestInputData.')
         }
-        @{ TestInputData = $inputData.TestInputData }
+        $testInputData = @{}
+        foreach ($name in $inputData.TestInputData.psbase.Keys) {
+            $testInputData[$name] = $inputData.TestInputData[$name]
+        }
+        if ($testInputData['DeploymentOutputs'] -is [System.Collections.IDictionary]) {
+            $outputs = [System.Collections.Generic.Dictionary[string, object]]::new(
+                [System.StringComparer]::Ordinal)
+            foreach ($name in $testInputData['DeploymentOutputs'].psbase.Keys) {
+                $entry = $testInputData['DeploymentOutputs'][$name]
+                $outputs[$name] = if ($entry -is [System.Collections.IDictionary]) {
+                    [pscustomobject]$entry
+                }
+                else { $entry }
+            }
+            $testInputData['DeploymentOutputs'] = $outputs
+        }
+        @{ TestInputData = $testInputData }
     }
     default {
         throw [System.ArgumentException]::new("Unsupported Bicep Pester mode '$($inputData.Mode)'.")

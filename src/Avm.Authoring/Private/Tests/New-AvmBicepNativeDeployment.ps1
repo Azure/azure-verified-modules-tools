@@ -40,6 +40,10 @@ function New-AvmBicepNativeDeployment {
         $failure = $null
         try {
             $response = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -Confirm:$false
+            $responseId = Get-AvmPropertyValue -InputObject $response -Name 'Id'
+            if ($responseId -isnot [string] -or $responseId -ine $id) {
+                throw [AvmProcessException]::new('The native deployment response did not identify the recorded deployment.')
+            }
             $provisioningState = Get-AvmPropertyValue -InputObject $response -Name 'ProvisioningState'
             if ($provisioningState -eq 'Succeeded') {
                 $entry['status'] = 'Succeeded'

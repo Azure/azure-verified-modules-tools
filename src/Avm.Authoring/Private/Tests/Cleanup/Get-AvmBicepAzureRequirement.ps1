@@ -16,7 +16,7 @@ function Get-AvmBicepAzureRequirement {
         @{
             Name = 'Az.Resources'; MinimumVersion = '9.0.3'
             Commands = @{
-                'Get-AzResource'                       = @('ResourceId', 'ExpandProperties')
+                'Get-AzResource'                       = @('ResourceId', 'ResourceGroupName', 'ExpandProperties')
                 'Remove-AzResource'                    = @('ResourceId', 'Force')
                 'Get-AzResourceGroup'                  = @('Name')
                 'New-AzResourceGroup'                  = @('Name', 'Location', 'Tag')
