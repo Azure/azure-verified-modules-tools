@@ -359,7 +359,7 @@ run "telemetry" {
         $updated = Get-Content -LiteralPath $testFile -Raw
         $updated | Should -Not -Match 'mock_provider "modtm"'
         $updated | Should -Not -Match 'mock_provider "random"'
-        $updated | Should -Match 'mock_provider "azapi"'
+        [regex]::Matches($updated, 'mock_provider "azapi"').Count | Should -Be 1
         $updated | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'
         $result.FilesProcessed | Should -Be 3
     }
@@ -384,6 +384,89 @@ run "telemetry" {
         }
 
         [System.IO.File]::ReadAllBytes($testFile) | Should -Be $before
+    }
+
+    It 'provides valid AzAPI unit data for a standard telemetry mock exactly once' -TestCases @(
+        @{ Provider = 'modtm' }
+        @{ Provider = 'azapi' }
+    ) {
+        param($Provider)
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'telemetry.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value "mock_provider `"$Provider`" {}" -Encoding utf8NoBOM
+
+        $firstPass = InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir; TestPath = $testFile } {
+            param($Root, $TestPath)
+            $targets = @([pscustomobject]@{ Path = $Root; Profiles = @('root') })
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $targets
+            $firstPass = [System.IO.File]::ReadAllText($TestPath)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $targets
+            return $firstPass
+        }
+
+        $updated = [System.IO.File]::ReadAllText($testFile)
+        $updated | Should -BeExactly $firstPass
+        $updated | Should -Not -Match 'mock_provider "modtm"'
+        [regex]::Matches($updated, 'mock_provider "azapi"').Count | Should -Be 1
+        $updated | Should -Match 'subscription_resource_id\s*=\s*"/subscriptions/00000000-0000-0000-0000-000000000000"'
+    }
+
+    It 'preserves an authored AzAPI mock while retiring modtm' {
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'telemetry.tftest.hcl'
+        $mock = @'
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = { subscription_id = "11111111-1111-1111-1111-111111111111" }
+  }
+}
+'@
+        Set-Content -LiteralPath $testFile -Value ($mock + "`nmock_provider `"modtm`" {}`n") -Encoding utf8NoBOM
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+            param($Root)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+        }
+        ([System.IO.File]::ReadAllText($testFile)).TrimEnd() | Should -BeExactly $mock.TrimEnd()
+    }
+
+    It 'rejects ambiguous replacement-provider mocks without rewriting the file' -TestCases @(
+        @{ Extra = 'provider "azapi" {}' }
+        @{ Extra = "run `"setup`" {`n  module { source = `"./setup`" }`n}`n" }
+        @{ Extra = "run `"mapped`" {`n  providers = { modtm = modtm }`n}`n" }
+        @{ Extra = 'mock_provider "azapi" { alias = "alternate" }' }
+        @{ Extra = "mock_provider `"azapi`" { source = `"./mocks`" }`nrun `"mapped`" {`n  providers = { modtm = modtm }`n}`n" }
+        @{ Extra = "mock_provider `"azapi`" { source = `"./mocks`" }`nrun `"setup`" {`n  module { source = `"./setup`" }`n}`n" }
+    ) {
+        param($Extra)
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'telemetry.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value ("mock_provider `"modtm`" {}`n" + $Extra) -Encoding utf8NoBOM
+        $before = [System.IO.File]::ReadAllBytes($testFile)
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+                param($Root)
+                Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                    [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+            }
+        } | Should -Throw '*Cannot automatically migrate telemetry mocks*'
+        [System.IO.File]::ReadAllBytes($testFile) | Should -Be $before
+    }
+
+    It 'does not introduce a mocked provider into an integration test' {
+        $testDir = Join-Path $script:moduleDir 'tests' 'integration'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'telemetry.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value 'mock_provider "modtm" {}' -Encoding utf8NoBOM
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+            param($Root)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+        }
+        [System.IO.File]::ReadAllText($testFile) | Should -Not -Match 'mock_provider'
     }
 
     It 'preserves random mocks when a module dependency is not scanned' -TestCases @(

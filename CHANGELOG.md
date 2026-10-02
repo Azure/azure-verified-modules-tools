@@ -351,6 +351,10 @@ section when cutting a release.
   provider. Authored random use is retained; custom mocks need manual review.
   JSON configurations and unscanned module dependencies retain their mocks;
   explicit test provider mappings are checked before any mock is removed.
+- Standard telemetry unit mocks migrate to AzAPI with a valid synthetic
+  client-config subscription ID. Custom mocks are preserved, and ambiguous
+  real-provider or delegated tests fail explicitly instead of being
+  silently mocked.
 - Newly scaffolded Bicep modules use the canonical telemetry parameter
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately

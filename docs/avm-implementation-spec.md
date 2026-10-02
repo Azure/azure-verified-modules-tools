@@ -640,8 +640,14 @@ random provider requirement is removed only if no other random resources
 or data sources remain in the module. The transform also removes obsolete
 `modtm` provider declarations in examples and standalone test modules when
 they have no remaining `modtm` resources or data sources, empty `modtm` test
-mocks, and standard references to the old telemetry resource. Non-empty test
-mocks and remaining author-owned `modtm` resources or data sources fail with
+mocks, and standard references to the old telemetry resource. Direct unit
+tests receive a missing AzAPI mock when retiring their empty modtm mock;
+empty AzAPI mocks receive a valid synthetic subscription resource ID for
+`azapi_client_config`. Authored non-empty AzAPI mocks are preserved.
+Real-provider declarations, aliased mocks, provider mappings and delegated
+test modules require review rather than being silently changed. Integration
+tests do not receive new mocks. Non-empty modtm test mocks and remaining
+author-owned `modtm` resources or data sources fail with
 actionable diagnostics instead of being silently rewritten. When random was
 used only by retired telemetry, standard empty `mock_provider "random"`
 blocks in direct unit tests are removed if the root, local children, and test

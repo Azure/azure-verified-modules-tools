@@ -460,6 +460,14 @@ non-resource class. Unknown identities retain the resource requirement, and
 conflicting identities fail. Child-module and example profiles disable this
 root-only rule.
 
+For provider-mocked unit tests, telemetry migration replaces a standard
+empty modtm mock with a missing AzAPI mock and gives empty AzAPI mocks a
+valid synthetic `subscription_resource_id`. Existing custom AzAPI mocks
+remain unchanged; ensure their client-config defaults contain a full
+`/subscriptions/<guid>` ID, not a bare GUID. Real-provider declarations,
+aliased mocks and delegated test modules are reported for review rather
+than rewritten.
+
 The generated `module_class` setting applies only to the root. Do not
 override it to contradict the repository identity. Custom profiles that use
 this setting need AVM ruleset v1.2.0 or later; explicit `enabled = false`

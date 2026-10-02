@@ -20,7 +20,7 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
             param($ToolPath)
             New-AvmToolPathEnvironment -ToolPath $ToolPath -ToolName terraform
         }
-        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate')) {
+        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate', 'TF_CLI_ARGS_test')) {
             $script:processEnvironment[$name] = $null
         }
 
@@ -557,9 +557,12 @@ terraform {
 '@
         $testPath = Join-Path $unit 'telemetry.tftest.hcl'
         Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
-mock_provider "azapi" {}
 mock_provider "modtm" {}
 mock_provider "random" {}
+
+variables {
+  location = "eastus"
+}
 
 run "telemetry" {
   assert {
@@ -577,6 +580,7 @@ run "telemetry" {
         $testContent = Get-Content -LiteralPath $testPath -Raw
         $testContent | Should -Not -Match 'mock_provider "modtm"'
         $testContent | Should -Not -Match 'mock_provider "random"'
+        [regex]::Matches($testContent, 'mock_provider "azapi"').Count | Should -Be 1
         $testContent | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'
         $providerContent = Get-Content -LiteralPath (Join-Path $wrapper 'terraform.tf') -Raw
         $providerContent | Should -Not -Match '(?m)^\s*modtm\s*='
@@ -587,6 +591,9 @@ run "telemetry" {
         $drift.Changed | Should -BeNullOrEmpty
         Get-Content -LiteralPath $testPath -Raw | Should -BeExactly $testContent
         Assert-TelemetryTerraformValid -Root $root
+        $unitResult = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit')), '-no-color') -Root $root
+        $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
     }
 
     It 'encodes an unversioned local module in the name and creates no deployment when disabled' {

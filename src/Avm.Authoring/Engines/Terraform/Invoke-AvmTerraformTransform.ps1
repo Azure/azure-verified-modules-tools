@@ -308,6 +308,8 @@ function Remove-AvmLegacyTelemetryTestMock {
     $changes = [System.Collections.Generic.List[object]]::new()
     $emptyMock = '(?m)^[ \t]*mock_provider[ \t]+"modtm"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $customMock = '(?m)^[ \t]*mock_provider[ \t]+"modtm"[ \t]*\{'
+    $azapiMock = '(?m)^[ \t]*mock_provider[ \t]+"azapi"[ \t]*\{'
+    $emptyAzapiMock = '(?m)^[ \t]*mock_provider[ \t]+"azapi"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $legacyReference = '(?<![A-Za-z0-9_])modtm_telemetry\.telemetry(?![A-Za-z0-9_])'
     $emptyRandomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $randomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{'
@@ -332,15 +334,47 @@ function Remove-AvmLegacyTelemetryTestMock {
         }
 
         $original = [System.IO.File]::ReadAllText($file.FullName)
+        $relativePath = [System.IO.Path]::GetRelativePath($owner.Path, $file.FullName).Replace('\', '/')
+        $isUnitTest = $relativePath -cmatch '^tests/unit/[^/]+\.tftest\.hcl$'
+        $retiredMock = [regex]::Match($original, $emptyMock)
         $updated = [regex]::Replace($original, $emptyMock, '')
         if ([regex]::IsMatch($updated, $customMock)) {
             throw [AvmConfigurationException]::new(
                 "Test file '$($file.FullName)' contains a non-empty modtm mock; remove or rewrite it manually before telemetry migration.")
         }
+        $emptyAzapi = [regex]::Match($updated, $emptyAzapiMock)
+        $hasAzapiMock = [regex]::IsMatch($updated, $azapiMock)
+        $needsAzapiMock = $retiredMock.Success -and -not $hasAzapiMock
+        if ($isUnitTest -and ($retiredMock.Success -or $emptyAzapi.Success)) {
+            if ($updated -match '(?m)^[ \t]*provider[ \t]+"azapi"[ \t]*\{' -or
+                $updated -match '(?m)^[ \t]*module[ \t]*\{' -or
+                $updated -match '=[ \t]*modtm(?=[ \t\r\n,}.]|$)' -or
+                ($hasAzapiMock -and $updated -match '\balias[ \t]*=')) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot automatically migrate telemetry mocks in '$($file.FullName)': an authored provider, alias, provider mapping, or delegated test module needs review.")
+            }
+        }
+        if ($isUnitTest -and ($needsAzapiMock -or $emptyAzapi.Success)) {
+            $lineEnding = if ($original.Contains("`r`n")) { "`r`n" } else { "`n" }
+            $replacementMock = @'
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+'@
+            $replacementMock = ($replacementMock.Replace("`r`n", "`n").TrimEnd() + "`n").Replace("`n", $lineEnding)
+            if ($emptyAzapi.Success) {
+                $updated = $updated.Remove($emptyAzapi.Index, $emptyAzapi.Length).Insert($emptyAzapi.Index, $replacementMock)
+            }
+            else {
+                $updated = $updated.Insert($retiredMock.Index, $replacementMock)
+            }
+        }
         $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
-        $relativePath = [System.IO.Path]::GetRelativePath($owner.Path, $file.FullName).Replace('\', '/')
-        if ($relativePath -cmatch '^tests/unit/[^/]+\.tftest\.hcl$' -and
-            [regex]::IsMatch($updated, $randomMock)) {
+        if ($isUnitTest -and [regex]::IsMatch($updated, $randomMock)) {
             $testDirectory = Split-Path -Parent $file.FullName
             $key = "$($owner.Path)|$testDirectory"
             if (-not $randomUse.ContainsKey($key)) {
@@ -366,7 +400,7 @@ function Remove-AvmLegacyTelemetryTestMock {
 
     $encoding = [System.Text.UTF8Encoding]::new($false)
     foreach ($change in $changes) {
-        if ($PSCmdlet.ShouldProcess($change.Path, 'remove retired telemetry test mocks and references')) {
+        if ($PSCmdlet.ShouldProcess($change.Path, 'migrate retired telemetry test mocks and references')) {
             [System.IO.File]::WriteAllText($change.Path, $change.Content, $encoding)
         }
     }
