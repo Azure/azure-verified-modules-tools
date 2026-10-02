@@ -786,12 +786,13 @@ function Invoke-AvmTerraformTransform {
             EnvVars     = $mapotfEnv
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
+        $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
+        $unitTestTargets = @($moduleTargets + $testTargets)
         $unitSnapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Context.Root `
-                -ModuleTargets $moduleTargets -Options $transformOptions)
+                -ModuleTargets $unitTestTargets -Options $transformOptions)
 
         $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
 
-        $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
         Invoke-AvmParallel `
             -InputObject $moduleTargets `
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `
@@ -829,7 +830,7 @@ function Invoke-AvmTerraformTransform {
                 -Argument $transformOptions `
                 -ThrottleLimit $effectiveThrottle
         }
-        Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $moduleTargets `
+        Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $unitTestTargets `
             -Snapshots $unitSnapshots -Options $transformOptions
         Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null

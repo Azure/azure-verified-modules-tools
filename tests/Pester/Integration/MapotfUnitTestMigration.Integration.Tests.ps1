@@ -191,6 +191,34 @@ run "child" {
         @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
     }
 
+    It 'inspects and migrates a module reached through a directory alias' {
+        $fixture = New-NativeTestFixture
+        $alias = Join-Path $TestDrive ('alias-' + [guid]::NewGuid().ToString('N'))
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -ItemType $linkType -Path $alias -Target $fixture.Root
+        $fixture.Root = $alias
+        $fixture.Child = Join-Path $alias 'modules' 'child'
+        $fixture.Test = Join-Path $alias 'tests' 'unit' 'scopes.tftest.hcl'
+        $fixture.Targets[0].Path = $fixture.Root
+        $fixture.Targets[1].Path = $fixture.Child
+        $fixture.Scope.File = Get-Item -LiteralPath $fixture.Test
+        $before = Read-NativeTestFixture -Fixture $fixture
+        $before.test.run_modules.root.dir | Should -BeExactly $fixture.Root
+        $before.test.run_modules.child.dir | Should -BeExactly $fixture.Child
+        foreach ($target in $fixture.Targets) {
+            [System.IO.File]::WriteAllText((Join-Path $target.Path 'location.tf'), "variable `"location`" {`n  type = string`n}`n", $script:utf8)
+        }
+        Invoke-NativeLocationProfile -Fixture $fixture -Locations @($before.test.run_modules.Values.dir)
+        $after = Read-NativeTestFixture -Fixture $fixture
+        $after.test.runs.root.variables[0].mptf.attributes.location | Should -BeExactly 'eastus'
+        $after.test.runs.child.variables[0].mptf.attributes.location | Should -BeExactly 'eastus'
+        $after.test.run_modules.child.dir | Should -BeExactly $fixture.Child
+        $first = [System.IO.File]::ReadAllText($fixture.Test)
+        Invoke-NativeLocationProfile -Fixture $fixture -Locations @($before.test.run_modules.Values.dir)
+        [System.IO.File]::ReadAllText($fixture.Test) | Should -BeExactly $first
+        @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
+    }
+
     It 'preserves an explicitly authored global location' -TestCases @(
         @{ Value = '"uksouth"' }
         @{ Value = 'null' }

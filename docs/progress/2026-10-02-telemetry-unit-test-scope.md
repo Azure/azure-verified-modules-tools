@@ -21,7 +21,8 @@ without weakening the safeguards for unknown dependencies or real providers.
 - [x] Verify the released MaPoTF distribution and signed checksum manifest.
 - [x] Implement and test only source-proven migration cases.
 - [x] Run the full local gate.
-- [ ] Complete the full telemetry integration run, commit and push.
+- [x] Complete the full telemetry integration run, commit and push.
+- [ ] Fix and qualify standalone test-module discovery in hosted integration.
 - [ ] Repeat the narrow ALZ networking preview.
 
 ## Evidence
@@ -127,9 +128,10 @@ The initial Tools integration snapshots native test targets and local input
 declarations before ordinary source transforms, then adds only newly required
 location inputs to eligible mocked runs. Authored global and per-run inputs
 remain untouched. The root/local-child Terraform regression is restored.
-Focused checks and the full local gate now pass. The final complete telemetry
-integration run is running; commit/push and ALZ networking preview remain
-outstanding.
+Focused checks, the full local gate and all 34 telemetry/native integration
+cases passed. Runtime commit `db16bbfc239d2f6f46d79e9f75af9e0079c25ed3`
+is pushed. Hosted qualification found a standalone test-target regression; its fix
+and the ALZ networking preview remain outstanding.
 
 ## Integration validation
 
@@ -153,6 +155,62 @@ outstanding.
 - Full `./build.ps1 pre-commit`: layout and lint passed, 2,689 unit tests
   passed (nine skipped), and 1,291 component tests passed (one skipped).
   Zero test failures; the gate completed in 16m31s.
+- The final complete telemetry/native integration run passed all 34 cases,
+  with zero failures or skips.
+
+## Hosted standalone test-target regression
+
+The [macOS real-binary job](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37029558799/job/110912670057)
+completed with 156 passes, three failures and one skip. Native inspection
+rejected the real-binary fixture under `/var/folders/...` as an unknown local
+target. The first hypothesis was a macOS directory alias, but the completed
+Windows and Linux jobs reported the same failure. Source-only reproduction
+against both actual CI fixtures confirmed the cause: the orchestrator supplied
+only root and child modules to native inspection, omitting its already
+discovered standalone `tests/wrapper` and `tests/unit/setup` targets.
+
+The repair includes these known standalone test modules in inspection and
+migration, without making them owners of nearby test files. Only root and
+child module profiles establish file ownership, so a `.tf` file in
+`tests/unit` cannot prevent its sibling unit test from being inspected.
+The explicit directory allowlist and provider-review guards remain unchanged.
+The provisional alias-rebinding implementation was removed rather than
+retaining an unproven workaround.
+
+Both added fixture regressions first reproduced the hosted failure, then
+passed the real transform with no drift and unchanged test-file hashes.
+A directory-junction regression also passes without path rebinding and
+checks native selected-file migration, second-pass stability and cleanup.
+The corresponding 100 unit cases and all 37 telemetry/native integration
+cases pass, with no failures or skips. The complete integration run finished
+in 7m24s. The first full-gate attempt exhausted the documented transient
+PSScriptAnalyzer crash retries. A fresh-process `./build.ps1 pre-commit`
+passed layout and lint, all 2,690 unit tests (nine skipped) and all 1,291
+component tests (one skipped). It finished in 14m08s with zero errors.
+Hosted qualification of this follow-up is outstanding.
+
+The narrow preview has not been dispatched. A fresh concurrency check found
+the [scheduled repository sync](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37009330644)
+still queued, most recently with 142 completed and 88 queued jobs.
+Do not replace its queued slot, cancel it or retry it.
+
+A disposable local ALZ networking clone at `670c45d48b0c7c6a244cddac8715269b0fc06185`
+transformed successfully: 74 files processed, 30 changed, no reported issues.
+Its three authored test files
+contain eight runs, all `command = plan`, with AzAPI, AzureRM, modtm and random
+mocks and no real-provider declarations or setup/teardown hooks. The original
+native inspection is retained before transformation. Comparing the native
+before/after records confirms all eight targets, commands, assertions,
+expected failures, authored variables, per-hub regions and telemetry opt-outs
+are preserved. Only the new test-only location and standard mock migration
+change their test contracts.
+
+The first local unit invocation stopped during dependency initialization,
+before any run executed: nested Git module downloads hit Windows
+`fatal: '$GIT_DIR' too big` under the long disposable checkout path.
+The next attempt uses a shorter ignored path in the same worktree, with no
+source repair or reduced test coverage. Azure credentials and CLI/managed
+identity/OIDC authentication are disabled for this local mocked tier.
 
 ## Blockers or dependencies
 

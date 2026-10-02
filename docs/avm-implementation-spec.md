@@ -646,7 +646,10 @@ empty AzAPI mocks receive a valid synthetic subscription resource ID for
 `azapi_client_config`. Authored non-empty AzAPI mocks are preserved.
 MaPoTF 0.3.0 inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
-targets are supported; remote or unknown targets fail without fetching them.
+targets, including discovered standalone test setup and wrapper modules,
+are supported; remote or unknown targets fail without fetching them.
+Only root and child modules establish test-file ownership; standalone
+test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,
 required `location` input receives a per-run `location = "eastus"` in its
 provider-mocked tests. Existing global and per-run values, including nulls

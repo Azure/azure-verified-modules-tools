@@ -213,6 +213,25 @@ Describe 'Terraform unit-test migration' {
             Should -Invoke Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring -Exactly 2
         }
 
+        It 'inspects standalone test targets without treating them as file owners' {
+            $testTarget = [pscustomobject]@{
+                Path     = Join-Path $script:fixture.Root 'tests' 'unit'
+                Scope    = 'test'
+                Profiles = @('provider-cleanup', 'test')
+            }
+            $script:fixture.Targets += $testTarget
+            $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+            }
+            $result | Should -HaveCount 2
+            $result[0].Scope.Owner.Path | Should -BeExactly $script:fixture.Root
+            $result[0].Scope.IsUnitTest | Should -BeTrue
+            Should -Invoke Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring -Exactly 2 -ParameterFilter {
+                @($ModuleTargets | Where-Object Scope -EQ 'test').Count -eq 1
+            }
+        }
+
         It 'rejects a path outside every known owner' {
             Mock Get-AvmTerraformFile -ModuleName Avm.Authoring {
                 [pscustomobject]@{ Name = 'outside.tftest.hcl'; FullName = $Root + '-outside.tftest.hcl' }

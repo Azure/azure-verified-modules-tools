@@ -809,6 +809,29 @@ run "second" {
         $result.StdOut | Should -Match 'azapi_resource\.telemetry\[0\] will be updated in-place'
     }
 
+    It 'preserves existing delegated fixture tests during transformation for <Fixture>' -TestCases @(
+        @{ Fixture = 'terraform-azure-avm-res-mock' }
+        @{ Fixture = 'terraform-azurerm-avm-res-mock' }
+    ) {
+        param($Fixture)
+
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $source = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' $Fixture
+        Copy-Item -LiteralPath $source -Destination $root -Recurse -Force
+        $tests = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.tftest.hcl')
+        $hashes = @{}
+        foreach ($file in $tests) {
+            $hashes[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $result = Invoke-TelemetryEngine -Root $root -CheckDrift
+        $result.Status | Should -BeExactly 'pass'
+        @($result.Changed).Count | Should -Be 0
+        foreach ($file in $tests) {
+            (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $hashes[$file.FullName]
+        }
+        @(Get-ChildItem -LiteralPath $root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
+    }
+
     It 'accepts a 36-character version at the 64-character Azure name limit' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root

@@ -12,6 +12,7 @@ function Get-AvmTerraformTestFileScope {
             Where-Object { $_.Name.EndsWith('.tftest.hcl', [System.StringComparison]::OrdinalIgnoreCase) }) {
         $owner = $ModuleTargets |
             Where-Object {
+                ($_.Profiles -contains 'root' -or $_.Profiles -contains 'module') -and
                 $file.FullName.StartsWith(
                     ($_.Path + [System.IO.Path]::DirectorySeparatorChar),
                     [System.StringComparison]::Ordinal)
