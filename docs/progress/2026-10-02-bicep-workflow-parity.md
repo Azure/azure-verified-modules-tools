@@ -46,6 +46,11 @@ Implementation baseline:
 - [x] Update the directly related command help and migration contract.
 - [x] Run focused checks and the ordinary full development gate.
 - [x] Commit and push the implementation to the existing draft review.
+- [x] Qualify an unsigned extracted distribution through native contracts
+      and unmodified registry cases without live Azure.
+- [ ] Confirm hosted checks, including coverage, for the package correction.
+- [ ] Complete separately approved release and live Azure qualification
+      before replacing registry workflows.
 
 ## Validation
 
@@ -100,8 +105,21 @@ native target checks, exact attempted IDs and recoverable cleanup remain.
 
 The integrated source passed the ordinary full gate: 2,750 unit tests and
 1,257 component tests, with nine unit skips and one component skip; layout
-and lint passed. Local unsigned distribution qualification and approved
-live Azure qualification remain separate from these source results.
+and lint passed.
+
+The [native package qualification](2026-10-02-bicep-native-package-qualification.md)
+passed with 348 byte-verified payload files, 56 extracted command definitions,
+158 packaged unit tests, 143 packaged component tests, five real scaffold
+compiles and six real-compiler registry scenarios with simulated Azure.
+It exposed and corrected propagation of the explicit version-check override
+through the public e2e command. The artifact records the exact source
+boundary rather than claiming unchanged-main provenance.
+
+Additional lifecycle/input controls address the prior hosted coverage
+shortfall. The corrected source passed the ordinary full gate with 2,807
+unit tests and 1,257 component tests, with nine unit skips and one component
+skip; local coverage reached 73.18% against the unchanged 70% floor.
+Hosted verification and approved live Azure qualification remain separate.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,

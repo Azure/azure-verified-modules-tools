@@ -187,7 +187,7 @@ function Invoke-AvmTestE2e {
     }
     else {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-        $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+        $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem -SkipModuleVersionCheck:$SkipModuleVersionCheck
     }
     $bicepOptions = @(
         'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'Location',

@@ -27,6 +27,10 @@ $loadedPath = (Get-Module -Name 'Avm.Authoring').Path
 
 $selectors = @(
     'Invoke-AvmPrCheck*'
+    'Invoke-AvmTestE2e*'
+    'Invoke-AvmTestCleanup*'
+    'Bicep native*'
+    'Resolve-AvmBicepParameterToken*'
     'Bicep e2e post hook subprocess*'
     'Bicep static convention checks.checks the complete root*'
     'Bicep static convention checks.fails closed when the API*'
@@ -39,9 +43,10 @@ $selectors = @(
     'Bicep PSRule policy checks.reports required failures*'
     'Component: extracted package test imports*'
     'Component: Bicep Pester unit tier*'
-    'Component: Bicep isolated end-to-end deployments.*post*'
-    'Component: Bicep isolated end-to-end deployments.honors WhatIf*'
-    'Component: Bicep scoped end-to-end deployments.*post*'
+    'Component: Bicep native*'
+    'Component: Bicep cleanup state and context*'
+    'Component: Bicep same-process test scripts*'
+    'Component: Bicep authored deployment output contract*'
     'Component: Bicep ARM integration tier.does not run case-local post*'
 )
 & (Join-Path $repoRoot 'build.ps1') test, component -TestName $selectors
@@ -67,12 +72,20 @@ $tiers = @(
         }
     }
 )
+$executedNames = @($tiers | Where-Object { $_.Tier -ne 'integration' } | ForEach-Object { $_.Tests })
+foreach ($selector in $selectors) {
+    if (@($executedNames | Where-Object { $_ -like $selector }).Count -eq 0) {
+        throw [System.InvalidOperationException]::new(
+            "The packaged contracts did not execute any test matching '$selector'.")
+    }
+}
 $report = [pscustomobject]@{
-    Kind            = 'offline fixture contracts; mocked compiler, policy and Azure processes, not deployment qualification'
+    Kind            = 'offline fixture contracts; simulated Azure and fixture compiler/policy controls, not live deployment qualification'
     ImportedPath    = $loadedPath
     RequiredSteps   = 'policy/convention/docs cannot skip or return uninspectable success; docs must render every selected source'
     UnitRouting     = 'real child Pester through the packaged Resources/bicep runner'
-    PostHookRouting = 'fake-process success, failure, cancellation, cleanup ordering and dry-run checks'
+    PostHookRouting = 'isolated and same-process success, failure, cancellation, cleanup ordering and dry-run checks'
+    NativeWorkflow  = 'four scopes, hosted completion, typed inputs, cleanup state/recovery and real-Pester output compatibility'
     Tiers           = @($tiers | Where-Object { $_.Tier -ne 'integration' })
     RealScaffold    = [pscustomobject]@{
         Kind     = 'real offline pinned Bicep compilation of generated canonical/legacy scaffold and invalid description/prefix/name cases'

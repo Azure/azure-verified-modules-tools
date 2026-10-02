@@ -5,6 +5,7 @@ BeforeAll {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
     $script:sourceManifest = Join-Path $moduleRoot 'Avm.Authoring.psd1'
     & (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') -SourceManifest $script:sourceManifest
+    $script:sourceManifest = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'
 }
 
 AfterAll {

@@ -3,7 +3,8 @@
 
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring')
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    & (Join-Path $PSScriptRoot '..' '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
 }
 
 AfterAll {
@@ -220,6 +221,22 @@ Describe 'Invoke-AvmTestE2e native workflow options' {
             Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'test-root'; Ecosystem = $Ecosystem } }
             Mock Invoke-AvmBicepTestE2e { [pscustomobject]@{ Status = 'pass'; Engine = 'bicep' } }
             Mock Invoke-AvmTerraformTestE2e { [pscustomobject]@{ Status = 'pass'; Engine = 'terraform' } }
+        }
+    }
+
+    It 'forwards the explicit version-check policy to context discovery: <SkipCheck>' -ForEach @(
+        @{ SkipCheck = $true }
+        @{ SkipCheck = $false }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ SkipCheck = $SkipCheck } {
+            param($SkipCheck)
+            $null = Invoke-AvmTestE2e -Ecosystem bicep -SkipModuleVersionCheck:$SkipCheck
+            Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter {
+                [bool]$SkipModuleVersionCheck -eq $SkipCheck
+            }
+            Should -Invoke Get-AvmModuleContext -Exactly 1 -ParameterFilter {
+                [bool]$SkipModuleVersionCheck -eq $SkipCheck
+            }
         }
     }
 
