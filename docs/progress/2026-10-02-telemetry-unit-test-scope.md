@@ -74,14 +74,16 @@ native interface. Runtime implementation commit:
 `25775cf91ea010b5f1ed363b2b543e2a71e9cf0f`. Follow-up
 `7c1ad9b85848938df37faca06922d2f55f499796` changes documentation/tests to
 clarify repeated variable flags; runtime files are unchanged.
-The review remains open and requires review.
+The operator merged the review on October 2 at
+`d7485208e513b7b29d9128c6fe25a09864ba96ac` and confirmed the release
+version will be 0.3.0.
 
 The native repository's build, tests, vet and lint passed. Hosted Windows
 and Linux builds and CodeQL completed successfully at both `25775cf` and
 the final `7c1ad9b` head:
 [build](https://github.com/Azure/mapotf/actions/runs/37009035845) and
 [CodeQL](https://github.com/Azure/mapotf/actions/runs/37009035915).
-GitHub reports `REVIEW_REQUIRED`; no checks are still running for that head.
+Those checks completed before the operator's merge.
 
 Tools-side development checks used `./build.ps1 integration` with an explicit,
 commit-identified executable, never a replaced verified cache entry:
@@ -108,10 +110,15 @@ The released Tools pin and qualified runtime code remain unchanged.
 Investigation is local and source-only. Archived repositories remain excluded.
 No deployment, module publication, protected approval, or source-module repair
 is authorized by this slice.
-Tools integration and its real regression depend on a reviewed, approved
-MaPoTF release with verified assets. No merge or release publication has been
-authorized. Existing direct-unit migration remains qualified by the preceding
-local gate, all-platform CI and active-pattern preview.
+Tools integration and its real regression depend on MaPoTF 0.3.0 with verified
+release assets. At the first post-merge check,
+[v0.3.0](https://github.com/Azure/mapotf/releases/tag/v0.3.0) was a prerelease
+with zero assets; it was not installable. The Tools pin therefore remains
+0.2.2. Release creation, approval and publication remain operator-owned; this
+session only checks availability and will resume integration once the complete
+distribution and required attestations are verified. Existing direct-unit
+migration remains qualified by the preceding local gate, all-platform CI and
+active-pattern preview.
 Before rollout, the team documentation should describe the approved release,
 test-migration behavior and upgrade procedure, reusing an existing open
 documentation review where applicable.
