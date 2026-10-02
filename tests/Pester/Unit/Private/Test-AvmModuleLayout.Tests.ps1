@@ -197,6 +197,12 @@ Describe 'Module Resources packaging' {
             'provider-cleanup' = @(
                 'remove_modtm_provider.mptf.hcl'
             )
+            'unit-test-inspect' = @(
+                'inspect.mptf.hcl'
+            )
+            'unit-test' = @(
+                'location.mptf.hcl'
+            )
         }
 
         foreach ($profile in $expected.Keys) {

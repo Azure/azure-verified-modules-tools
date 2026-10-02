@@ -27,6 +27,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             Source    = 'path-heuristic'
         }
         Mock Set-AvmTelemetryTagLintDirective -ModuleName 'Avm.Authoring'
+        Mock Get-AvmTerraformUnitTestSnapshot -ModuleName 'Avm.Authoring' { @() }
     }
 
     It 'rejects a non-terraform context' {
@@ -575,6 +576,50 @@ mock_provider "azapi" {
         Get-Content -LiteralPath $testFile -Raw | Should -Not -Match 'mock_provider "random"'
         Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw |
             Should -Match 'resource "random_integer"'
+    }
+
+    It 'migrates a native-validated sibling target and checks its actual random use' -TestCases @(
+        @{ UsesRandom = $true }
+        @{ UsesRandom = $false }
+    ) {
+        param($UsesRandom)
+        $owner = Join-Path $script:moduleDir 'modules' 'owner'
+        $sibling = Join-Path $script:moduleDir 'modules' 'sibling'
+        $unit = Join-Path $owner 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit, $sibling -Force
+        Set-Content -LiteralPath (Join-Path $owner 'main.tf') -Encoding utf8NoBOM -Value 'locals {}'
+        $source = if ($UsesRandom) { 'resource "random_string" "suffix" { length = 4 }' } else { 'locals {}' }
+        Set-Content -LiteralPath (Join-Path $sibling 'main.tf') -Encoding utf8NoBOM -Value $source
+        $testFile = Join-Path $unit 'sibling.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+run "sibling" {
+  module {
+    source = "../sibling"
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:moduleDir
+            Owner = $owner
+            Sibling = $sibling
+            TestFile = $testFile
+        } {
+            param($Root, $Owner, $Sibling, $TestFile)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                [pscustomobject]@{ Path = $Owner; Profiles = @('module') }
+                [pscustomobject]@{ Path = $Sibling; Profiles = @('root', 'module') }
+            ) -UnitTestPlans @(
+                [pscustomobject]@{ Path = $TestFile; TargetPaths = @($Sibling) }
+            )
+        }
+        $updated = [System.IO.File]::ReadAllText($testFile)
+        $updated | Should -Not -Match 'mock_provider "modtm"'
+        $updated | Should -Match 'mock_provider "azapi"'
+        $updated | Should -Match 'source = "\.\./sibling"'
+        [regex]::IsMatch($updated, 'mock_provider "random"') | Should -Be $UsesRandom
     }
 
     It 'requires manual review when an empty mock is attached to a test module' {

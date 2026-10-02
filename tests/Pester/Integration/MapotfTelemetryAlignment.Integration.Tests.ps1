@@ -53,12 +53,12 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
         }
 
         function Assert-TelemetryTerraformValid {
-            param([string] $Root)
+            param([string] $Root, [string] $TestDirectory = 'tests')
 
             $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
                 -ArgumentList @('fmt', '-recursive', $Root) -Root $Root
             $init = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-                -ArgumentList @('init', '-backend=false', '-input=false', '-upgrade', '-no-color') -Root $Root
+                -ArgumentList @('init', '-backend=false', '-input=false', '-upgrade', '-no-color', "-test-directory=$TestDirectory") -Root $Root
             $init.StdOut | Should -Not -Match 'Finding Azure/modtm versions'
             $validation = Invoke-TelemetryProcess -FilePath $script:terraformPath `
                 -ArgumentList @('validate', '-json') -Root $Root
@@ -594,6 +594,92 @@ run "telemetry" {
         $unitResult = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('test', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit')), '-no-color') -Root $root
         $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
+    }
+
+    It 'preserves root and local-child unit targets when telemetry introduces location' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        New-TelemetryModule -Root $root -WithLegacy
+        New-TelemetryModule -Root $child -WithLegacy -Child
+        foreach ($target in @($root, $child)) {
+            Add-Content -LiteralPath (Join-Path $target 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "hub_regions" {
+  type = map(string)
+}
+'@
+            Set-Content -LiteralPath (Join-Path $target 'main.tf') -Encoding utf8NoBOM -Value @'
+locals {
+  primary_region = var.hub_regions.primary
+}
+'@
+        }
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testPath = Join-Path $unit 'scopes.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "azapi" {}
+mock_provider "modtm" {}
+mock_provider "random" {}
+
+variables {
+  enable_telemetry = false
+  hub_regions = {
+    primary   = "westeurope"
+    secondary = "swedencentral"
+  }
+}
+
+run "root" {
+  command = plan
+
+  assert {
+    condition     = local.primary_region == "westeurope" && var.hub_regions.secondary == "swedencentral"
+    error_message = "Authored hub regions must be preserved."
+  }
+  assert {
+    condition     = length(azapi_resource.telemetry) == 0 && var.location == "eastus"
+    error_message = "Supply only the new test input and preserve the telemetry opt-out."
+  }
+}
+
+run "child" {
+  command = plan
+
+  module {
+    source = "./modules/child"
+  }
+
+  assert {
+    condition     = local.primary_region == "westeurope" && var.hub_regions.secondary == "swedencentral"
+    error_message = "The delegated module must retain the authored hub regions."
+  }
+  assert {
+    condition     = length(azapi_resource.telemetry) == 0 && var.location == "eastus"
+    error_message = "The delegated module must receive only the new input."
+  }
+}
+'@
+
+        $before = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $before.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $before[$path]
+        }
+        @(Get-ChildItem -LiteralPath $root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $content = [System.IO.File]::ReadAllText($testPath)
+        $content | Should -Match 'source\s*=\s*"\./modules/child"'
+        $content | Should -Match 'mock_provider "azapi"'
+        $content | Should -Not -Match 'mock_provider "(modtm|random)"'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $content
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit')), '-no-color') -Root $root
+        $result.StdOut | Should -Match 'Success! 2 passed, 0 failed'
     }
 
     It 'encodes an unversioned local module in the name and creates no deployment when disabled' {

@@ -107,6 +107,10 @@ section when cutting a release.
 
 ### Changed
 
+- Pinned MaPoTF 0.3.0 enables native, single-file Terraform test migration.
+  Known root and local-child runs receive only newly required location inputs,
+  preserving authored global/run values, regions, assertions and telemetry
+  opt-outs. Remote or unknown targets are rejected without fetching them.
 - Terraform MaPoTF now replaces `modtm` telemetry with an empty
   subscription-scoped AzAPI deployment for metadata-backed roots and children.
   Roots other than utilities without Azure resources and all Azure-deploying
@@ -353,7 +357,7 @@ section when cutting a release.
   explicit test provider mappings are checked before any mock is removed.
 - Standard telemetry unit mocks migrate to AzAPI with a valid synthetic
   client-config subscription ID. Custom mocks are preserved, and ambiguous
-  real-provider or delegated tests fail explicitly instead of being
+  real-provider contexts or unknown test targets fail explicitly instead of being
   silently mocked.
 - Newly scaffolded Bicep modules use the canonical telemetry parameter
   description that matches their metadata-backed prefix declaration, so

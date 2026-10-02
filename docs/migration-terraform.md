@@ -464,9 +464,20 @@ For provider-mocked unit tests, telemetry migration replaces a standard
 empty modtm mock with a missing AzAPI mock and gives empty AzAPI mocks a
 valid synthetic `subscription_resource_id`. Existing custom AzAPI mocks
 remain unchanged; ensure their client-config defaults contain a full
-`/subscriptions/<guid>` ID, not a bare GUID. Real-provider declarations,
-aliased mocks and delegated test modules are reported for review rather
-than rewritten.
+`/subscriptions/<guid>` ID, not a bare GUID.
+
+MaPoTF 0.3.0 supports both root runs and runs targeting a known local module
+in direct `tests/unit/*.tftest.hcl` files. It records each target's inputs
+before migration and adds per-run `location = "eastus"` only when migration
+introduces a required location and neither global nor run variables already
+supplies one. The value is test-only; existing nulls, expressions, per-hub
+regions, assertions and telemetry opt-outs are preserved. Pre-existing
+missing inputs are not repaired.
+
+Remote or unknown targets, real-provider declarations, aliased mocks and
+provider mappings require review rather than an automatic rewrite. A mocked
+AzureRM provider does not by itself isolate new AzAPI telemetry. Integration
+tests receive neither new mocks nor test locations.
 
 The generated `module_class` setting applies only to the root. Do not
 override it to contradict the repository identity. Custom profiles that use

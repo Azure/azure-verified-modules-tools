@@ -644,14 +644,25 @@ mocks, and standard references to the old telemetry resource. Direct unit
 tests receive a missing AzAPI mock when retiring their empty modtm mock;
 empty AzAPI mocks receive a valid synthetic subscription resource ID for
 `azapi_client_config`. Authored non-empty AzAPI mocks are preserved.
-Real-provider declarations, aliased mocks, provider mappings and delegated
-test modules require review rather than being silently changed. Integration
-tests do not receive new mocks. Non-empty modtm test mocks and remaining
+MaPoTF 0.3.0 inspects each direct `tests/unit/*.tftest.hcl` file before source
+transformation. Root runs and explicitly selected, known local module
+targets are supported; remote or unknown targets fail without fetching them.
+After source transformation, only a target that gained a previously absent,
+required `location` input receives a per-run `location = "eastus"` in its
+provider-mocked tests. Existing global and per-run values, including nulls
+and expressions, remain authored. This test-only value is not a production
+default and never replaces per-hub regions or repairs unrelated pre-existing
+missing inputs. Assertions, targets and telemetry opt-outs are preserved.
+Real-provider declarations, aliased mocks and provider mappings still require
+review rather than being silently changed; an AzureRM mock alone cannot cover
+new AzAPI telemetry. Integration tests do not receive new mocks or locations.
+Non-empty modtm test mocks and remaining
 author-owned `modtm` resources or data sources fail with
 actionable diagnostics instead of being silently rewritten. When random was
 used only by retired telemetry, standard empty `mock_provider "random"`
-blocks in direct unit tests are removed if the root, local children, and test
-setup no longer need that provider. Non-empty mocks or remaining random
+blocks in direct unit tests are removed if the owner, selected local test
+targets, their known local children, and test setup no longer need that
+provider. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
 JSON configurations and module dependencies that cannot be checked locally
 also retain their random mocks rather than assuming the provider is unused.
