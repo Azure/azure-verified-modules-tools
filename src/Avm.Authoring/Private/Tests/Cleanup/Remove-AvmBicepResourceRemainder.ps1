@@ -117,7 +117,8 @@ function Remove-AvmBicepResourceRemainder {
                 }
                 'Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems' {
 
-                    $vaultId = $ResourceId.split('/backupFabrics/')[0]
+                    $vaultId = $ResourceId.Substring(
+                        0, $ResourceId.IndexOf('/backupFabrics/', [System.StringComparison]::OrdinalIgnoreCase))
                     $resourceName = $ResourceId.Split('/')[-1]
                     $vault = Invoke-AvmBicepCleanupLookup -Command 'Get-AzRecoveryServicesVaultProperty' -Parameters @{
                         VaultId = $vaultId

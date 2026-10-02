@@ -934,8 +934,12 @@ Describe 'Bicep workflow cleanup CLI boundary' {
         InModuleScope Avm.Authoring {
             Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } }
             Mock Get-AzContext {
-                [pscustomobject]@{ Subscription = @{ Id = '00000000-0000-0000-0000-000000000003' } }
+                [pscustomobject]@{
+                    Subscription = @{ Id = '00000000-0000-0000-0000-000000000003' }
+                    Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' }
+                }
             }
+            Mock Assert-AvmBicepAzureIdentity {}
         }
     }
 
@@ -946,6 +950,10 @@ Describe 'Bicep workflow cleanup CLI boundary' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq 'fake-az' -and $ArgumentList[-4] -eq '--subscription' -and
                 $ArgumentList[-3] -eq '00000000-0000-0000-0000-000000000003'
+            }
+            Should -Invoke Assert-AvmBicepAzureIdentity -Exactly 1 -ParameterFilter {
+                $SubscriptionId -eq '00000000-0000-0000-0000-000000000003' -and
+                $TenantId -eq '00000000-0000-0000-0000-000000000002'
             }
         }
     }

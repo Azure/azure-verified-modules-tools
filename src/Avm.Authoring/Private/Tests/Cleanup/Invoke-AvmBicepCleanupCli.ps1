@@ -25,6 +25,9 @@ function Invoke-AvmBicepCleanupCli {
         -not $PSCmdlet.ShouldProcess(($ArgumentList -join ' '), 'Run Azure cleanup command')) {
         return
     }
+    $tenantId = Get-AvmPropertyValue -InputObject (
+        Get-AvmPropertyValue -InputObject $context -Name 'Tenant') -Name 'Id'
+    Assert-AvmBicepAzureIdentity -AzPath $az.Source -SubscriptionId $subscriptionId -TenantId $tenantId
     $result = Invoke-AvmProcess -FilePath $az.Source -ArgumentList (
         $ArgumentList + @('--subscription', $subscriptionId, '--output', 'json')
     ) -IgnoreExitCode

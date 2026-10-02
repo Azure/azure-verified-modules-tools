@@ -57,10 +57,29 @@ native handler behavior, exact resource identification, dependency
 ordering, recursive Create-operation discovery, pagination, partial lookup
 results, preflight rejection, cancellation, and checked CLI failures.
 
+The [cleanup state and context slice](2026-10-02-bicep-cleanup-state-context.md)
+adds private dependency/authentication preflight, process-scoped context
+restoration, ordered cleanup retries and atomic non-secret state. Its full
+development gate passed 2,646 unit tests and 1,293 component tests, with
+nine unit skips and one component skip. Both slices are retained in draft
+[tools #219](https://github.com/Azure/azure-verified-modules-tools/pull/219).
+
 The adapted helpers are not yet wired into the e2e runner. They do not
-change its current restrictions or constitute full workflow parity. State
-persistence, authentication preflight, execution retries, region selection,
-subscription selection, and runner integration remain in progress.
+change its current restrictions or constitute full workflow parity.
+Runner integration must record owned groups and attempted deployment IDs
+before submission, retain state outside temporary templates/parameters,
+preserve assertions then post-hook then cleanup, and expose recovery to
+local and Actions callers. Execution retries, region selection,
+subscription-pool selection and typed CI parameter handling also remain.
+
+Before claiming parity, verify the legacy provider-container expansion
+path: the current cleanup parser requires complete resource IDs. Runtime
+parameter maps also still use ordinary `.Keys` in
+`New-AvmBicepTestParameterFile`; add the authored `keys` parameter regression
+there as well as the already-covered README behavior from
+[Azure/bicep-registry-modules#7442](https://github.com/Azure/bicep-registry-modules/pull/7442).
+Do not remove existing execution guards until equivalent target handling
+and recovery are wired and exercised on unmodified registry cases.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,

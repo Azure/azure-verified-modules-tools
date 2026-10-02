@@ -701,6 +701,41 @@ captures the input digests and diagnostics. The required `avm pr-check` docs
 step enforces later README drift; this qualification alone does not authorize
 removing the registry CI workflow or its other gates.
 
+### Bicep cleanup state
+
+The private native cleanup helpers adapt the registry's ordinary cleanup;
+the reaper is only a fallback. They are not yet connected to `avm test e2e`.
+Runner integration must check dependencies and authentication before
+submission, record each attempted deployment ID before submitting it,
+and retain cleanup state separately from temporary templates and parameters.
+
+Use the caller's existing Azure PowerShell session with process-scoped
+subscription and tenant selection. Verify the selected account and cloud,
+restore the original context even on failure, and stop if restoration fails.
+Azure CLI and PowerShell must confirm the same subscription, tenant, cloud
+and account before CLI cleanup. Do not log in, export tokens or install
+modules implicitly. The native dependency floors follow the Az 15.5.0
+bundle, plus Az.Subscription 0.12.0, which is distributed separately.
+Check the actual command provenance and parameter names or aliases.
+
+The private version-1 JSON state allows only target identifiers, status,
+verified group ownership tags and the small amount of resource metadata
+needed after deletion. It never stores credentials, parameter values,
+deployment outputs or raw Azure responses. Create a unique local temporary
+file by default; an explicit path resolves against the caller's PowerShell
+location. Never overwrite an existing file during creation. Updates use a
+flushed, exclusive sibling temporary file followed by an atomic replacement,
+and retain the last valid state if serialization fails.
+
+Capture post-removal metadata before deleting resources or their parents.
+Persist successful removal before post-processing so recovery retries only
+unfinished work. Partial discovery, unverified ownership and exhausted
+cleanup remain explicit failures with pending targets; cancellation and
+context-restoration failure must not enter the ordinary retry loop.
+An Actions caller may upload the non-secret state as an artifact. Recovery
+from that artifact requires a completed upload; runner loss beforehand
+still relies on the reaper or operator cleanup, not a new external journal.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.
