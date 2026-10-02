@@ -1,6 +1,6 @@
 # Telemetry migration for explicit unit-test targets
 
-**Status**: in-progress
+**Status**: blocked
 **Started**: 2026-10-02
 **Updated**: 2026-10-02
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -10,6 +10,8 @@
 Preserve existing unit-test targets and assertions during central telemetry
 migration. Establish which local delegated runs can be migrated safely
 without weakening the safeguards for unknown dependencies or real providers.
+Implementation and local ALZ qualification are complete. The remaining
+plan-only workflow preview is blocked by existing repository-sync runs.
 
 ## Checklist
 
@@ -22,7 +24,9 @@ without weakening the safeguards for unknown dependencies or real providers.
 - [x] Implement and test only source-proven migration cases.
 - [x] Run the full local gate.
 - [x] Complete the full telemetry integration run, commit and push.
-- [ ] Fix and qualify standalone test-module discovery in hosted integration.
+- [x] Fix and qualify standalone test-module discovery in hosted integration.
+- [x] Preserve all eight ALZ unit plans through the complete local pre-commit chain.
+- [x] Verify second-pass transformation stability without retained changes.
 - [ ] Repeat the narrow ALZ networking preview.
 
 ## Evidence
@@ -130,8 +134,10 @@ location inputs to eligible mocked runs. Authored global and per-run inputs
 remain untouched. The root/local-child Terraform regression is restored.
 Focused checks, the full local gate and all 34 telemetry/native integration
 cases passed. Runtime commit `db16bbfc239d2f6f46d79e9f75af9e0079c25ed3`
-is pushed. Hosted qualification found a standalone test-target regression; its fix
-and the ALZ networking preview remain outstanding.
+is pushed. Hosted qualification found a standalone test-target regression,
+subsequently fixed and qualified in
+`9e1595a9abd6cb0a5a17fea8b9f01c76ae2a2656`. The ALZ workflow preview remains
+outstanding.
 
 ## Integration validation
 
@@ -187,16 +193,24 @@ in 7m24s. The first full-gate attempt exhausted the documented transient
 PSScriptAnalyzer crash retries. A fresh-process `./build.ps1 pre-commit`
 passed layout and lint, all 2,690 unit tests (nine skipped) and all 1,291
 component tests (one skipped). It finished in 14m08s with zero errors.
-Hosted qualification of this follow-up is outstanding.
+The [hosted qualification run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37037370527)
+at `9e1595a9abd6cb0a5a17fea8b9f01c76ae2a2656` completed successfully.
+All eleven validation jobs passed: lint, workflow tests, the three OS test
+jobs, and both real-binary fixtures on Windows, Linux and macOS. Coverage
+upload and test-result publication also passed. Completed job logs confirm
+the previously failing pre-commit case, both fixture regressions and the
+directory-alias regression actually executed and passed.
 
 The narrow preview has not been dispatched. A fresh concurrency check found
 the [scheduled repository sync](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37009330644)
-still queued, most recently with 142 completed and 88 queued jobs.
-Do not replace its queued slot, cancel it or retry it.
+still queued and a [second sync](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37036072558)
+pending. Wait for all active and pending sync states to clear before the
+already-authorized narrow plan-only preview. Do not replace either slot,
+cancel either run or retry it.
 
 A disposable local ALZ networking clone at `670c45d48b0c7c6a244cddac8715269b0fc06185`
 transformed successfully: 74 files processed, 30 changed, no reported issues.
-Its three authored test files
+Before migration, its three authored test files
 contain eight runs, all `command = plan`, with AzAPI, AzureRM, modtm and random
 mocks and no real-provider declarations or setup/teardown hooks. The original
 native inspection is retained before transformation. Comparing the native
@@ -208,12 +222,25 @@ change their test contracts.
 The first local unit invocation stopped during dependency initialization,
 before any run executed: nested Git module downloads hit Windows
 `fatal: '$GIT_DIR' too big` under the long disposable checkout path.
-The next attempt uses a shorter ignored path in the same worktree, with no
-source repair or reduced test coverage. Azure credentials and CLI/managed
-identity/OIDC authentication are disabled for this local mocked tier.
+Moving the unchanged clone to the shorter ignored `out/alz` path resolved
+the download failure without source repairs or reduced coverage. All eight
+original unit plans then passed. A separate second-pass `-CheckDrift`
+processed 74 files with zero changes and no issues.
+
+The complete local `avm pre-commit` chain passed all six steps: metadata,
+managed-file sync, convention checks, transformation, formatting and
+documentation. It retained the repository's managed-files 1.1.0 pin; the
+1.1.2 availability warning was nonblocking and no upgrade was requested.
+Repeating the unit tier after this preparation again executed all eight
+original runs across three files: eight passed, zero failed, no issues.
+Azure credentials and CLI/managed identity/OIDC authentication were disabled
+for both local mocked runs. All local qualification jobs are finished.
 
 ## Blockers or dependencies
 
+The sole remaining qualification blocker is workflow concurrency: wait for
+the existing scheduled and pending repository-sync runs, then verify the
+ALZ-only plan-only preview without publication.
 Investigation is local and source-only. Archived repositories remain excluded.
 No deployment, module publication, protected approval, or source-module repair
 is authorized by this slice.
