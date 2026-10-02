@@ -5,7 +5,8 @@ BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).ProviderPath
     $script:moduleRoot = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
     $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-convention'
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
 }
 
 AfterAll {
@@ -506,7 +507,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             }).Count | Should -Be 1
     }
 
-    It 'accepts the shipped scaffold telemetry declaration and description as a distinct supported form' {
+    It 'accepts the shipped canonical scaffold telemetry declaration and description' {
         $scaffold = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'scaffold'
         New-Item -ItemType Directory -Path $scaffold -Force | Out-Null
         $sourcePath = Join-Path $scaffold 'main.bicep'
@@ -521,11 +522,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $rootJson = Join-Path $script:modulePath 'main.json'
         $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
         $template['parameters']['enableTelemetry']['metadata']['description'] = `
-            'Optional. Enable/disable usage telemetry for this module.'
-        $template['variables']['avmTelemetryIdPrefix'] = $template['variables']['telemetryIdPrefix']
-        $null = $template['variables'].Remove('telemetryIdPrefix')
+            'Optional. Enable/Disable usage telemetry for module.'
         $template['resources'] = @($template['resources'][1])
-        $template['resources'][0]['name'] = "[format('{0}.mock', variables('avmTelemetryIdPrefix'))]"
+        $template['resources'][0]['name'] = "[format('{0}.mock', variables('telemetryIdPrefix'))]"
         $scope = InModuleScope 'Avm.Authoring' -Parameters @{ P = $scaffold } {
             param($P)
             Get-AvmBicepConventionScope -Path $P
@@ -539,7 +538,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
                 -Template $T -SourcePath $P -Resources $resources
         })
-        $issues.Count | Should -Be 0
+        $issues.Count | Should -Be 0 -Because ($issues | ConvertTo-Json -Compress -Depth 6)
     }
 
     It 'accepts the previously shipped telemetry source and compiled alias throughout convention' {
@@ -604,7 +603,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
     It 'rejects any description other than the two exact approved telemetry descriptions: <Case>' -TestCases @(
         @{ Case = 'canonical typo'; Description = 'Optional. Enable/disable usage telemetry for module.' }
-        @{ Case = 'shipped typo'; Description = 'Optional. Enable/Disable usage telemetry for this module.' }
+        @{ Case = 'legacy typo'; Description = 'Optional. Enable/Disable usage telemetry for this module.' }
     ) {
         param($Case, $Description)
 
@@ -618,8 +617,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
     }
 
     It 'requires each exact telemetry description to match its source form: <Case>' -TestCases @(
-        @{ Case = 'canonical source and shipped description'; ShippedSource = $false; Description = 'Optional. Enable/disable usage telemetry for this module.' }
-        @{ Case = 'shipped source and canonical description'; ShippedSource = $true; Description = 'Optional. Enable/Disable usage telemetry for module.' }
+        @{ Case = 'canonical source and legacy description'; ShippedSource = $false; Description = 'Optional. Enable/disable usage telemetry for this module.' }
+        @{ Case = 'legacy source and canonical description'; ShippedSource = $true; Description = 'Optional. Enable/Disable usage telemetry for module.' }
     ) {
         param($Case, $ShippedSource, $Description)
 
