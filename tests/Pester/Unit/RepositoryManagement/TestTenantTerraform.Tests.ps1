@@ -86,13 +86,11 @@ Describe 'Tools repository federation context' {
 }
 
 Describe 'Terraform test tenant selection' {
-    It 'keeps explicitly legacy selections on their normal path without candidate dependencies' {
-        $result = Resolve-RepositoryTestTenantSettings -TestTenant legacy
-        $result.TestTenant | Should -BeExactly 'legacy'
-        $result.Status | Should -BeExactly 'Ready'
-        $result.Settings | Should -BeNullOrEmpty
-        (Resolve-RepositoryTestTenantSettings -TestTenant legacy -BamiValues @{ invalid = 'ignored' }).TestTenant |
-            Should -BeExactly 'legacy'
+    It 'rejects the retired tenant rather than preserving an old execution fallback' {
+        { Resolve-RepositoryTestTenantSettings -TestTenant legacy } |
+            Should -Throw '*legacy test tenant is retired*'
+        { Resolve-RepositoryTestTenantSettings -TestTenant legacy -BamiValues (New-AvmTestBamiSettings) } |
+            Should -Throw '*legacy test tenant is retired*'
     }
 
     It 'resolves selected BAMI settings without a separate activation parameter' {
@@ -100,7 +98,7 @@ Describe 'Terraform test tenant selection' {
         $result.TestTenant | Should -BeExactly 'bami'
         $result.SelectedTestTenant | Should -BeExactly 'bami'
         $result.Status | Should -BeExactly 'Ready'
-        $result.Settings.Count | Should -Be 11
+        $result.Settings.Count | Should -Be 8
         $result.Settings.TEST_BAMI_TENANT_ID | Should -BeExactly '10000000-0000-4000-8000-000000000001'
         (Get-Command Resolve-RepositoryTestTenantSettings).Parameters.ContainsKey('Enabled') | Should -BeFalse
     }
@@ -125,7 +123,7 @@ Describe 'Terraform test tenant selection' {
 
 Describe 'Candidate plan and output safety' {
     BeforeEach {
-        $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings) -RepositorySync
+        $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
         $script:plan = New-AvmTestBamiPlan
         $script:planArguments = @{
             Settings = $script:settings
@@ -133,6 +131,7 @@ Describe 'Candidate plan and output safety' {
             RepositoryId = '1234'
             RepositoryOwnerId = '6844498'
             RepositorySyncRepositoryId = '1239632211'
+            EntraGroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
         }
     }
 
@@ -194,9 +193,9 @@ Describe 'Candidate plan and output safety' {
         { Assert-AvmBamiIdentityPlan -Plan $alternate @script:planArguments } | Should -Throw '*validation federation*'
     }
 
-    It 'rejects every delete or replacement, including directory membership changes' {
+    It 'rejects identity and federation deletes or replacements while allowing membership refresh' {
         foreach ($actions in @(@('delete'), @('delete', 'create'), @('create', 'delete'))) {
-            $script:plan.resource_changes[2].change.actions = $actions
+            $script:plan.resource_changes[0].change.actions = $actions
             { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
                 Should -Throw '*not delete or replace*'
         }
@@ -220,39 +219,40 @@ Describe 'Candidate plan and output safety' {
     It 'validates provider tenant and controller evidence before authorizing group membership: <Field>' -ForEach @(
         @{ Address = 'module.azure.data.azapi_client_config.current'; Field = 'tenant_id' }
         @{ Address = 'module.azure.data.azapi_client_config.current'; Field = 'subscription_id' }
-        @{ Address = 'module.azure.data.azuread_client_config.bami[0]'; Field = 'tenant_id' }
-        @{ Address = 'module.azure.data.azuread_client_config.bami[0]'; Field = 'client_id' }
-        @{ Address = 'module.azure.data.azuread_client_config.bami[0]'; Field = 'object_id' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'tenant_id' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'client_id' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'object_id' }
     ) {
         $resource = @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $Address)[0]
         $resource.values[$Field] = [guid]::Empty.ToString()
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw '*Candidate membership requires*'
     }
 
-    It 'rejects missing, swapped, renamed, dynamic, mail-enabled or nonsafety group evidence' {
+    It 'rejects missing, duplicated, renamed, invalid-ID or nonsecurity group evidence' {
         foreach ($address in @(
-            'module.azure.data.azuread_group.entra_readers',
-            'module.azure.data.azuread_group.test_permissions["test_identity_owners"]',
-            'module.azure.data.azuread_group.test_permissions["fabric_admins"]'
+            'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]',
+            'module.azure.data.azuread_group.test_permissions["avm-test-identity-owners"]'
         )) {
-            foreach ($field in @('object_id', 'display_name', 'security_enabled', 'mail_enabled', 'types', 'onpremises_sync_enabled')) {
+            foreach ($field in @('object_id', 'display_name', 'security_enabled')) {
                 $invalid = New-AvmTestBamiPlan
                 $resource = @($invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $address)[0]
                 $resource.values[$field] = switch ($field) {
-                    'object_id' { '90000000-0000-4000-8000-000000000001' }
-                    'display_name' { 'avm-bootstrap-fabric-admins' }
+                    'object_id' { [guid]::Empty.ToString() }
+                    'display_name' { 'different configured group' }
                     'security_enabled' { $false }
-                    'mail_enabled' { $true }
-                    'types' { ,@('DynamicMembership') }
-                    'onpremises_sync_enabled' { $true }
                 }
-                { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*group*contract*'
+                { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*configured security group*'
             }
             $invalid = New-AvmTestBamiPlan
             $invalid.planned_values.root_module.child_modules[0].resources = @(
                 $invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CNE $address
             )
-            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*group evidence*'
+            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*exactly one*'
+            $invalid = New-AvmTestBamiPlan
+            $invalid.planned_values.root_module.child_modules[0].resources += @(
+                $invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $address
+            )[0].Clone()
+            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*exactly one*'
         }
     }
 
@@ -288,16 +288,45 @@ Describe 'Candidate plan and output safety' {
         }
     }
 
-    It 'adds Fabric membership only for explicit opt-in and permits exact opt-out revocation' {
-        $enabled = New-AvmTestBamiPlan -KnownClient -FabricAdminApis
+    It 'accepts arbitrary configured group names without a fixed role/capability interface' {
+        foreach ($names in @(@(), @('Data engineering testers'), @('Data engineering testers', 'quoted "group"'))) {
+            $script:planArguments.EntraGroupNames = $names
+            $plan = New-AvmTestBamiPlan -KnownClient -GroupNames $names
+            { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+        }
+    }
+
+    It 'adds the configured Fabric edge only when the name is in the resolved repository list' {
+        $names = @('avm-test-identity-owners', 'avm-test-entra-readers', 'avm-test-fabric-admins')
+        $enabled = New-AvmTestBamiPlan -KnownClient -GroupNames $names
         { Assert-AvmBamiIdentityPlan -Plan $enabled @script:planArguments } | Should -Throw '*scope*'
-        { Assert-AvmBamiIdentityPlan -Plan $enabled @script:planArguments -FabricAdminApis $true } | Should -Not -Throw
-        { Assert-AvmBamiIdentityPlan -Plan (New-AvmTestBamiPlan -KnownClient) @script:planArguments -FabricAdminApis $true } |
-            Should -Throw '*scope*'
-        $revoked = New-AvmTestBamiPlan -KnownClient -FabricRevocation
-        { Assert-AvmBamiIdentityPlan -Plan $revoked @script:planArguments } | Should -Not -Throw
-        $revoked.resource_changes[-1].change.before.member_object_id = '10000000-0000-4000-8000-000000000011'
-        { Assert-AvmBamiIdentityPlan -Plan $revoked @script:planArguments } | Should -Throw '*exact obsolete*'
+        $script:planArguments.EntraGroupNames = $names
+        { Assert-AvmBamiIdentityPlan -Plan $enabled @script:planArguments } | Should -Not -Throw
+    }
+
+    It 'permits target-group recreation with a new resolved object ID and only the same repository principal' {
+        foreach ($actions in @(@('delete', 'create'), @('create', 'delete'))) {
+            $plan = New-AvmTestBamiPlan -KnownClient
+            $plan.resource_changes[1].change.actions = $actions
+            $plan.resource_changes[1].change.before.group_object_id = '90000000-0000-4000-8000-000000000001'
+            { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+            $plan.resource_changes[1].change.before.member_object_id = '10000000-0000-4000-8000-000000000011'
+            { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*individual membership edge*'
+        }
+    }
+
+    It 'permits obsolete per-repository membership removal but rejects another principal or a shared-group deletion' {
+        foreach ($plan in @(
+            (New-AvmTestBamiPlan -KnownClient -RemovedGroup 'previous test group'),
+            (New-AvmTestBamiPlan -KnownClient -LegacyMembershipMigration)
+        )) {
+            { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+            $plan.resource_changes[-1].change.before.member_object_id = '10000000-0000-4000-8000-000000000011'
+            { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*individual membership edge*'
+        }
+        $plan = New-AvmTestBamiPlan -KnownClient -RemovedGroup 'previous test group'
+        $plan.resource_changes[-1].type = 'azuread_group'
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*individual membership edge*'
     }
 
     It 'permits only destruction of the precise obsolete direct Owner assignment, including its previous unindexed address' {
@@ -377,25 +406,20 @@ Describe 'Candidate plan and output safety' {
 }
 
 Describe 'Terraform effective contract and state wiring' {
-    It 'pins BAMI group IDs while preserving legacy readers membership state and a real direct-role destroy migration' {
+    It 'resolves configured display names and creates only dynamic individual edges without a fixed group-ID interface' {
         $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
         $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'variables.tf')
         $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
-        $azure | Should -Match 'resource "azuread_group_member" "example"'
-        $azure | Should -Match 'display_name\s*=\s*var.bami_group_settings == null \? local.entra_readers_group_name : null'
-        $azure | Should -Match 'object_id\s*=\s*var.bami_group_settings == null \? null : var.bami_group_settings.entra_readers_group_id'
-        $azure | Should -Match '(?s)moved \{\s*from = azapi_resource.identity_role_assignment\s*to\s*= azapi_resource.identity_role_assignment\[0\]'
+        $azure | Should -Match 'resource "azuread_group_member" "test_permissions"'
+        $azure | Should -Match 'for_each\s*=\s*var.entra_group_names'
+        $azure | Should -Match 'display_name\s*=\s*each.value'
         $azure | Should -Not -Match 'removed\s*\{|destroy\s*=\s*false|resource "azuread_group"'
-        $variables | Should -Match '(?s)variable "bami_group_settings".*?default\s*=\s*null'
-        foreach ($name in @('entra_readers_group_id', 'test_identity_owners_group_id', 'fabric_admins_group_id')) {
-            $bami | Should -Match ($name + '\s*=\s*var\.' + $name)
-            $environmentName = 'TEST_BAMI_' + $name.ToUpperInvariant()
-            $workflow | Should -Match ($environmentName + ' = \$env:' + $environmentName)
-            $workflow | Should -Match ($environmentName + ': \$\{\{ vars\.' + $environmentName + ' \}\}')
-        }
-        $azure | Should -Match 'var.bami_group_settings.fabric_admin_apis \? 1 : 0'
-        $azure | Should -Match 'condition\s*=\s*local.bami_member_is_repository_identity'
+        $variables | Should -Match '(?s)variable "expected_identity_context".*?nullable\s*=\s*false'
+        $bami | Should -Match 'entra_group_names\s*=\s*var.entra_group_names'
+        $workflow | Should -Not -Match 'TEST_BAMI_(ENTRA_READERS|TEST_IDENTITY_OWNERS|FABRIC_ADMINS)_GROUP_ID'
+        $azure | Should -Not -Match 'avm-test-|grp-sec-avm|fabric_admin|bami_group_settings'
+        $azure | Should -Match 'condition\s*=\s*local.member_is_repository_identity'
     }
 
     It 'continues writing repository secrets that actually override legacy variables' {
@@ -414,13 +438,10 @@ Describe 'Terraform effective contract and state wiring' {
         $workflow | Should -Match 'TEST_SUBSCRIPTION_IDS: \$\{\{ secrets.TEST_SUBSCRIPTION_IDS \}\}'
     }
 
-    It 'keeps legacy Azure resource addresses, provider inputs and backend independent' {
+    It 'removes retired Azure execution from the ordinary root while keeping BAMI providers and backend independent' {
         $main = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $legacy = [regex]::Match($main, '(?s)^module "azure" \{.*?\n\}').Value
-        $legacy | Should -Not -BeNullOrEmpty
-        $legacy | Should -Match 'count\s*=\s*var.repository_creation_mode_enabled \? 0 : 1'
-        $legacy | Should -Not -Match 'bami|test_settings'
-        $legacy | Should -Match 'identity_resource_group_name\s*=\s*var.identity_resource_group_name'
+        $legacy | Should -BeNullOrEmpty
         $main | Should -Match 'arm_client_id\s*=\s*local.test_settings.client_id'
         $main | Should -Match 'arm_tenant_id\s*=\s*local.test_settings.tenant_id'
         $main | Should -Match 'test_subscription_ids\s*=\s*local.test_settings.test_subscription_ids'
@@ -429,6 +450,24 @@ Describe 'Terraform effective contract and state wiring' {
         $candidate | Should -Not -Match 'provider "github"|storage_account_name\s*='
         ([regex]::Matches($candidate, 'client_id\s*=\s*var.controller_client_id')).Count | Should -Be 2
         ([regex]::Matches($candidate, 'use_cli\s*=\s*false')).Count | Should -Be 2
+        $retirement = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'retired-identity.tf')
+        $retirement | Should -Match '(?s)removed \{\s*from = module.azure\s+lifecycle \{\s*destroy = false'
+        $retirement | Should -Not -Match 'module.github|bami-identities|state (rm|mv)|refresh\s*='
+        $providers = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'terraform.tf')
+        $providers | Should -Match 'tenant_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.tenant_id'
+        $providers | Should -Match 'client_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.controller_client_id'
+        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
+        $workflow | Should -Not -Match 'vars\.ARM_(TENANT_ID|CLIENT_ID|SUBSCRIPTION_ID)|vars\.TEST_SUBSCRIPTION_IDS'
+    }
+
+    It 'uses mock providers only for the explicitly permitted retirement-state seed test' {
+        $test = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'tests' 'retired_identity.tftest.hcl')
+        foreach ($provider in @('azapi', 'azuread', 'github')) {
+            $test | Should -Match ('mock_provider "' + $provider + '"')
+        }
+        $test | Should -Match '(?s)run "seed_only_disposable_mock_retired_state" \{\s*command\s*=\s*apply\s*state_key\s*=\s*"retired-fixture"'
+        $test | Should -Match '(?s)run "forget_only_retired_state_without_refresh" \{\s*command\s*=\s*plan\s*state_key\s*=\s*"retired-fixture"'
+        $test | Should -Not -Match '(?m)^provider\s+"|backend|token|client_secret'
     }
 
     It 'uses the existing per-module identity for both validation subjects without changing the original trust' {
@@ -446,21 +485,17 @@ Describe 'Terraform effective contract and state wiring' {
         $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
-        $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
+        $ordinary | Should -Not -Match 'source\s*=\s*"\./modules/azure"'
         $bami | Should -Match 'source\s*=\s*"\.\./terraform/modules/azure"'
-        $ordinary | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
         $bami | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
-        $ordinary | Should -Match 'count\s*=\s*var.repository_creation_mode_enabled \? 0 : 1'
         $bami | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
     }
 
-    It 'exposes the effective legacy or BAMI test settings to plan-only consumers' {
+    It 'exposes only the verified BAMI test settings to plan-only consumers' {
         $output = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'outputs.tf')
         $output | Should -Match '(?s)output "test_settings" \{\s*description\s*=\s*"[^"]+"\s*value\s*=\s*local.test_settings\s*\}'
         $locals = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'locals.tf')
-        $locals | Should -Match 'client_id\s*=\s*module.azure\[0\].client_id'
-        $locals | Should -Match 'tenant_id\s*=\s*module.azure\[0\].tenant_id'
-        $locals | Should -Match 'test_subscription_ids\s*=\s*var.test_subscription_ids'
+        $locals | Should -Not -Match 'module.azure|var.test_subscription_ids'
         foreach ($field in @('tenant_id', 'client_id', 'test_subscription_ids')) {
             $locals | Should -Match ('\b' + $field + '\s*=\s*var.bami_test_settings\.' + $field + '\b')
         }

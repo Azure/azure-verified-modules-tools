@@ -44,24 +44,12 @@ function Get-AvmBamiSettings {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
-        [switch] $BicepOnly,
-        [switch] $RepositorySync
+        [switch] $BicepOnly
     )
 
-    if ($BicepOnly -and $RepositorySync) {
-        throw [System.ArgumentException]::new('Bicep execution and repository-sync settings are separate projections.')
-    }
     $guidNames = @('TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID')
     if (-not $BicepOnly) {
         $guidNames += @('TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID')
-    }
-    $accessGroupNames = @(
-        'TEST_BAMI_ENTRA_READERS_GROUP_ID',
-        'TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID',
-        'TEST_BAMI_FABRIC_ADMINS_GROUP_ID'
-    )
-    if ($RepositorySync) {
-        $guidNames += $accessGroupNames
     }
     $result = [ordered]@{}
     foreach ($name in $guidNames) {
@@ -71,9 +59,6 @@ function Get-AvmBamiSettings {
             throw [System.ArgumentException]::new("$name must be a nonempty GUID in a complete BAMI bundle.")
         }
         $result[$name] = $id.ToString()
-    }
-    if ($RepositorySync -and @($accessGroupNames | ForEach-Object { $result[$_] } | Select-Object -Unique).Count -ne 3) {
-        throw [System.ArgumentException]::new('BAMI readers, test identity owners, and Fabric admins group IDs must be distinct.')
     }
     $groupNames = @('TEST_BAMI_MANAGEMENT_GROUP_ID')
     if (-not $BicepOnly) {

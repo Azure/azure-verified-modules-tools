@@ -120,9 +120,9 @@ the existing cleanup policy.
 for all repositories discovered by the existing Terraform sync, including new
 and otherwise unlisted repositories. Configuration is the source of truth;
 tenant selection is independent of managed-file promotion. Higher `order`
-wins; later declaration wins a tie, so explicit legacy exceptions remain
-supported. If no matching group declares `testTenant`, the resolver still
-falls back to `legacy`.
+wins; later declaration wins a tie. The legacy tenant no longer exists:
+normal Terraform sync rejects a legacy or missing selection before cleanup or
+external work. Repository creation remains independent of test identities.
 
 Tools publishes BAMI execution settings for `Azure/bicep-registry-modules`
 using generic `VALIDATE_*` Variables, without per-module canary selectors.
@@ -148,31 +148,30 @@ environment. There is one current BAMI tenant, not a profile catalog.
 | `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
 | `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
 | `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | Bicep persistent-resource subscription |
-| `TEST_BAMI_ENTRA_READERS_GROUP_ID` | Pinned object ID of `avm-test-entra-readers` |
-| `TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID` | Pinned object ID of `avm-test-identity-owners` |
-| `TEST_BAMI_FABRIC_ADMINS_GROUP_ID` | Pinned object ID of `avm-test-fabric-admins` |
 
 Admin and Persistent must be different subscriptions, and neither may appear
 in the disposable test pool. The shared Bicep-only guard also rejects
 Persistent overlap without copying Admin into the Bicep projection.
-Repository sync requires all eleven fields and three distinct access group
-IDs. It validates the provider tenants and observed group names/types before
-changing individual repository membership edges. The controller never joins
-these test groups. Fabric admin API membership is default-off and requires
-an explicit canonical repository list under
-`repositoryGroups[].testCapabilities.fabricAdminApis`; wildcard grants are
-rejected. See [group access and migration](repository-sync/README.md#bami-group-access-and-migration).
+Group names come from flat `repositoryGroups[].entraGroups` arrays in the
+[central configuration](repository-config/config.json), not environment IDs
+or capability flags. Matching lists accumulate and deduplicate; they do not
+override defaults. The default adds `avm-test-entra-readers` and
+`avm-test-identity-owners` to every repository test identity. The separate
+`fabric` group adds `avm-test-fabric-admins` only for
+`avm-ptn-unified-data-platform`. Terraform resolves each arbitrary configured
+display name uniquely in the BAMI tenant and manages only individual
+membership edges. The controller never joins these groups. See
+[group access and migration](repository-sync/README.md#bami-group-access-and-migration).
 
 Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
-Explicit legacy selections retain the legacy consumer settings. See the
+There is no fallback to retired-tenant settings. See the
 [candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
 
 Bicep variable sync retains its existing eight-field source and five-field
-execution projections. The three group IDs are repository-sync-only inputs,
-not Bicep target Variables.
+execution projections. Configured Entra names are not Bicep target Variables.
 
 | BAMI source field | Consumer target Variable |
 | --- | --- |

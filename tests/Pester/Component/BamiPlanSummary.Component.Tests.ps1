@@ -6,11 +6,12 @@ BeforeAll {
     function New-AvmTestBamiSummaryPlan {
         param(
             [switch] $KnownClient, [switch] $ValidationPending,
-            [switch] $OwnerMigration, [switch] $FabricAdminApis, [switch] $FabricRevocation
+            [switch] $OwnerMigration, [string] $RemovedGroup,
+            [string[]] $GroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
         )
 
         $plan = New-AvmTestBamiPlan -KnownClient:$KnownClient -ValidationPending:$ValidationPending `
-            -OwnerMigration:$OwnerMigration -FabricAdminApis:$FabricAdminApis -FabricRevocation:$FabricRevocation `
+            -OwnerMigration:$OwnerMigration -RemovedGroup $RemovedGroup -GroupNames $GroupNames `
             -RepositoryOwnerId '5678' -RepositorySyncRepositoryId '9012'
         $plan.planned_values.outputs.test_identity.value.repository_owner_id = '5678'
         foreach ($resource in $plan.planned_values.root_module.child_modules[0].resources) {
@@ -65,6 +66,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
             Root = Join-Path $TestDrive 'candidate-root'
             TemporaryRoot = $TestDrive
             RepositorySyncRepositoryId = '9012'
+            EntraGroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
         }
         Mock Invoke-RepositoryGitHubApi {
             if ($Endpoint -ceq 'repos/Azure/azure-verified-modules-tools') {
@@ -125,15 +127,17 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $result[0].Status | Should -BeExactly 'Ready'
         $summary = Read-AvmTestBamiSummary -Information $information
         ($summary.Keys | Sort-Object) -join ',' |
-            Should -BeExactly 'directory_readers_group,expected_tenant_id,fabric_admin_apis,fabric_admins_group,repository,repository_id,repository_owner_id,resources,test_identity_owners_group'
+            Should -BeExactly 'expected_tenant_id,groups,repository,repository_id,repository_owner_id,resources'
         $summary.repository | Should -BeExactly $script:repo.full_name
         $summary.repository_id | Should -BeExactly '1234'
         $summary.repository_owner_id | Should -BeExactly '5678'
         $summary.expected_tenant_id | Should -BeExactly $script:parameters.BamiValues.TEST_BAMI_TENANT_ID
-        $summary.directory_readers_group | Should -BeExactly 'avm-test-entra-readers'
-        $summary.test_identity_owners_group | Should -BeExactly 'avm-test-identity-owners'
-        $summary.fabric_admins_group | Should -BeExactly 'avm-test-fabric-admins'
-        $summary.fabric_admin_apis | Should -BeFalse
+        $summary.groups.Count | Should -Be 2
+        ($summary.groups | ForEach-Object { $_['display_name'] } | Sort-Object) -join ',' |
+            Should -BeExactly (($script:parameters.EntraGroupNames | Sort-Object) -join ',')
+        foreach ($group in $summary.groups) {
+            ($group.Keys | Sort-Object) -join ',' | Should -BeExactly 'display_name,object_id'
+        }
         $summary.resources.Count | Should -Be 7
         $planned = @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.mode -ceq 'managed' })
         ($summary.resources | ForEach-Object { $_['address'] } | Sort-Object) -join ',' |
@@ -143,7 +147,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
             ($resource.actions -is [array]) | Should -BeTrue
             $resource.actions -join ',' | Should -BeExactly ($change.change.actions -join ',')
             $source = @($planned | Where-Object { $_.address -ceq $resource.address })[0].values
-            $expectedFields = switch -CaseSensitive ($resource.address) {
+            $expectedFields = switch -Wildcard -CaseSensitive ($resource.address) {
                 'module.azure.azapi_resource.identity' {
                     $resource.type | Should -BeExactly $source.type
                     $resource.parent_id | Should -BeExactly $source.parent_id
@@ -154,12 +158,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
                     $resource.principal_id | Should -BeExactly $source.output.properties.principalId
                     'actions,address,client_id,id,name,parent_id,principal_id,tenant_id,type'
                 }
-                'module.azure.azuread_group_member.test_identity_owners[0]' {
-                    $resource.group_object_id | Should -BeExactly $source.group_object_id
-                    $resource.member_object_id | Should -BeExactly $source.member_object_id
-                    'actions,address,group_object_id,member_object_id'
-                }
-                'module.azure.azuread_group_member.example' {
+                'module.azure.azuread_group_member.test_permissions*' {
                     $resource.group_object_id | Should -BeExactly $source.group_object_id
                     $resource.member_object_id | Should -BeExactly $source.member_object_id
                     'actions,address,group_object_id,member_object_id'
@@ -194,7 +193,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         }
         $script:plan.planned_values.root_module.child_modules[0].resources[0].values.output.properties.unselected = 'DO_NOT_LOG_IDENTITY_OUTPUT'
         foreach ($change in $script:plan.resource_changes) {
-            $change.change.before = @{ credential = 'DO_NOT_LOG_BEFORE' }
+            if ($change.change.before) { $change.change.before.unselected = 'DO_NOT_LOG_BEFORE' }
             $change.change.after.unselected = 'DO_NOT_LOG_AFTER'
         }
         $script:plan.planned_values.root_module.child_modules[0].resources += @{
@@ -226,10 +225,11 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         foreach ($field in @('id', 'client_id', 'tenant_id', 'principal_id')) {
             $summary.resources[0][$field] | Should -BeExactly '[unknown until apply]'
         }
-        $summary.resources[1].member_object_id | Should -BeExactly '[unknown until apply]'
-        $summary.resources[2].member_object_id | Should -BeExactly '[unknown until apply]'
-        $summary.resources[2].group_object_id | Should -BeExactly '10000000-0000-4000-8000-000000000008'
-        foreach ($credential in $summary.resources[3..6]) {
+        foreach ($membership in $summary.resources[5..6]) {
+            $membership.member_object_id | Should -BeExactly '[unknown until apply]'
+            $membership.group_object_id | Should -Not -Match '\[unknown'
+        }
+        foreach ($credential in $summary.resources[1..4]) {
             $credential.parent_id | Should -BeExactly '[unknown until apply]'
             $credential.subject | Should -Not -Match '\[unknown'
         }
@@ -247,7 +247,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $summary = Read-AvmTestBamiSummary -Information $information
         $summary.resources[0].id | Should -BeExactly '[not present in plan]'
         $summary.resources[0].actions | Should -BeExactly '[unavailable: missing or ambiguous actions]'
-        $summary.directory_readers_group | Should -BeExactly '[not present in plan]'
+        $summary.groups.Count | Should -Be 0
     }
 
     It 'never serializes an unexpected object in an allow-listed scalar field' {
@@ -291,14 +291,15 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $resource.values.body.properties.audiences = @('DO_NOT_LOG_SENSITIVE_AUDIENCE')
         $resource.sensitive_values = @{ body = @{ properties = @{ audiences = @($true) } } }
         $group = @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
-                $_.address -ceq 'module.azure.data.azuread_group.entra_readers'
+                $_.address -ceq 'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]'
             })[0]
         $group.values.display_name = "synthetic`n::warning::not-an-annotation"
         Write-AvmBamiIdentityPlanSummary -Plan $script:plan -Repository $script:repo `
             -TenantId $script:parameters.BamiValues.TEST_BAMI_TENANT_ID -InformationVariable information 6>$null
         $summary = Read-AvmTestBamiSummary -Information $information
-        $summary.resources[3].audiences | Should -BeExactly '[redacted: sensitive]'
-        $summary.directory_readers_group | Should -BeExactly "synthetic`n::warning::not-an-annotation"
+        $summary.resources[1].audiences | Should -BeExactly '[redacted: sensitive]'
+        ($summary.groups | ForEach-Object { $_['display_name'] }) |
+            Should -Contain "synthetic`n::warning::not-an-annotation"
         $information.MessageData | Should -Not -Match 'DO_NOT_LOG|(?m)^::warning::'
     }
 
@@ -307,7 +308,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters -InformationVariable information 6>$null
         $summary = Read-AvmTestBamiSummary -Information $information
         $result.Status | Should -BeExactly 'PendingCandidateIdentity'
-        $summary.resources[6].actions -join ',' | Should -BeExactly 'create'
+        $summary.resources[4].actions -join ',' | Should -BeExactly 'create'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
     }
 
@@ -324,7 +325,9 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $result.ConsumerSettings.client_id | Should -BeExactly '10000000-0000-4000-8000-000000000006'
         $previewSummary.resources[0].id | Should -BeExactly '[unknown until apply]'
         $applySummary.resources[0].id | Should -BeExactly (New-AvmTestBamiIdentity).identity_resource_id
-        $applySummary.resources[1].actions -join ',' | Should -BeExactly 'update'
+        (@($applySummary.resources | Where-Object {
+                    $_['address'] -ceq 'module.azure.azuread_group_member.test_permissions["avm-test-identity-owners"]'
+                })[0].actions) -join ',' | Should -BeExactly 'update'
         $planCalls = @($script:processCalls | Where-Object { $_.Arguments[0] -ceq 'plan' })
         $planCalls.Count | Should -Be 2
         $paths = @($planCalls | ForEach-Object {
@@ -343,7 +346,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         @{ Case = 'extra managed resource'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources += @{ address = 'module.azure.azapi_resource.unexpected'; mode = 'managed'; values = @{ credential = 'DO_NOT_LOG_INVALID' } } } }
         @{ Case = 'missing resource'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources = $Plan.planned_values.root_module.child_modules[0].resources[0..5] } }
         @{ Case = 'delete'; Mutate = { param($Plan) $Plan.resource_changes[2].change.actions = @('delete') } }
-        @{ Case = 'replacement'; Mutate = { param($Plan) $Plan.resource_changes[2].change.actions = @('create', 'delete') } }
+        @{ Case = 'identity replacement'; Mutate = { param($Plan) $Plan.resource_changes[0].change.actions = @('create', 'delete') } }
         @{ Case = 'identity scope'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[0].values.parent_id = '/subscriptions/wrong/resourceGroups/wrong' } }
         @{ Case = 'Owner group binding'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[1].values.group_object_id = '10000000-0000-4000-8000-000000000099' } }
         @{ Case = 'bootstrap Fabric group'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[-1].values.display_name = 'avm-bootstrap-fabric-admins' } }
@@ -366,8 +369,8 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
-    It 'shows only verified deletion fields and honors before-sensitive masks during Owner migration and Fabric revocation' {
-        $script:plan = New-AvmTestBamiSummaryPlan -KnownClient -OwnerMigration -FabricRevocation
+    It 'shows only verified deletion fields and honors before-sensitive masks during Owner and membership migration' {
+        $script:plan = New-AvmTestBamiSummaryPlan -KnownClient -OwnerMigration -RemovedGroup 'former configured group'
         $deletion = @($script:plan.resource_changes | Where-Object {
                 $_.address -ceq 'module.azure.azapi_resource.identity_role_assignment[0]'
             })[0]
@@ -383,22 +386,23 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $owner.parent_id | Should -BeExactly $deletion.change.before.parent_id
         $owner.principalId | Should -BeExactly $deletion.change.before.body.properties.principalId
         $owner.condition | Should -BeExactly '[redacted: sensitive]'
-        $fabric = @($summary.resources | Where-Object address -CEQ 'module.azure.azuread_group_member.fabric_admins[0]')[0]
-        $fabric.actions -join ',' | Should -BeExactly 'delete'
-        $fabric.group_object_id | Should -BeExactly $script:parameters.BamiValues.TEST_BAMI_FABRIC_ADMINS_GROUP_ID
-        $summary.fabric_admin_apis | Should -BeFalse
+        $removed = @($summary.resources | Where-Object address -CEQ 'module.azure.azuread_group_member.test_permissions["former configured group"]')[0]
+        $removed.actions -join ',' | Should -BeExactly 'delete'
+        $removed.group_object_id | Should -BeExactly '10000000-0000-4000-8000-000000000099'
         $information.MessageData | Should -Not -Match 'DO_NOT_LOG'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
     }
 
-    It 'includes Fabric membership and the capability only for an explicitly opted-in plan' {
-        $script:parameters.FabricAdminApis = $true
-        $script:plan = New-AvmTestBamiSummaryPlan -KnownClient -FabricAdminApis
+    It 'includes each configured membership without exposing a capability flag or group contents' {
+        $script:parameters.EntraGroupNames += 'Data engineering testers'
+        $script:plan = New-AvmTestBamiSummaryPlan -KnownClient -GroupNames $script:parameters.EntraGroupNames
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters -InformationVariable information 6>$null
         $summary = Read-AvmTestBamiSummary -Information $information
         $result.Status | Should -BeExactly 'Ready'
         $summary.resources.Count | Should -Be 8
-        $summary.fabric_admin_apis | Should -BeTrue
-        ($summary.resources | ForEach-Object { $_['address'] }) | Should -Contain 'module.azure.azuread_group_member.fabric_admins[0]'
+        $summary.groups.Count | Should -Be 3
+        ($summary.resources | ForEach-Object { $_['address'] }) |
+            Should -Contain 'module.azure.azuread_group_member.test_permissions["Data engineering testers"]'
+        $summary.Contains('fabric_admin_apis') | Should -BeFalse
     }
 }

@@ -44,6 +44,7 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
             Root = Join-Path $TestDrive 'candidate-root'
             TemporaryRoot = $TestDrive
             RepositorySyncRepositoryId = '1239632211'
+            EntraGroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
         }
         Mock Invoke-RepositoryGitHubApi {
             if ($Endpoint -ceq 'repos/Azure/azure-verified-modules-tools') { $script:toolsRepository }
@@ -97,10 +98,8 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         $script:capturedVariables.github_repository_id | Should -BeExactly '1234'
         $script:capturedVariables.github_organization_id | Should -BeExactly '6844498'
         $script:capturedVariables.repository_sync_repository_id | Should -BeExactly '1239632211'
-        $script:capturedVariables.entra_readers_group_id | Should -BeExactly $script:parameters.BamiValues.TEST_BAMI_ENTRA_READERS_GROUP_ID
-        $script:capturedVariables.test_identity_owners_group_id | Should -BeExactly $script:parameters.BamiValues.TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID
-        $script:capturedVariables.fabric_admins_group_id | Should -BeExactly $script:parameters.BamiValues.TEST_BAMI_FABRIC_ADMINS_GROUP_ID
-        $script:capturedVariables.fabric_admin_apis | Should -BeFalse
+        $script:capturedVariables.entra_group_names | Should -Be $script:parameters.EntraGroupNames
+        $script:capturedVariables.Keys | Should -Not -Contain 'fabric_admin_apis'
         @(Get-ChildItem -LiteralPath $TestDrive -Directory | Where-Object Name -Like 'avm-bami-*').Count | Should -Be 0
     }
 
@@ -174,32 +173,33 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
 
     It 'refuses a wrong group binding before any candidate apply' {
         $script:plan.planned_values.root_module.child_modules[0].resources[1].values.group_object_id =
-            $script:parameters.BamiValues.TEST_BAMI_FABRIC_ADMINS_GROUP_ID
-        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*pinned group*'
+            '10000000-0000-4000-8000-000000000099'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*resolved configured group*'
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
     }
 
     It 'keeps a known identity pending until required Owner membership is reconciled' {
         $script:plan = New-AvmTestBamiPlan -KnownClient
         $script:plan.resource_changes[1].change.actions = @('create')
+        $script:plan.resource_changes[1].change.before = $null
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
         $result.Status | Should -BeExactly 'PendingCandidateIdentity'
         $result.ConsumerSettings | Should -BeNullOrEmpty
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
     }
 
-    It 'passes Fabric opt-in explicitly and rejects membership when the same flag is off' {
-        $script:parameters.FabricAdminApis = $true
-        $script:plan = New-AvmTestBamiPlan -KnownClient -FabricAdminApis
+    It 'passes arbitrary configured names and rejects edges outside that list' {
+        $script:parameters.EntraGroupNames += 'Data engineering testers'
+        $script:plan = New-AvmTestBamiPlan -KnownClient -GroupNames $script:parameters.EntraGroupNames
         (Invoke-AvmBamiRepositoryIdentity @script:parameters).Status | Should -BeExactly 'Ready'
-        $script:capturedVariables.fabric_admin_apis | Should -BeTrue
-        $script:parameters.FabricAdminApis = $false
+        $script:capturedVariables.entra_group_names | Should -Be $script:parameters.EntraGroupNames
+        $script:parameters.EntraGroupNames = $script:parameters.EntraGroupNames[0..1]
         { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*scope*'
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
     }
 
-    It 'previews exact Owner migration and Fabric revocation without applying or advertising readiness' {
-        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -FabricRevocation
+    It 'previews exact Owner migration and configured membership removal without applying or advertising readiness' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -RemovedGroup 'former configured group'
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
         $result.Status | Should -BeExactly 'PendingCandidateIdentity'
         $result.ConsumerSettings | Should -BeNullOrEmpty
@@ -207,7 +207,7 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
     }
 
     It 'allows only a guarded saved migration plan at the mocked apply boundary' {
-        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -FabricRevocation
+        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -RemovedGroup 'former configured group'
         $result = Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false
         $result.Status | Should -BeExactly 'Ready'
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 1 -ParameterFilter {
@@ -219,7 +219,7 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration
         $script:plan.resource_changes[-1].change.before.body.properties.principalId =
             '10000000-0000-4000-8000-000000000011'
-        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*exact obsolete*'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*exact obsolete Owner assignment*'
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
     }
 

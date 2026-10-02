@@ -1,22 +1,23 @@
 data "azapi_client_config" "current" {
   lifecycle {
     postcondition {
-      condition     = var.bami_group_settings == null ? true : lower(self.tenant_id) == lower(var.bami_group_settings.tenant_id)
-      error_message = "The Azure provider must use the pinned BAMI tenant."
+      condition = (
+        lower(self.tenant_id) == lower(var.expected_identity_context.tenant_id) &&
+        lower(self.subscription_id) == lower(var.expected_identity_context.subscription_id)
+      )
+      error_message = "The Azure provider must use the selected test identity tenant and subscription."
     }
   }
 }
 
-data "azuread_client_config" "bami" {
-  count = var.bami_group_settings == null ? 0 : 1
-
+data "azuread_client_config" "current" {
   lifecycle {
     postcondition {
       condition = (
-        lower(self.tenant_id) == lower(var.bami_group_settings.tenant_id) &&
-        lower(self.client_id) == lower(var.bami_group_settings.controller_client_id)
+        lower(self.tenant_id) == lower(data.azapi_client_config.current.tenant_id) &&
+        lower(self.client_id) == lower(var.expected_identity_context.controller_client_id)
       )
-      error_message = "The Graph provider must use the pinned BAMI tenant and controller."
+      error_message = "The Graph provider must match the identity's tenant and selected controller."
     }
   }
 }
@@ -68,121 +69,33 @@ resource "azapi_resource" "validation_federated_credential" {
   }
 }
 
-# Add owner role assignment.
-# The condition prevents the assignee from creating new role assignments for owner, user access administrator, or role based access control administrator.
-resource "azapi_resource" "identity_role_assignment" {
-  count     = var.bami_group_settings == null ? 1 : 0
-  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "${var.github_repository_owner}${var.github_repository_name}${var.management_group_id}${data.azapi_client_config.current.tenant_id}")
-  parent_id = "/providers/Microsoft.Management/managementGroups/${var.management_group_id}"
-  body = {
-    properties = {
-      roleDefinitionId = "/providers/Microsoft.Authorization/roleDefinitions/${local.role_definition_name_owner}"
-      principalType    = "ServicePrincipal"
-      principalId      = azapi_resource.identity.output.properties.principalId
-      description      = "Role assignment for AVM testing. Repo: ${var.github_repository_owner}/${var.github_repository_name}"
-      conditionVersion = "2.0"
-      condition        = <<CONDITION
-(
- (
-  !(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})
- )
- OR
- (
-  @Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAllValues:GuidNotEquals {${local.role_definition_name_owner}, 18d7d88d-d35e-4fb5-a5c3-7773c20a72d9, f58310d9-a9f6-439a-9e8d-f62e7b41a168}
- )
-)
-AND
-(
- (
-  !(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})
- )
- OR
- (
-  @Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAllValues:GuidNotEquals {${local.role_definition_name_owner}, 18d7d88d-d35e-4fb5-a5c3-7773c20a72d9, f58310d9-a9f6-439a-9e8d-f62e7b41a168}
- )
-)
-CONDITION
-    }
-  }
-}
-
-data "azuread_group" "entra_readers" {
-  display_name = var.bami_group_settings == null ? local.entra_readers_group_name : null
-  object_id    = var.bami_group_settings == null ? null : var.bami_group_settings.entra_readers_group_id
-
-  lifecycle {
-    postcondition {
-      condition = var.bami_group_settings == null ? true : (
-        lower(self.object_id) == lower(var.bami_group_settings.entra_readers_group_id) &&
-        self.display_name == "avm-test-entra-readers" &&
-        self.security_enabled && !self.mail_enabled &&
-        length(self.types) == 0 && self.onpremises_sync_enabled != true
-      )
-      error_message = "BAMI readers must resolve by pinned object ID to the assigned avm-test-entra-readers security group."
-    }
-  }
-}
-
 data "azuread_group" "test_permissions" {
-  for_each = local.bami_group_contracts
+  for_each = var.entra_group_names
 
-  object_id = each.value.object_id
+  display_name     = each.value
+  security_enabled = true
 
   lifecycle {
     postcondition {
       condition = (
-        lower(self.object_id) == lower(each.value.object_id) &&
-        self.display_name == each.value.display_name &&
-        self.security_enabled && !self.mail_enabled &&
-        length(self.types) == 0 && self.onpremises_sync_enabled != true
+        self.display_name == each.value &&
+        self.security_enabled && !contains(self.types, "DynamicMembership")
       )
-      error_message = "BAMI access groups must match their pinned object IDs, names, and assigned security-group contract."
+      error_message = "Configured Entra names must resolve uniquely to security groups that permit individual membership management."
     }
   }
 }
 
-resource "azuread_group_member" "example" {
-  group_object_id  = data.azuread_group.entra_readers.object_id
+resource "azuread_group_member" "test_permissions" {
+  for_each = var.entra_group_names
+
+  group_object_id  = data.azuread_group.test_permissions[each.key].object_id
   member_object_id = azapi_resource.identity.output.properties.principalId
 
   lifecycle {
     precondition {
-      condition     = local.bami_member_is_repository_identity
-      error_message = "Only the dedicated BAMI repository identity, never the controller, may receive test group membership."
+      condition     = local.member_is_repository_identity
+      error_message = "Only the dedicated repository test identity, never the controller, may receive configured group memberships."
     }
   }
-}
-
-resource "azuread_group_member" "test_identity_owners" {
-  count = var.bami_group_settings == null ? 0 : 1
-
-  group_object_id  = data.azuread_group.test_permissions["test_identity_owners"].object_id
-  member_object_id = azapi_resource.identity.output.properties.principalId
-
-  lifecycle {
-    precondition {
-      condition     = local.bami_member_is_repository_identity
-      error_message = "Only the dedicated BAMI repository identity, never the controller, may receive test Owner membership."
-    }
-  }
-}
-
-resource "azuread_group_member" "fabric_admins" {
-  count = var.bami_group_settings == null ? 0 : (var.bami_group_settings.fabric_admin_apis ? 1 : 0)
-
-  group_object_id  = data.azuread_group.test_permissions["fabric_admins"].object_id
-  member_object_id = azapi_resource.identity.output.properties.principalId
-
-  lifecycle {
-    precondition {
-      condition     = local.bami_member_is_repository_identity
-      error_message = "Only an explicitly opted-in dedicated BAMI repository identity may receive Fabric admin API membership."
-    }
-  }
-}
-
-moved {
-  from = azapi_resource.identity_role_assignment
-  to   = azapi_resource.identity_role_assignment[0]
 }

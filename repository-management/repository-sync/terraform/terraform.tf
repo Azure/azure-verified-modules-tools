@@ -1,7 +1,5 @@
 terraform {
-  # `removed { lifecycle { destroy = false } }` (see modules/github/github.repository.removed_managed_files.tf)
-  # requires Terraform 1.7+.
-  required_version = ">= 1.7.0"
+  required_version = ">= 1.9.0"
   required_providers {
     azapi = {
       source  = "Azure/azapi"
@@ -21,4 +19,21 @@ terraform {
 
 provider "github" {
   owner = var.github_repository_owner
+}
+
+provider "azapi" {
+  tenant_id       = var.bami_test_settings == null ? null : var.bami_test_settings.tenant_id
+  subscription_id = var.bami_test_settings == null ? null : var.bami_test_settings.admin_subscription_id
+  client_id       = var.bami_test_settings == null ? null : var.bami_test_settings.controller_client_id
+  use_oidc        = true
+  use_cli         = false
+  use_msi         = false
+}
+
+provider "azuread" {
+  tenant_id = var.bami_test_settings == null ? null : var.bami_test_settings.tenant_id
+  client_id = var.bami_test_settings == null ? null : var.bami_test_settings.controller_client_id
+  use_oidc  = true
+  use_cli   = false
+  use_msi   = false
 }

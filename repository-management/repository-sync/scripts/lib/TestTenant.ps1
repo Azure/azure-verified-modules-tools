@@ -40,10 +40,10 @@ function Resolve-RepositoryTestTenantSettings {
     if ($TestTenant -isnot [string] -or $TestTenant -cnotin @('legacy', 'bami')) {
         throw [System.ArgumentException]::new('testTenant must be exactly legacy or bami.')
     }
-    $settings = $null
-    if ($TestTenant -ceq 'bami') {
-        $settings = Get-AvmBamiSettings -Values $BamiValues -RepositorySync
+    if ($TestTenant -ceq 'legacy') {
+        throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
     }
+    $settings = Get-AvmBamiSettings -Values $BamiValues
     return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = 'Ready'; Settings = $settings }
 }
 
@@ -124,10 +124,11 @@ function Assert-AvmBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
-        [bool] $FabricAdminApis = $false
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames
     )
 
-    $Settings = Get-AvmBamiSettings -Values $Settings -RepositorySync
+    $Settings = Get-AvmBamiSettings -Values $Settings
+    $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
     if ($RepositoryId -cnotmatch '^[1-9][0-9]*$' -or $RepositoryOwnerId -cnotmatch '^[1-9][0-9]*$' -or
         $RepositorySyncRepositoryId -cnotmatch '^[1-9][0-9]*$') {
         throw [System.ArgumentException]::new('Candidate federation requires positive GitHub repository, organization, and tools repository IDs.')
@@ -141,18 +142,20 @@ function Assert-AvmBamiIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $identityAddress = 'module.azure.azapi_resource.identity'
-    $readersAddress = 'module.azure.azuread_group_member.example'
-    $ownersAddress = 'module.azure.azuread_group_member.test_identity_owners[0]'
-    $fabricAddress = 'module.azure.azuread_group_member.fabric_admins[0]'
     $validationCredentialAddress = 'module.azure.azapi_resource.validation_federated_credential'
+    $membershipNames = @{}
+    foreach ($groupName in $EntraGroupNames) {
+        $key = ConvertTo-Json -InputObject $groupName -Compress
+        $membershipNames["module.azure.azuread_group_member.test_permissions[$key]"] = $groupName
+    }
     $allowed = @(
-        $identityAddress, $ownersAddress, $readersAddress,
+        $identityAddress,
         'module.azure.azapi_resource.identity_federated_credentials["pr-check"]',
         'module.azure.azapi_resource.identity_federated_credentials["integration-test"]',
         'module.azure.azapi_resource.identity_federated_credentials["examples-test"]',
         $validationCredentialAddress
     )
-    if ($FabricAdminApis) { $allowed += $fabricAddress }
+    $allowed += @($membershipNames.Keys)
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
     if ($managed.Count -ne $allowed.Count -or $addresses.Count -ne $allowed.Count -or
@@ -169,11 +172,13 @@ function Assert-AvmBamiIdentityPlan {
     }
     foreach ($resource in $managed) {
         $address = $resource['address']
-        $type = if ($address -in @($readersAddress, $ownersAddress, $fabricAddress)) { 'azuread_group_member' } else { 'azapi_resource' }
+        $type = if ($membershipNames.ContainsKey($address)) { 'azuread_group_member' } else { 'azapi_resource' }
         $change = $changes[$address]
+        $actions = if ($null -ne $change) { @($change['change']['actions']) } else { @() }
+        $permittedActions = if ($type -ceq 'azuread_group_member') { @('no-op', 'create', 'update', 'delete,create', 'create,delete') } else { @('no-op', 'create', 'update') }
         if ($resource['type'] -cne $type -or $resource['values'] -isnot [System.Collections.IDictionary] -or
             $null -eq $change -or $change['mode'] -cne 'managed' -or $change['type'] -cne $type -or
-            @($change['change']['actions']).Count -ne 1 -or $change['change']['actions'][0] -cnotin @('no-op', 'create', 'update')) {
+            ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
         }
     }
@@ -186,7 +191,7 @@ function Assert-AvmBamiIdentityPlan {
         throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
     }
     $azureContexts = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azapi_client_config.current' })
-    $graphContexts = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_client_config.bami[0]' })
+    $graphContexts = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_client_config.current' })
     if ($azureContexts.Count -ne 1 -or $graphContexts.Count -ne 1 -or
         $azureContexts[0]['mode'] -cne 'data' -or $graphContexts[0]['mode'] -cne 'data' -or
         $azureContexts[0]['type'] -cne 'azapi_client_config' -or $graphContexts[0]['type'] -cne 'azuread_client_config' -or
@@ -224,35 +229,28 @@ function Assert-AvmBamiIdentityPlan {
             $principalId -eq $controllerPrincipal))) {
         throw [System.InvalidOperationException]::new('Candidate group membership must use the dedicated repository principal, never the controller.')
     }
-    $groups = @(
-        @{ Address = 'module.azure.data.azuread_group.entra_readers'; Id = $Settings['TEST_BAMI_ENTRA_READERS_GROUP_ID']; Name = 'avm-test-entra-readers'; Member = $readersAddress }
-        @{ Address = 'module.azure.data.azuread_group.test_permissions["test_identity_owners"]'; Id = $Settings['TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID']; Name = 'avm-test-identity-owners'; Member = $ownersAddress }
-        @{ Address = 'module.azure.data.azuread_group.test_permissions["fabric_admins"]'; Id = $Settings['TEST_BAMI_FABRIC_ADMINS_GROUP_ID']; Name = 'avm-test-fabric-admins'; Member = $fabricAddress }
-    )
-    foreach ($group in $groups) {
-        $evidence = @($resources | Where-Object { $_['address'] -ceq $group.Address })
+    foreach ($address in $membershipNames.Keys) {
+        $groupName = $membershipNames[$address]
+        $dataAddress = $address.Replace('azuread_group_member.', 'data.azuread_group.')
+        $evidence = @($resources | Where-Object { $_['address'] -ceq $dataAddress })
         if ($evidence.Count -ne 1 -or $evidence[0]['mode'] -cne 'data' -or
             $evidence[0]['type'] -cne 'azuread_group' -or $evidence[0]['values'] -isnot [System.Collections.IDictionary]) {
-            throw [System.InvalidOperationException]::new('Candidate membership requires complete pinned group evidence.')
+            throw [System.InvalidOperationException]::new("Candidate membership requires exactly one target-tenant lookup for configured group '$groupName'.")
         }
         $values = $evidence[0]['values']
-        if ($values['object_id'] -isnot [string] -or $values['display_name'] -isnot [string] -or
-            $values['security_enabled'] -isnot [bool] -or $values['mail_enabled'] -isnot [bool] -or
-            $values['object_id'] -ine $group.Id -or $values['display_name'] -cne $group.Name -or
-            $values['security_enabled'] -ne $true -or $values['mail_enabled'] -ne $false -or
-            $values['types'] -isnot [System.Collections.IList] -or $values['types'].Count -ne 0 -or
-            ($null -ne $values['onpremises_sync_enabled'] -and $values['onpremises_sync_enabled'] -isnot [bool]) -or
-            $values['onpremises_sync_enabled'] -eq $true) {
-            throw [System.InvalidOperationException]::new('Candidate group evidence does not match the pinned assigned security-group contract.')
+        $groupId = [guid]::Empty
+        if ($values['object_id'] -isnot [string] -or -not [guid]::TryParseExact($values['object_id'], 'D', [ref] $groupId) -or
+            $groupId -eq [guid]::Empty -or $values['display_name'] -cne $groupName -or
+            $values['security_enabled'] -isnot [bool] -or $values['security_enabled'] -ne $true) {
+            throw [System.InvalidOperationException]::new('Candidate group evidence must identify the configured security group in the selected tenant.')
         }
-        if ($group.Member -ceq $fabricAddress -and -not $FabricAdminApis) { continue }
-        $membership = @($managed | Where-Object { $_['address'] -ceq $group.Member })[0]['values']
+        $membership = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
         $member = $membership['member_object_id']
-        if ($membership['group_object_id'] -isnot [string] -or $membership['group_object_id'] -ine $group.Id -or
+        if ($membership['group_object_id'] -isnot [string] -or $membership['group_object_id'] -ine $groupId.ToString() -or
             ($null -ne $principal -and ($member -isnot [string] -or $member -ine $principal)) -or
             ($null -eq $principal -and ($null -ne $member -or
-                -not (Test-AvmTerraformPlanUnknownField -Change $changes[$group.Member]['change'] -Path 'member_object_id')))) {
-            throw [System.InvalidOperationException]::new('Candidate membership must bind only the pinned group and dedicated repository principal.')
+                -not (Test-AvmTerraformPlanUnknownField -Change $changes[$address]['change'] -Path 'member_object_id')))) {
+            throw [System.InvalidOperationException]::new('Candidate membership must bind only the resolved configured group and dedicated repository principal.')
         }
     }
     foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
@@ -283,20 +281,31 @@ function Assert-AvmBamiIdentityPlan {
     }
     $ownerDeletions = 0
     foreach ($change in $changes.Values) {
-        if ($change['address'] -cin $allowed) { continue }
         $actions = @($change['change']['actions'])
+        if ($change['address'] -cin $allowed -and $change['type'] -cne 'azuread_group_member') { continue }
+        if ($change['address'] -cin $allowed -and $actions -notcontains 'delete' -and
+            $null -eq $change['change']['before']) { continue }
         if ($change['mode'] -ceq 'data' -and $actions.Count -eq 1 -and $actions[0] -cin @('no-op', 'read')) { continue }
         $before = $change['change']['before']
-        if ($change['mode'] -cne 'managed' -or $actions.Count -ne 1 -or $actions[0] -cne 'delete' -or
-            $null -ne $change['change']['after'] -or $before -isnot [System.Collections.IDictionary] -or $null -eq $principal) {
+        if ($change['mode'] -cne 'managed' -or $before -isnot [System.Collections.IDictionary] -or $null -eq $principal) {
             throw [System.InvalidOperationException]::new('Candidate plans must not delete or replace resources outside verified permission migration or revocation.')
         }
-        if ($change['address'] -ceq $fabricAddress -and -not $FabricAdminApis -and $change['type'] -ceq 'azuread_group_member' -and
-            $before['group_object_id'] -ieq $Settings['TEST_BAMI_FABRIC_ADMINS_GROUP_ID'] -and $before['member_object_id'] -ieq $principal) {
-            continue
+        $membershipAddress = $change['address'] -ceq 'module.azure.azuread_group_member.example' -or
+            $change['address'] -cmatch '^module\.azure\.azuread_group_member\.test_permissions\["(?:[^"\\]|\\.)+"\]$'
+        if ($change['type'] -ceq 'azuread_group_member' -and $membershipAddress) {
+            $previousGroupId = [guid]::Empty
+            $removed = ($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after']
+            $retained = $change['address'] -cin $allowed -and
+                ($actions -join ',') -cin @('no-op', 'update', 'delete,create', 'create,delete')
+            if (($removed -or $retained) -and $before['member_object_id'] -is [string] -and
+                $before['member_object_id'] -ieq $principal -and $before['group_object_id'] -is [string] -and
+                [guid]::TryParseExact($before['group_object_id'], 'D', [ref] $previousGroupId) -and $previousGroupId -ne [guid]::Empty) {
+                continue
+            }
         }
         $ownerAddresses = @('module.azure.azapi_resource.identity_role_assignment', 'module.azure.azapi_resource.identity_role_assignment[0]')
-        if ($change['address'] -cin $ownerAddresses -and $change['type'] -ceq 'azapi_resource' -and
+        if (($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after'] -and
+            $change['address'] -cin $ownerAddresses -and $change['type'] -ceq 'azapi_resource' -and
             $before['body'] -is [System.Collections.IDictionary] -and $before['body']['properties'] -is [System.Collections.IDictionary]) {
             $assignmentName = Get-AvmBamiOwnerAssignmentName -Repository $Repository -Settings $Settings
             $scope = "/providers/Microsoft.Management/managementGroups/$($Settings['TEST_BAMI_MANAGEMENT_GROUP_ID'])"
@@ -311,7 +320,7 @@ function Assert-AvmBamiIdentityPlan {
                 if ($ownerDeletions -eq 1) { continue }
             }
         }
-        throw [System.InvalidOperationException]::new('Candidate deletion is not the exact obsolete repository Owner assignment or opted-out Fabric membership.')
+        throw [System.InvalidOperationException]::new('Candidate change is not the exact obsolete Owner assignment or an individual membership edge for this repository principal.')
     }
 }
 
@@ -323,7 +332,7 @@ function ConvertTo-AvmBamiConsumerSettings {
         [Parameter(Mandatory)] [object] $Repository
     )
 
-    $Settings = Get-AvmBamiSettings -Values $Settings -RepositorySync
+    $Settings = Get-AvmBamiSettings -Values $Settings
     $clientId = [guid]::Empty
     $expectedIdentity = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($Repository.full_name.Replace('/', '-').Replace('windows', 'w5s'))"
     if ($Identity['client_id'] -isnot [string] -or -not [guid]::TryParseExact($Identity['client_id'], 'D', [ref] $clientId) -or
@@ -349,8 +358,7 @@ function Write-AvmBamiIdentityPlanSummary {
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
         [Parameter(Mandatory)] [object] $Repository,
-        [Parameter(Mandatory)] [string] $TenantId,
-        [bool] $FabricAdminApis = $false
+        [Parameter(Mandatory)] [string] $TenantId
     )
 
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
@@ -392,14 +400,6 @@ function Write-AvmBamiIdentityPlanSummary {
             client_id = 'output.properties.clientId'
             principal_id = 'output.properties.principalId'
         }
-        'module.azure.azuread_group_member.test_identity_owners[0]' = [ordered]@{
-            group_object_id = 'group_object_id'
-            member_object_id = 'member_object_id'
-        }
-        'module.azure.azuread_group_member.example' = [ordered]@{
-            group_object_id = 'group_object_id'
-            member_object_id = 'member_object_id'
-        }
     }
     $federationFields = [ordered]@{
         type = 'type'
@@ -413,10 +413,10 @@ function Write-AvmBamiIdentityPlanSummary {
         $fields['module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'] = $federationFields
     }
     $fields['module.azure.azapi_resource.validation_federated_credential'] = $federationFields
-    $fabricAddress = 'module.azure.azuread_group_member.fabric_admins[0]'
-    if (@($resources | Where-Object { $_['address'] -ceq $fabricAddress }).Count -gt 0 -or
-        @($Plan['resource_changes'] | Where-Object { $_['address'] -ceq $fabricAddress }).Count -gt 0) {
-        $fields[$fabricAddress] = [ordered]@{ group_object_id = 'group_object_id'; member_object_id = 'member_object_id' }
+    foreach ($resource in @($resources) + @($Plan['resource_changes'])) {
+        if ($resource['type'] -ceq 'azuread_group_member' -and $resource['mode'] -ceq 'managed') {
+            $fields[$resource['address']] = [ordered]@{ group_object_id = 'group_object_id'; member_object_id = 'member_object_id' }
+        }
     }
     foreach ($address in @('module.azure.azapi_resource.identity_role_assignment', 'module.azure.azapi_resource.identity_role_assignment[0]')) {
         if (@($Plan['resource_changes'] | Where-Object { $_['address'] -ceq $address }).Count -gt 0) {
@@ -457,24 +457,23 @@ function Write-AvmBamiIdentityPlanSummary {
             $entry
         }
     )
-    $groupAddress = 'module.azure.data.azuread_group.entra_readers'
-    $groups = @($resources | Where-Object { $_['address'] -ceq $groupAddress })
-    $group = if ($groups.Count -eq 1) { $groups[0] } else { $null }
-    $groupChanges = @($Plan['resource_changes'] | Where-Object { $_ -and $_['address'] -ceq $groupAddress })
-    $groupChange = if ($groupChanges.Count -eq 1) { $groupChanges[0]['change'] } else { @{} }
-    $owners = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_group.test_permissions["test_identity_owners"]' })
-    $ownersGroup = if ($owners.Count -eq 1) { $owners[0] } else { $null }
-    $fabric = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_group.test_permissions["fabric_admins"]' })
-    $fabricGroup = if ($fabric.Count -eq 1) { $fabric[0] } else { $null }
+    $groups = @(
+        foreach ($resource in $resources) {
+            if ($resource['mode'] -ceq 'data' -and $resource['type'] -ceq 'azuread_group' -and
+                $resource['address'].StartsWith('module.azure.data.azuread_group.test_permissions[')) {
+                [ordered]@{
+                    display_name = & $readField -Resource $resource -Change @{} -Path 'display_name'
+                    object_id = & $readField -Resource $resource -Change @{} -Path 'object_id'
+                }
+            }
+        }
+    )
     $summary = [ordered]@{
         repository = $Repository.full_name
         repository_id = [string]$Repository.id
         repository_owner_id = [string]$Repository.owner.id
         expected_tenant_id = $TenantId
-        directory_readers_group = & $readField -Resource $group -Change $groupChange -Path 'display_name'
-        test_identity_owners_group = & $readField -Resource $ownersGroup -Change @{} -Path 'display_name'
-        fabric_admins_group = & $readField -Resource $fabricGroup -Change @{} -Path 'display_name'
-        fabric_admin_apis = $FabricAdminApis
+        groups = $groups
         resources = $summaryResources
     }
     Write-Information -MessageData ("BAMI candidate identity plan summary:`n" + (ConvertTo-Json -InputObject $summary -Depth 6)) `
@@ -510,13 +509,14 @@ function Invoke-AvmBamiRepositoryIdentity {
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
         [string] $TemporaryRoot = [System.IO.Path]::GetTempPath(),
         [bool] $PlanOnly = $true,
-        [bool] $FabricAdminApis = $false
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $settings = Get-AvmBamiSettings -Values $BamiValues -RepositorySync
+    $settings = Get-AvmBamiSettings -Values $BamiValues
+    $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
     $stateKey = Get-AvmBamiIdentityStateKey -TenantId $settings['TEST_BAMI_TENANT_ID'] -RepoId $RepoId
     $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend
     if ($Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
@@ -543,12 +543,8 @@ function Invoke-AvmBamiRepositoryIdentity {
             tenant_id = $settings['TEST_BAMI_TENANT_ID']
             subscription_id = $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
             controller_client_id = $settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
-            management_group_id = $settings['TEST_BAMI_MANAGEMENT_GROUP_ID']
             identity_resource_group_name = $settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME']
-            entra_readers_group_id = $settings['TEST_BAMI_ENTRA_READERS_GROUP_ID']
-            test_identity_owners_group_id = $settings['TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID']
-            fabric_admins_group_id = $settings['TEST_BAMI_FABRIC_ADMINS_GROUP_ID']
-            fabric_admin_apis = $FabricAdminApis
+            entra_group_names = $EntraGroupNames
             github_repository_owner = $repo.owner.login
             github_repository_name = $repo.name
             github_organization_id = [string]$repo.owner.id
@@ -597,8 +593,8 @@ function Invoke-AvmBamiRepositoryIdentity {
         $plan = ConvertFrom-Json -InputObject $planJson -AsHashtable -Depth 100
         Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository `
             -RepositoryId ([string]$repo.id) -RepositoryOwnerId $toolsContext.OrganizationId `
-            -RepositorySyncRepositoryId $toolsContext.RepositoryId -JobWorkflowRef $JobWorkflowRef -FabricAdminApis $FabricAdminApis
-        Write-AvmBamiIdentityPlanSummary -Plan $plan -Repository $repo -TenantId $settings['TEST_BAMI_TENANT_ID'] -FabricAdminApis $FabricAdminApis
+            -RepositorySyncRepositoryId $toolsContext.RepositoryId -JobWorkflowRef $JobWorkflowRef -EntraGroupNames $EntraGroupNames
+        Write-AvmBamiIdentityPlanSummary -Plan $plan -Repository $repo -TenantId $settings['TEST_BAMI_TENANT_ID']
         if ($PlanOnly -and @($plan['resource_changes'] | Where-Object {
                     $_ -and $_['mode'] -ceq 'managed' -and
                     $_['change']['actions'] -notcontains 'no-op'

@@ -11,9 +11,6 @@ function New-AvmTestBamiSettings {
         TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = 'rg-bami-test'
         TEST_BAMI_BICEP_CLIENT_ID = '10000000-0000-4000-8000-000000000004'
         TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = '10000000-0000-4000-8000-000000000005'
-        TEST_BAMI_ENTRA_READERS_GROUP_ID = '10000000-0000-4000-8000-000000000008'
-        TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID = '10000000-0000-4000-8000-000000000009'
-        TEST_BAMI_FABRIC_ADMINS_GROUP_ID = '10000000-0000-4000-8000-000000000010'
     }
 }
 
@@ -31,9 +28,10 @@ function New-AvmTestBamiPlan {
     param(
         [switch] $KnownClient,
         [switch] $ValidationPending,
-        [switch] $FabricAdminApis,
         [switch] $OwnerMigration,
-        [switch] $FabricRevocation,
+        [switch] $LegacyMembershipMigration,
+        [string] $RemovedGroup,
+        [string[]] $GroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
@@ -79,23 +77,22 @@ AND
                 } else { $null }
             }
         }
-        @{
-            address = 'module.azure.azuread_group_member.test_identity_owners[0]'
-            mode = 'managed'
-            type = 'azuread_group_member'
-            values = @{
-                group_object_id = $settings.TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID
-                member_object_id = if ($KnownClient) { $principalId } else { $null }
-            }
-        }
-        @{
-            address = 'module.azure.azuread_group_member.example'; mode = 'managed'; type = 'azuread_group_member'
-            values = @{
-                group_object_id = $settings.TEST_BAMI_ENTRA_READERS_GROUP_ID
-                member_object_id = if ($KnownClient) { $principalId } else { $null }
-            }
-        }
     )
+    $groups = @{}
+    $number = 8
+    foreach ($groupName in $GroupNames) {
+        $groups[$groupName] = '10000000-0000-4000-8000-{0:000000000000}' -f $number
+        $key = ConvertTo-Json -InputObject $groupName -Compress
+        $resources += @{
+            address = "module.azure.azuread_group_member.test_permissions[$key]"
+            mode = 'managed'; type = 'azuread_group_member'
+            values = @{
+                group_object_id = $groups[$groupName]
+                member_object_id = if ($KnownClient) { $principalId } else { $null }
+            }
+        }
+        $number++
+    }
     foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
         $resources += @{
             address = if ($environment -ceq 'avm-validation') { 'module.azure.azapi_resource.validation_federated_credential' } else {
@@ -121,15 +118,6 @@ AND
             }
         }
     }
-    if ($FabricAdminApis) {
-        $resources += @{
-            address = 'module.azure.azuread_group_member.fabric_admins[0]'; mode = 'managed'; type = 'azuread_group_member'
-            values = @{
-                group_object_id = $settings.TEST_BAMI_FABRIC_ADMINS_GROUP_ID
-                member_object_id = if ($KnownClient) { $principalId } else { $null }
-            }
-        }
-    }
     $changes = @($resources | ForEach-Object {
             $actions = @(if ($KnownClient -and (-not $ValidationPending -or
                     $_.address -cne 'module.azure.azapi_resource.validation_federated_credential')) {
@@ -146,7 +134,10 @@ AND
                 @{ parent_id = $true }
             }
             @{ address = $_.address; mode = $_.mode; type = $_.type
-                change = @{ actions = $actions; after = $_.values.Clone(); after_unknown = $unknown; after_sensitive = @{} }
+                change = @{
+                    actions = $actions; after = $_.values.Clone(); after_unknown = $unknown; after_sensitive = @{}
+                    before = if ($KnownClient -and $actions[0] -ceq 'no-op') { $_.values.Clone() } else { $null }
+                }
             }
         })
     if ($OwnerMigration) {
@@ -171,12 +162,16 @@ AND
             }
         }
     }
-    if ($FabricRevocation) {
+    if ($RemovedGroup -or $LegacyMembershipMigration) {
+        $key = ConvertTo-Json -InputObject $RemovedGroup -Compress
         $changes += @{
-            address = 'module.azure.azuread_group_member.fabric_admins[0]'; mode = 'managed'; type = 'azuread_group_member'
+            address = if ($LegacyMembershipMigration) { 'module.azure.azuread_group_member.example' } else {
+                "module.azure.azuread_group_member.test_permissions[$key]"
+            }
+            mode = 'managed'; type = 'azuread_group_member'
             change = @{
                 actions = @('delete'); after = $null
-                before = @{ group_object_id = $settings.TEST_BAMI_FABRIC_ADMINS_GROUP_ID; member_object_id = $principalId }
+                before = @{ group_object_id = '10000000-0000-4000-8000-000000000099'; member_object_id = $principalId }
             }
         }
     }
@@ -184,17 +179,14 @@ AND
         address = 'module.azure.data.azapi_client_config.current'; mode = 'data'; type = 'azapi_client_config'
         values = @{ tenant_id = $settings.TEST_BAMI_TENANT_ID; subscription_id = $settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }
     }, @{
-        address = 'module.azure.data.azuread_client_config.bami[0]'; mode = 'data'; type = 'azuread_client_config'
+        address = 'module.azure.data.azuread_client_config.current'; mode = 'data'; type = 'azuread_client_config'
         values = @{ tenant_id = $settings.TEST_BAMI_TENANT_ID; client_id = $settings.TEST_BAMI_CONTROLLER_CLIENT_ID; object_id = '10000000-0000-4000-8000-000000000011' }
     }
-    foreach ($group in @(
-        @{ Address = 'module.azure.data.azuread_group.entra_readers'; Id = $settings.TEST_BAMI_ENTRA_READERS_GROUP_ID; Name = 'avm-test-entra-readers' }
-        @{ Address = 'module.azure.data.azuread_group.test_permissions["test_identity_owners"]'; Id = $settings.TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID; Name = 'avm-test-identity-owners' }
-        @{ Address = 'module.azure.data.azuread_group.test_permissions["fabric_admins"]'; Id = $settings.TEST_BAMI_FABRIC_ADMINS_GROUP_ID; Name = 'avm-test-fabric-admins' }
-    )) {
+    foreach ($groupName in $GroupNames) {
+        $key = ConvertTo-Json -InputObject $groupName -Compress
         $resources += @{
-            address = $group.Address; mode = 'data'; type = 'azuread_group'
-            values = @{ object_id = $group.Id; display_name = $group.Name; security_enabled = $true; mail_enabled = $false; types = @(); onpremises_sync_enabled = $null }
+            address = "module.azure.data.azuread_group.test_permissions[$key]"; mode = 'data'; type = 'azuread_group'
+            values = @{ object_id = $groups[$groupName]; display_name = $groupName; security_enabled = $true; types = @() }
         }
     }
     return @{

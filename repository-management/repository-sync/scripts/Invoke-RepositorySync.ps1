@@ -1,10 +1,7 @@
 # Requires Environment Variables for GitHub Actions
 # GH_TOKEN
-# ARM_USE_AZUREAD
-# ARM_USE_OIDC
-# ARM_TENANT_ID
-# ARM_SUBSCRIPTION_ID
-# ARM_CLIENT_ID
+# TEST_BAMI_* (the eight-field BAMI settings bundle)
+# ARM_BACKEND_* (the separate state-only identity and storage)
 # Must run gh auth login -h "GitHub.com" before running this script
 
 [CmdletBinding()]
@@ -15,7 +12,6 @@ param(
     [string]$stateTenantId = "",
     [string]$stateSubscriptionId = "",
     [string]$stateClientId = "",
-    [string]$identityResourceGroupName = "",
     [bool]$planOnly = $false,
     [string]$repoId = "avm-ptn-example-repo",
     [string]$repoUrl = "https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo",
@@ -32,8 +28,6 @@ param(
         "azurecla-write"
     ),
     [switch]$forceFileUpdate,
-    [string]$managementGroupId = "",
-    [array]$testSubscriptionIds = @(),
     [hashtable]$bamiSettings = @{},
     [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
 )
@@ -89,12 +83,20 @@ if(!$repositoryCreationModeEnabled){
 
 $repositoryConfig = Get-Content -Path $repoConfigFilePath -Raw | ConvertFrom-Json
 $settings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId $repoId
-$selectedTestTenant = if ($repositoryCreationModeEnabled) { 'legacy' } else { $settings.TestTenant }
+$selectedTestTenant = if ($repositoryCreationModeEnabled) { 'none' } else { $settings.TestTenant }
+if (-not $repositoryCreationModeEnabled -and $selectedTestTenant -cne 'bami') {
+    throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
+}
 if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true' -and
     ($env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or $env:GITHUB_REF -cne 'refs/heads/main')) {
     throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
 }
-$testTenant = Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
+$testTenant = if ($repositoryCreationModeEnabled) {
+    [pscustomobject]@{ TestTenant = 'none'; Settings = $null }
+}
+else {
+    Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
+}
 $repositorySyncContext = if ($repositoryCreationModeEnabled) {
     $null
 }
@@ -122,7 +124,7 @@ if ($testTenant.TestTenant -ceq 'bami') {
         Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
         RepositorySyncRepositoryId = $repositorySyncContext.RepositoryId
         PlanOnly = $planOnly
-        FabricAdminApis = $settings.TestCapabilities.fabricAdminApis
+        EntraGroupNames = $settings.EntraGroups
     }
     if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
         $candidateParameters.JobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
@@ -212,18 +214,12 @@ if(!$repositoryCreationModeEnabled) {
         -issueLog $issueLog
 }
 
-Write-Host "Using test subscription IDs:"
-Write-Host $($testSubscriptionIds | ConvertTo-Json)
-
 $terraformVariables = @{
     repository_creation_mode_enabled = $repositoryCreationModeEnabled.IsPresent
     github_repository_owner = $orgName
     github_repository_name = $repoName
     module_id = $repoId
     module_name = $moduleName
-    management_group_id = $managementGroupId
-    test_subscription_ids = $testSubscriptionIds
-    identity_resource_group_name = $identityResourceGroupName
     is_protected_repo = $true
     github_teams = $githubTeams
     pull_request_bypass_teams = $settings.PullRequestBypassTeams

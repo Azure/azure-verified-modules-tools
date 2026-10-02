@@ -1,38 +1,37 @@
-variable "management_group_id" {
-  type        = string
-  description = "Id of the management group to create the role assignment in."
-}
-
-variable "bami_group_settings" {
-  type = object({
-    tenant_id                     = string
-    controller_client_id          = string
-    entra_readers_group_id        = string
-    test_identity_owners_group_id = string
-    fabric_admins_group_id        = string
-    fabric_admin_apis             = bool
-  })
-  description = "Pinned BAMI access groups; null preserves legacy direct Owner and readers lookup."
-  default     = null
+variable "entra_group_names" {
+  type        = set(string)
+  description = "Configured group display names to resolve in this identity's tenant."
+  default     = []
 
   validation {
-    condition = var.bami_group_settings == null ? true : (
+    condition = alltrue([
+      for name in var.entra_group_names :
+      trimspace(name) != "" && name == trimspace(name) && !can(regex("[\\x00-\\x1f\\x7f]", name))
+    ])
+    error_message = "Entra group display names must be nonempty, trimmed strings without control characters."
+  }
+}
+
+variable "expected_identity_context" {
+  type = object({
+    tenant_id            = string
+    subscription_id      = string
+    controller_client_id = string
+  })
+  description = "Expected BAMI tenant, identity subscription, and provisioning controller."
+  nullable    = false
+
+  validation {
+    condition = (
       alltrue([
         for id in [
-          var.bami_group_settings.tenant_id,
-          var.bami_group_settings.controller_client_id,
-          var.bami_group_settings.entra_readers_group_id,
-          var.bami_group_settings.test_identity_owners_group_id,
-          var.bami_group_settings.fabric_admins_group_id
+          var.expected_identity_context.tenant_id,
+          var.expected_identity_context.subscription_id,
+          var.expected_identity_context.controller_client_id
         ] : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id)) && lower(id) != "00000000-0000-0000-0000-000000000000"
-      ]) &&
-      length(distinct([
-        lower(var.bami_group_settings.entra_readers_group_id),
-        lower(var.bami_group_settings.test_identity_owners_group_id),
-        lower(var.bami_group_settings.fabric_admins_group_id)
-      ])) == 3
+      ])
     )
-    error_message = "BAMI requires nonempty tenant/controller GUIDs and three distinct pinned group object IDs."
+    error_message = "BAMI provider context requires nonempty tenant, subscription, and controller GUIDs."
   }
 }
 

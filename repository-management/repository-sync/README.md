@@ -15,14 +15,14 @@ The identity and storage settings below are GitHub **`avm` environment variables
 
 | Settings | Purpose |
 | --- | --- |
-| `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` | Existing provider identity and Azure resource targets; do not change these during migration |
+| Eight `TEST_BAMI_*` values | BAMI identity provisioning and validated test settings |
 | `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID` | TME state-only identity |
 | `ARM_BACKEND_STORAGE_ACCOUNT_NAME`, `ARM_BACKEND_STORAGE_CONTAINER_NAME` | TME state location, selected with the state identity |
 
 Set all five `ARM_BACKEND_*` values together. The workflow and sync command
 reject missing or partial backend configuration before repository mutations;
 provider identity and storage aliases are not fallbacks. The shared backend
-is required for both legacy and BAMI test tenants. Direct calls to
+is required for normal BAMI sync. Direct calls to
 `Invoke-RepositorySync.ps1` must supply `stateTenantId`, `stateSubscriptionId`,
 `stateClientId`, `stateStorageAccountName`, and `stateContainerName`.
 Repository-creation mode continues to use a local backend without these values.
@@ -44,8 +44,11 @@ never pass tokens, SAS credentials, or account keys through `-backend-config`.
 The state UAMI trusts the same repository-ID/`avm` environment subject as the
 existing provider UAMI, in its own tenant.
 
-Azure CLI logs in as the state identity for blob-lease recovery, while providers
-continue using the existing `ARM_*` environment. State recovery forwards the
+Azure CLI logs in as the state identity for blob-lease recovery. Providers use
+the verified BAMI tenant, administration subscription, and controller from the
+settings bundle; old `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`
+and legacy subscription/group inputs are no longer source requirements.
+State recovery forwards the
 state subscription explicitly. Keep workflow concurrency at one active run and
 do not run another state writer outside that workflow.
 
@@ -57,29 +60,26 @@ approval for that consequence before running manual canaries.
 ## BAMI candidate identities
 
 The central `testTenant` default selects BAMI for all repositories discovered by
-Terraform sync, including new and otherwise unlisted repositories. Higher-order
-explicit legacy exceptions remain supported. There is no additional activation
-variable or script parameter. BAMI-selected repositories require the
+Terraform sync, including new and otherwise unlisted repositories. The legacy
+tenant is retired; normal sync explicitly rejects that selection instead of
+accessing an old provider. There is no additional activation variable or
+script parameter. Normal sync requires the
 [complete BAMI bundle](../README.md#test-tenant-selection)
-before cleanup, Terraform, or repository mutations. In GitHub Actions they also
-require the trusted Tools repository and `refs/heads/main`. Legacy selections
-retain their normal path without requiring BAMI values.
+before cleanup, Terraform, or repository mutations. GitHub Actions executions
+require the trusted Tools repository and `refs/heads/main`. Repository creation
+does not provision or publish test identities.
 
 All BAMI-selected repositories attempt preparation during normal trusted-main
 syncs, including scheduled and repository-dispatch applies. Manual `plan_only` still
 defaults to `true`; `false` permits the existing coupled candidate-identity apply
-and consumer-secret update. Sync does not run module deployment tests. Selecting
-`legacy` in configuration restores the legacy consumer tuple, rather than merely
-pausing the BAMI path.
+and consumer-secret update. Sync does not run module deployment tests.
 
 The [candidate root](bami-identity/main.tf) reuses the Azure identity module
 only for selected repositories. Each candidate has its own
 `bami-identities/<tenantGuid>/<repoId>.tfstate` key in the **same configured TME
-backend**. The legacy `<repoId>.tfstate`, `module.azure[0]`, provider `ARM_*`,
-and `ARM_BACKEND_*` settings remain unchanged. Switching
-the central selection back to `legacy` restores legacy consumer secrets
-without touching candidate identities or state. A later candidate tenant uses
-a different internal key; it does not replace the previous tenant's identities.
+backend**. The ordinary `<repoId>.tfstate` root now manages GitHub configuration
+only; it consumes the verified candidate tuple instead of executing the retired
+Azure module. Backend keys and `ARM_BACKEND_*` settings are unchanged.
 
 Plan-only never applies to obtain a client ID. If the candidate ID is still
 unknown or any identity, federation, or membership change is pending, the run
@@ -91,9 +91,9 @@ below is allowed. Failed or uncertain applies do not trigger automatic state
 repair, state imports, or apply retries.
 
 After validation, both paths log an allow-listed candidate-plan summary:
-repository and tenant identifiers, the seven managed addresses and actions,
-an optional eighth Fabric membership, and any bounded migration/revocation
-deletes. It includes identity and membership scopes and federation bindings;
+repository and tenant identifiers, the identity, four federation credentials,
+every configured membership, and bounded migration/revocation actions.
+It includes observed group names/IDs and membership scopes;
 obsolete Owner deletions also show the previous scope, principal, and
 delegation condition. Unknown and sensitive fields are marked explicitly. The summary
 excludes raw plans, state, variables, output documents, and credentials; it
@@ -107,7 +107,7 @@ assignment retains the
 Owner, User Access Administrator, and RBAC Administrator are denied with
 `ForAnyOfAllValues:GuidNotEquals` in both write and delete clauses,
 `conditionVersion = "2.0"`. Verify controller federation, identity/FIC
-permissions, and pinned group read/membership access. Controller directory-role
+permissions, and configured-name group read/membership access. Controller directory-role
 assignment alone does not establish Graph API readiness; offline checks do
 not prove the role-only route or effective live permissions.
 
@@ -120,46 +120,64 @@ controller as an execution identity to bypass a failed prerequisite.
 
 ## BAMI group access and migration
 
-The three group IDs in the [source bundle](../README.md#test-tenant-selection)
-are required even when Fabric access is off. BAMI resolves groups by object ID,
-not the legacy display-name lookup, and requires the expected named, assigned,
-non-mail-enabled security groups in the pinned tenant. Repository sync manages
+Flat `repositoryGroups[].entraGroups` arrays contain arbitrary Entra group display
+names. Matching groups are ordered by `order`, then declaration, and their names
+accumulate with exact-name deduplication. A repository-specific list adds to
+defaults; an empty list does not remove inherited memberships.
+Terraform resolves each name uniquely in the selected BAMI tenant. Missing,
+ambiguous, nonsecurity, or directory-dynamic groups that cannot accept individual
+membership updates fail explicitly. Repository sync manages
 only each dedicated test identity's membership edges, never the shared groups'
 complete membership lists or their Azure/directory role assignments.
 The candidate's private `test_group_contract` output exposes only observed
 provider identifiers and allow-listed group metadata, not group members,
 owners, or credentials. `test_identity` and consumer secrets are unchanged.
 
-An illustrative explicit Fabric opt-in, requiring separate approval:
+The checked-in default and Fabric selection are:
 
 ```json
-{
-  "name": "fabric-admin-api-tests",
-  "order": 10,
-  "repositories": ["avm-ptn-fabric-example"],
-  "testCapabilities": { "fabricAdminApis": true }
-}
+[
+  {
+    "name": "default",
+    "repositories": ["*"],
+    "entraGroups": ["avm-test-entra-readers", "avm-test-identity-owners"]
+  },
+  {
+    "name": "fabric",
+    "repositories": ["avm-ptn-unified-data-platform"],
+    "entraGroups": ["avm-test-fabric-admins"]
+  }
+]
 ```
 
-Missing capability means `false`. Higher `order`, then later declaration,
-wins; explicit `false` revokes only that repository's Fabric edge on an
-approved apply. `true` requires canonical repository IDs and rejects `*`.
-Module names, topics, and BAMI selection never imply Fabric opt-in. This
-capability affects BAMI only; no repository is opted in by this change.
+The unified-data-platform identity therefore gets all three memberships; other
+repositories get the two defaults. Removing a name from all matching groups
+removes only that repository's edge on an approved apply. Group object IDs are
+looked up anew, so Terraform-owned group recreation refreshes/replaces those
+edges without a publisher change. There is no fixed group-ID interface or
+`testCapabilities` flag.
 `avm-bootstrap-fabric-admins` is not a consumer group. Tenant registration,
 licensing, first portal access, and Fabric tenant settings remain bootstrap
 operator work outside repository sync.
 
-The readers edge retains `azuread_group_member.example`, so preserving the
-bootstrap readers object ID avoids membership replacement when its name
-changes. A `moved` block preserves legacy direct Owner state at
-`identity_role_assignment[0]`. Legacy still creates that conditioned assignment;
-BAMI creates no direct Owner assignment and adds `test_identity_owners[0]`
-instead. A future approved saved plan destroys only the obsolete deterministic
+BAMI creates no direct Owner assignment. A future approved saved plan destroys
+only the obsolete deterministic
 Owner assignment for the same repository principal, pinned management group,
 role, and resource ID. Keep the controller's existing Owner-assignment deletion
-permission until this migration finishes. No `removed { destroy = false }`,
-state removal/import, or whole-group reconciliation is used.
+permission until this migration finishes. Old singleton readers edges and
+name-keyed memberships can be removed/replaced only for the same repository
+principal. No live BAMI role or membership is forgotten with
+`removed { destroy = false }`; whole-group reconciliation is never used.
+
+The separate ordinary-root `retired-identity.tf` forgets only `module.azure`
+state from the already-nonexistent legacy tenant. That explicitly approved
+retirement avoids old resource refresh, data-source reads, and destruction;
+it does not touch the isolated live BAMI identity root or state backend.
+Terraform 1.9+ is required. The local gate proves this with disposable mock
+state: seven original objects produce only `forget` actions, retain their
+before-values, and have no refresh/data-read trace. A seed `command = apply`
+is permitted only inside that fully mocked Terraform test, never as a live
+apply or actual state operation.
 
 Bootstrap prerequisites and the shared group assignment are delivered in
 [azure-cloud-native/Azure-Verified-Modules-Tooling-BAMI#43](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Tooling-BAMI/pull/43).
@@ -308,7 +326,7 @@ runtime state identity cross-tenant or provider-management permissions.
    }
    ```
 
-   Leave provider `ARM_*`, management group, identity resource group, and test
+   Leave the BAMI settings bundle, management group, identity resource group, and test
    subscription variables unchanged. No state migration flags are needed during
    normal init: fresh workflow checkouts select the copied state by the unchanged
    `<repoId>.tfstate` key.

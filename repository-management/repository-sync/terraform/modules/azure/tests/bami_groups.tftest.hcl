@@ -10,7 +10,7 @@ override_data {
 }
 
 override_data {
-  target = data.azuread_client_config.bami[0]
+  target = data.azuread_client_config.current
   values = {
     tenant_id = "10000000-0000-4000-8000-000000000001"
     client_id = "10000000-0000-4000-8000-000000000002"
@@ -19,38 +19,32 @@ override_data {
 }
 
 override_data {
-  target = data.azuread_group.entra_readers
+  target = data.azuread_group.test_permissions["repository-readers"]
   values = {
-    object_id               = "10000000-0000-4000-8000-000000000008"
-    display_name            = "avm-test-entra-readers"
-    security_enabled        = true
-    mail_enabled            = false
-    types                   = []
-    onpremises_sync_enabled = null
+    object_id        = "10000000-0000-4000-8000-000000000008"
+    display_name     = "repository-readers"
+    security_enabled = true
+    types            = []
   }
 }
 
 override_data {
-  target = data.azuread_group.test_permissions["test_identity_owners"]
+  target = data.azuread_group.test_permissions["repository-owners"]
   values = {
-    object_id               = "10000000-0000-4000-8000-000000000009"
-    display_name            = "avm-test-identity-owners"
-    security_enabled        = true
-    mail_enabled            = false
-    types                   = []
-    onpremises_sync_enabled = null
+    object_id        = "10000000-0000-4000-8000-000000000009"
+    display_name     = "repository-owners"
+    security_enabled = true
+    types            = []
   }
 }
 
 override_data {
-  target = data.azuread_group.test_permissions["fabric_admins"]
+  target = data.azuread_group.test_permissions["analytics-admins"]
   values = {
-    object_id               = "10000000-0000-4000-8000-000000000010"
-    display_name            = "avm-test-fabric-admins"
-    security_enabled        = true
-    mail_enabled            = false
-    types                   = []
-    onpremises_sync_enabled = null
+    object_id        = "10000000-0000-4000-8000-000000000010"
+    display_name     = "analytics-admins"
+    security_enabled = true
+    types            = []
   }
 }
 
@@ -70,7 +64,6 @@ override_resource {
 }
 
 variables {
-  management_group_id                 = "mg-bami-test"
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
@@ -81,85 +74,71 @@ variables {
   github_organization_id              = "6844498"
   github_repository_id                = "1234"
   repository_sync_repository_id       = "1239632211"
-  bami_group_settings = {
-    tenant_id                     = "10000000-0000-4000-8000-000000000001"
-    controller_client_id          = "10000000-0000-4000-8000-000000000002"
-    entra_readers_group_id        = "10000000-0000-4000-8000-000000000008"
-    test_identity_owners_group_id = "10000000-0000-4000-8000-000000000009"
-    fabric_admins_group_id        = "10000000-0000-4000-8000-000000000010"
-    fabric_admin_apis             = false
+  entra_group_names                   = ["repository-readers", "repository-owners"]
+  expected_identity_context = {
+    tenant_id            = "10000000-0000-4000-8000-000000000001"
+    subscription_id      = "10000000-0000-4000-8000-000000000003"
+    controller_client_id = "10000000-0000-4000-8000-000000000002"
   }
 }
 
-run "bami_uses_only_required_individual_group_edges_by_default" {
+run "configured_names_create_only_individual_group_edges" {
   command = plan
 
   assert {
     condition = (
-      length(azapi_resource.identity_role_assignment) == 0 &&
-      length(azuread_group_member.test_identity_owners) == 1 &&
-      length(azuread_group_member.fabric_admins) == 0 &&
-      azuread_group_member.example.group_object_id == var.bami_group_settings.entra_readers_group_id &&
-      azuread_group_member.test_identity_owners[0].group_object_id == var.bami_group_settings.test_identity_owners_group_id &&
-      azuread_group_member.example.member_object_id == azapi_resource.identity.output.properties.principalId &&
-      azuread_group_member.test_identity_owners[0].member_object_id == azapi_resource.identity.output.properties.principalId
+      toset(keys(azuread_group_member.test_permissions)) == var.entra_group_names &&
+      alltrue([for name, membership in azuread_group_member.test_permissions :
+        membership.group_object_id == data.azuread_group.test_permissions[name].object_id &&
+        membership.member_object_id == azapi_resource.identity.output.properties.principalId
+      ])
     )
-    error_message = "BAMI must use only the dedicated identity's pinned readers/owners edges; direct Owner and Fabric access are absent."
+    error_message = "Configured names must create only this repository's resolved membership edges, never a direct BAMI Owner assignment."
   }
 
   assert {
     condition = (
-      output.test_group_contract.azure_context.tenant_id == var.bami_group_settings.tenant_id &&
-      output.test_group_contract.graph_context.client_id == var.bami_group_settings.controller_client_id &&
-      length(keys(output.test_group_contract.groups)) == 3 &&
-      alltrue([for group in output.test_group_contract.groups : length(keys(group)) == 6])
+      output.test_group_contract.azure_context.tenant_id == var.expected_identity_context.tenant_id &&
+      output.test_group_contract.graph_context.client_id == var.expected_identity_context.controller_client_id &&
+      length(keys(output.test_group_contract.groups)) == 2 &&
+      alltrue([for group in output.test_group_contract.groups : length(keys(group)) == 3])
     )
-    error_message = "Observed evidence must expose only provider identifiers and six allow-listed fields for each group, never members or owners."
+    error_message = "Observed evidence must contain only provider identifiers and allow-listed group metadata."
   }
 }
 
-run "explicit_fabric_opt_in_adds_only_the_dedicated_identity_edge" {
+run "additional_configured_name_accumulates_an_edge" {
   command = plan
 
   variables {
-    bami_group_settings = {
-      tenant_id                     = "10000000-0000-4000-8000-000000000001"
-      controller_client_id          = "10000000-0000-4000-8000-000000000002"
-      entra_readers_group_id        = "10000000-0000-4000-8000-000000000008"
-      test_identity_owners_group_id = "10000000-0000-4000-8000-000000000009"
-      fabric_admins_group_id        = "10000000-0000-4000-8000-000000000010"
-      fabric_admin_apis             = true
+    entra_group_names = ["repository-readers", "repository-owners", "analytics-admins"]
+  }
+
+  assert {
+    condition = (
+      length(azuread_group_member.test_permissions) == 3 &&
+      azuread_group_member.test_permissions["analytics-admins"].group_object_id == "10000000-0000-4000-8000-000000000010"
+    )
+    error_message = "An additional configured name must not replace default memberships."
+  }
+}
+
+run "recreated_group_uses_its_new_resolved_object_id" {
+  command = plan
+
+  override_data {
+    target = data.azuread_group.test_permissions["repository-readers"]
+    values = {
+      object_id        = "90000000-0000-4000-8000-000000000008"
+      display_name     = "repository-readers"
+      security_enabled = true
+      types            = []
     }
   }
 
   assert {
-    condition = (
-      length(azapi_resource.identity_role_assignment) == 0 &&
-      length(azuread_group_member.fabric_admins) == 1 &&
-      azuread_group_member.fabric_admins[0].group_object_id == var.bami_group_settings.fabric_admins_group_id &&
-      azuread_group_member.fabric_admins[0].member_object_id == azapi_resource.identity.output.properties.principalId
-    )
-    error_message = "Explicit opt-in must add only the dedicated repository identity to the pinned test Fabric group."
-  }
-}
-
-run "legacy_keeps_direct_owner_and_original_reader_edge" {
-  command = plan
-
-  variables {
-    bami_group_settings = null
-  }
-
-  assert {
-    condition = (
-      length(azapi_resource.identity_role_assignment) == 1 &&
-      length(azuread_group_member.test_identity_owners) == 0 &&
-      length(azuread_group_member.fabric_admins) == 0 &&
-      local.entra_readers_group_name == "grp-sec-avm-tf-end-to-end-testing-entra-readers" &&
-      azapi_resource.identity_role_assignment[0].body.properties.conditionVersion == "2.0" &&
-      azapi_resource.identity_role_assignment[0].body.properties.principalId == azapi_resource.identity.output.properties.principalId
-    )
-    error_message = "Legacy must retain its conditioned direct Owner assignment and original readers membership, without BAMI access edges."
+    condition     = azuread_group_member.test_permissions["repository-readers"].group_object_id == "90000000-0000-4000-8000-000000000008"
+    error_message = "Membership must follow the current target-tenant lookup, not a pinned historical ID."
   }
 }
 
@@ -167,7 +146,7 @@ run "wrong_graph_tenant_is_rejected_before_membership" {
   command = plan
 
   override_data {
-    target = data.azuread_client_config.bami[0]
+    target = data.azuread_client_config.current
     values = {
       tenant_id = "90000000-0000-4000-8000-000000000001"
       client_id = "10000000-0000-4000-8000-000000000002"
@@ -175,60 +154,49 @@ run "wrong_graph_tenant_is_rejected_before_membership" {
     }
   }
 
-  expect_failures = [data.azuread_client_config.bami]
+  expect_failures = [data.azuread_client_config.current]
 }
 
-run "wrong_azure_tenant_is_rejected_before_membership" {
+run "wrong_azure_subscription_is_rejected_before_membership" {
   command = plan
 
   override_data {
     target = data.azapi_client_config.current
     values = {
-      tenant_id       = "90000000-0000-4000-8000-000000000001"
-      subscription_id = "10000000-0000-4000-8000-000000000003"
+      tenant_id       = "10000000-0000-4000-8000-000000000001"
+      subscription_id = "90000000-0000-4000-8000-000000000003"
     }
   }
 
   expect_failures = [data.azapi_client_config.current]
 }
 
-run "bootstrap_fabric_group_cannot_replace_a_test_group" {
+run "lookup_uses_the_configured_name" {
+  command = plan
+
+  assert {
+    condition     = data.azuread_group.test_permissions["repository-owners"].display_name == "repository-owners"
+    error_message = "Group lookups must use the exact configured display name."
+  }
+}
+
+run "directory_dynamic_membership_is_not_manually_managed" {
   command = plan
 
   override_data {
-    target = data.azuread_group.test_permissions["fabric_admins"]
+    target = data.azuread_group.test_permissions["repository-owners"]
     values = {
-      object_id               = "10000000-0000-4000-8000-000000000010"
-      display_name            = "avm-bootstrap-fabric-admins"
-      security_enabled        = true
-      mail_enabled            = false
-      types                   = []
-      onpremises_sync_enabled = null
+      object_id        = "10000000-0000-4000-8000-000000000009"
+      display_name     = "repository-owners"
+      security_enabled = true
+      types            = ["DynamicMembership"]
     }
   }
 
   expect_failures = [data.azuread_group.test_permissions]
 }
 
-run "dynamic_owner_group_is_rejected" {
-  command = plan
-
-  override_data {
-    target = data.azuread_group.test_permissions["test_identity_owners"]
-    values = {
-      object_id               = "10000000-0000-4000-8000-000000000009"
-      display_name            = "avm-test-identity-owners"
-      security_enabled        = true
-      mail_enabled            = false
-      types                   = ["DynamicMembership"]
-      onpremises_sync_enabled = null
-    }
-  }
-
-  expect_failures = [data.azuread_group.test_permissions]
-}
-
-run "controller_cannot_receive_repository_test_group_edges" {
+run "controller_cannot_receive_repository_group_edges" {
   command = plan
 
   override_resource {
@@ -246,5 +214,5 @@ run "controller_cannot_receive_repository_test_group_edges" {
     }
   }
 
-  expect_failures = [azuread_group_member.example, azuread_group_member.test_identity_owners]
+  expect_failures = [azuread_group_member.test_permissions]
 }

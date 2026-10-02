@@ -353,7 +353,10 @@ task 'test-tenant-terraform' {
         $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
         $formatPaths = @('main.tf', 'variables.tf', 'tests')
         if ($directory -eq 'terraform') {
-            $formatPaths += @('locals.tf', 'modules/azure/outputs.tf')
+            $formatPaths += @(
+                'locals.tf', 'terraform.tf', 'retired-identity.tf',
+                'tests/fixtures/retired-identity/main.tf', 'tests/fixtures/retired-identity/azure/main.tf'
+            )
         }
         elseif ($directory -eq 'bami-identity') {
             $formatPaths += @('terraform.tf', 'outputs.tf')
@@ -375,6 +378,13 @@ task 'test-tenant-terraform' {
             @('validate', '-no-color'),
             @('test', '-json', '-verbose')
         )) {
+            if ($directory -eq 'terraform' -and $arguments[0] -eq 'test') {
+                $traceRoot = Join-Path $script:outRoot 'test-results'
+                $null = [System.IO.Directory]::CreateDirectory($traceRoot)
+                $environment.TF_LOG = 'TRACE'
+                $environment.TF_LOG_PATH = Join-Path $traceRoot 'retired-identity.terraform.trace.log'
+                [System.IO.File]::WriteAllText($environment.TF_LOG_PATH, '')
+            }
             $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments -WorkingDirectory $root -TimeoutSec 600 `
                 -EnvVars $environment
             if ($result.ExitCode -ne 0) {
@@ -395,6 +405,60 @@ task 'test-tenant-terraform' {
                     throw [System.IO.InvalidDataException]::new('Terraform did not return a complete mocked-test summary.')
                 }
                 Write-Host $summary[0]['@message']
+                if ($directory -eq 'terraform') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    $seedStates = @($events | Where-Object {
+                            $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'seed_only_disposable_mock_retired_state'
+                        })
+                    $retirementPlans = @($events | Where-Object {
+                            $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'forget_only_retired_state_without_refresh'
+                        })
+                    if ($seedStates.Count -ne 1 -or $retirementPlans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Retirement requires one disposable mocked seed state and its actual forget-only plan.')
+                    }
+                    $seedResources = @(Get-AvmTerraformPlannedResource -Module $seedStates[0]['test_state']['root_module'])
+                    $seedManaged = @($seedResources | Where-Object { $_['mode'] -ceq 'managed' })
+                    $retirementChanges = @($retirementPlans[0]['test_plan']['resource_changes'])
+                    $forgotten = @($retirementChanges | Where-Object { $_['change']['actions'] -contains 'forget' })
+                    if ($seedManaged.Count -ne 7 -or $forgotten.Count -ne $seedManaged.Count -or
+                        @($retirementChanges | Where-Object { $_['change']['actions'] -contains 'delete' }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Retirement must forget exactly the seven retired fixture objects without any destruction.')
+                    }
+                    foreach ($change in $forgotten) {
+                        $source = @($seedManaged | Where-Object { $_['address'] -ceq $change['address'] })
+                        if (-not $change['address'].StartsWith('module.azure[0].') -or $source.Count -ne 1 -or
+                            (@($change['change']['actions']) -join ',') -cne 'forget' -or
+                            $null -ne $change['change']['after'] -or
+                            (ConvertTo-Json -InputObject $source[0]['values'] -Depth 100 -Compress) -cne
+                            (ConvertTo-Json -InputObject $change['change']['before'] -Depth 100 -Compress)) {
+                            throw [System.IO.InvalidDataException]::new('Retired objects must retain their original mocked before-values and only forget within the old module.')
+                        }
+                    }
+                    $trace = [System.IO.File]::ReadAllLines($environment.TF_LOG_PATH)
+                    $start = [Array]::FindIndex($trace, [Predicate[string]]{ param($line)
+                        $line.Contains('starting plan for forget_only_retired_state_without_refresh')
+                    })
+                    $end = [Array]::FindIndex($trace, [Predicate[string]]{ param($line)
+                        $line.Contains('completed plan for forget_only_retired_state_without_refresh')
+                    })
+                    if ($start -lt 0 -or $end -le $start) {
+                        throw [System.IO.InvalidDataException]::new('Retirement trace must identify the actual mocked plan execution.')
+                    }
+                    $planTrace = $trace[$start..$end]
+                    if (@($planTrace | Where-Object {
+                                $_.Contains('module.azure[0]') -and $_ -match 'NodeAbstractResourceInstance\.refresh:|readDataSource:|\bReadResource\b|\bReadDataSource\b'
+                            }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Retired-tenant resource refresh or data-source reads are forbidden.')
+                    }
+                    foreach ($data in @($seedResources | Where-Object { $_['mode'] -ceq 'data' })) {
+                        if (@($planTrace | Where-Object {
+                                    $_.Contains("NodePlannableResourceInstanceOrphan: removing state object for $($data['address'])")
+                                }).Count -ne 1) {
+                            throw [System.IO.InvalidDataException]::new('Retired data sources must be removed from disposable state without re-reading them.')
+                        }
+                    }
+                    Write-Build Green '  retired fixture: seven unchanged forget actions, zero refresh/read/destroy'
+                }
                 if ($directory -eq 'bami-identity') {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
@@ -419,13 +483,12 @@ task 'test-tenant-terraform' {
                             address = 'module.azure.data.azapi_client_config.current'
                             mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context']
                         }, @{
-                            address = 'module.azure.data.azuread_client_config.bami[0]'
+                            address = 'module.azure.data.azuread_client_config.current'
                             mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context']
                         }
-                        foreach ($name in @('entra_readers', 'test_identity_owners', 'fabric_admins')) {
-                            $address = if ($name -ceq 'entra_readers') { 'module.azure.data.azuread_group.entra_readers' } else {
-                                'module.azure.data.azuread_group.test_permissions["' + $name + '"]'
-                            }
+                        foreach ($name in $evidence['groups'].Keys) {
+                            $key = ConvertTo-Json -InputObject $name -Compress
+                            $address = "module.azure.data.azuread_group.test_permissions[$key]"
                             $resources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
                         }
                         $candidatePlan = @{
@@ -434,29 +497,13 @@ task 'test-tenant-terraform' {
                             planned_values = @{ root_module = @{ resources = $resources } }
                         }
                     }
-                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings) -RepositorySync) `
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
+                    $repositoryConfig = Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json
+                    $groupNames = (Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId 'avm-ptn-example-repo').EntraGroups
+                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
                         -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
-                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211'
-                    Write-Build Green '  actual candidate plan passes the pinned group and federation guard'
-                }
-                elseif ($directoryName -eq 'terraform-modules-azure') {
-                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
-                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
-                    $legacyPlans = @($events | Where-Object {
-                            $_['type'] -eq 'test_plan' -and $_['@testrun'] -ceq 'legacy_keeps_direct_owner_and_original_reader_edge'
-                        })
-                    if ($legacyPlans.Count -ne 1) {
-                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked legacy assignment plan.')
-                    }
-                    $assignments = @($legacyPlans[0]['test_plan']['resource_changes'] | Where-Object {
-                            $_['address'] -ceq 'azapi_resource.identity_role_assignment[0]'
-                        })
-                    $expectedName = Get-AvmBamiOwnerAssignmentName -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -Settings (New-AvmTestBamiSettings)
-                    if ($assignments.Count -ne 1 -or
-                        $assignments[0]['change']['after']['name'] -cne $expectedName) {
-                        throw [System.IO.InvalidDataException]::new('The migration guard must match the actual Terraform UUIDv5 legacy assignment name.')
-                    }
-                    Write-Build Green '  legacy assignment UUID matches the exact migration guard'
+                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $groupNames
+                    Write-Build Green '  actual candidate plan passes configured memberships and federation guard'
                 }
             }
         }

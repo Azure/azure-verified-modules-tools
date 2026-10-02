@@ -13,35 +13,14 @@ variable "controller_client_id" {
   description = "BAMI controller used only to provision dedicated test identities."
 }
 
-variable "management_group_id" {
-  type        = string
-  description = "BAMI management group for module test permissions."
-}
-
 variable "identity_resource_group_name" {
   type        = string
   description = "Existing BAMI resource group for repository identities."
 }
 
-variable "entra_readers_group_id" {
-  type        = string
-  description = "Pinned object ID of avm-test-entra-readers in the BAMI tenant."
-}
-
-variable "test_identity_owners_group_id" {
-  type        = string
-  description = "Pinned object ID of avm-test-identity-owners in the BAMI tenant."
-}
-
-variable "fabric_admins_group_id" {
-  type        = string
-  description = "Pinned object ID of avm-test-fabric-admins in the BAMI tenant."
-}
-
-variable "fabric_admin_apis" {
-  type        = bool
-  description = "Explicit repository opt-in to tenant-wide Fabric admin APIs."
-  default     = false
+variable "entra_group_names" {
+  type        = set(string)
+  description = "Group display names resolved from the repository's BAMI configuration."
 }
 
 variable "github_repository_owner" {

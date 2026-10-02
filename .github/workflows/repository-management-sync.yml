@@ -156,7 +156,7 @@ jobs:
           "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
-      # Only state lock recovery uses this CLI login; providers retain ARM_* below.
+      # Only state lock recovery uses this CLI login; providers use BAMI settings.
       - name: Azure login for state (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
@@ -181,7 +181,6 @@ jobs:
           Write-Output "Plan Only: $planOnly"
           Write-Output "Force File Update: $forceFileUpdate"
 
-          $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
           $bamiSettings = @{
             TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
             TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
@@ -191,9 +190,6 @@ jobs:
             TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
             TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
             TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
-            TEST_BAMI_ENTRA_READERS_GROUP_ID = $env:TEST_BAMI_ENTRA_READERS_GROUP_ID
-            TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID = $env:TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID
-            TEST_BAMI_FABRIC_ADMINS_GROUP_ID = $env:TEST_BAMI_FABRIC_ADMINS_GROUP_ID
           }
 
           $repoMetaDataJson = $env:REPO_META_DATA_JSON
@@ -208,14 +204,11 @@ jobs:
           Import-Module Avm.Authoring -Force -ErrorAction Stop
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
-            -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
-            -testSubscriptionIds $testSubscriptionIds `
             -stateStorageAccountName $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME `
             -stateContainerName $env:ARM_BACKEND_STORAGE_CONTAINER_NAME `
             -stateTenantId $env:ARM_BACKEND_TENANT_ID `
             -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
             -stateClientId $env:ARM_BACKEND_CLIENT_ID `
-            -identityResourceGroupName "${{ vars.IDENTITY_RESOURCE_GROUP_NAME }}" `
             -repoId "${{ matrix.repoId }}" `
             -repoUrl "${{ matrix.repoUrl }}" `
             -repoMetaData $repoMetaData `
@@ -228,9 +221,6 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
-          ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
-          ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}
           ARM_BACKEND_SUBSCRIPTION_ID: ${{ steps.state-backend.outputs.subscription-id }}
           ARM_BACKEND_CLIENT_ID: ${{ steps.state-backend.outputs.client-id }}
@@ -238,7 +228,6 @@ jobs:
           ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ steps.state-backend.outputs.container }}
           ARM_USE_AZUREAD: true
           ARM_USE_OIDC: true
-          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
@@ -247,9 +236,6 @@ jobs:
           TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
           TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
-          TEST_BAMI_ENTRA_READERS_GROUP_ID: ${{ vars.TEST_BAMI_ENTRA_READERS_GROUP_ID }}
-          TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID: ${{ vars.TEST_BAMI_TEST_IDENTITY_OWNERS_GROUP_ID }}
-          TEST_BAMI_FABRIC_ADMINS_GROUP_ID: ${{ vars.TEST_BAMI_FABRIC_ADMINS_GROUP_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
 
       - name: Upload issue log JSON

@@ -10,9 +10,11 @@ override_data {
 }
 
 override_data {
-  target = data.azuread_group.entra_readers
+  target = data.azuread_client_config.current
   values = {
-    object_id = "10000000-0000-4000-8000-000000000007"
+    tenant_id = "10000000-0000-4000-8000-000000000001"
+    client_id = "10000000-0000-4000-8000-000000000002"
+    object_id = "10000000-0000-4000-8000-000000000011"
   }
 }
 
@@ -32,7 +34,6 @@ override_resource {
 }
 
 variables {
-  management_group_id                 = "mg-bami-test"
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
@@ -43,6 +44,11 @@ variables {
   github_organization_id              = "6844498"
   github_repository_id                = "1234"
   repository_sync_repository_id       = "1239632211"
+  expected_identity_context = {
+    tenant_id            = "10000000-0000-4000-8000-000000000001"
+    subscription_id      = "10000000-0000-4000-8000-000000000003"
+    controller_client_id = "10000000-0000-4000-8000-000000000002"
+  }
 }
 
 run "existing_environments_keep_their_module_trust" {

@@ -5,6 +5,10 @@
 **Updated**: 2026-10-01
 **Branch**: `jaredfholgate-test-identity-group-access`
 
+The [configuration correction](2026-10-02-configured-test-identity-groups.md)
+supersedes the fixed group-ID and Fabric-capability design below. This record
+preserves the initial implementation and validation, not the current contract.
+
 ## Outcome
 
 Implemented pinned BAMI group object IDs for each repository test identity's Directory
