@@ -237,27 +237,56 @@ function Test-AvmTerraformRandomProviderInUse {
     $ErrorActionPreference = 'Stop'
 
     $modulePrefix = $ModulePath + [System.IO.Path]::DirectorySeparatorChar
-    $files = [System.Collections.Generic.List[object]]::new()
+    $directories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($target in $ModuleTargets) {
         if ($target.Path -cne $ModulePath -and
             -not $target.Path.StartsWith($modulePrefix, [System.StringComparison]::Ordinal)) {
             continue
         }
-        foreach ($file in Get-ChildItem -LiteralPath $target.Path -File -Filter '*.tf') {
-            $files.Add($file)
+        $null = $directories.Add($target.Path)
+    }
+    $null = $directories.Add($TestDirectory)
+    foreach ($directory in Get-ChildItem -LiteralPath $TestDirectory -Recurse -Directory) {
+        $relativePath = [System.IO.Path]::GetRelativePath($TestDirectory, $directory.FullName)
+        if (@($relativePath -split '[\\/]' | Where-Object { $_.StartsWith('.') -or $_ -eq 'node_modules' }).Count -eq 0) {
+            $null = $directories.Add($directory.FullName)
         }
     }
-    foreach ($file in Get-AvmTerraformFile -Root $TestDirectory |
-            Where-Object { $_.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) }) {
-        $files.Add($file)
-    }
 
-    foreach ($file in $files) {
-        $source = [System.IO.File]::ReadAllText($file.FullName)
-        if ($source -match '(?m)^[ \t]*random[ \t]*=[ \t]*\{' -or
-            $source -match 'hashicorp/random' -or
-            $source -match '(?m)^[ \t]*(?:resource|data|ephemeral)[ \t]+"random_[^"]+"[ \t]+"[^"]+"') {
-            return $true
+    foreach ($directory in $directories) {
+        foreach ($file in Get-ChildItem -LiteralPath $directory -File) {
+            if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-AvmLog "Preserving random mock: JSON configuration '$($file.FullName)' needs dependency review." -Level Verbose | Out-Null
+                return $true
+            }
+            if (-not $file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            $source = [System.IO.File]::ReadAllText($file.FullName)
+            if ($source -match '(?m)^[ \t]*random[ \t]*=[ \t]*\{' -or
+                $source -match 'hashicorp/random' -or
+                $source -match '(?m)^[ \t]*(?:resource|data|ephemeral)[ \t]+"random_[^"]+"[ \t]+"[^"]+"') {
+                return $true
+            }
+            $moduleBlocks = [regex]::Matches($source, '(?m)^[ \t]*module[ \t]+"[^"]+"[ \t]*\{')
+            if ([regex]::Matches($source, '(?m)^[ \t]*module\b(?!\.)').Count -ne $moduleBlocks.Count) {
+                Write-AvmLog "Preserving random mock: module declarations in '$($file.FullName)' need dependency review." -Level Verbose | Out-Null
+                return $true
+            }
+            foreach ($block in $moduleBlocks) {
+                $sourceMatch = [regex]::Match(
+                    $source.Substring($block.Index + $block.Length),
+                    '\A\s*source[ \t]*=[ \t]*"(?<path>\.\.?/[^"]+)"')
+                if (-not $sourceMatch.Success) {
+                    Write-AvmLog "Preserving random mock: a module source in '$($file.FullName)' is not a known local dependency." -Level Verbose | Out-Null
+                    return $true
+                }
+                $dependencyPath = [System.IO.Path]::GetFullPath($sourceMatch.Groups['path'].Value, $directory)
+                if (-not $directories.Contains([System.IO.Path]::TrimEndingDirectorySeparator($dependencyPath))) {
+                    Write-AvmLog "Preserving random mock: module dependency '$dependencyPath' was not scanned." -Level Verbose | Out-Null
+                    return $true
+                }
+            }
         }
     }
     return $false
@@ -321,7 +350,8 @@ function Remove-AvmLegacyTelemetryTestMock {
             if (-not $randomUse[$key]) {
                 $withoutEmptyMocks = [regex]::Replace($updated, $emptyRandomMock, '')
                 if ([regex]::IsMatch($withoutEmptyMocks, $randomMock) -or
-                    $withoutEmptyMocks -match '(?<![A-Za-z0-9_])random_[A-Za-z0-9_]+\.' -or
+                    $withoutEmptyMocks -match '(?<![A-Za-z0-9_])random(?:_[A-Za-z0-9_]+)?\.' -or
+                    $withoutEmptyMocks -match '=[ \t]*random(?=[ \t\r\n,}.]|$)' -or
                     $withoutEmptyMocks -match '(?m)^[ \t]*module[ \t]*\{') {
                     throw [AvmConfigurationException]::new(
                         "Test file '$($file.FullName)' still uses a random mock or resource after the telemetry-only random provider was removed; review it manually.")

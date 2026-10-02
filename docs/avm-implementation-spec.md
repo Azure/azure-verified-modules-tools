@@ -636,6 +636,8 @@ used only by retired telemetry, standard empty `mock_provider "random"`
 blocks in direct unit tests are removed if the root, local children, and test
 setup no longer need that provider. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
+JSON configurations and module dependencies that cannot be checked locally
+also retain their random mocks rather than assuming the provider is unused.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

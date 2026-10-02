@@ -344,6 +344,8 @@ section when cutting a release.
 - Telemetry migration removes empty `random` provider mocks from direct unit
   tests only when the root, local children, and test setup no longer use the
   provider. Authored random use is retained; custom mocks need manual review.
+  JSON configurations and unscanned module dependencies retain their mocks;
+  explicit test provider mappings are checked before any mock is removed.
 - Newly scaffolded Bicep modules use the canonical telemetry parameter
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately

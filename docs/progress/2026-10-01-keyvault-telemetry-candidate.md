@@ -1,6 +1,6 @@
 # Key Vault telemetry candidate validation
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-01
 **Updated**: 2026-10-02
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -17,9 +17,9 @@ weakening candidate validation.
 - [x] Determine whether retired random-provider mocks are safe to remove
       automatically or require a module-owned repair.
 - [x] Add focused regression coverage for any shared transform change.
-- [ ] Run the pre-commit gate, commit, and push the existing branch without
+- [x] Run the pre-commit gate, commit, and push the existing branch without
       force.
-- [ ] Confirm the result with an approved, plan-only candidate preview.
+- [x] Confirm the result with an approved, plan-only candidate preview.
 
 ## Validation
 
@@ -42,8 +42,18 @@ mocks in place when a module, local child, or test setup still uses random,
 and rejects custom mocks or test references for manual review. All 21
 real-MaPoTF telemetry integration cases passed. The full gate on the
 isolated central cleanup passed layout, lint, 2,597 unit tests (9 existing
-skips), and 1,287 component tests (1 existing skip). The branch plan-only
-retest is pending.
+skips), and 1,287 component tests (1 existing skip).
+
+Central cleanup was committed and pushed as `b4fd7d3`. The subsequent
+[Key Vault plan-only retest](https://github.com/Azure/azure-verified-modules-tools/actions/runs/36983140005)
+passed Prepare and Validate on that exact commit; Publish was skipped.
+Project synchronization was also disabled. The source-based candidate
+therefore passed without a direct Key Vault module repair. Advisory lint
+warnings remain and were not suppressed to obtain this result.
+Validation executed all 34 existing unit runs: 34 passed, none failed or
+skipped. The receipt records base
+`42e230776874d00448a98857a86ba0bff9ea3801` and candidate tree
+`266d5a6be246517c6a84e560d39591cc90c1bac7`.
 
 ## Blockers or dependencies
 
