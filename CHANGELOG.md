@@ -21,6 +21,40 @@ section when cutting a release.
 
 ### Added
 
+- `avm test e2e` validates and previews eligible Bicep examples before Create.
+  Resource-group cases use tagged disposable groups; a narrow subset of
+  subscription, management-group and tenant cases requires explicit targets
+  and ownership checks. Optional case-local Pester assertions run after a
+  successful deployment, and `post.ps1` runs once after each attempted Create,
+  including failure, before guarded cleanup. Results report absent or failed
+  hooks and assertions; incomplete ownership or cleanup fails the case.
+  Unsupported deployment shapes, Terraform e2e and legacy registry CI are
+  unchanged.
+- `avm test integration` validates and previews Bicep `tests/e2e` examples
+  with an explicit Azure subscription. Tokens are substituted only in a
+  temporary compiled template, `.e2eignore` is honored, and resource-group
+  targets require an existing group. Terraform integration is unchanged.
+- `avm test unit` runs Bicep module-owned Pester tests/unit by default, with
+  optional nested scopes and explicit `-IncludeCompliance` or
+  `-CompliancePath` for the registry compliance suite during migration. Tag
+  and name filters, child-process isolation, and separate fail/skipped results
+  make missing or disabled tests visible without changing build-only `avm test`.
+- `avm init -Ecosystem terraform` creates and sets up the module's GitHub
+  repository: it writes `metadata.json`, creates the repository, pauses for
+  open source portal setup and JIT elevation, grants the module contributors
+  and readers teams, and publishes a first commit built from a packaged minimal
+  scaffold and `avm pre-commit` output. It then requests the AVM app
+  installations, clones the repository, and shows the final manual Open Source
+  Portal steps: tie the repository to the shared AVM just-in-time rule, then,
+  last, leave `jaredholgate` and `jatracey` as the only individual Direct
+  Owners. Each stage checks the existing state, so rerunning resumes an
+  interrupted setup. Terraform `-ChildModule` initialization still creates only
+  `metadata.json`.
+- The `avm-tf-module-repository-creation` agent skill in `.github/skills`
+  guides an agent through creating a Terraform module repository with
+  `avm init`, including the inputs to ask for, the Open Source Portal steps,
+  and the final Direct Owners check. Install it with
+  `gh skill install Azure/azure-verified-modules-tools .github/skills/avm-tf-module-repository-creation --scope user`.
 - `avm test integration --max-retry` defaults to two retries for recognized
   Azure capacity and region-ineligible failures, matching the E2E retry bound.
   Replay requires completed Terraform-owned teardown and preserves test
@@ -73,6 +107,9 @@ section when cutting a release.
 
 ### Changed
 
+- New `metadata.json` files written by `avm init` and `avm metadata initialize`
+  list their properties in schema order, starting with `$schema`, whatever the
+  order of the supplied values. Existing files are not rewritten.
 - The combined module catalog now publishes each owner as a structured
   `handle`, `type`, and nullable `displayName` object. User display names come
   from GitHub profile names, while Azure team display names come from team
@@ -95,8 +132,8 @@ section when cutting a release.
 - Terraform repository sync reads each repository's root `metadata.json` instead
   of the tools-local inventory CSV, including every owner and qualified owning
   team. GitHub archive state is authoritative. New repositories publish metadata
-  in their first commit with a temporary, restored default-ruleset opt-out;
-  CSV registration and its obsolete creation parameters are removed.
+  in their first commit; CSV registration and its obsolete creation parameters
+  are removed.
 - Terraform example transforms now set `enable_telemetry = var.enable_telemetry`
   on module calls only when the called module declares that input. Existing
   example variables retain their location and metadata but default to `false`,
@@ -269,6 +306,8 @@ section when cutting a release.
 
 ### Removed
 
+- `repository-management/repository-creation/` (`New-Repository.ps1` and its
+  helpers). Create Terraform module repositories with `avm init`.
 - `repository-management/managed-files/`. The tree was retained only as a
   compatibility shim for the previously published module, which resolved managed
   files and config from it. Avm.Authoring now resolves both from
@@ -281,6 +320,16 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm test e2e` now destroys and retries an example when Azure rejects its
+  randomly selected region with `RequestDisallowedByAzure` and the
+  `aka.ms/locationineligible` explanation, which `avm test integration`
+  already retried. Other `RequestDisallowedByAzure`, policy, and authorization
+  denials still do not trigger a retry.
+- The first push to a new Terraform repository no longer fails with `GH013`
+  when the organization's production ruleset applies. `avm init` temporarily
+  sets `global-rulesets-opt-out`, which exempts the repository, instead of
+  `rulesets-default-opt-in`, which only controls a separate opt-in ruleset,
+  and restores the recorded original value after the push.
 - Support real `Oracle.Database` ARM canonical types in metadata schemas,
   validation, fallback discovery, initialization, and catalog output. Preserve
   strict resource syntax, ownership, telemetry, and pattern/utility taxonomy.

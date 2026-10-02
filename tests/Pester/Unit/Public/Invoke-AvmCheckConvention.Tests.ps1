@@ -72,17 +72,29 @@ Describe 'Invoke-AvmCheckConvention' {
         }
     }
 
-    It 'the bicep engine still throws AvmNotSupportedException for its stub' {
-        $err = InModuleScope 'Avm.Authoring' {
-            try {
-                Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{ Ecosystem = 'bicep'; Root = $TestDrive })
-                $null
-            }
-            catch { $_.Exception }
+    It 'reports an actionable failure when the bicep module layout is not known' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{
+                    Ecosystem = 'bicep'; Root = $TestDrive; Kind = 'bicep-module'
+                })
         }
-        $err.GetType().Name        | Should -Be 'AvmNotSupportedException'
-        $err.GetType().BaseType.Name | Should -Be 'AvmConfigurationException'
-        $err.Message               | Should -Match 'Bicep convention check is not yet wired'
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.scope'
+    }
+
+    It 'fails closed when a Bicep monorepo contains no discoverable module scopes' {
+        $result = InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmMetadataScope { @() }
+            Invoke-AvmBicepCheckConvention -Context ([pscustomobject]@{
+                    Ecosystem = 'bicep'; Root = $TestDrive; Kind = 'bicep-monorepo'
+                })
+        }
+        $result.Status | Should -Be 'fail'
+        $result.ScopesChecked | Should -Be 0
+        $result.UncoveredFamilies.Count | Should -Be 0
+        $result.Issues.Count | Should -Be 1
+        $result.Issues[0].Code | Should -Be 'avm.bicep.scope'
+        $result.Issues[0].Severity | Should -Be 'error'
     }
 
     It 'the terraform engine returns a real envelope and no longer throws AvmNotSupportedException' {

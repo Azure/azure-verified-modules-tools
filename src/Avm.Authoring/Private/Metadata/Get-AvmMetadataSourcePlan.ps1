@@ -15,10 +15,7 @@ function Get-AvmMetadataSourcePlan {
     $sourcePath = Join-Path -Path $Path -ChildPath 'main.bicep'
     $source = Get-Content -LiteralPath $sourcePath -Raw
     $code = Get-AvmBicepCommentFreeSource -Source $source
-    $literals = Get-AvmBicepMetadataLiteral -Source $source
-    if ($literals.description -cne $Metadata.moduleDescription) {
-        throw [System.ArgumentException]::new('The metadata description must match the existing main.bicep description.')
-    }
+    $null = Get-AvmBicepMetadataLiteral -Source $source
     if (-not $Metadata.Contains('telemetryIdPrefix')) {
         if ($Metadata.canonicalType -cne 'helper' -and
             [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
@@ -27,15 +24,16 @@ function Get-AvmMetadataSourcePlan {
         return
     }
 
-    $declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
-    $nameReference = '${avmTelemetryIdPrefix}'
+    $declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+    $nameReference = '${telemetryIdPrefix}'
     $headPattern = "(?m)(?<head>^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@[^']+'[^\r\n]*\{\s*name[\t ]*:[\t ]*')"
-    if ($code.Contains($declaration) -and
-        [regex]::IsMatch($code, $headPattern + [regex]::Escape($nameReference) + '\.')) {
+    if (Test-AvmBicepTelemetrySourceWiring -Source $code) {
         return
     }
-    if ([regex]::IsMatch($code, '(?m)^[\t ]*var[\t ]+avmTelemetryIdPrefix\b')) {
-        throw [System.ArgumentException]::new('main.bicep already defines avmTelemetryIdPrefix differently; review its source manually.')
+    $conflict = [regex]::Match($code, '(?m)^[\t ]*var[\t ]+(?<name>telemetryIdPrefix|avmTelemetryIdPrefix)\b')
+    if ($conflict.Success) {
+        throw [System.ArgumentException]::new(
+            "main.bicep already defines $($conflict.Groups['name'].Value) differently; review its source manually.")
     }
 
     $authoredPrefix = Get-AvmBicepTelemetrySourcePrefix -Path $Path

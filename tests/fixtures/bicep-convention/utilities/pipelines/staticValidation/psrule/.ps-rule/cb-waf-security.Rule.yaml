@@ -1,0 +1,9 @@
+apiVersion: github.com/microsoft/PSRule/v1
+kind: Baseline
+metadata:
+  name: CB.AVM.WAF.Security
+spec:
+  rule:
+    include:
+      - Azure.Storage.Firewall
+      - Azure.Storage.SecureTransfer

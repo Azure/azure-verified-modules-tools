@@ -127,7 +127,7 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 
 | Verb                          | Bicep behaviour                                                          | Terraform behaviour                                                        |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `avm init`                    | One-time local module setup: `-Proposed` writes only metadata.json; full initialization scaffolds root source, version, changelog and e2e tests, plus missing child modules through a requested target | One-time local metadata.json creation; source is added separately and no remote repository is created |
+| `avm init`                    | One-time local module setup: `-Proposed` writes only metadata.json; full initialization scaffolds root source, version, changelog and e2e tests, plus missing child modules through a requested target | Resumable repository setup: local metadata.json, GitHub repository creation, portal/JIT pause, team access, first commit of the minimal scaffold plus `avm pre-commit` output, app installation request, local clone; `-ChildModule` writes only metadata.json |
 | `avm format`                  | `bicep format` + Prettier                                                | `terraform fmt` + `avmfix`                                                 |
 | `avm lint`                    | Bicep linter + ESLint + compliance Pester subset (fast checks)           | cleaned temporary copy; `terraform init -upgrade` then `tflint` with merged AVM config |
 | `avm check policy`            | PSRule.Rules.Azure                                                       | Conftest with APRL + AVMSEC                                                |
@@ -160,15 +160,18 @@ proposed module has no source to classify, so `avm init` takes
 `-Ecosystem`, `-ModuleType`, and `-Path`. Missing metadata is prompted for only
 in an interactive terminal; scripted callers can supply `-InputObject`.
 Existing metadata is never overwritten. Bicep `-Proposed` creates only
-metadata.json and any missing directories after validation; Terraform
-initialization is metadata-only, with no repository creation or publishing.
+metadata.json and any missing directories after validation. Terraform root
+initialization creates and sets up the GitHub repository in resumable stages
+that query existing state first; Terraform child initialization is
+metadata-only.
 Full Bicep initialization adds root files and recursively creates missing
 child modules without touching existing authored files. The target's
 `-InputObject` and an optional `-AncestorInputObject` keyed by exact
 root-relative paths (`.` for the root) supply scripted metadata for a
 deep child; interactive users are prompted per missing ancestor.
 All planned files are validated before writing, and no initialization
-invokes deployment or remote repository creation.
+invokes a deployment; only Terraform root initialization creates a remote
+repository.
 
 Both authoring chains require valid root and child `metadata.json` files.
 Required tools are resolved before the metadata step. Metadata failure then

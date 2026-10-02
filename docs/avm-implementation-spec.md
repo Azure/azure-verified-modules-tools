@@ -472,21 +472,38 @@ registration mirror remains unchanged.
 
 `avm metadata validate` requires the caller's ecosystem, module kind, and child
 scope. `-CheckSource` also verifies the required Bicep literal name and
-description declarations, description consistency, and source telemetry
-requirements. The Bicep `metadata name` and JSON `moduleDisplayName` are
-independent and are not required to match.
+description declarations and source telemetry requirements when main.bicep
+exists. Bicep `metadata name` and `metadata description` serve different
+purposes from JSON `moduleDisplayName` and `moduleDescription`; neither pair
+must match. A metadata-only Bicep scope may omit main.bicep only when it has
+neither version.json nor main.json at that scope. Source markers without
+metadata are also discovered and rejected. The catalog separately rejects
+source-less modules reported as published by the registry.
 `-InputObject` validates supplied metadata values without reading a file.
 `avm metadata show` only reads and validates an existing `metadata.json`; it
 never derives values or reads CSV indexes.
-`avm init` is the one-time local entry point. Callers supply
+`avm init` is the one-time entry point. Callers supply
 `-Ecosystem`, `-ModuleType`, and `-Path`; `-Proposed` is Bicep-only and creates
 only `metadata.json`, even when the module and provider directories do not
-exist yet. Terraform initialization likewise creates only local metadata and
-its containing directory, never a remote repository. Full Bicep
+exist yet. Full Bicep
 initialization scaffolds the root's metadata.json, main.bicep, version.json,
 CHANGELOG.md, and defaults/WAF-aligned tests/e2e sources; children receive
-only metadata.json and main.bicep. Neither mode creates main.json, README.md,
-a remote repository, or a deployment. Existing files remain unmodified.
+only metadata.json and main.bicep. Bicep initialization creates neither
+main.json, README.md, a remote repository, nor a deployment. Existing files
+remain unmodified.
+Terraform root initialization creates and sets up the `Azure/<repository>`
+GitHub repository named by `-Path`, as a sequence of resumable stages that
+each query the current local and GitHub state first: write metadata.json to
+the folder, create the public repository, wait for open source portal setup
+and JIT elevation, grant the module contributors (push) and readers (triage)
+teams, publish the first commit to `main`, request the AVM app installations
+in `microsoft/github-operations` unless the repository is listed there or an
+open request exists, and clone the repository into an empty folder. The first
+commit is built in a temporary clone from the portal's seed files,
+metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
+and `avm pre-commit` output; no other local content is published. Interrupted
+or non-interactive runs stop with instructions and resume on the next run.
+Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child
 `main.bicep` into `main.json` through the pinned Bicep CLI. It leaves
 unchanged output bytes and timestamps alone. A proposed module with only
@@ -512,7 +529,9 @@ missing field names. `-Proposed` never cascades and does not accept an
 ancestor map. For new uninstrumented children without a version file,
 telemetry remains optional. New utility roots without telemetry use
 telemetry-free source. Source-authored literal prefixes are preserved when
-metadata is missing, without rewriting the source; conflicts fail.
+metadata is missing, without rewriting the source; conflicts fail. New Bicep
+scaffolds seed their source literals from JSON metadata, but existing source
+names and descriptions are preserved and validated independently.
 Validate metadata, exact path casing, source literals, templates, target
 files, and the whole root-to-child plan before confirmation or any write.
 `-WhatIf` validates and reports the same planned files without writing;
@@ -532,6 +551,11 @@ creating directories or files.
 
 `avm metadata initialize` never overwrites existing files. `-UpdateSource`
 adds a scoped Bicep telemetry load without replacing telemetry transport.
+New source wiring and telemetry-enabled root scaffolds use
+`var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')`
+and `${telemetryIdPrefix}` in the deployment name. Existing source using that
+form or the earlier `avmTelemetryIdPrefix`/`$.telemetryIdPrefix` form is
+preserved without migration; conflicting variable definitions fail.
 When source wiring is requested and no prefix is supplied, initialization
 retains the single, valid prefix already authored in main.bicep, excluding
 that module's own published catalog record from duplicate checks. A prefix
@@ -590,10 +614,19 @@ Terraform repository discovery reads validated root metadata from each
 repository's default branch. Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
-New-repository creation initializes metadata before the first commit without a
-tools-local CSV registration. Its initial push temporarily changes only
-`rulesets-default-opt-in`, preserving the prior value in a recovery record and
-verifying restoration on success or failure. Existing repositories use normal
+New-repository creation (`avm init`) initializes metadata before the first
+commit without a tools-local CSV registration. Organization rulesets require
+pull requests on `main` once a repository is marked active, so its initial push
+temporarily sets only `global-rulesets-opt-out` to `true`. The original value
+and the repository ID are recorded in the user's Avm state folder first, then
+the value is restored and verified on success or failure. A later run restores
+a recorded value left by an interrupted run only while the property is still
+`true` and repository sync does not manage the repository; a record for a
+deleted repository of the same name is discarded. A `true` value with no
+record stops the run because its original value is unknown, unless repository
+sync manages the repository; sync's own ruleset also requires pull requests, so
+such a repository without module files is not pushed to directly.
+Existing repositories use normal
 reviewed updates; generated public catalog CSVs are unaffected.
 The current one-off Terraform migration is agent-led and metadata-only because
 source inference is ambiguous. It uses a reviewed inclusion/exclusion inventory,
@@ -629,6 +662,20 @@ drift mode and returns generated `{Path, Content}` values for an independent
 comparator. A Bicep compilation failure is reported per module in drift
 mode; a source-less README is explicitly identified rather than reported as
 generated.
+Drift mode can report a warning rather than stale only when the tracked
+README omits complete generated required/non-required grouping-comment
+pairs. A private, non-writing docs render marks only those comments in
+first-party example JSON values; removing the unpredictable markers must
+reproduce the normal rendered README exactly before the marked pairs can
+qualify. Authored descriptions cannot acquire these markers, even if they
+contain convincing headings, fences, or complete example frames. Partial
+pairs, changed prose, code, types, examples, outputs, and any other byte
+differences still fail. Unused child-example aliases carry no rendered
+markers and are ignored; a half-rendered alias fails closed. The accepted
+pairs are not tied to a module name or fixed count, and normal generation
+writes the unchanged renderer output.
+An unavailable private render reports an error. This local comparison
+behavior does not waive the full-registry qualification limit below.
 Referenced module test examples are validated against the compiled
 parameters of their actual target `main.bicep`, including tests assigned
 to a child README. Unknown names or omitted required parameters fail
@@ -644,6 +691,15 @@ comment lines absent from the checked-in `avm/res/key-vault/vault/README.md`,
 and separately verifies all source-less README bytes. Report that historical
 exception explicitly; keep the comments in generated output, as the legacy
 generator emits them. Every other byte remains subject to the comparison.
+At registry commit `82bab0404566557b9fb5efdc9780bb5ce438030b`,
+an offline render with the published dependencies and pinned Bicep CLI
+produced all 575 source-backed READMEs. An independent comparison found 574
+byte-identical matches and only the eight proven generated Vault comment
+lines; the three source-less README files matched their tracked Git blobs
+without being counted as rendered. The [qualification record](progress/2026-10-01-bicep-current-registry-readme-qualification.md)
+captures the input digests and diagnostics. The required `avm pr-check` docs
+step enforces later README drift; this qualification alone does not authorize
+removing the registry CI workflow or its other gates.
 
 ### Files inside the user's home
 

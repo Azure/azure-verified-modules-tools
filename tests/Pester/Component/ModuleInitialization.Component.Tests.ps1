@@ -438,26 +438,27 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         [System.IO.File]::ReadAllBytes($source) | Should -Be $before
     }
 
-    It 'initializes local Terraform metadata without source files or remote operations' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'initializes local Terraform child metadata without source files or remote operations' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $result = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource `
+        $result = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
             -InputObject $metadataInput -SkipModuleVersionCheck
 
         $result.Status | Should -Be 'pass'
         $result.Changed | Should -BeTrue
         $result.PlannedFiles | Should -Be @('metadata.json')
         @(Get-ChildItem -LiteralPath $root -Force).Name | Should -Be @('metadata.json')
-        (Test-AvmModuleMetadata -Path $root -Ecosystem terraform -ModuleType resource -SkipModuleVersionCheck).Status |
+        (Test-AvmModuleMetadata -Path $root -Ecosystem terraform -ModuleType resource -ChildModule -SkipModuleVersionCheck).Status |
             Should -Be 'pass'
-        (Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -SkipModuleVersionCheck).Changed |
+        (Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule -SkipModuleVersionCheck).Changed |
             Should -BeFalse
     }
 
@@ -468,17 +469,18 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         Test-Path -LiteralPath $root | Should -BeFalse
     }
 
-    It 'does not create a Terraform directory under WhatIf and rejects -Proposed' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'does not create a Terraform child directory under WhatIf and rejects -Proposed' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $plan = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource `
+        $plan = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
             -InputObject $metadataInput -SkipModuleVersionCheck -WhatIf
         $plan.Changed | Should -BeFalse
         $plan.PlannedFiles | Should -Be @('metadata.json')
@@ -488,17 +490,18 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         Test-Path -LiteralPath $root | Should -BeFalse
     }
 
-    It 'dispatches avm init to the local metadata-only Terraform initializer' {
-        $root = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N'))
+    It 'dispatches avm init for a Terraform child module to the local metadata initializer' {
+        $modules = Join-Path $TestDrive ('terraform-azure-avm-res-' + [guid]::NewGuid().ToString('N')) 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $root = Join-Path $modules 'blob-service'
         $metadataInput = @{
-            moduleDisplayName = 'Storage Accounts'
-            moduleDescription = 'Deploys a Storage Account.'
-            canonicalType = 'Microsoft.Storage/storageAccounts'
+            moduleDisplayName = 'Blob Services'
+            moduleDescription = 'Deploys a Storage Account blob service.'
+            canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
             telemetryIdPrefix = '46d3xtrf.res.explicit'
-            owners = @()
         }
 
-        $result = avm -SkipModuleVersionCheck init -Ecosystem terraform -ModuleType resource `
+        $result = avm -SkipModuleVersionCheck init -Ecosystem terraform -ModuleType resource -ChildModule `
             -Path $root -InputObject $metadataInput --passthru
 
         $result.Status | Should -Be 'pass'
@@ -530,8 +533,11 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
             Should -BeExactly '0.1'
         (Get-Content -LiteralPath (Join-Path $fixture.Path 'CHANGELOG.md') -Raw) |
             Should -Match 'avm/res/storage/storage-account/CHANGELOG.md'
-        (Get-Content -LiteralPath (Join-Path $fixture.Path 'main.bicep') -Raw) |
-            Should -Match ([regex]::Escape("loadJsonContent('metadata.json', '$.telemetryIdPrefix')"))
+        $source = Get-Content -LiteralPath (Join-Path $fixture.Path 'main.bicep') -Raw
+        $source | Should -Match ([regex]::Escape(
+                "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"))
+        $source | Should -Match ([regex]::Escape('${telemetryIdPrefix}.'))
+        $source | Should -Not -Match 'avmTelemetryIdPrefix'
         (Test-AvmModuleMetadata -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
                 -CheckSource -SkipModuleVersionCheck).Status | Should -Be 'pass'
     }
@@ -617,13 +623,13 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
         Test-Path -LiteralPath $wrongPath | Should -BeTrue
     }
 
-    It 'preserves an authored source and version while adding only missing scaffold files' {
+    It 'preserves an independently described source and version while adding only missing scaffold files' {
         $fixture = New-InitializationFixture
         $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.123abcd'
         $null = New-Item -ItemType Directory -Path $fixture.Path
         $sourcePath = Join-Path $fixture.Path 'main.bicep'
         $versionPath = Join-Path $fixture.Path 'version.json'
-        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`nmetadata description = 'Deploys a Storage Account.'`n")
+        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`nmetadata description = 'Authored deployment details.'`n")
         [System.IO.File]::WriteAllText($versionPath, "{`"version`":`"8.3`"}`n")
         $sourceBytes = [System.IO.File]::ReadAllBytes($sourcePath)
         $versionBytes = [System.IO.File]::ReadAllBytes($versionPath)
@@ -638,6 +644,26 @@ Describe 'Component: full local Bicep module initialization' -Tag Component {
         )
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBytes
         [System.IO.File]::ReadAllBytes($versionPath) | Should -Be $versionBytes
+        $result.Metadata.moduleDescription | Should -BeExactly 'Deploys a Storage Account.'
+        (Test-AvmModuleMetadata -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
+                -CheckSource -SkipModuleVersionCheck).Status | Should -Be 'pass'
+    }
+
+    It 'rejects missing source metadata literals before scaffolding other files' {
+        $fixture = New-InitializationFixture
+        $fixture.InputObject.telemetryIdPrefix = '46d3xbcp.res.123abcd'
+        $null = New-Item -ItemType Directory -Path $fixture.Path
+        $sourcePath = Join-Path $fixture.Path 'main.bicep'
+        [System.IO.File]::WriteAllText($sourcePath, "metadata name = 'Authored name'`n")
+        $sourceBefore = [System.IO.File]::ReadAllBytes($sourcePath)
+
+        {
+            Initialize-AvmModule -Path $fixture.Path -Ecosystem bicep -ModuleType resource `
+                -InputObject $fixture.InputObject -SkipModuleVersionCheck
+        } | Should -Throw '*main.bicep must declare metadata description*'
+        Test-Path -LiteralPath (Join-Path $fixture.Path 'metadata.json') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $fixture.Path 'version.json') | Should -BeFalse
+        [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBefore
     }
 
     It 'keeps the single authored source prefix when creating missing metadata without rewriting main.bicep' {
@@ -667,18 +693,31 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $before
     }
 
-    It 'generates metadata for an existing source that already reads the prefix from metadata.json' {
+    It 'generates metadata for an existing <Form> source without changing it' -TestCases @(
+        @{
+            Form = 'registry'
+            Declaration = "var telemetryIdPrefix = loadJsonContent('metadata.json', 'telemetryIdPrefix')"
+            Reference = '${telemetryIdPrefix}'
+        }
+        @{
+            Form = 'legacy'
+            Declaration = "var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')"
+            Reference = '${avmTelemetryIdPrefix}'
+        }
+    ) {
+        param($Declaration, $Reference)
         $fixture = New-InitializationFixture
         $null = New-Item -ItemType Directory -Path $fixture.Path
         $sourcePath = Join-Path $fixture.Path 'main.bicep'
-        [System.IO.File]::WriteAllText($sourcePath, @'
+        $source = @'
 metadata name = 'Authored name'
-metadata description = 'Deploys a Storage Account.'
-var avmTelemetryIdPrefix = loadJsonContent('metadata.json', '$.telemetryIdPrefix')
+metadata description = 'Authored deployment details.'
+<declaration>
 resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
-  name: '${avmTelemetryIdPrefix}.${uniqueString(resourceGroup().id)}'
+  name: '<reference>.${uniqueString(resourceGroup().id)}'
 }
-'@)
+'@.Replace('<declaration>', $Declaration).Replace('<reference>', $Reference)
+        [System.IO.File]::WriteAllText($sourcePath, $source)
         $before = [System.IO.File]::ReadAllBytes($sourcePath)
         $result = InModuleScope Avm.Authoring -Parameters @{ Target = $fixture.Path; Values = $fixture.InputObject } {
             param($Target, $Values)
@@ -688,6 +727,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
                 -InputObject $Values -SkipModuleVersionCheck
         }
         $result.Metadata.telemetryIdPrefix | Should -BeExactly '46d3xbcp.res.123abcd'
+        $result.Metadata.moduleDescription | Should -BeExactly 'Deploys a Storage Account.'
         $result.PlannedFiles | Should -Not -Contain 'main.bicep'
         [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $before
     }

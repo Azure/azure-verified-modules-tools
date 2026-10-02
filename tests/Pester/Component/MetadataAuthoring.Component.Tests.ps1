@@ -72,10 +72,17 @@ BeforeAll {
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Invoke-AvmHttp { throw 'Metadata validation must not fetch external data.' }
             Mock Invoke-AvmProcess { throw 'These metadata fixtures must not run a subprocess.' }
-            foreach ($name in @('Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform', 'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention', 'Invoke-AvmTest', 'Invoke-AvmDocs')) {
+            foreach ($name in @('Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform', 'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention', 'Invoke-AvmTest')) {
                 Mock -CommandName $name -MockWith {
                     $script:metadataLaterCalls++
                     [pscustomobject]@{ Status = 'pass'; Issues = @() }
+                }
+            }
+            Mock Invoke-AvmDocs {
+                $script:metadataLaterCalls++
+                [pscustomobject]@{
+                    Status = 'pass'; Issues = @(); FilesSelected = 0
+                    FilesProcessed = 0; NotRendered = @()
                 }
             }
             $savedActions = $env:GITHUB_ACTIONS
@@ -223,11 +230,11 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
     }
 
-    It 'discovers Oracle metadata-only children and reports missing telemetry for <Ecosystem>' -TestCases @(
-        @{ Ecosystem = 'bicep'; Extension = 'bicep' }
-        @{ Ecosystem = 'terraform'; Extension = 'tf' }
+    It 'applies <Ecosystem> telemetry rules to Oracle metadata-only children' -TestCases @(
+        @{ Ecosystem = 'bicep'; Extension = 'bicep'; Status = 'pass' }
+        @{ Ecosystem = 'terraform'; Extension = 'tf'; Status = 'fail' }
     ) {
-        param($Ecosystem, $Extension)
+        param($Ecosystem, $Extension, $Status)
         $fixture = New-AuthoringMetadataFixture -Ecosystem $Ecosystem -Child
         $fixture.Context.Scope = $null
         $fixture.Data.canonicalType = 'Oracle.Database/autonomousDatabases'
@@ -238,11 +245,16 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         [System.IO.File]::WriteAllText($childFile, ($child | ConvertTo-Json -Depth 20))
         [System.IO.File]::Delete((Join-Path $fixture.Paths[1] "main.$Extension"))
         $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck
-        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Status | Should -Be $Status
         $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
-        $issues | Should -HaveCount 1
-        $issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
-        $issues[0].File | Should -Match 'blob-service/metadata.json$'
+        if ($Status -eq 'pass') {
+            $issues | Should -HaveCount 0
+        }
+        else {
+            $issues | Should -HaveCount 1
+            $issues[0].Code | Should -Be 'AVM_METADATA_TELEMETRY'
+            $issues[0].File | Should -Match 'blob-service/metadata.json$'
+        }
         $probe.Warnings | Should -HaveCount 0
     }
 
@@ -364,14 +376,100 @@ Describe 'Component: metadata in authoring checks' -Tag Component {
         @(Get-ChildItem $fixture.Root -Recurse -File | Get-FileHash | ForEach-Object Hash) | Should -Be $before
     }
 
-    It 'fails a Bicep source mismatch rather than repairing either file' {
+    It 'accepts independently authored Bicep descriptions in <Command>' -TestCases @(
+        @{ Command = 'Invoke-AvmPreCommit' }
+        @{ Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Command)
         $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
-        $fixture.Data.moduleDescription = 'Does not match the source.'
+        $fixture.Data.moduleDescription = 'Catalog summary distinct from the source.'
         Save-AuthoringMetadataFixture -Fixture $fixture
-        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPrCheck
+        $sourcePath = Join-Path $fixture.Root 'main.bicep'
+        $sourceBefore = [System.IO.File]::ReadAllBytes($sourcePath)
+        $metadataBefore = [System.IO.File]::ReadAllBytes((Join-Path $fixture.Root 'metadata.json'))
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'pass'
+        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+        [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBefore
+        [System.IO.File]::ReadAllBytes((Join-Path $fixture.Root 'metadata.json')) | Should -Be $metadataBefore
+    }
+
+    It 'accepts a proposed Bicep root with only metadata.json in <Command>' -TestCases @(
+        @{ Command = 'Invoke-AvmPreCommit' }
+        @{ Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        Remove-Item -LiteralPath (Join-Path $fixture.Root 'main.bicep')
+
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'pass'
+        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+    }
+
+    It 'accepts a metadata-only HCI extension below a versioned Bicep root in <Command>' -TestCases @(
+        @{ Command = 'Invoke-AvmPreCommit' }
+        @{ Command = 'Invoke-AvmPrCheck' }
+    ) {
+        param($Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
+        $childPath = Join-Path $fixture.Root 'arc-setting' 'extension'
+        $null = New-Item -ItemType Directory -Path $childPath -Force
+        $fixture.Paths += $childPath
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'version.json'), '{"version":"1.0.0"}')
+        $childMetadataPath = Join-Path $childPath 'metadata.json'
+        $childMetadata = Get-Content -LiteralPath $childMetadataPath -Raw | ConvertFrom-Json -AsHashtable
+        $childMetadata.canonicalType = 'Microsoft.AzureStackHCI/clusters/arcSettings/extensions'
+        $childMetadata.telemetryIdPrefix = '46d3xbcp.res.756292c'
+        [System.IO.File]::WriteAllText($childMetadataPath, ($childMetadata | ConvertTo-Json -Depth 20))
+
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
+        $probe.Result.Status | Should -Be 'pass'
+        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $childPath 'main.bicep') | Should -BeFalse
+    }
+
+    It 'rejects source-less Bicep <Scope> with <Marker> in <Command>' -TestCases @(
+        @{ Scope = 'root'; Marker = 'version.json'; Command = 'Invoke-AvmPreCommit' }
+        @{ Scope = 'root'; Marker = 'main.json'; Command = 'Invoke-AvmPrCheck' }
+        @{ Scope = 'child'; Marker = 'version.json'; Command = 'Invoke-AvmPrCheck' }
+        @{ Scope = 'child'; Marker = 'main.json'; Command = 'Invoke-AvmPreCommit' }
+    ) {
+        param($Scope, $Marker, $Command)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep -Child:($Scope -eq 'child')
+        Save-AuthoringMetadataFixture -Fixture $fixture
+        $target = if ($Scope -eq 'child') { $fixture.Paths[1] } else { $fixture.Root }
+        Remove-Item -LiteralPath (Join-Path $target 'main.bicep')
+        [System.IO.File]::WriteAllText((Join-Path $target $Marker), '{}')
+
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command $Command
         $probe.Result.Status | Should -Be 'fail'
-        ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
-        Get-Content (Join-Path $fixture.Root 'main.bicep') -Raw | Should -Match 'Creates storage\.'
+        $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_SOURCE'
+        $issues[0].File | Should -Be ([System.IO.Path]::GetRelativePath($fixture.Root, (Join-Path $target 'main.bicep')).Replace('\', '/'))
+    }
+
+    It 'discovers a source-less Bicep scope with only <Marker> as missing metadata' -TestCases @(
+        @{ Marker = 'version.json' }
+        @{ Marker = 'main.json' }
+    ) {
+        param($Marker)
+        $fixture = New-AuthoringMetadataFixture -Ecosystem bicep
+        $fixture.Context.Kind = 'bicep-monorepo'
+        $fixture.Context.Scope = $null
+        $modulePath = Join-Path $fixture.Root 'avm' 'res' 'storage' 'orphan'
+        $null = New-Item -ItemType Directory -Path $modulePath -Force
+        [System.IO.File]::WriteAllText((Join-Path $modulePath $Marker), '{}')
+
+        $probe = Invoke-AuthoringMetadataFixture -Fixture $fixture -Command Invoke-AvmPreCommit
+        $probe.Result.Status | Should -Be 'fail'
+        $issues = ($probe.Result.Steps | Where-Object Step -eq 'metadata').Result.Issues
+        $issues | Should -HaveCount 1
+        $issues[0].Code | Should -Be 'AVM_METADATA_MISSING'
+        $issues[0].File | Should -Be 'avm/res/storage/orphan/metadata.json'
     }
 
     It 'rejects incorrect metadata casing instead of treating it as missing' {

@@ -140,11 +140,11 @@ Describe 'terraform-module required Azure feature registration' {
         $block = $script:jobs['integration-test']
         $block | Should -Match "Test-Path -LiteralPath '.required-features.json' -PathType Leaf"
         $block | Should -Match 'ConvertFrom-Json.+-NoEnumerate'
-        $block | Should -Match '\$features.Count -eq 0\) \{ return \}'
+        $block | Should -Match '\$features.Count -eq 0\) \{'
         $block | Should -Match '\$selected -ne \$effective'
         $block | Should -Match '\$env:ARM_CLIENT_ID'
         $block | Should -Match '\$env:ARM_TENANT_ID'
-        $block | Should -Match 'avm register-features --subscription-id \$env:SELECTED_SUBSCRIPTION_ID --what-if --passthru'
+        $block | Should -Match 'Register-AvmFeature -SubscriptionId \$env:SELECTED_SUBSCRIPTION_ID -WhatIf'
         $block | Should -Match '\$preview.FeaturesTotal -ne \$features.Count'
         $block | Should -Match '''required=true'' \| Out-File -FilePath \$env:GITHUB_OUTPUT'
         $script:jobs['e2e-test'] | Should -Match 'run: \*check-required-features'
@@ -157,7 +157,7 @@ Describe 'terraform-module required Azure feature registration' {
         $block = $script:jobs[$Job]
         $names = @(
             'Install Avm.Authoring'
-            'Check required features'
+            'Validate required features offline'
             'Azure login for required features'
             'Register required features'
             $Test

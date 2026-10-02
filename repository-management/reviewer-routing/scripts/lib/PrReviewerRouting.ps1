@@ -22,7 +22,7 @@ $script:AvmPrReviewerRoutingFallbackTeam = 'Azure/azure-verified-modules-module-
 $script:AvmPrReviewerRoutingNeedsCoreTeamLabel = 'Needs: Core Team :genie:'
 $script:AvmPrReviewerRoutingNeedsModuleOwnerLabel = 'Needs: Module Owner :mega:'
 $script:AvmPrReviewerRoutingOrphanedLabel = 'Status: Module Orphaned :yellow_circle:'
-$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels'
+$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels,state'
 
 function Get-AvmPrReviewerRoutingCandidates {
     <#
@@ -37,11 +37,11 @@ function Get-AvmPrReviewerRoutingCandidates {
     param(
         [Parameter(Mandatory)] [string] $Repository,
         [string] $PullRequestUrl,
-        [int] $UpdatedWithinMinutes = 0
+        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0
     )
 
     if (-not [string]::IsNullOrWhiteSpace($PullRequestUrl)) {
-        $sanitized = $PullRequestUrl.Replace('api.', '').Replace('repos/', '').Replace('pulls/', 'pull/')
+        $sanitized = $PullRequestUrl -replace '^https://api\.github\.com/repos/([^/]+/[^/]+)/pulls/', 'https://github.com/$1/pull/'
         $pullRequest = Invoke-RepositoryGitHub -AsJson -Arguments @(
             'pr', 'view', $sanitized, '--repo', $Repository, '--json', $script:AvmPrReviewerRoutingFields
         )
@@ -52,7 +52,7 @@ function Get-AvmPrReviewerRoutingCandidates {
     }
 
     $pullRequests = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
-        'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
+        'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', ([int]::MaxValue.ToString([cultureinfo]::InvariantCulture)),
         '--json', "$($script:AvmPrReviewerRoutingFields),updatedAt"
     ))
     $pullRequests = @($pullRequests | Where-Object { -not $_.isDraft })
@@ -103,14 +103,16 @@ function Resolve-AvmPrReviewerRouting {
         [Parameter(Mandatory)] [object] $PullRequest,
         [Parameter(Mandatory)] [string] $Repository,
         [Parameter(Mandatory)] [hashtable] $CatalogIndex,
-        [Parameter(Mandatory)] [string[]] $ChangedFilePaths
+        [Parameter(Mandatory)] [string[]] $ChangedFilePaths,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep',
+        [hashtable] $EligibilityCache = @{}
     )
 
     $topLevelModulePaths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     $touchedMetadataModulePaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $coreTeamPaths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($path in $ChangedFilePaths) {
-        $topLevelModulePath = Get-AvmBicepTopLevelModulePath -Path $path
+        $topLevelModulePath = if ($Ecosystem -ceq 'terraform') { '.' } else { Get-AvmBicepTopLevelModulePath -Path $path }
         if ($null -eq $topLevelModulePath -or $path -like '*avm.core.team.tests.ps1' -or $path -like '*.e2eignore') {
             $null = $coreTeamPaths.Add($path)
         }
@@ -118,7 +120,8 @@ function Resolve-AvmPrReviewerRouting {
             continue
         }
         $null = $topLevelModulePaths.Add($topLevelModulePath)
-        if ($path -ceq "$topLevelModulePath/metadata.json") {
+        $metadataPath = if ($topLevelModulePath -ceq '.') { 'metadata.json' } else { "$topLevelModulePath/metadata.json" }
+        if ($path -ceq $metadataPath) {
             $null = $touchedMetadataModulePaths.Add($topLevelModulePath)
         }
     }
@@ -128,11 +131,16 @@ function Resolve-AvmPrReviewerRouting {
     # is authoritative whenever the module isn't indexed yet or the pull
     # request itself edits that module's metadata.json.
     $headRef = [string]$PullRequest.headRefOid
+    $reviewState = Get-AvmPrReviewerRoutingReviewState -PullRequest $PullRequest
     # Keyed by Handle so the same owner declared on multiple modules is only
     # requested once; the value keeps its {Handle, Type} record so team-vs-
     # user is decided purely by Type below, never by inferring from '/'.
-    $owningHandles = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::Ordinal)
-    $reviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    $owningHandles = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $reviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $reviewerTypes = @{}
+    $fallbackModules = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    $authorOwnedModules = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
     $modules = [System.Collections.Generic.List[object]]::new()
     foreach ($topLevelModulePath in $topLevelModulePaths) {
         $forceMetadataLookup = $touchedMetadataModulePaths.Contains($topLevelModulePath)
@@ -147,8 +155,13 @@ function Resolve-AvmPrReviewerRouting {
         if ($owners.Count -eq 0) {
             $owners = @([ordered]@{ Handle = $script:AvmPrReviewerRoutingFallbackTeam; Type = 'team' })
         }
+        elseif ($owners.Count -eq 1 -and $owners[0].Type -ceq 'user' -and $owners[0].Handle -ieq $reviewState.Author) {
+            $null = $fallbackModules.Add($topLevelModulePath)
+            $authorOwnedModules.Add($topLevelModulePath)
+        }
         foreach ($owner in $owners) {
             $owningHandles[$owner.Handle] = $owner
+            $reviewerTypes[$owner.Handle] = $owner.Type
             if (-not $reviewerModules.ContainsKey($owner.Handle)) {
                 $reviewerModules[$owner.Handle] = [System.Collections.Generic.List[string]]::new()
             }
@@ -157,27 +170,33 @@ function Resolve-AvmPrReviewerRouting {
     }
     $orphanedModules = @($modules | Where-Object { $_.Owners.Count -eq 0 } | ForEach-Object { $_.ModulePath })
 
-    $requestedLogins = @($PullRequest.reviewRequests | Where-Object { $_.PSObject.Properties['login'] -and $_.login } | ForEach-Object { $_.login })
-    $requestedTeamSlugs = @($PullRequest.reviewRequests | Where-Object { -not ($_.PSObject.Properties['login'] -and $_.login) } |
-            ForEach-Object { if ($_.PSObject.Properties['slug'] -and $_.slug) { $_.slug } elseif ($_.PSObject.Properties['name']) { $_.name } })
-    $reviewedLogins = @($PullRequest.reviews | Where-Object { $_.PSObject.Properties['author'] -and $_.author -and $_.author.PSObject.Properties['login'] } |
-            ForEach-Object { $_.author.login })
-    $authorLogin = if ($PullRequest.PSObject.Properties['author'] -and $PullRequest.author -and $PullRequest.author.PSObject.Properties['login']) {
-        $PullRequest.author.login
-    } else {
-        $null
-    }
-
     $newReviewers = [System.Collections.Generic.List[string]]::new()
     $skippedReviewers = [System.Collections.Generic.List[object]]::new()
     foreach ($owner in $owningHandles.Values) {
         $reason = $null
         if ($owner.Type -ceq 'team') {
-            if ($requestedTeamSlugs -contains ($owner.Handle -split '/')[-1]) { $reason = 'review already requested' }
+            if ($reviewState.RequestedTeams.Contains(($owner.Handle -split '/')[-1])) { $reason = 'review already requested' }
         }
-        elseif ($owner.Handle -eq $authorLogin) { $reason = 'pull request author' }
-        elseif ($requestedLogins -contains $owner.Handle) { $reason = 'review already requested' }
-        elseif ($reviewedLogins -contains $owner.Handle) { $reason = 'already reviewed' }
+        elseif ($owner.Handle -ieq $reviewState.Author) { $reason = 'pull request author' }
+        elseif ($reviewState.RequestedUsers.Contains($owner.Handle)) { $reason = 'review already requested' }
+        elseif ($reviewState.ReviewedUsers.Contains($owner.Handle)) { $reason = 'already reviewed' }
+
+        if ($null -eq $reason -or $reason -ceq 'review already requested') {
+            $eligibility = Get-AvmPrReviewerRoutingEligibility -Repository $Repository -Handle $owner.Handle -Type $owner.Type -Cache $EligibilityCache
+            if (-not $eligibility.Eligible) {
+                if ($owner.Handle -ieq $script:AvmPrReviewerRoutingFallbackTeam) {
+                    throw [System.InvalidOperationException]::new("Fallback owners group [$($owner.Handle)] cannot review [$Repository]: $($eligibility.Reason).")
+                }
+                $reason = "ineligible: $($eligibility.Reason)"
+                foreach ($modulePath in $reviewerModules[$owner.Handle]) {
+                    $null = $fallbackModules.Add($modulePath)
+                }
+                $warning = "Owner [$($owner.Handle)] is ineligible to review pull request [$($PullRequest.url)] in [$Repository]: " +
+                    "$($eligibility.Reason). Using owners group [$script:AvmPrReviewerRoutingFallbackTeam] instead."
+                $warnings.Add($warning)
+                Write-AvmPrReviewerRoutingWarning -Message $warning
+            }
+        }
 
         if ($null -eq $reason) {
             $newReviewers.Add($owner.Handle)
@@ -186,6 +205,33 @@ function Resolve-AvmPrReviewerRouting {
             $skippedReviewers.Add([ordered]@{ Handle = $owner.Handle; Reason = $reason })
         }
     }
+    if ($fallbackModules.Count -gt 0) {
+        $fallback = $script:AvmPrReviewerRoutingFallbackTeam
+        $reviewerTypes[$fallback] = 'team'
+        if (-not $reviewerModules.ContainsKey($fallback)) {
+            $reviewerModules[$fallback] = [System.Collections.Generic.List[string]]::new()
+        }
+        foreach ($modulePath in $fallbackModules) {
+            if (-not $reviewerModules[$fallback].Contains($modulePath)) {
+                $reviewerModules[$fallback].Add($modulePath)
+            }
+        }
+        if (-not $newReviewers.Contains($fallback)) {
+            $eligibility = Get-AvmPrReviewerRoutingEligibility -Repository $Repository -Handle $fallback -Type team -Cache $EligibilityCache
+            if (-not $eligibility.Eligible) {
+                throw [System.InvalidOperationException]::new("Fallback owners group [$fallback] cannot review [$Repository]: $($eligibility.Reason).")
+            }
+            if ($reviewState.RequestedTeams.Contains(($fallback -split '/')[-1])) {
+                if (-not @($skippedReviewers | Where-Object { $_.Handle -ieq $fallback }).Count) {
+                    $skippedReviewers.Add([ordered]@{ Handle = $fallback; Reason = 'review already requested' })
+                }
+            }
+            else {
+                $newReviewers.Add($fallback)
+            }
+        }
+    }
+    $newReviewers.Sort([System.StringComparer]::OrdinalIgnoreCase)
 
     $hasOrphanedModule = $orphanedModules.Count -gt 0
     $desiredLabels = @(if ($coreTeamPaths.Count -gt 0 -or $hasOrphanedModule) { $script:AvmPrReviewerRoutingNeedsCoreTeamLabel } else { $script:AvmPrReviewerRoutingNeedsModuleOwnerLabel })
@@ -196,6 +242,7 @@ function Resolve-AvmPrReviewerRouting {
     $newLabels = @($desiredLabels | Where-Object { $existingLabels -notcontains $_ })
 
     foreach ($handle in @($reviewerModules.Keys)) {
+        $reviewerModules[$handle].Sort([System.StringComparer]::Ordinal)
         $reviewerModules[$handle] = @($reviewerModules[$handle])
     }
 
@@ -206,7 +253,10 @@ function Resolve-AvmPrReviewerRouting {
         OrphanedModules  = $orphanedModules
         CoreTeamPaths    = @($coreTeamPaths)
         ReviewerModules  = $reviewerModules
+        ReviewerTypes    = $reviewerTypes
         SkippedReviewers = @($skippedReviewers)
+        AuthorOwnedModules = @($authorOwnedModules)
+        Warnings         = $warnings.ToArray()
     }
 }
 
@@ -239,6 +289,9 @@ function Write-AvmPrReviewerRoutingPlan {
     if ($Routing.CoreTeamPaths.Count -gt 0) {
         Write-Host "Core team review is needed for $($Routing.CoreTeamPaths.Count) changed file(s): $(Format-AvmRunSummaryList -Values $Routing.CoreTeamPaths -Limit 10)"
     }
+    if ($Routing.AuthorOwnedModules.Count -gt 0) {
+        Write-Host "The author is the sole owner of $(Format-AvmRunSummaryList -Values $Routing.AuthorOwnedModules); requesting the owners group instead."
+    }
     if ($Routing.NewReviewers.Count -gt 0) {
         Write-Host 'Requesting reviews from:'
         foreach ($reviewer in $Routing.NewReviewers) {
@@ -260,15 +313,18 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     Routes one pull request and returns its outcome for the run summary.
 
     .OUTPUTS
-    An ordered dictionary with Url, Number, Status (Draft, AlreadyRouted,
-    Updated or WouldUpdate), NewReviewers, NewLabels and ReviewerModules.
+    An ordered dictionary with Url, Number, Status (Draft, Closed,
+    AlreadyRouted, MissingLabel, Updated or WouldUpdate), NewReviewers,
+    NewLabels, ReviewerModules and Warnings.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)] [object] $PullRequest,
         [Parameter(Mandatory)] [string] $Repository,
-        [Parameter(Mandatory)] [hashtable] $CatalogIndex
+        [Parameter(Mandatory)] [hashtable] $CatalogIndex,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep',
+        [hashtable] $EligibilityCache = @{}
     )
 
     $pr = $PullRequest
@@ -279,15 +335,23 @@ function Set-AvmPrReviewerRoutingForPullRequest {
         NewReviewers    = @()
         NewLabels       = @()
         ReviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        Warnings        = @()
     }
     if ($pr.isDraft) {
         Write-Host "Pull request [$($pr.url)] is a draft. Skipping."
         $outcome.Status = 'Draft'
         return $outcome
     }
+    if ($pr.PSObject.Properties['state'] -and $pr.state -ine 'open') {
+        Write-Host "Pull request [$($pr.url)] is no longer open. Skipping."
+        $outcome.Status = 'Closed'
+        return $outcome
+    }
 
     $changedFilePaths = @(Get-AvmPrReviewerRoutingChangedFiles -Repository $Repository -Number $pr.number)
-    $routing = Resolve-AvmPrReviewerRouting -PullRequest $pr -Repository $Repository -CatalogIndex $CatalogIndex -ChangedFilePaths $changedFilePaths
+    $routing = Resolve-AvmPrReviewerRouting -PullRequest $pr -Repository $Repository -CatalogIndex $CatalogIndex `
+        -ChangedFilePaths $changedFilePaths -Ecosystem $Ecosystem -EligibilityCache $EligibilityCache
+    $outcome.Warnings = $routing.Warnings
 
     # Only write when something actually changes, so a reprocessed pull
     # request is not touched again. An unnecessary write would bump its
@@ -309,7 +373,23 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     }
     $outcome.Status = 'WouldUpdate'
     if ($PSCmdlet.ShouldProcess("Labels [$($routing.NewLabels -join ', ')] and reviewers [$($routing.NewReviewers -join ', ')] on pull request [$($pr.url)]", 'Add')) {
-        $null = Invoke-RepositoryGitHub -Arguments $editArguments
+        try {
+            $null = Invoke-RepositoryGitHub -Arguments $editArguments
+        }
+        catch [System.InvalidOperationException] {
+            $message = $_.Exception.Message.Trim()
+            $missingLabels = @($routing.NewLabels | Where-Object { $message -ceq "GitHub operation failed: '$_' not found" })
+            if ($missingLabels.Count -ne 1) {
+                throw
+            }
+            $warning = "Routing deferred for pull request [$($pr.url)]: label [$($missingLabels[0])] does not exist in [$Repository]. " +
+                'Repository sync must provision the standard labels; a subsequent routing run will retry.'
+            Write-Warning $warning
+            $outcome.Status = 'MissingLabel'
+            $outcome.Warnings += $warning
+            return $outcome
+        }
+        Assert-AvmPrReviewerRoutingApplied -PullRequest $pr -Repository $Repository -Routing $routing
         $outcome.Status = 'Updated'
     }
 
@@ -342,6 +422,18 @@ function Write-AvmPrReviewerRoutingSummary {
         "$(@($Outcomes | Where-Object { $_.Status -ceq 'AlreadyRouted' }).Count) already routed, " +
         "$(@($Outcomes | Where-Object { $_.Status -ceq 'Draft' }).Count) draft(s) skipped, " +
         "$($Failures.Count) failed."
+    $closedCount = @($Outcomes | Where-Object { $_.Status -ceq 'Closed' }).Count
+    if ($closedCount -gt 0) {
+        $overview += " $closedCount no longer open."
+    }
+    $missingLabelOutcomes = @($Outcomes | Where-Object { $_.Status -ceq 'MissingLabel' })
+    if ($missingLabelOutcomes.Count -gt 0) {
+        $overview += " $($missingLabelOutcomes.Count) deferred with missing-label warnings."
+    }
+    $warnings = @($Outcomes | ForEach-Object { $_.Warnings })
+    if ($warnings.Count -gt 0) {
+        $overview += " $($warnings.Count) warning(s)."
+    }
 
     $logLines = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -364,7 +456,7 @@ function Write-AvmPrReviewerRoutingSummary {
 
     Write-AvmRunSummary -Title 'Pull request reviewer routing' -Overview $overview -LogLines $logLines `
         -TableHeaders @('Pull request', $reviewersLabel, $labelsLabel) -TableRows $rows.ToArray() `
-        -Failures $Failures -DryRun:$DryRun
+        -Failures $Failures -Warnings $warnings -DryRun:$DryRun
 }
 
 function Invoke-AvmPrReviewerRouting {
@@ -372,13 +464,20 @@ function Invoke-AvmPrReviewerRouting {
     param(
         [Parameter(Mandatory)] [string] $Repository,
         [string] $PullRequestUrl,
-        [int] $UpdatedWithinMinutes = 0
+        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem = 'bicep',
+        [hashtable] $CatalogIndex,
+        [AllowEmptyCollection()] [object[]] $PullRequests
     )
 
     try {
-        $pullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
-        Write-Verbose "Processing [$($pullRequests.Count)] pull request(s) in [$Repository]." -Verbose
-        $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
+        if (-not $PSBoundParameters.ContainsKey('PullRequests')) {
+            $PullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
+        }
+        Write-Verbose "Processing [$($PullRequests.Count)] pull request(s) in [$Repository]." -Verbose
+        if (-not $PSBoundParameters.ContainsKey('CatalogIndex')) {
+            $CatalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository -Ecosystem $Ecosystem
+        }
     }
     catch {
         # A pre-loop setup failure is fatal (there is nothing left to sweep), but a bare
@@ -392,16 +491,25 @@ function Invoke-AvmPrReviewerRouting {
 
     $outcomes = [System.Collections.Generic.List[object]]::new()
     $failures = [System.Collections.Generic.List[string]]::new()
-    $total = $pullRequests.Count
+    $eligibilityCache = @{}
+    $total = $PullRequests.Count
     $index = 0
-    foreach ($pr in $pullRequests) {
+    foreach ($pr in $PullRequests) {
         $index++
         # Printed unconditionally, before any network call for this pull request, so a run
         # that dies without an exception (e.g. a process kill) still leaves an unambiguous
         # last-seen item in the log, independent of gh's own argument echo.
         Write-Verbose "[$index/$total] Routing pull request [$($pr.url)]." -Verbose
         try {
-            $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository -CatalogIndex $catalogIndex -WhatIf:$WhatIfPreference
+            if (-not $pr.PSObject.Properties['headRefOid']) {
+                $details = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $pr.url)
+                if ($details.Count -ne 1) {
+                    throw [System.InvalidOperationException]::new("Unable to retrieve one pull request for '$($pr.url)'.")
+                }
+                $pr = $details[0]
+            }
+            $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository `
+                -CatalogIndex $CatalogIndex -Ecosystem $Ecosystem -EligibilityCache $eligibilityCache -WhatIf:$WhatIfPreference
             $outcomes.Add($outcome)
         }
         catch {

@@ -110,18 +110,22 @@ the `Avm.Authoring` verb you call instead.
 > `tests/integration/*.tftest.hcl`, and `avm test e2e` deploys each
 > `examples/*` directory. Each tier also fans out over `modules/*`
 > submodules and runs an optional isolated `setup.ps1` hook per target.
-> An `avm test e2e` apply that fails on region or SKU capacity is
-> destroyed and retried (up to `-MaxRetry`, default 2) rather than
-> failing the run; add extra retryable patterns with
-> `$env:AVM_E2E_RETRY_PATTERN`. `avm test e2e --example <name>` targets a
-> single example (leaf or `examples/<name>`) and `avm test e2e --list`
-> emits a JSON array of runnable example names for building a CI matrix.
+> An `avm test e2e` apply that fails on region or SKU capacity, or with
+> `RequestDisallowedByAzure` plus the `aka.ms/locationineligible`
+> explanation because the selected region is not accepting new customers,
+> is destroyed and retried (up to `-MaxRetry`, default 2) rather than
+> failing the run; other `RequestDisallowedByAzure`, policy, and
+> authorization denials do not trigger a retry. Add extra retryable
+> patterns with `$env:AVM_E2E_RETRY_PATTERN`. `avm test e2e --example <name>`
+> targets a single example (leaf or `examples/<name>`) and
+> `avm test e2e --list` emits a JSON array of runnable example names for
+> building a CI matrix.
 
 `avm test integration` also accepts `--max-retry` (default 2, range 0-10).
-It reuses the built-in E2E capacity/quota patterns and recognizes
-`RequestDisallowedByAzure` only with the `aka.ms/locationineligible` explanation,
-not an ordinary authorization-related HTTP 403. Unit tests never retry, and
-`AVM_E2E_RETRY_PATTERN` remains E2E-only.
+It reuses the built-in E2E patterns, including that region-ineligible
+`RequestDisallowedByAzure` denial, and rejects every other HTTP 403 or
+`RequestDisallowedByAzure` diagnostic, such as an ordinary authorization
+failure. Unit tests never retry, and `AVM_E2E_RETRY_PATTERN` remains E2E-only.
 
 Integration retries rerun the same selected test target without an extra delay,
 subscription change, or another setup/init. Native `TF_CLI_ARGS_test` filters
@@ -165,13 +169,16 @@ The approved-verb equivalent is
 validates the file without contacting Azure.
 
 The reusable Terraform workflow checks this file after resolving the effective
-`ARM_*` variables and installing `Avm.Authoring`. Only the protected
-`integration-test` and `examples-test` jobs use OIDC to sign in to Azure and
-run the command, with the **same client and tenant IDs** as Terraform. The
-integration job uses the selected test subscription; each e2e leg uses its
-own selected subscription. An `ARM_SUBSCRIPTION_ID_OVERRIDE` remains effective
-for Terraform, but a mismatch with the selected test subscription fails the
-preflight before Azure login rather than registering an unintended subscription.
+`ARM_*` variables and installing `Avm.Authoring`. Its "Validate required
+features offline" step checks the entire manifest and selected subscription
+without making Azure calls or registering features. Only the later protected
+`integration-test` and `examples-test` job steps use OIDC to sign in to Azure
+and run the registration command, with the **same client and tenant IDs** as
+Terraform. The integration job uses the selected test subscription; each e2e
+leg uses its own selected subscription. An `ARM_SUBSCRIPTION_ID_OVERRIDE` remains
+effective for Terraform, but a mismatch with the selected test subscription
+fails the preflight before Azure login rather than registering an unintended
+subscription.
 The selector, unit, and pr-check jobs never register features.
 
 The test identity needs `Microsoft.Features/*` access on each selected test
@@ -390,7 +397,7 @@ exactly this status today.
 | `avm test`            | `terraform validate`    | per direct `examples/*`: `init -backend=false -upgrade -input=false -no-color` then `validate -no-color -json`, with isolated module data |   ✅   | Includes `.e2eignore` examples. Warns about uncovered local modules; no examples is `skipped`. `--no-init` skips initialization and coverage. Upgrade mode may update example dependency locks. |
 | `avm test unit`       | `terraform test`        | per target (`<root>` + each `modules/*`): optional `setup.ps1`, then `test -test-directory=tests/unit -no-color -json`       |   ✅   | Fans out over `modules/*`; exit `1` parsed for failing runs; abnormal exit throws. `.env` per target bridged to the subprocess. `setup.sh` / `teardown.sh` hooks are rejected. |
 | `avm test integration`| `terraform test`        | same as `unit` with `-test-directory=tests/integration`                                                                      |   ✅   | Real providers; needs credentials. Recognized capacity failures retry after confirmed Terraform teardown (`-MaxRetry`, default 2). Assertions and cleanup failures never retry. Shell hooks are rejected. |
-| `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
+| `avm test e2e`        | `terraform apply`       | per `examples/*` (skip `.e2eignore`): `pre.ps1` → `init -upgrade` → apply → `plan -detailed-exitcode` (idempotency) → destroy → `post.ps1` |   ✅   | Real backend; destroy is always attempted best-effort. An apply that fails on capacity or an ineligible region is destroyed and retried (`-MaxRetry`, default 2) and logged as a warning. `pre.sh` / `post.sh` hooks are rejected. |
 | `avm docs`            | `terraform-docs`        | `markdown table --output-file README.md --output-mode inject .` from `cwd=<root>`                                            |   ✅   | Requires `BEGIN_TF_DOCS` / `END_TF_DOCS` markers in `README.md`. Without them, terraform-docs falls back to appending and `Changed` flags it.   |
 | `avm check policy`    | `terraform` + `conftest`| per `examples/*` (skip `.e2eignore`): PowerShell hooks → `init -upgrade` → `plan -out=tfplan` → `show -json` → separate APRL / AVMSEC `test --all-namespaces` runs |   ✅   | Uses pinned bundles and default exemptions from `avm.pins.jsonc`; local `exceptions/` stays scoped to its example. `pre.sh` and `post.sh` are rejected with PowerShell migration guidance. Requires provider credentials for planning. |
 | `avm transform`       | `mapotf`                | root: `root,module,common`; each `modules/**/terraform.tf`: `module,common`; each direct `examples/*`: `example,common`; then `clean-backup` per target |   ✅   | Repeated `--mptf-dir` values compose scoped profiles. Root/submodule transforms finish before examples inspect their inputs. Supported example calls use `var.enable_telemetry`, with a true-default example variable reused in place or added to `variables.tf`. Module file-layout rules never reach examples. Pr-check snapshots and restores source files, including new variable files, while reporting transform drift. |

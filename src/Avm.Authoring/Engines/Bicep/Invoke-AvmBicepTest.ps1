@@ -18,6 +18,7 @@ function Invoke-AvmBicepTest {
         and exits non-zero on a failed build. This engine sets
         -IgnoreExitCode, inspects parsed diagnostics, and reports any
         nonzero exit without a parsed error so a failed build cannot pass.
+        AVM_OFFLINE=1 disables external module restoration.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -56,9 +57,13 @@ function Invoke-AvmBicepTest {
 
     $issues = New-Object System.Collections.Generic.List[object]
     foreach ($file in $files) {
+        $arguments = @('build', '--stdout', $file.FullName)
+        if ($env:AVM_OFFLINE -eq '1') {
+            $arguments += '--no-restore'
+        }
         $r = Invoke-AvmProcess `
             -FilePath $tool.Path `
-            -ArgumentList @('build', '--stdout', $file.FullName) `
+            -ArgumentList $arguments `
             -IgnoreExitCode
 
         $stream = if ($r.StdErr) { $r.StdErr } else { '' }

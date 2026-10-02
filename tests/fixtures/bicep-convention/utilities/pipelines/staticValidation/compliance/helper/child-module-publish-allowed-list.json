@@ -1,0 +1,5 @@
+{
+  "allowed-child-modules": [
+    "avm/res/mock/widget/child"
+  ]
+}

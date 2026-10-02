@@ -57,11 +57,7 @@ function Get-AvmBicepScaffoldPlan {
                 }
                 if ($definition.Template -eq $sourceTemplate) {
                     $authoredSource = [System.IO.File]::ReadAllText($definition.Path)
-                    $literals = Get-AvmBicepMetadataLiteral -Source $authoredSource
-                    if ($literals.description -cne $Metadata.moduleDescription) {
-                        throw [System.ArgumentException]::new(
-                            "Existing main.bicep metadata description does not match metadata.json: $($definition.Path)")
-                    }
+                    $null = Get-AvmBicepMetadataLiteral -Source $authoredSource
                 }
                 continue
             }

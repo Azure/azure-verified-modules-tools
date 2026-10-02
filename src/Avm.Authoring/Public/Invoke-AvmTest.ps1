@@ -17,9 +17,8 @@ function Invoke-AvmTest {
         example configuration files) and
         carries no run counts. The real test tiers are the separate
         'avm test unit', 'avm test integration' and 'avm test e2e'
-        verbs, which execute 'terraform test' and report
-        RunsTotal/RunsPassed/RunsFailed. In the gauntlets this verb is
-        the step named 'validate' for that reason.
+        verbs, which report test run counts (Bicep Pester or Terraform tests).
+        In the gauntlets this verb is the step named 'validate' for that reason.
 
         Terraform includes .e2eignore examples and warns when the root module
         or an immediate modules/ configuration is not reached by a local

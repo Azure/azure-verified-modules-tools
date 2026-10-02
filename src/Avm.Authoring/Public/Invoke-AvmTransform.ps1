@@ -18,9 +18,9 @@ function Invoke-AvmTransform {
         unchanged.
         A consumer repository can override a profile under
         config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
-        The Bicep engine compiles root and child main.bicep sources into
-        main.json. README generation and repeatable test scaffolding remain
-        separate follow-on slices.
+        The Bicep engine compiles root and child main.bicep sources, including
+        children under modules/, into main.json. README generation and
+        repeatable test scaffolding remain separate follow-on slices.
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.

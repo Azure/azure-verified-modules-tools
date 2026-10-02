@@ -46,7 +46,7 @@ function Set-AvmBicepTestTenantVariable {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     if ($Name -cnotin @(Get-AvmBicepTestTenantVariableNames)) {
-        throw [System.ArgumentException]::new('Only the five Bicep execution variables and their selector may be written.')
+        throw [System.ArgumentException]::new('Only the five Bicep execution variables may be written.')
     }
     if (-not $PSCmdlet.ShouldProcess("Azure/bicep-registry-modules/$Name", 'Publish a nonsecret Actions variable')) {
         throw [System.OperationCanceledException]::new('The nonsecret variable write was not approved.')
@@ -69,7 +69,7 @@ function Set-AvmBicepTestTenantVariable {
         catch {
             $acknowledgement = if ($writeError) { 'was not acknowledged' } else { 'was acknowledged' }
             $failure = [System.InvalidOperationException]::new(
-                "The write of $Name $acknowledgement, and consumer readback failed. Its outcome is unverified; inspect consumer values and routing before retrying.",
+                "The write of $Name $acknowledgement, and consumer readback failed. Its outcome is unverified; inspect consumer execution values before retrying.",
                 $_.Exception
             )
             if ($writeError) { $failure.Data['WriteError'] = $writeError }
@@ -89,11 +89,8 @@ function Set-AvmBicepTestTenantVariable {
             $observation = if ($differences.Count -gt 0) {
                 "Readback does not match the expected publication: $($differences -join ', ')."
             }
-            elseif ($Name -ceq 'TEST_BAMI_MODULE_PATHS') {
-                'Readback confirms the requested selector and unchanged execution values are present; routing may already be active.'
-            }
             else {
-                'Readback confirms the requested candidate value is present and the selector is unchanged.'
+                'Readback confirms the requested execution value is present and other execution values are unchanged.'
             }
             throw [System.InvalidOperationException]::new("The write of $Name was not acknowledged. $observation No write retry or rollback was attempted.", $writeError)
         }
@@ -116,7 +113,6 @@ function Invoke-AvmBicepTestTenantSync {
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
-        [Parameter(Mandatory)] [object] $Configuration,
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -127,35 +123,29 @@ function Invoke-AvmBicepTestTenantSync {
         throw [System.ArgumentException]::new('Use -Apply explicitly to publish; -PlanOnly:$false is not an apply flag.')
     }
     $bundle = Get-AvmBamiSettings -Values $Values
-    $projection = Get-AvmBamiSettings -Values $bundle -BicepOnly
-    $selectorName = 'TEST_BAMI_MODULE_PATHS'
-    $selector = ConvertTo-AvmBicepModulePaths -Configuration $Configuration
-    $desiredPaths = ConvertFrom-AvmBicepModulePaths -Json $selector
+    $execution = Get-AvmBamiSettings -Values $bundle -BicepOnly
+    $projection = [ordered]@{
+        VALIDATE_TENANT_ID = $execution.TEST_BAMI_TENANT_ID
+        VALIDATE_CLIENT_ID = $execution.TEST_BAMI_BICEP_CLIENT_ID
+        VALIDATE_PERSISTENT_SUBSCRIPTION_ID = $execution.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+        VALIDATE_MANAGEMENT_GROUP_ID = $execution.TEST_BAMI_MANAGEMENT_GROUP_ID
+        VALIDATE_SUBSCRIPTION_IDS = $execution.TEST_BAMI_SUBSCRIPTION_IDS
+    }
     $snapshot = Get-AvmBicepTestTenantSnapshot
-    $existingSelector = if ($null -ne $snapshot[$selectorName]) { $snapshot[$selectorName].Value } else { '' }
-    $existingPaths = ConvertFrom-AvmBicepModulePaths -Json $existingSelector
-    $active = $existingPaths.Count -gt 0
-    $activating = $desiredPaths.Count -gt 0
-    $valueChanges = @(
+    $retargetedNames = @(
         foreach ($name in $projection.Keys) {
-            if ($null -eq $snapshot[$name] -or $snapshot[$name].Value -cne $projection[$name]) { $name }
+            if ($null -ne $snapshot[$name] -and $snapshot[$name].Value -cne $projection[$name]) { $name }
         }
     )
-    if ($active -and $activating -and $valueChanges.Count -gt 0) {
+    if ($retargetedNames.Count -gt 0) {
         throw [System.InvalidOperationException]::new(
-            "Active BAMI execution values cannot change: $($valueChanges -join ', '). Separately deactivate all BAMI selectors before retargeting."
+            "Existing BAMI execution values cannot change: $($retargetedNames -join ', '). Retargeting requires coordinated maintenance; routine publication cannot overwrite present values."
         )
     }
-    $deactivationOnly = $active -and -not $activating
-    if ($deactivationOnly) {
-        # Deactivation freezes even stale candidate values; retargeting needs a later, inactive run.
-        foreach ($name in @($projection.Keys)) {
-            $projection[$name] = if ($null -ne $snapshot[$name]) { $snapshot[$name].Value } else { $null }
-        }
-    }
     $changes = @(
-        if (-not $deactivationOnly) { $valueChanges }
-        if ($existingSelector -cne $selector) { $selectorName }
+        foreach ($name in $projection.Keys) {
+            if ($null -eq $snapshot[$name]) { $name }
+        }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
     $result = [ordered]@{
@@ -164,20 +154,16 @@ function Invoke-AvmBicepTestTenantSync {
         PlanOnly = -not $publishing
         HasChanges = $changes.Count -gt 0
         ChangedNames = $changes
-        DeactivationOnly = $deactivationOnly
-        DeferredValueNames = @(if ($deactivationOnly) { $valueChanges })
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep execution variables, then their selector')) {
+    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Initialize missing nonsecret Bicep execution variables')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result
     }
 
-    $selectorAttempted = $false
     try {
         foreach ($name in $changes) {
-            if ($name -ceq $selectorName) { continue }
             $snapshot = Set-AvmBicepTestTenantVariable -Expected $snapshot -Name $name -Value $projection[$name] -Confirm:$false
         }
         $readback = Get-AvmBicepTestTenantSnapshot
@@ -188,30 +174,17 @@ function Invoke-AvmBicepTestTenantSync {
                 throw [System.InvalidOperationException]::new("Complete execution-value readback does not match $name.")
             }
         }
-        if ($selectorName -cin $changes) {
-            $selectorAttempted = $true
-            $snapshot = Set-AvmBicepTestTenantVariable -Expected $readback -Name $selectorName -Value $selector -Confirm:$false
-        }
         $final = Get-AvmBicepTestTenantSnapshot
         Assert-AvmBicepTestTenantSnapshot -Expected $snapshot -Actual $final -Stage 'final publication readback'
-        if ($null -eq $final[$selectorName] -or $final[$selectorName].Value -cne $selector) {
-            throw [System.InvalidOperationException]::new('Final selector readback does not match the derived central configuration.')
-        }
     }
     catch {
-        $routing = if ($selectorAttempted) {
-            'A selector write may have occurred; routing may already be active.'
-        }
-        else {
-            'This run did not write the selector; partial candidate values or outside edits may remain.'
-        }
         throw [System.InvalidOperationException]::new(
-            "Bicep variable synchronization stopped. $routing No automatic rollback or write retry was performed. $($_.Exception.Message)",
+            "Bicep variable synchronization stopped. Partial execution values or outside edits may remain; publication is unverified. No automatic rollback or write retry was performed. $($_.Exception.Message)",
             $_.Exception
         )
     }
     if ($changes.Count -gt 0) {
-        $result.Status = if ($deactivationOnly) { 'Deactivated' } else { 'Published' }
+        $result.Status = 'Published'
     }
     return [pscustomobject]$result
 }
