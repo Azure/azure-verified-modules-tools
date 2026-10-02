@@ -2,7 +2,7 @@
 
 **Status**: in-progress
 **Started**: 2026-10-01
-**Updated**: 2026-10-01
+**Updated**: 2026-10-02
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -35,15 +35,19 @@ test passed, and all 21 telemetry integration cases passed offline.
 The full `./build.ps1 pre-commit` gate passed layout, lint, 2,590 unit
 tests (9 existing skips), and 1,287 component tests (1 existing skip).
 
-An isolated copy of that candidate, with only the three empty random mocks
-removed, passed all 34 existing provider-mocked unit runs. Examples still
-use random resources, so automatic removal of author-owned test mocks is not
-safe for every module; a separate Key Vault test-only repair owns them.
-The branch plan-only retest is pending.
+The updated shared transform removed those three empty random mocks from
+the exact staged candidate without touching examples, kept the next drift
+check clean, and passed all 34 existing provider-mocked unit runs. It leaves
+mocks in place when a module, local child, or test setup still uses random,
+and rejects custom mocks or test references for manual review. All 21
+real-MaPoTF telemetry integration cases passed. The full gate on the
+isolated central cleanup passed layout, lint, 2,597 unit tests (9 existing
+skips), and 1,287 component tests (1 existing skip). The branch plan-only
+retest is pending.
 
 ## Blockers or dependencies
 
-The Key Vault test-only repair must reach its module's `main` branch before
-repository sync can validate that unit suite. Publish was skipped by
-plan-only. No production deployment, module publication, or protected-job
-approval is authorized by this slice.
+No Key Vault module change is needed for its standard empty random mocks.
+The prior candidate did not publish. Any non-standard test that still uses
+random must be reviewed by its module owner; this slice does not authorize
+production deployment, module publication, or protected-job approval.

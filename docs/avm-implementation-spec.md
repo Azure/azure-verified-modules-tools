@@ -631,10 +631,11 @@ or data sources remain in the module. The transform also removes obsolete
 they have no remaining `modtm` resources or data sources, empty `modtm` test
 mocks, and standard references to the old telemetry resource. Non-empty test
 mocks and remaining author-owned `modtm` resources or data sources fail with
-actionable diagnostics instead of being silently rewritten. If the random
-provider was used only by retired telemetry, authors must also remove empty
-`mock_provider "random"` declarations from unit tests that no longer exercise
-random resources; other random mocks remain author-owned.
+actionable diagnostics instead of being silently rewritten. When random was
+used only by retired telemetry, standard empty `mock_provider "random"`
+blocks in direct unit tests are removed if the root, local children, and test
+setup no longer need that provider. Non-empty mocks or remaining random
+references fail for manual review; mocks for other random use are preserved.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

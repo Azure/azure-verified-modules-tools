@@ -559,6 +559,7 @@ terraform {
         Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
 mock_provider "azapi" {}
 mock_provider "modtm" {}
+mock_provider "random" {}
 
 run "telemetry" {
   assert {
@@ -575,6 +576,7 @@ run "telemetry" {
             Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
         $testContent = Get-Content -LiteralPath $testPath -Raw
         $testContent | Should -Not -Match 'mock_provider "modtm"'
+        $testContent | Should -Not -Match 'mock_provider "random"'
         $testContent | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'
         $providerContent = Get-Content -LiteralPath (Join-Path $wrapper 'terraform.tf') -Raw
         $providerContent | Should -Not -Match '(?m)^\s*modtm\s*='

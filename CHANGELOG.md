@@ -341,6 +341,9 @@ section when cutting a release.
 - MaPoTF sorts newly added child `location` variables with existing required
   inputs on the first transform, avoiding a second-pass change during
   candidate validation.
+- Telemetry migration removes empty `random` provider mocks from direct unit
+  tests only when the root, local children, and test setup no longer use the
+  provider. Authored random use is retained; custom mocks need manual review.
 - Newly scaffolded Bicep modules use the canonical telemetry parameter
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately

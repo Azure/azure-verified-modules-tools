@@ -333,6 +333,7 @@ data "modtm_module_source" "custom" {
         $testFile = Join-Path $testDir 'telemetry.tftest.hcl'
         Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
 mock_provider "modtm" {}
+mock_provider "random" {}
 mock_provider "azapi" {}
 
 run "telemetry" {
@@ -357,9 +358,140 @@ run "telemetry" {
         $result.Changed | Should -Contain ([System.IO.Path]::Combine('tests', 'unit', 'telemetry.tftest.hcl'))
         $updated = Get-Content -LiteralPath $testFile -Raw
         $updated | Should -Not -Match 'mock_provider "modtm"'
+        $updated | Should -Not -Match 'mock_provider "random"'
         $updated | Should -Match 'mock_provider "azapi"'
         $updated | Should -Match 'can\(azapi_resource\.telemetry\[0\]\)'
         $result.FilesProcessed | Should -Be 3
+    }
+
+    It 'preserves random mocks when a real random resource or requirement remains' -TestCases @(
+        @{ Source = 'resource "random_string" "suffix" { length = 4 }' }
+        @{ Source = 'terraform { required_providers { random = { source = "hashicorp/random" } } }' }
+    ) {
+        param($Source)
+        Add-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value $Source
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'random.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value 'mock_provider "random" {}' -Encoding utf8NoBOM
+        $before = [System.IO.File]::ReadAllBytes($testFile)
+
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+            param($Root)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+        }
+
+        [System.IO.File]::ReadAllBytes($testFile) | Should -Be $before
+    }
+
+    It 'preserves random mocks when a local child still uses the provider' {
+        $child = Join-Path $script:moduleDir 'modules' 'child'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM `
+            -Value 'resource "random_string" "suffix" { length = 4 }'
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'random.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value 'mock_provider "random" {}' -Encoding utf8NoBOM
+
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir; Child = $child } {
+            param($Root, $Child)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                [pscustomobject]@{ Path = $Child; Profiles = @('module') })
+        }
+
+        Get-Content -LiteralPath $testFile -Raw | Should -Match 'mock_provider "random"'
+    }
+
+    It 'preserves random mocks when a unit test setup still uses the provider' {
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $setup = Join-Path $testDir 'setup'
+        $null = New-Item -ItemType Directory -Path $setup -Force
+        Set-Content -LiteralPath (Join-Path $setup 'main.tf') -Encoding utf8NoBOM `
+            -Value 'resource "random_string" "suffix" { length = 4 }'
+        $testFile = Join-Path $testDir 'random.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value 'mock_provider "random" {}' -Encoding utf8NoBOM
+
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+            param($Root)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+        }
+
+        Get-Content -LiteralPath $testFile -Raw | Should -Match 'mock_provider "random"'
+    }
+
+    It 'removes an obsolete unit mock without touching example-owned random resources' {
+        $example = Join-Path $script:moduleDir 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $example -Force
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM `
+            -Value 'resource "random_integer" "region" { min = 1; max = 3 }'
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'random.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Value 'mock_provider "random" {}' -Encoding utf8NoBOM
+
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+            param($Root)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+        }
+
+        Get-Content -LiteralPath $testFile -Raw | Should -Not -Match 'mock_provider "random"'
+        Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw |
+            Should -Match 'resource "random_integer"'
+    }
+
+    It 'requires manual review when an empty mock is attached to a test module' {
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $testFile = Join-Path $testDir 'delegated.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
+mock_provider "random" {}
+run "delegated" {
+  module {
+    source = "./setup"
+  }
+}
+'@
+        $before = [System.IO.File]::ReadAllBytes($testFile)
+
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+                param($Root)
+                Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                    [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+            }
+        } | Should -Throw '*still uses a random mock or resource*'
+        [System.IO.File]::ReadAllBytes($testFile) | Should -Be $before
+    }
+
+    It 'rejects a custom random mock before rewriting another unit test' {
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $standard = Join-Path $testDir 'standard.tftest.hcl'
+        $custom = Join-Path $testDir 'custom.tftest.hcl'
+        Set-Content -LiteralPath $standard -Encoding utf8NoBOM -Value 'mock_provider "random" {}'
+        Set-Content -LiteralPath $custom -Encoding utf8NoBOM -Value @'
+mock_provider "random" {
+  override_resource {
+    target = random_string.suffix
+  }
+}
+'@
+        $before = [System.IO.File]::ReadAllBytes($standard)
+
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+                param($Root)
+                Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                    [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+            }
+        } | Should -Throw '*still uses a random mock or resource*'
+        [System.IO.File]::ReadAllBytes($standard) | Should -Be $before
+        Get-Content -LiteralPath $custom -Raw | Should -Match 'random_string\.suffix'
     }
 
     It 'rejects custom modtm mocks before changing another test file' {
@@ -398,6 +530,7 @@ mock_provider "modtm" {
         Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
 mock_provider "modtm" {
 }
+mock_provider "random" {}
 run "telemetry" {
   assert {
     condition     = can(modtm_telemetry.telemetry)

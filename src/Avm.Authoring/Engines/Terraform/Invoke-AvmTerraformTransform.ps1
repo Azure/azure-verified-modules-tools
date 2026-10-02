@@ -219,6 +219,50 @@ function Get-AvmTerraformTransformTarget {
     return $targets.ToArray()
 }
 
+function Test-AvmTerraformRandomProviderInUse {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ModulePath,
+
+        [Parameter(Mandatory)]
+        [object[]] $ModuleTargets,
+
+        [Parameter(Mandatory)]
+        [string] $TestDirectory
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $modulePrefix = $ModulePath + [System.IO.Path]::DirectorySeparatorChar
+    $files = [System.Collections.Generic.List[object]]::new()
+    foreach ($target in $ModuleTargets) {
+        if ($target.Path -cne $ModulePath -and
+            -not $target.Path.StartsWith($modulePrefix, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        foreach ($file in Get-ChildItem -LiteralPath $target.Path -File -Filter '*.tf') {
+            $files.Add($file)
+        }
+    }
+    foreach ($file in Get-AvmTerraformFile -Root $TestDirectory |
+            Where-Object { $_.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) }) {
+        $files.Add($file)
+    }
+
+    foreach ($file in $files) {
+        $source = [System.IO.File]::ReadAllText($file.FullName)
+        if ($source -match '(?m)^[ \t]*random[ \t]*=[ \t]*\{' -or
+            $source -match 'hashicorp/random' -or
+            $source -match '(?m)^[ \t]*(?:resource|data|ephemeral)[ \t]+"random_[^"]+"[ \t]+"[^"]+"') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Remove-AvmLegacyTelemetryTestMock {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -236,6 +280,9 @@ function Remove-AvmLegacyTelemetryTestMock {
     $emptyMock = '(?m)^[ \t]*mock_provider[ \t]+"modtm"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $customMock = '(?m)^[ \t]*mock_provider[ \t]+"modtm"[ \t]*\{'
     $legacyReference = '(?<![A-Za-z0-9_])modtm_telemetry\.telemetry(?![A-Za-z0-9_])'
+    $emptyRandomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
+    $randomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{'
+    $randomUse = @{}
 
     foreach ($file in Get-AvmTerraformFile -Root $Root |
             Where-Object { $_.Name.EndsWith('.tftest.hcl', [System.StringComparison]::OrdinalIgnoreCase) }) {
@@ -262,6 +309,26 @@ function Remove-AvmLegacyTelemetryTestMock {
                 "Test file '$($file.FullName)' contains a non-empty modtm mock; remove or rewrite it manually before telemetry migration.")
         }
         $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
+        $relativePath = [System.IO.Path]::GetRelativePath($owner.Path, $file.FullName).Replace('\', '/')
+        if ($relativePath -cmatch '^tests/unit/[^/]+\.tftest\.hcl$' -and
+            [regex]::IsMatch($updated, $randomMock)) {
+            $testDirectory = Split-Path -Parent $file.FullName
+            $key = "$($owner.Path)|$testDirectory"
+            if (-not $randomUse.ContainsKey($key)) {
+                $randomUse[$key] = Test-AvmTerraformRandomProviderInUse `
+                    -ModulePath $owner.Path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory
+            }
+            if (-not $randomUse[$key]) {
+                $withoutEmptyMocks = [regex]::Replace($updated, $emptyRandomMock, '')
+                if ([regex]::IsMatch($withoutEmptyMocks, $randomMock) -or
+                    $withoutEmptyMocks -match '(?<![A-Za-z0-9_])random_[A-Za-z0-9_]+\.' -or
+                    $withoutEmptyMocks -match '(?m)^[ \t]*module[ \t]*\{') {
+                    throw [AvmConfigurationException]::new(
+                        "Test file '$($file.FullName)' still uses a random mock or resource after the telemetry-only random provider was removed; review it manually.")
+                }
+                $updated = $withoutEmptyMocks
+            }
+        }
         if ($updated -cne $original) {
             $changes.Add([pscustomobject]@{ Path = $file.FullName; Content = $updated })
         }
@@ -269,7 +336,7 @@ function Remove-AvmLegacyTelemetryTestMock {
 
     $encoding = [System.Text.UTF8Encoding]::new($false)
     foreach ($change in $changes) {
-        if ($PSCmdlet.ShouldProcess($change.Path, 'remove legacy modtm test mocks and references')) {
+        if ($PSCmdlet.ShouldProcess($change.Path, 'remove retired telemetry test mocks and references')) {
             [System.IO.File]::WriteAllText($change.Path, $change.Content, $encoding)
         }
     }
@@ -485,10 +552,11 @@ function Invoke-AvmTerraformTransform {
         inputs are generated, keeping the first transform idempotent.
         Examples run example, provider-cleanup, common after the module calls
         have settled. Standalone test-module directories run provider-cleanup
-        and an optional consumer test profile. Empty modtm test mocks and
-        telemetry resource references are migrated.
-        Non-empty modtm mocks fail with an actionable error. The final call
-        removes '*.tf.mptfbackup' files.
+        and an optional consumer test profile. Empty modtm test mocks,
+        telemetry references, and empty random mocks in direct unit tests
+        with no remaining random provider usage are migrated. Custom mocks
+        that cannot be removed safely fail with an actionable error. The
+        final call removes '*.tf.mptfbackup' files.
 
         Several of the vendored configs (e.g. order_resource_attrs) read
         provider schemas, so mapotf shells out to 'terraform init' +

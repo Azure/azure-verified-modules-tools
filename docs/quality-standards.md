@@ -373,8 +373,9 @@ Currently vendored:
   and sorts newly generated location variables with authored inputs.
   Examples run `example,provider-cleanup,common` and test-module directories
   run `provider-cleanup`, followed by any consumer-supplied `test` profile.
-  Standard empty `modtm` mocks and references in `.tftest.hcl` are migrated,
-  with drift snapshots covering those files. Non-empty mocks fail explicitly.
+  Standard empty `modtm` mocks, legacy telemetry references, and empty
+  random mocks in direct unit tests with no remaining random provider use are
+  migrated; drift snapshots cover those files. Custom mocks fail explicitly.
   A configured
   `TF_PLUGIN_CACHE_DIR` keeps these target transforms serial because Terraform's
   shared provider plugin cache is not concurrency-safe.
