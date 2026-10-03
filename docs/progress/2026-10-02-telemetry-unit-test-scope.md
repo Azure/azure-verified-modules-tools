@@ -2,7 +2,7 @@
 
 **Status**: blocked
 **Started**: 2026-10-02
-**Updated**: 2026-10-02
+**Updated**: 2026-10-03
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -10,8 +10,9 @@
 Preserve existing unit-test targets and assertions during central telemetry
 migration. Establish which local delegated runs can be migrated safely
 without weakening the safeguards for unknown dependencies or real providers.
-Implementation and local ALZ qualification are complete. The remaining
-plan-only workflow preview is blocked by existing repository-sync runs.
+Implementation, all-platform CI and local ALZ qualification are complete.
+The plan-only workflow preview reached the selected ALZ repository but
+stopped at a BAMI test-tenant group lookup before telemetry migration.
 
 ## Checklist
 
@@ -27,7 +28,8 @@ plan-only workflow preview is blocked by existing repository-sync runs.
 - [x] Fix and qualify standalone test-module discovery in hosted integration.
 - [x] Preserve all eight ALZ unit plans through the complete local pre-commit chain.
 - [x] Verify second-pass transformation stability without retained changes.
-- [ ] Repeat the narrow ALZ networking preview.
+- [x] Attempt the ALZ plan-only preview and classify its pre-migration failure.
+- [ ] Complete the narrow ALZ networking preview after its identity prerequisites pass.
 
 ## Evidence
 
@@ -201,12 +203,11 @@ upload and test-result publication also passed. Completed job logs confirm
 the previously failing pre-commit case, both fixture regressions and the
 directory-alias regression actually executed and passed.
 
-The narrow preview has not been dispatched. A fresh concurrency check found
+The narrow preview was initially blocked. A concurrency check found
 the [scheduled repository sync](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37009330644)
 still queued and a [second sync](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37036072558)
-pending. Wait for all active and pending sync states to clear before the
-already-authorized narrow plan-only preview. Do not replace either slot,
-cancel either run or retry it.
+pending. Monitoring left those runs unchanged. The later preview below was
+dispatched only after every active and pending sync state was empty.
 
 A disposable local ALZ networking clone at `670c45d48b0c7c6a244cddac8715269b0fc06185`
 transformed successfully: 74 files processed, 30 changed, no reported issues.
@@ -236,12 +237,51 @@ original runs across three files: eight passed, zero failed, no issues.
 Azure credentials and CLI/managed identity/OIDC authentication were disabled
 for both local mocked runs. All local qualification jobs are finished.
 
+## Plan-only preview and identity prerequisite
+
+The documentation-only checkpoint at
+`ef039737116c52cf3af6822aeb6e875a4f524618` also passed its complete
+[CI recheck](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37047130289):
+all eleven validation jobs, coverage upload and test-result publication.
+Both CI watchers are finished; no local qualification job remains running.
+
+On October 3, all five active workflow-state queries and the exact-head
+duplicate check returned zero. The
+[ALZ-only preview](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37110789089)
+was dispatched once at that qualified Tools head with `plan_only=true`,
+workflow authoring source enabled, managed-file forcing disabled and project
+sync disabled. The active, unarchived ALZ main remained
+`670c45d48b0c7c6a244cddac8715269b0fc06185`. Matrix generation selected only
+the intended ALZ repository.
+
+Preparation failed in the BAMI candidate identity plan:
+`module.azure.data.azuread_group.entra_readers` could not resolve
+`grp-sec-avm-tf-end-to-end-testing-entra-readers`.
+`Invoke-RepositorySync.ps1` invokes this prerequisite before authoring
+preparation, and `TestTenant.ps1` terminates on the failed Terraform plan
+without state repair or an automatic apply retry. No telemetry migration or
+module test ran in this preview. It produced no candidate or validation
+artifact; validation and publication were both skipped.
+
+The [same ALZ job on main](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37062290942/job/111080590663)
+at `b0ba22f2fca81e4e068414e7f20bb703acd37de4` had already failed with the
+identical group lookup error. This is a shared identity prerequisite, not
+evidence of a telemetry transformation regression. The repository-sync
+README records that the group exists in BAMI but controller lookup and
+membership readiness were unproved. The failure alone does not establish
+whether the group is absent or inaccessible to the configured controller.
+No group, permission, tenant selection, state or workflow guard was changed,
+and the failed preview was not retried.
+
 ## Blockers or dependencies
 
-The sole remaining qualification blocker is workflow concurrency: wait for
-the existing scheduled and pending repository-sync runs, then verify the
-ALZ-only plan-only preview without publication.
-Investigation is local and source-only. Archived repositories remain excluded.
+The remaining remote qualification blocker is the BAMI controller's lookup
+of the required Entra readers group. An authorized operator must verify the
+configured tenant/controller and group visibility, then repair any missing
+prerequisite before another preview. Do not bypass the identity guard,
+invent a replacement group, grant permissions or switch to the legacy tenant
+to make telemetry qualification pass.
+Investigation used existing workflow logs and local source only. Archived repositories remain excluded.
 No deployment, module publication, protected approval, or source-module repair
 is authorized by this slice.
 The MaPoTF release dependency is satisfied. Release creation, approval and
