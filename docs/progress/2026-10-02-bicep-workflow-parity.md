@@ -121,6 +121,14 @@ unit tests and 1,257 component tests, with nine unit skips and one component
 skip; local coverage reached 73.18% against the unchanged 70% floor.
 Hosted verification and approved live Azure qualification remain separate.
 
+The [hosted qualification follow-up](2026-10-03-bicep-hosted-qualification.md)
+confirmed passing hosted coverage on all three operating systems, but
+identified a real lint warning and a Windows job timeout. It corrects the
+callback-only switch reference and applies the user-approved 25-minute
+test-job ceiling. Its refreshed unsigned package and ordinary local gate
+passed; hosted confirmation of those corrections is still pending. One
+bounded live route-table smoke is approved only after those checks pass.
+
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,
 release, or registry workflow change has been performed.

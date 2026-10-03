@@ -27,8 +27,10 @@ function Resolve-AvmBicepTestToken {
     }
     $unresolved = @([regex]::Matches($Content, '#_([A-Za-z][A-Za-z0-9_]*)_#') |
             ForEach-Object { $_.Groups[1].Value } |
-            Where-Object { -not $DeferResourceLocation -or $_ -ine 'resourceLocation' } |
             Sort-Object -Unique)
+    if ($DeferResourceLocation) {
+        $unresolved = @($unresolved | Where-Object { $_ -ine 'resourceLocation' })
+    }
     if ($unresolved.Count -gt 0) {
         throw [AvmConfigurationException]::new(
             "Unresolved Bicep test tokens in '$SourcePath': $($unresolved -join ', ').")

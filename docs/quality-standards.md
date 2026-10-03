@@ -246,6 +246,10 @@ step summaries.
 
 **CI matrix.** The build job runs layout, Unit coverage, and Component tests on `windows-latest`, `ubuntu-latest`, and `macos-latest` through `./build.ps1 ci-tests`. Lint and workflow-definition tests have separate Ubuntu-only jobs. The full local `./build.ps1 ci` still runs lint; integration runs separately on all three OSes.
 
+Each matrix validation job has a 25-minute ceiling so the complete coverage
+and component tiers can finish on hosted Windows. Individual test timeouts,
+test selection and the coverage floor are unchanged.
+
 **PowerShell startup-profile workaround.** CI sets
 `DOTNET_MultiCoreJitMinNumCpus=7fffffff` before launching PowerShell to avoid
 [shared startup-profile corruption](https://github.com/dotnet/runtime/issues/121977).

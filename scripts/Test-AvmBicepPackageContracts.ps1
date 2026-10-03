@@ -30,6 +30,7 @@ $selectors = @(
     'Invoke-AvmTestE2e*'
     'Invoke-AvmTestCleanup*'
     'Bicep native*'
+    'Bicep ARM test token helpers*'
     'Resolve-AvmBicepParameterToken*'
     'Bicep e2e post hook subprocess*'
     'Bicep static convention checks.checks the complete root*'
