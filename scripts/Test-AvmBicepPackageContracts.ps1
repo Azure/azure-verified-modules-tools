@@ -32,6 +32,7 @@ $selectors = @(
     'Bicep native*'
     'Bicep cleanup dependency preflight*'
     'Bicep cleanup native requirements*'
+    'Bicep workflow cleanup group absence*'
     'Bicep ARM test token helpers*'
     'Resolve-AvmBicepParameterToken*'
     'Bicep e2e post hook subprocess*'

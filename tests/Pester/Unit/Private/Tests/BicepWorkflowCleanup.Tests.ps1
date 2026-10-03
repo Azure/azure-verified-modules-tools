@@ -107,6 +107,175 @@ Describe 'Bicep workflow cleanup resource identity' {
     }
 }
 
+Describe 'Bicep workflow cleanup group absence' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:groupLookupFailure = [System.Exception]::new('Unclassified SDK lookup failure.')
+            $script:groupSubscription = '00000000-0000-0000-0000-000000000001'
+            Mock Get-AzResourceGroup { throw $script:groupLookupFailure }
+            Mock Get-AzContext { @{ Subscription = @{ Id = $script:groupSubscription } } }
+            Mock Invoke-AzRestMethod { throw 'Unexpected ARM verification.' }
+        }
+    }
+
+    It 'confirms an unclassified named-group error using an exact ARM GET: <Category>' -ForEach @(
+        @{ Category = 'CloseError' }, @{ Category = 'OperationStopped' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Category = $Category } {
+            param($Category)
+            $script:unclassifiedGroupError = [Management.Automation.ErrorRecord]::new(
+                [Exception]::new('Unclassified SDK lookup failure.'), 'SdkGroupLookup',
+                [Management.Automation.ErrorCategory]$Category, $null)
+            Mock Get-AzResourceGroup { throw $script:unclassifiedGroupError }
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 404; Content = '{"error":{"code":"ResourceGroupNotFound"}}' }
+            }
+            Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test(one)' } |
+                Should -BeNullOrEmpty
+            Should -Invoke Get-AzResourceGroup -Exactly 1 -ParameterFilter { $Name -ceq 'test(one)' }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -ceq 'GET' -and $ErrorAction -eq 'Stop' -and
+                $Path -ceq '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test%28one%29?api-version=2021-04-01'
+            }
+        }
+    }
+
+    It 'preserves successful native results without a second lookup' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResourceGroup { @{ ResourceId = '/original'; Tags = @{ owner = 'original' } } }
+            $result = Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' }
+            $result.ResourceId | Should -BeExactly '/original'
+            $result.Tags.owner | Should -BeExactly 'original'
+            Should -Invoke Get-AzContext -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'does not reinterpret a classified HTTP <Status> response' -ForEach @(
+        @{ Status = 401 }
+        @{ Status = 403 }
+        @{ Status = 404 }
+        @{ Status = 429 }
+        @{ Status = 500 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Status = $Status } {
+            param($Status)
+            $script:groupLookupFailure = [Net.Http.HttpRequestException]::new(
+                'Classified response.', $null, [Net.HttpStatusCode]$Status)
+            if ($Status -eq 404) {
+                Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } |
+                    Should -BeNullOrEmpty
+            }
+            else {
+                { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } } |
+                    Should -Throw -ExpectedMessage '*Classified response*'
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'does not probe after <Label>' -ForEach @(
+        @{ Label = 'authorization failure'; Fault = [UnauthorizedAccessException]::new('Blocked') }
+        @{ Label = 'invalid input'; Fault = [ArgumentException]::new('Blocked') }
+        @{ Label = 'timeout'; Fault = [TimeoutException]::new('Blocked') }
+        @{ Label = 'cancellation'; Fault = [OperationCanceledException]::new('Blocked') }
+        @{ Label = 'wrapped cancellation'; Fault = [Exception]::new('Blocked', [OperationCanceledException]::new()) }
+        @{ Label = 'transport failure'; Fault = [Net.Http.HttpRequestException]::new('Blocked') }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Fault = $Fault } {
+            param($Fault)
+            $script:groupLookupFailure = $Fault
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } } |
+                Should -Throw
+            Should -Invoke Get-AzContext -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'does not probe a plain exception classified as <Category>' -ForEach @(
+        @{ Category = 'AuthenticationError' }, @{ Category = 'PermissionDenied' }
+        @{ Category = 'SecurityError' }, @{ Category = 'ConnectionError' }
+        @{ Category = 'OperationTimeout' }
+        @{ Category = 'InvalidArgument' }, @{ Category = 'InvalidData' }
+        @{ Category = 'InvalidResult' }, @{ Category = 'ParserError' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Category = $Category } {
+            param($Category)
+            $script:classifiedGroupError = [Management.Automation.ErrorRecord]::new(
+                [Exception]::new('Classified failure.'), 'ClassifiedFailure',
+                [Management.Automation.ErrorCategory]$Category, $null)
+            Mock Get-AzResourceGroup { throw $script:classifiedGroupError }
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } } |
+                Should -Throw
+            Should -Invoke Get-AzContext -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'fails when verification returns <Label>' -ForEach @(
+        @{ Label = 'an existing group'; Status = 200; Content = '{"id":"/existing"}' }
+        @{ Label = 'access denied'; Status = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+        @{ Label = 'an authorization-shaped 404'; Status = 404; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+        @{ Label = 'an unknown 404'; Status = 404; Content = '{"error":{"code":"NotFound"}}' }
+        @{ Label = 'an empty 404'; Status = 404; Content = '' }
+        @{ Label = 'a malformed 404'; Status = 404; Content = 'not-json' }
+        @{ Label = 'a missing error code'; Status = 404; Content = '{}' }
+        @{ Label = 'a rate limit'; Status = 429; Content = '{}' }
+        @{ Label = 'a service failure'; Status = 500; Content = '{}' }
+        @{ Label = 'a missing status'; Status = $null; Content = '{"error":{"code":"ResourceGroupNotFound"}}' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Status = $Status; Content = $Content } {
+            param($Status, $Content)
+            $script:groupVerification = @{ StatusCode = $Status; Content = $Content }
+            Mock Invoke-AzRestMethod { $script:groupVerification }
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } } |
+                Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+
+    It 'does not probe a different getter or a non-name-only query' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResource { throw $script:groupLookupFailure }
+            foreach ($parameters in @(@{}, @{ Name = @('one', 'two') }, @{ Name = 'test'; ExpandProperties = $true })) {
+                { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters $parameters } |
+                    Should -Throw
+            }
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResource -Parameters @{ ResourceId = '/original' } } |
+                Should -Throw
+            Should -Invoke Get-AzContext -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'rejects an invalid context subscription before REST: <Subscription>' -ForEach @(
+        @{ Subscription = '' }
+        @{ Subscription = 'not-a-guid' }
+        @{ Subscription = '00000000-0000-0000-0000-000000000000' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Subscription = $Subscription } {
+            param($Subscription)
+            $script:groupSubscription = $Subscription
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = 'test' } } |
+                Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'rejects a named-group lookup that would target <Label>' -ForEach @(
+        @{ Label = 'a child resource'; Name = 'test/providers/Microsoft.Compute/virtualMachines/other' }
+        @{ Label = 'a different query'; Name = 'test?api-version=other' }
+        @{ Label = 'a parent path'; Name = '../other' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Name = $Name } {
+            param($Name)
+            { Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup -Parameters @{ Name = $Name } } |
+                Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+}
+
 Describe 'Bicep workflow cleanup locks and failures' {
     It 'never returns inherited or similarly prefixed foreign locks' {
         InModuleScope Avm.Authoring {

@@ -33,6 +33,20 @@ Describe 'Component: Bicep native workflow recovery boundaries' -Tag Component {
         $script:fixture.Calls.Count | Should -Be 0
     }
 
+    It 'confirms an already absent owned group during state-only recovery' {
+        (Invoke-AvmTestE2e @script:options -Phase Deploy).Status | Should -Be 'pass'
+        $script:fixture.Groups.Clear()
+        $script:fixture.GroupAbsenceChecks = 0
+        $script:fixture.Calls.Clear()
+        $result = Invoke-AvmTestCleanup -StatePath $script:fixture.StatePath `
+            -SubscriptionId $script:options.SubscriptionId -TenantId $script:options.TenantId -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        $script:fixture.GroupAbsenceChecks | Should -BeGreaterThan 0
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        $script:fixture.Calls | Should -Not -Contain 'post'
+    }
+
     It 'rechecks ownership before removal and purge after tags change during metadata capture' {
         $script:fixture.RetagDuringMetadata = $true
         $result = Invoke-AvmTestE2e @script:options

@@ -51,6 +51,8 @@ Implementation baseline:
 - [x] Confirm hosted checks, including coverage, for the package correction.
 - [x] Qualify the native dependency import-scope correction before the
       approved live smoke.
+- [ ] Qualify the shared native resource-group absence correction exposed
+      by the approved live preflight.
 - [ ] Complete separately approved release and live Azure qualification
       before replacing registry workflows.
 
@@ -137,10 +139,15 @@ The isolated regression, real local prerequisites and refreshed package
 qualification pass. The ordinary gate passed 2,814 unit and 1,259 component
 tests, with nine unit skips and one component skip. All 17 hosted checks
 then passed for `d25c1fe`. The [single approved live smoke](2026-10-03-bicep-live-route-table.md)
-is prepared against that exact qualified package. Its first browser sign-in
-could not open a window in this host; the approved device-code alternative
-expired before authentication completed. Both stopped before e2e invocation,
-so the live test remains blocked on user sign-in with no resources created.
+was prepared against that exact qualified package. After resolving sign-in
+delivery and restricting the CLI profile to the intended test tenant, both
+sign-ins and the paired identity check succeeded. The SDK then reported a
+new group's absence without HTTP metadata, exposing the shared
+[resource-group lookup correction](2026-10-03-bicep-resource-group-absence.md).
+Its focused and extracted-package controls pass. The ordinary full gate
+also passes: 2,854 unit and 1,260 component tests, with nine unit skips and
+one component skip. Hosted qualification of the correction remains pending.
+E2e has not been invoked and no test resources were created.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,

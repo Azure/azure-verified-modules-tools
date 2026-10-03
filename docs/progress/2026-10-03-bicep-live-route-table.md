@@ -25,7 +25,10 @@ private session evidence.
 - [x] Qualify the exact module bytes locally, as an extracted package and
       through all 17 hosted checks.
 - [x] Bind the driver to that archive and the matching hosted receipt.
-- [ ] Complete the approved process-only Azure PowerShell sign-in.
+- [x] Complete the approved process-only Azure PowerShell sign-in.
+- [ ] Rebind the smoke to the resource-group absence correction after its
+      local, package and hosted qualification.
+- [ ] Renew the ended PowerShell process sign-in once those bytes are ready.
 - [ ] Run the one unchanged defaults case with ordinary cleanup.
 - [ ] Verify resource absence, state-only no-op and exact history removal.
 - [ ] Record the actual result without expanding the qualification claim.
@@ -62,11 +65,44 @@ The approved validation and deployment budget remains unused. Both
 authentication-only results are retained; do not generate repeated codes
 until the user is ready to complete one.
 
+The user has now confirmed readiness and requested a fresh code. The
+authentication-only retry checks both retained results for no invocation
+or cleanup state before continuing with the unchanged approval.
+
+The background retry's sign-in prompt was not readable through the task
+interface. That process was stopped, and its directory was checked again:
+no invocation marker or cleanup state exists. A visible terminal with
+readable output replaces that interaction path; the retained stop evidence
+and marker checks prevent turning authentication recovery into a deployment
+retry.
+
+The readable captured prompt was delivered, but that sign-in was not
+completed. On the subsequent user-requested attempt, PowerShell sign-in
+succeeded and its process was retained while CLI prerequisites were checked.
+The shared CLI cache held only a tenant-level entry. Its approved refresh
+encountered a stale tenant's MFA requirement and was stopped without
+changing security settings. The user confirmed the intended tenant, and
+a clean temporary CLI profile was signed into only that tenant.
+
+Both sign-ins and the paired identity check then succeeded. The new-group
+preflight failed on the SDK's unclassified missing-resource-group exception.
+The result again confirms no e2e invocation or submission. The shared
+[resource-group absence correction](2026-10-03-bicep-resource-group-absence.md)
+must be qualified before continuing; this is not an Azure deployment
+failure or a request for broader permissions.
+
+The corrected package and ordinary full local gate now pass. Its hosted
+qualification remains pending; the earlier receipt cannot qualify the new
+bytes. The isolated CLI descriptor still confirms the intended enabled
+test subscription without another sign-in or a shared-cache refresh.
+The successful process-only PowerShell session ended with the preflight
+failure and must be renewed after the correction is ready.
+
 ## Blockers or dependencies
 
-Waiting for the user to complete a fresh device-code sign-in. No test
-resources were created and no cleanup is required for either sign-in
-attempt. One passing route-table case
+Waiting for hosted qualification of the shared SDK absence-handling correction.
+No test resources were created and no resource cleanup is required for
+the setup attempts. One passing route-table case
 would not qualify every cleanup provider, higher-scope permission,
 managed-identity representation or failure/recovery path. Other live
 coverage and rollout decisions require separate approval.

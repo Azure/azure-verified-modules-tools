@@ -132,6 +132,7 @@ Describe 'Component: Bicep native workflow CI and parameter inputs' -Tag Compone
         $script:options.Remove('ResourceLocation')
         (Invoke-AvmTestE2e @script:options).Status | Should -Be 'pass'
         @($script:fixture.GroupLocations) | Should -Be @('eastus')
+        $script:fixture.GroupAbsenceChecks | Should -BeGreaterThan 0
         @($script:fixture.NativeInputs | ForEach-Object { $_.Parameters['resourceLocation'] } |
             Select-Object -Unique) | Should -Be @('eastus')
     }

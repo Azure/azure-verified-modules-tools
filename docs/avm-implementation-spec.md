@@ -791,6 +791,11 @@ and retain the last valid state if serialization fails. State survives
 temporary-template and parameter-file cleanup.
 
 Capture post-removal metadata before deleting resources or their parents.
+If the native SDK reports a plain, unclassified named-group failure without
+HTTP metadata, verify only that group with an exact ARM GET in the selected
+subscription. Treat it as absent only for HTTP 404 with the structured
+`ResourceGroupNotFound` code. Never infer absence from error-message text,
+or probe after typed authorization, transport, timeout or cancellation errors.
 Persist successful removal before post-processing so recovery retries only
 unfinished work. Partial discovery, unverified ownership and exhausted
 cleanup remain explicit failures with pending targets; cancellation and

@@ -19,6 +19,7 @@ function New-NativeBicepWorkflowFixture {
         Calls = [Collections.Generic.List[object]]::new()
         NativeInputs = [Collections.Generic.List[object]]::new()
         GroupLocations = [Collections.Generic.List[string]]::new()
+        GroupAbsenceChecks = 0
         CurrentSubscription = '00000000-0000-0000-0000-000000000099'
         CurrentTenant = '00000000-0000-0000-0000-000000000002'
         IdentityMismatch = $false; GroupExists = $false; GroupCreateFails = $false
@@ -97,6 +98,7 @@ function New-NativeBicepWorkflowFixture {
             if ($null -ne $group -and $state.OwnershipMismatch) {
                 return @{ ResourceId = $group.ResourceId; Tags = @{ 'avm-e2e-run-id' = 'foreign' } }
             }
+            if ($null -eq $group) { throw [System.Exception]::new('Provided resource group does not exist.') }
             return $group
         }
         Mock New-AzResourceGroup {
@@ -197,6 +199,16 @@ function New-NativeBicepWorkflowFixture {
         Mock Invoke-AzRestMethod {
             $state = $script:nativeWorkflow
             if ($Method -ne 'GET') { throw 'Unexpected mutating REST request.' }
+            $groupMatch = [regex]::Match($Path, '^/subscriptions/([^/]+)/resourceGroups/([^/?]+)\?api-version=2021-04-01$')
+            if ($groupMatch.Success) {
+                $groupMatch.Groups[1].Value | Should -BeExactly $state.CurrentSubscription
+                $groupName = [uri]::UnescapeDataString($groupMatch.Groups[2].Value)
+                $state.GroupAbsenceChecks++
+                if ($state.GroupExists -or $state.Groups.ContainsKey($groupName)) {
+                    return @{ StatusCode = 200; Content = '{}' }
+                }
+                return @{ StatusCode = 404; Content = '{"error":{"code":"ResourceGroupNotFound"}}' }
+            }
             if ($Path.EndsWith('/operations?api-version=2021-04-01')) {
                 $state.Calls.Add('discover')
                 $id = $Path.Substring(0, $Path.Length - '/operations?api-version=2021-04-01'.Length)
