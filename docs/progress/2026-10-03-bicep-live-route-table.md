@@ -1,6 +1,6 @@
 # Approved native Bicep route-table smoke
 
-**Status**: blocked
+**Status**: complete
 **Started**: 2026-10-03
 **Updated**: 2026-10-03
 **Branch**: `jaredfholgate-didactic-memory`
@@ -26,16 +26,16 @@ private session evidence.
       through all 17 hosted checks.
 - [x] Bind the driver to that archive and the matching hosted receipt.
 - [x] Complete the approved process-only Azure PowerShell sign-in.
-- [ ] Rebind the smoke to the resource-group absence correction after its
+- [x] Rebind the smoke to the resource-group absence correction after its
       local, package and hosted qualification.
-- [ ] Renew the ended PowerShell process sign-in once those bytes are ready.
-- [ ] Run the one unchanged defaults case with ordinary cleanup.
-- [ ] Verify resource absence, state-only no-op and exact history removal.
-- [ ] Record the actual result without expanding the qualification claim.
+- [x] Renew the ended PowerShell process sign-in once those bytes are ready.
+- [x] Run the one unchanged defaults case with ordinary cleanup.
+- [x] Verify resource absence, state-only no-op and exact history removal.
+- [x] Record the actual result without expanding the qualification claim.
 
 ## Validation
 
-Qualified source: `d25c1fe93119b2afeb7038ce80e968a1b3d31f5e`.
+Initial prerequisite qualification: `d25c1fe93119b2afeb7038ce80e968a1b3d31f5e`.
 Unsigned archive SHA-256:
 `1DD4562705310CF5A2191638C917EE4B9FCE079053D6D1FD7AC7B90B185FF716`.
 [Hosted checks](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37117924997)
@@ -91,18 +91,37 @@ The result again confirms no e2e invocation or submission. The shared
 must be qualified before continuing; this is not an Azure deployment
 failure or a request for broader permissions.
 
-The corrected package and ordinary full local gate now pass. Its hosted
-qualification remains pending; the earlier receipt cannot qualify the new
-bytes. The isolated CLI descriptor still confirms the intended enabled
-test subscription without another sign-in or a shared-cache refresh.
-The successful process-only PowerShell session ended with the preflight
-failure and must be renewed after the correction is ready.
+### Completed live qualification
+
+The corrected source `7ef4f14f964d1713941146786fc1abfb4b70f1cc` passed
+the ordinary full local gate and all 17
+[hosted checks](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37132153429).
+Its unsigned archive SHA-256 is
+`39B1694118A83A89F34295487D2290ED3C500A9D68B028468C4094BBBA004843`;
+all 348 payload files match the committed source. A new receipt and attempt
+directory retain that exact boundary without changing earlier attempt guards.
+
+The isolated CLI profile authenticated an exact read-only group lookup.
+The user then completed a fresh process-only PowerShell sign-in; its code
+was delivered directly in chat, and the approved run continued immediately
+without another prerequisite wait.
+
+The unchanged defaults case passed in three minutes. State records exactly
+one successful deployment attempt and status `Complete`. Normal runner
+cleanup removed the test resources; the temporary group was confirmed
+absent, completed-state cleanup returned its no-op and the exact successful
+root deployment history record was separately removed and confirmed absent.
+The reaper was not invoked.
+
+All ten module files remain byte-identical, with no added module files.
+The case has no local assertion suite or post hook; both remain
+`not-present`, not passed. No other live scenario was run.
 
 ## Blockers or dependencies
 
-Waiting for hosted qualification of the shared SDK absence-handling correction.
-No test resources were created and no resource cleanup is required for
-the setup attempts. One passing route-table case
-would not qualify every cleanup provider, higher-scope permission,
-managed-identity representation or failure/recovery path. Other live
-coverage and rollout decisions require separate approval.
+No blocker remains for this bounded smoke, and no test cleanup is pending.
+Its one-case approval has been consumed; do not resubmit it.
+One passing route-table case does not qualify every cleanup provider,
+higher-scope permission, managed-identity representation or failure/recovery
+path. Other live coverage, release and registry cutover require separate
+approval.

@@ -1,6 +1,6 @@
 # Native resource-group absence verification
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-03
 **Updated**: 2026-10-03
 **Branch**: `jaredfholgate-didactic-memory`
@@ -26,7 +26,7 @@ private live-test driver.
 - [x] Correct only unclassified named-group lookup failure handling.
 - [x] Requalify the unsigned package.
 - [x] Pass the ordinary full development gate.
-- [ ] Commit, push and confirm hosted checks for the correction.
+- [x] Commit, push and confirm hosted checks for the correction.
 
 ## Validation
 
@@ -86,12 +86,21 @@ The six component reports contain no failures. The gate completed in
 17 minutes 13 seconds; expected negative-fixture warnings remain visible.
 All 348 source files still match the qualified package.
 
+The correction was committed and pushed as
+`7ef4f14f964d1713941146786fc1abfb4b70f1cc`. All 17 checks passed in its
+[hosted run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37132153429);
+the Windows test job completed in 14 minutes 19 seconds.
+
+The [approved live route-table smoke](2026-10-03-bicep-live-route-table.md)
+then passed against those exact package bytes. The previously failing
+native preflight and post-cleanup group-absence lookup both succeeded.
+The single recorded deployment completed successfully, normal cleanup
+finished, completed-state recovery was a no-op and the exact root history
+record was separately removed.
+
 ## Blockers or dependencies
 
-The original one-validation/one-submission budget is unused. Package and
-local qualification are complete; hosted qualification must pass before
-that case runs. The CLI uses an explicitly tenant-scoped temporary native
-profile, not a token bridge or a change to the shared default. The prior
-PowerShell process has ended; renew its process-only sign-in only after
-the corrected bytes are ready. No additional live case, permission change,
-release or registry cutover is authorized.
+No blocker remains for this correction. The original one-case budget was
+consumed successfully; it does not authorize another deployment.
+Qualification beyond the bounded route-table case, permission changes,
+release and registry cutover remain separate approval gates.

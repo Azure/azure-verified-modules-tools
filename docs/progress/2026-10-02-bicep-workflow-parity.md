@@ -51,8 +51,9 @@ Implementation baseline:
 - [x] Confirm hosted checks, including coverage, for the package correction.
 - [x] Qualify the native dependency import-scope correction before the
       approved live smoke.
-- [ ] Qualify the shared native resource-group absence correction exposed
+- [x] Qualify the shared native resource-group absence correction exposed
       by the approved live preflight.
+- [x] Complete the single approved live route-table smoke and its cleanup.
 - [ ] Complete separately approved release and live Azure qualification
       before replacing registry workflows.
 
@@ -146,12 +147,18 @@ new group's absence without HTTP metadata, exposing the shared
 [resource-group lookup correction](2026-10-03-bicep-resource-group-absence.md).
 Its focused and extracted-package controls pass. The ordinary full gate
 also passes: 2,854 unit and 1,260 component tests, with nine unit skips and
-one component skip. Hosted qualification of the correction remains pending.
-E2e has not been invoked and no test resources were created.
+one component skip. All 17 hosted checks passed for `7ef4f14`, followed by
+the approved unchanged route-table defaults case in three minutes. The
+single recorded deployment succeeded; ordinary cleanup completed, the
+temporary group was confirmed absent, completed-state cleanup was a no-op
+and the exact root deployment history record was separately removed.
+All ten module files remain unchanged. This case has no local assertion
+suite or post hook, so it does not add live proof for those paths.
 
 Reference source was read from immutable Git objects already present
-locally. No Azure deployment, deletion, permission change, reaper execution,
-release, or registry workflow change has been performed.
+locally. Only the separately approved route-table live case and its cleanup
+have run. No other Azure scenario, permission change, reaper execution,
+release or registry workflow change has been performed.
 
 Offline tests are not proof of live Azure parity. Registry CI replacement
 remains separate from implementation and requires approved live
