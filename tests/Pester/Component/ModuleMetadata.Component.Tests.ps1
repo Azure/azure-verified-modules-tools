@@ -423,6 +423,60 @@ Describe 'Component: shared module metadata schema' -Tag Component {
         $result.Metadata.Contains('owners') | Should -Be (-not $Child)
     }
 
+    It 'validates metadata without network access: <Ecosystem>, child=<Child>' -TestCases @(
+        @{ Ecosystem = 'bicep'; Child = $false }
+        @{ Ecosystem = 'bicep'; Child = $true }
+        @{ Ecosystem = 'terraform'; Child = $false }
+        @{ Ecosystem = 'terraform'; Child = $true }
+    ) {
+        param($Ecosystem, $Child)
+        $fixture = New-MetadataFixture -Ecosystem $Ecosystem -ChildModule:$Child
+        Save-MetadataFixture -Fixture $fixture
+        $offlineScript = @'
+$ErrorActionPreference = 'Stop'
+$socket = [System.Net.Sockets.Socket]::new(
+    [System.Net.Sockets.AddressFamily]::InterNetwork,
+    [System.Net.Sockets.SocketType]::Stream,
+    [System.Net.Sockets.ProtocolType]::Tcp)
+try {
+    # Reserve a non-listening loopback port so schema downloads cannot succeed.
+    $socket.Bind([System.Net.IPEndPoint]::new([System.Net.IPAddress]::Loopback, 0))
+    [System.Net.Http.HttpClient]::DefaultProxy = [System.Net.WebProxy]::new("http://$($socket.LocalEndPoint)")
+    Import-Module -Name $env:AVM_METADATA_TEST_MODULE -Force
+    $parameters = $env:AVM_METADATA_TEST_PARAMETERS | ConvertFrom-Json -AsHashtable
+    $valid = Test-AvmModuleMetadata @parameters
+    $metadata = Get-Content -LiteralPath (Join-Path $parameters.Path 'metadata.json') -Raw |
+        ConvertFrom-Json -AsHashtable
+    $null = $metadata.Remove('canonicalType')
+    $invalid = Test-AvmModuleMetadata @parameters -InputObject $metadata
+    @{ Valid = $valid; Invalid = $invalid } | ConvertTo-Json -Depth 20 -Compress
+}
+finally {
+    $socket.Dispose()
+}
+'@
+        $process = InModuleScope Avm.Authoring -Parameters @{
+            Script             = $offlineScript
+            ModulePath         = Join-Path $moduleRoot 'Avm.Authoring.psd1'
+            MetadataParameters = $fixture.Parameters | ConvertTo-Json -Compress
+        } {
+            param($Script, $ModulePath, $MetadataParameters)
+            Invoke-AvmProcess -FilePath (Get-Process -Id $PID).Path `
+                -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $Script) `
+                -EnvVars @{
+                    AVM_OFFLINE                  = '1'
+                    AVM_METADATA_TEST_MODULE     = $ModulePath
+                    AVM_METADATA_TEST_PARAMETERS = $MetadataParameters
+                } -TimeoutSec 30 -IgnoreExitCode
+        }
+        $process.ExitCode | Should -Be 0 -Because $process.StdErr
+        $results = $process.StdOut | ConvertFrom-Json -AsHashtable
+        $results.Valid.Status | Should -BeExactly 'pass' -Because $process.StdOut
+        $results.Valid.Issues | Should -HaveCount 0
+        $results.Invalid.Status | Should -BeExactly 'fail'
+        $results.Invalid.Issues.Code | Should -Contain 'AVM_METADATA_SCHEMA'
+    }
+
     It 'accepts team-only ownership without storing personal names' {
         $fixture = New-MetadataFixture
         $fixture.Data.owners = @('@Azure/avm-core-modules', '@Other-org/team-name')
