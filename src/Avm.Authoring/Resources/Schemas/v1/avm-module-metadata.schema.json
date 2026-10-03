@@ -1,5 +1,6 @@
 {
-  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Use the canonical HTTP identifier so Test-Json resolves its bundled draft-07 meta-schema without a download.",
   "$id": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
   "title": "AVM module metadata v1",
   "description": "Owner-authored metadata shared by Bicep and Terraform. Module kind and parent identity are derived from the repository, not authored here.",
