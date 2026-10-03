@@ -730,6 +730,10 @@ and account before CLI cleanup. Do not log in, export tokens or install
 modules implicitly. The native dependency floors follow the Az 15.5.0
 bundle, plus Az.Subscription 0.12.0, which is distributed separately.
 Check the actual command provenance and parameter names or aliases.
+Make the selected Az.Accounts version visible in the current PowerShell
+process's global scope before importing other Az modules: nested clients
+perform their own global Accounts lookup. Other dependencies remain
+module-scoped. This does not change persisted contexts or install modules.
 
 Explicit parameters or an ARM parameter file override opted-in CI inputs.
 `-UseCiInputs` accepts `AVM_CI_VARIABLES` and `AVM_CI_SECRETS` JSON:

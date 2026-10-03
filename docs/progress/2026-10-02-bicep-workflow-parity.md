@@ -2,7 +2,7 @@
 
 **Status**: in-progress
 **Started**: 2026-10-02
-**Updated**: 2026-10-02
+**Updated**: 2026-10-03
 **Branch**: `jaredfholgate-didactic-memory`
 
 ## Outcome
@@ -48,7 +48,9 @@ Implementation baseline:
 - [x] Commit and push the implementation to the existing draft review.
 - [x] Qualify an unsigned extracted distribution through native contracts
       and unmodified registry cases without live Azure.
-- [ ] Confirm hosted checks, including coverage, for the package correction.
+- [x] Confirm hosted checks, including coverage, for the package correction.
+- [ ] Qualify the native dependency import-scope correction before the
+      approved live smoke.
 - [ ] Complete separately approved release and live Azure qualification
       before replacing registry workflows.
 
@@ -126,8 +128,15 @@ confirmed passing hosted coverage on all three operating systems, but
 identified a real lint warning and a Windows job timeout. It corrects the
 callback-only switch reference and applies the user-approved 25-minute
 test-job ceiling. Its refreshed unsigned package and ordinary local gate
-passed; hosted confirmation of those corrections is still pending. One
-bounded live route-table smoke is approved only after those checks pass.
+passed; all 17 hosted checks subsequently passed for `9234c88`.
+One bounded live route-table smoke is approved. Before sign-in, its setup
+exposed a separate [dependency import-scope issue](2026-10-03-bicep-azure-dependency-scope.md).
+Only the selected Accounts module now becomes globally visible in the current
+process; other imports and version/provenance checks retain their behavior.
+The isolated regression, real local prerequisites and refreshed package
+qualification pass. The ordinary gate passed 2,814 unit and 1,259 component
+tests, with nine unit skips and one component skip. Hosted qualification of
+the new bytes is still pending.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,

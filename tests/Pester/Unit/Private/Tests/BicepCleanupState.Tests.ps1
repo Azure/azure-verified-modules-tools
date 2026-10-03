@@ -317,7 +317,7 @@ Describe 'Bicep cleanup dependency preflight' {
         }
     }
 
-    It 'imports the newest eligible explicit module path' {
+    It 'imports the newest eligible Accounts path into global scope' {
         InModuleScope Avm.Authoring {
             Mock Get-Module {
                 param($ListAvailable)
@@ -332,7 +332,30 @@ Describe 'Bicep cleanup dependency preflight' {
                 [pscustomobject]@{ ModuleName = 'Az.Accounts'; Version = [version]'5.4.0'; Parameters = @{} }
             }
             Assert-AvmBicepAzureDependency
-            Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'newest.psd1' }
+            Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'newest.psd1' -and $Global }
+        }
+    }
+
+    It 'keeps other dependency imports local to the module' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmBicepAzureRequirement {
+                [pscustomobject]@{
+                    Name = 'Az.Resources'; MinimumVersion = '9.0.3'
+                    Commands = @{ 'Get-AzResource' = @() }
+                }
+            }
+            Mock Get-Module {
+                param($ListAvailable)
+                if ($ListAvailable) {
+                    [pscustomobject]@{ Name = 'Az.Resources'; Version = [version]'9.0.3'; Path = 'resources.psd1' }
+                }
+            }
+            Mock Import-Module {}
+            Mock Get-Command {
+                [pscustomobject]@{ ModuleName = 'Az.Resources'; Version = [version]'9.0.3'; Parameters = @{} }
+            }
+            Assert-AvmBicepAzureDependency
+            Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'resources.psd1' -and -not $Global }
         }
     }
 }

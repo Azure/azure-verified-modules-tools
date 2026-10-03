@@ -30,7 +30,8 @@ function Assert-AvmBicepAzureDependency {
     }
 
     foreach ($entry in $selected) {
-        Import-Module -Name $entry.Module.Path -ErrorAction Stop
+        # Nested Az clients resolve Accounts from the global session scope.
+        Import-Module -Name $entry.Module.Path -Global:($entry.Requirement.Name -ceq 'Az.Accounts') -ErrorAction Stop
         foreach ($commandName in $entry.Requirement.Commands.psbase.Keys) {
             $command = Get-Command -Name $commandName -ErrorAction Stop
             if ($command.ModuleName -ne $entry.Requirement.Name -or

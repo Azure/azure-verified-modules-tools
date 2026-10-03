@@ -1,6 +1,6 @@
 # Hosted native Bicep qualification
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-03
 **Updated**: 2026-10-03
 **Branch**: `jaredfholgate-didactic-memory`
@@ -22,7 +22,7 @@ not approval to create or delete Azure resources.
 - [x] Run focused controls, requalify the changed package and pass the
       ordinary development gate.
 - [x] Finish the local correction and prepare the owned commit.
-- [ ] Verify hosted results for the corrected commit.
+- [x] Verify hosted results for the corrected commit.
 - [x] Resolve the existing test-tenant configuration without selecting a
       production subscription or changing Azure context.
 - [x] Obtain approval for one bounded route-table smoke and its setup,
@@ -65,6 +65,15 @@ skip. The component tier used four child processes. The complete local gate
 took 15 minutes 10 seconds; this is not a prediction of hosted runtime.
 The workflow regression verifies the approved 25-minute test-job ceiling.
 
+All 17 hosted checks for `9234c88bb7c021ad17ac0976fa32f1bbda439eb6`
+passed in the
+[corrected run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37114687302):
+lint, CodeQL, all three complete test jobs, workflow tests, six integration
+jobs and reporting. The Windows job finished in 13 minutes 31 seconds.
+The approved live setup then exposed a separate
+[native dependency import-scope issue](2026-10-03-bicep-azure-dependency-scope.md)
+before sign-in or deployment.
+
 The user's existing-tenant selection resolves to the configured BAMI tenant,
 the 28-subscription test pool and management group `avm-test`. Tenant-scoped
 subscription discovery confirms the selected test subscription is enabled.
@@ -75,8 +84,12 @@ deployment/deletion or permission change has been performed.
 
 The current local CLI context belongs to a different tenant. Live execution
 must use an explicitly verified test-tenant context, not the ambient default.
-The local-only native prerequisite check explicitly reports missing
-Az.Subscription 0.12.0; Azure PowerShell has no saved test-tenant context.
+Az.Subscription 0.12.0 was subsequently installed in the approved
+CurrentUser scope without changing its satisfied Accounts dependency.
+Azure PowerShell has no saved test-tenant context. The separately tracked
+import-scope correction passes the real local dependency check, refreshed
+package qualification and ordinary full local gate. Its own hosted
+qualification is still required before sign-in.
 
 The user approved one unchanged registry route-table defaults case in the
 existing BAMI test pool's first subscription, fixed to `eastus`, with one
