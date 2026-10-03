@@ -17,7 +17,9 @@ function Invoke-AvmBicepTestE2eAssertion {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [System.Collections.Generic.List[object]] $Issues
+        [System.Collections.Generic.List[object]] $Issues,
+
+        [switch] $InProcess
     )
 
     Set-StrictMode -Version 3.0
@@ -50,7 +52,7 @@ function Invoke-AvmBicepTestE2eAssertion {
         }
         $summary = Invoke-AvmBicepPesterSuite -Mode E2e `
             -Files $Item.AssertionFiles -TestInputData $testInputData `
-            -WorkingDirectory $RepositoryRoot -TimeoutSec 1800
+            -WorkingDirectory $RepositoryRoot -TimeoutSec 1800 -InProcess:$InProcess
     }
     catch [AvmProcessException] {
         $result.Status = 'fail'

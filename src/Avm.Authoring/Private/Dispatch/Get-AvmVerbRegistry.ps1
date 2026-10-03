@@ -105,6 +105,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Deploy isolated Bicep examples or run Terraform e2e tests.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('test', 'cleanup')
+            Cmdlet  = 'Invoke-AvmTestCleanup'
+            Summary = 'Resume unfinished Bicep test cleanup from a saved state file.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('register-features')
             Cmdlet  = 'Register-AvmFeature'
             Summary = 'Ensure required Azure features are registered in a selected test subscription.'

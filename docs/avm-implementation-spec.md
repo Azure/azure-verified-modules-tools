@@ -701,6 +701,114 @@ captures the input digests and diagnostics. The required `avm pr-check` docs
 step enforces later README drift; this qualification alone does not authorize
 removing the registry CI workflow or its other gates.
 
+### Bicep deployment tests and cleanup
+
+`avm test e2e` compiles selected `tests/e2e/**/main.test.bicep` cases into
+temporary ARM templates before cloud execution. It supports resource-group,
+subscription, management-group and tenant scope, including nested and
+cross-subscription deployments. Preserve the complete authored template:
+locks, assignments and repeated `init`/`idem` deployments are not stripped.
+`AVM_OFFLINE=1` adds `--no-restore` to compilation; it does not make a
+deployment command an offline test.
+
+The native runner adapts the registry's ordinary cleanup; the reaper is
+only a fallback. Explicit test targets are required. Cleanup follows
+recorded `Create` deployment operations recursively, not `Read` references
+or a subscription-wide inventory. ARM `Create` operations can represent
+updates to existing resources, so those resources can also be removed.
+Only run reviewed test sources in targets authorized for that lifecycle.
+Resource-group entry points use a new, uniquely named group with a verified
+run tag. Never delete the existing management group selected as the execution
+container. Exact provider-container operation IDs may expand only within
+their named resource group and provider namespace.
+
+Use the caller's existing Azure PowerShell session with process-scoped
+subscription and tenant selection. Verify the selected account and cloud,
+restore the original context even on failure, and stop if restoration fails.
+Azure CLI and PowerShell must confirm the same subscription, tenant, cloud
+and account before CLI cleanup. Do not log in, export tokens or install
+modules implicitly. The native dependency floors follow the Az 15.5.0
+bundle, plus Az.Subscription 0.12.0, which is distributed separately.
+Check the actual command provenance and parameter names or aliases.
+Make the selected Az.Accounts version visible in the current PowerShell
+process's global scope before importing other Az modules: nested clients
+perform their own global Accounts lookup. Other dependencies remain
+module-scoped. This does not change persisted contexts or install modules.
+
+Explicit parameters or an ARM parameter file override opted-in CI inputs.
+`-UseCiInputs` accepts `AVM_CI_VARIABLES` and `AVM_CI_SECRETS` JSON:
+secrets override variables; `CI_` removes underscores and takes precedence
+over the underscore-preserving `CI__` alias within one source. Keep typed
+numbers, booleans, arrays, objects, secure values and vault references intact.
+Tokens are replaced in temporary templates and recursively in in-memory
+parameters, never in authored source. Scope tokens belong to explicit
+target inputs. `keys` and `count` remain valid authored names.
+
+Subscription pools use a seeded, order-independent permutation and
+round-robin case assignment, rather than the registry's `Get-Random`
+permutation. Explicit subscription selection takes precedence over ambient
+CI pools. Resource placement uses the owning module's canonical resource
+type when available; pattern/helper or absent metadata uses the generic
+allowed-region list. Explicit parameter, token and resource-location pins
+must agree. Only wholly regional validation failures can relocate an
+unpinned, non-global, non-resource-group case. Metadata location and
+`baseTime` stay fixed. Record every attempt before submission, verify the
+native response's exact deployment ID, and retry only confirmed failure or
+exact preflight rejection. Unknown or cancelled outcomes never resubmit.
+
+After a successful deployment, pass its exact REST outputs to case-local
+Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
+the Azure PowerShell `Type`/`Value` properties without changing authored
+object keys or array shapes. Assertions and hooks run in the caller's
+PowerShell process to retain process-only authentication; caller/workflow
+cancellation applies instead of separate-process time limits. Restore the
+selected Azure context around each phase. Assertion/hook failure still
+attempts cleanup; cancellation retains state for deliberate recovery.
+Existing suites must run completely: skipped, filtered, inconclusive, empty
+or setup-failed suites are not passes. An absent suite is `not-present`.
+Module-owned unit Pester remains isolated under `avm test unit`; static
+authoring checks remain under `avm pr-check`, without deployments.
+
+`-Phase All` is the normal lifecycle. `Deploy` retains resources and state;
+a caller can renew its sign-ins before `Complete`, which never compiles or
+submits another deployment. Completion requires the explicit state-matching
+subscription and tenant and fingerprints the selected `main.test.bicep`,
+owning `main.bicep`, discovered assertions and case-local `post.ps1`. This
+is not a fingerprint of every imported helper or the whole checkout.
+Save completion-started state before running authored scripts; interrupted
+or repeated completion must use `avm test cleanup`, not replay those scripts.
+`-KeepResources` runs assertions but skips both the post hook and cleanup.
+
+The private version-1 JSON state allows only target identifiers, status,
+verified group ownership tags and the small amount of resource metadata
+needed after deletion, plus the case path, source fingerprint and
+completion-started marker. It never stores credentials, parameter values,
+deployment outputs or raw Azure responses. Create a unique local temporary
+file by default; an explicit path resolves against the caller's PowerShell
+location. Never overwrite an existing file during creation. Updates use a
+flushed, exclusive sibling temporary file followed by an atomic replacement,
+and retain the last valid state if serialization fails. State survives
+temporary-template and parameter-file cleanup.
+
+Capture post-removal metadata before deleting resources or their parents.
+If the native SDK reports a plain, unclassified named-group failure without
+HTTP metadata, verify only that group with an exact ARM GET in the selected
+subscription. Treat it as absent only for HTTP 404 with the structured
+`ResourceGroupNotFound` code. Never infer absence from error-message text,
+or probe after typed authorization, transport, timeout or cancellation errors.
+Persist successful removal before post-processing so recovery retries only
+unfinished work. Partial discovery, unverified ownership and exhausted
+cleanup remain explicit failures with pending targets; cancellation and
+context-restoration failure must not enter the ordinary retry loop. Pending
+cleanup stops later cases. `avm test cleanup` requires matching explicit
+subscription and tenant IDs, needs no source checkout and never runs authored
+scripts. Completed state is a local no-op. Resume only trusted state files.
+An Actions caller may upload the non-secret state as an artifact. Recovery
+from that artifact requires a completed upload; runner loss beforehand
+still relies on the reaper or operator cleanup, not a new external journal.
+An artifact must also be retained when a deployment phase fails after
+creating state; a failing command does not mean no resources exist.
+
 ### Files inside the user's home
 
 The module's own state lives under per-user folders per §7. It never drops dotfiles directly in `$HOME` (no `~/.avmrc`, no `~/.avm/`). The `$HOME/.config/avm`, `$HOME/.cache/avm`, etc. layout on Linux is the only Unix-style hidden state.

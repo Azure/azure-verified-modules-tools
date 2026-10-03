@@ -6,31 +6,34 @@ function Invoke-AvmBicepTestE2e {
         [pscustomobject] $Context,
 
         [switch] $AllowPathFallback,
-
         [AllowEmptyCollection()]
         [string[]] $Example = @(),
-
         [switch] $List,
-
         [switch] $Recurse,
-
         [string] $SubscriptionId,
-
         [string] $TenantId,
-
         [string] $ManagementGroupId,
-
         [string] $Location,
-
+        [string] $ResourceLocation,
         [string] $ResourceGroupPrefix,
-
         [string] $TokenFile,
-
         [System.Collections.IDictionary] $Tokens = @{},
-
         [string] $ParameterFile,
-
-        [System.Collections.IDictionary] $Parameters = @{}
+        [System.Collections.IDictionary] $Parameters = @{},
+        [switch] $UseCiInputs,
+        [string] $TestSubscriptionIds,
+        [ValidateRange(0, [int]::MaxValue)]
+        [int] $SubscriptionSelectionSeed = 0,
+        [ValidateRange(0, [int]::MaxValue)]
+        [int] $SubscriptionJobIndex = 0,
+        [ValidateSet('All', 'Deploy', 'Complete')]
+        [string] $Phase = 'All',
+        [string] $CleanupStatePath,
+        [switch] $KeepResources,
+        [ValidateRange(1, 3)]
+        [int] $DeploymentRetryLimit = 3,
+        [ValidateRange(1, 3)]
+        [int] $ValidationRetryLimit = 3
     )
 
     Set-StrictMode -Version 3.0
@@ -39,455 +42,190 @@ function Invoke-AvmBicepTestE2e {
     if ($Context.Ecosystem -ne 'bicep') {
         throw [System.ArgumentException]::new('Bicep end-to-end tests require a Bicep module context.')
     }
-    $discovered = @(Get-AvmBicepTestCase -Context $Context -Recurse:$Recurse)
+    $discovered = @(Get-AvmBicepTestCase -Context $Context -Recurse:($Recurse -or $Phase -eq 'Complete'))
     if ($List) {
-        $names = @($discovered | Where-Object { -not $_.Ignored } |
-                ForEach-Object { $_.RelativeDirectory })
-        return ('[{0}]' -f (($names | ForEach-Object {
-                        ConvertTo-Json -InputObject $_ -Compress
-                    }) -join ','))
+        $names = @($discovered | Where-Object { -not $_.Ignored } | ForEach-Object { $_.RelativeDirectory })
+        return ConvertTo-Json -InputObject $names -Compress
     }
-
-    $cases = @(Select-AvmBicepTestCase -Cases $discovered -Example $Example)
-    $ignored = @($discovered | Where-Object { $_.Ignored }).Count
-    $empty = [ordered]@{
-        Engine           = 'bicep'
-        Tool             = 'az'
-        ToolPath         = $null
-        ToolSource       = 'PATH'
-        Status           = 'skipped'
-        FilesProcessed   = 0
-        IgnoredFiles     = $ignored
-        RunsTotal        = 0
-        RunsPassed       = 0
-        RunsFailed       = 0
-        RunsSkipped      = 0
-        AssertionResults = @()
-        PostResults      = @()
-        CleanupPending   = @()
-        WhatIfChanges    = @()
-        Issues           = @()
+    $state = $null
+    if ($Phase -eq 'Complete') {
+        if ([string]::IsNullOrWhiteSpace($CleanupStatePath)) {
+            throw [AvmConfigurationException]::new('Bicep completion requires -CleanupStatePath.')
+        }
+        $state = Read-AvmBicepCleanupState -Path $CleanupStatePath
+        if (-not $state.Contains('case')) {
+            throw [AvmConfigurationException]::new('This cleanup state has no case to complete. Use avm test cleanup instead.')
+        }
+        $cases = @($discovered | Where-Object { $_.RelativePath -ceq $state['case']['path'] -and -not $_.Ignored })
+        if ($cases.Count -ne 1) {
+            throw [AvmConfigurationException]::new('The saved case is missing or ignored in this checkout. Use avm test cleanup without running source.')
+        }
+        if ($Example.Count -gt 0 -or $UseCiInputs -or $Tokens.psbase.Count -gt 0 -or $Parameters.psbase.Count -gt 0 -or
+            $TokenFile -or $ParameterFile -or $TestSubscriptionIds -or $ResourceLocation -or $ResourceGroupPrefix -or $ManagementGroupId) {
+            throw [AvmConfigurationException]::new('Complete selects its case and deployment inputs from state; do not supply deployment-only options.')
+        }
+        if ($Location -and ($Location -replace '\s', '').ToLowerInvariant() -cne $state['case']['metadataLocation']) {
+            throw [AvmConfigurationException]::new('The completion location must match the saved deployment location.')
+        }
+        $Location = $state['case']['metadataLocation']
+    }
+    else {
+        $cases = @(Select-AvmBicepTestCase -Cases $discovered -Example $Example)
+    }
+    $result = [ordered]@{
+        Engine = 'bicep'; Tool = 'Az.Resources'; ToolPath = $null; ToolSource = 'PowerShell module'
+        BicepTool = $null; Phase = $Phase; Status = 'skipped'; FilesProcessed = 0
+        IgnoredFiles = @($discovered | Where-Object Ignored).Count
+        RunsTotal = 0; RunsPassed = 0; RunsFailed = 0; RunsSkipped = $cases.Count
+        AssertionResults = @(); PostResults = @(); CleanupPending = @(); CleanupStatePaths = @()
+        CleanupDeferred = $false; WhatIfChanges = @(); Issues = @()
     }
     if ($cases.Count -eq 0) {
-        Write-AvmLog 'no runnable Bicep tests/e2e examples found' -Level Warning
-        return [pscustomobject]$empty
+        Write-AvmLog -Level Warning -Message 'No runnable Bicep tests/e2e examples found.'
+        return [pscustomobject]$result
     }
-
-    $subscription = [guid]::Empty
-    if (-not [guid]::TryParse($SubscriptionId, [ref]$subscription) -or
-        $subscription -eq [guid]::Empty) {
-        throw [AvmConfigurationException]::new(
-            'Bicep e2e requires an explicit, nonempty GUID -SubscriptionId.')
+    if ($CleanupStatePath -and $cases.Count -ne 1) {
+        throw [AvmConfigurationException]::new('An explicit -CleanupStatePath requires exactly one selected Bicep case.')
     }
-    $SubscriptionId = $subscription.ToString('D')
-    if ([string]::IsNullOrWhiteSpace($Location)) {
-        throw [AvmConfigurationException]::new('Bicep e2e requires an explicit -Location.')
+    if ($ParameterFile -and $Parameters.psbase.Count -gt 0) {
+        throw [AvmConfigurationException]::new('Use either -ParameterFile or -Parameters, not both.')
     }
-    $prefixTooLong = -not [string]::IsNullOrWhiteSpace($ResourceGroupPrefix) -and $ResourceGroupPrefix.Length -gt 57
-    $prefixHasInvalidCharacters = $ResourceGroupPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$'
-    if (-not [string]::IsNullOrWhiteSpace($ResourceGroupPrefix) -and
-        ($prefixTooLong -or $prefixHasInvalidCharacters)) {
-        throw [AvmConfigurationException]::new(
-            'Bicep e2e requires a safe -ResourceGroupPrefix (1-57 letters, digits, underscores, dots or hyphens).')
+    $ci = Get-AvmBicepWorkflowEnvironment -Enabled:$UseCiInputs
+    if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+        $SubscriptionId = $ci.SubscriptionId
+        if ([string]::IsNullOrEmpty($TestSubscriptionIds)) { $TestSubscriptionIds = $ci.PoolJson }
     }
-    if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
-        $tenant = [guid]::Empty
-        if (-not [guid]::TryParse($TenantId, [ref]$tenant) -or $tenant -eq [guid]::Empty) {
-            throw [AvmConfigurationException]::new(
-                'Bicep higher-scope e2e requires an explicit, nonempty GUID -TenantId.')
-        }
-        $TenantId = $tenant.ToString('D')
+    if ([string]::IsNullOrWhiteSpace($TenantId)) { $TenantId = $ci.TenantId }
+    $tenant = [guid]::Empty
+    if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
+        throw [AvmConfigurationException]::new('Bicep e2e requires an explicit, nonempty GUID -TenantId.')
     }
-    $groupHasInvalidCharacters = $ManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$'
-    $groupHasInvalidSuffix = -not [string]::IsNullOrWhiteSpace($ManagementGroupId) -and $ManagementGroupId.EndsWith('.')
-    if (-not [string]::IsNullOrWhiteSpace($ManagementGroupId) -and
-        ($groupHasInvalidCharacters -or $groupHasInvalidSuffix)) {
-        throw [AvmConfigurationException]::new(
-            'Bicep e2e -ManagementGroupId must be a safe group name, not an ARM resource ID.')
+    $selection = Select-AvmBicepWorkflowSubscription -PoolJson $TestSubscriptionIds `
+        -FallbackSubscriptionId $SubscriptionId -RandomSeed $SubscriptionSelectionSeed -CaseIndex $SubscriptionJobIndex
+    if ($null -ne $state -and ($state['subscriptionId'] -ine $selection.SubscriptionId -or $state['tenantId'] -ine $TenantId)) {
+        throw [AvmConfigurationException]::new('Completion state does not match the explicitly selected subscription and tenant.')
+    }
+    $Location = ($Location -replace '\s', '').ToLowerInvariant()
+    if ($Location -cnotmatch '^[a-z0-9]+$') {
+        throw [AvmConfigurationException]::new('Bicep e2e requires an explicit Azure -Location for deployment metadata.')
+    }
+    if ($ResourceGroupPrefix -and ($ResourceGroupPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,56}$' -or
+            $ResourceGroupPrefix.EndsWith('.'))) {
+        throw [AvmConfigurationException]::new('Bicep e2e requires a safe -ResourceGroupPrefix of at most 57 characters.')
+    }
+    if ($ManagementGroupId -and ($ManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $ManagementGroupId.EndsWith('.') -or $ManagementGroupId -in @('.', '..'))) {
+        throw [AvmConfigurationException]::new('Bicep e2e -ManagementGroupId must be a safe group name, not an ARM resource ID.')
     }
     if (-not $PSCmdlet.ShouldProcess(
-            "$($cases.Count) Bicep example(s) in subscription $SubscriptionId",
-            'Deploy Bicep tests and remove only verified test resources')) {
-        $empty.RunsSkipped = $cases.Count
-        return [pscustomobject]$empty
+            "$($cases.Count) Bicep case(s) in the explicitly selected test targets", "Run Bicep e2e phase $Phase")) {
+        return [pscustomobject]$result
     }
-
-    $bicep = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
-    $az = Get-Command -Name 'az' -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $az) {
-        throw [AvmConfigurationException]::new('Azure CLI (az) is required for Bicep e2e tests.')
-    }
+    Assert-AvmBicepAzureDependency
+    $az = Get-Command -Name az -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context
-    $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root `
-        -SubscriptionId $SubscriptionId -TokenFile $TokenFile -Tokens $Tokens
-    $runDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) `
-        -ChildPath ('avm-bicep-e2e-{0}' -f [guid]::NewGuid().ToString('N'))
-    $null = New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop
-    $compiled = [System.Collections.Generic.List[object]]::new()
-    $issues = [System.Collections.Generic.List[object]]::new()
-    $changes = [System.Collections.Generic.List[object]]::new()
-    $pending = [System.Collections.Generic.List[string]]::new()
-    $assertions = [System.Collections.Generic.List[object]]::new()
-    $postResults = [System.Collections.Generic.List[object]]::new()
-    $passed = 0
-    $failed = 0
-    $attempted = 0
-    $stopForCleanup = $false
-    try {
-        $parameterPath = $null
-        for ($index = 0; $index -lt $cases.Count; $index++) {
-            $path = Join-Path $runDirectory ('{0}.json' -f $index)
-            $caseRunId = [guid]::NewGuid().ToString('N')
-            $scopedTokens = if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
-                Get-AvmBicepTestTokenMap -Root $Context.Root `
-                    -SubscriptionId $SubscriptionId -TenantId $TenantId `
-                    -ManagementGroupId $ManagementGroupId -RunId $caseRunId `
-                    -TokenFile $TokenFile -Tokens $Tokens
-            }
-            else {
-                $null
-            }
-            $template = New-AvmBicepTestTemplate -SourcePath $cases[$index].Path `
-                -DestinationPath $path -BicepPath $bicep.Path -Tokens $tokenMap `
-                -ScopedTokens $scopedTokens -RequireScopedTokens `
-                -OwnedGroupRunId $caseRunId -SourceRoot $Context.Root -Confirm:$false
-            $caseParameterPath = $null
-            if ($template.Scope -eq 'group') {
-                Assert-AvmBicepTestIsolation -Template $template.Template `
-                    -SourcePath $cases[$index].RelativePath
-            }
-            else {
-                if ($template.Scope -eq 'mg' -and
-                    [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
-                    throw [AvmConfigurationException]::new(
-                        "Bicep e2e test '$($cases[$index].RelativePath)' requires -ManagementGroupId.")
-                }
-                Assert-AvmBicepScopedTestIsolation -Template $template.Template `
-                    -Scope $template.Scope -SourcePath $cases[$index].RelativePath `
-                    -OwnedGroupRunId $caseRunId
-                if ($template.HasGroupDeployment) {
-                    throw [AvmConfigurationException]::new(
-                        "Bicep e2e test '$($cases[$index].RelativePath)' deploys into a resource group from subscription scope; Create is refused until crash recovery and owned teardown are implemented.")
-                }
-                $caseParameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
-                    -DestinationPath (Join-Path $runDirectory ('{0}-parameters.json' -f $index)) `
-                    -Tokens $scopedTokens -ParameterFile $ParameterFile `
-                    -Parameters $Parameters -Confirm:$false
-            }
-            $assertionFiles = @(Get-AvmBicepE2eAssertionFile -CasePath $cases[$index].Path)
-            $compiled.Add([pscustomobject]@{
-                    Case           = $cases[$index]
-                    Scope          = $template.Scope
-                    RunId          = $caseRunId
-                    DeploymentName = 'avm-e2e-{0}' -f $caseRunId
-                    TemplatePath   = $path
-                    Template       = $template.Template
-                    ParameterPath  = $caseParameterPath
-                    AssertionFiles = [string[]]$assertionFiles
-                })
+    if ($Phase -eq 'Complete') {
+        $item = [pscustomobject]@{
+            Case = $cases[0]; Scope = $state['case']['scope']
+            AssertionFiles = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $cases[0].Path)
         }
-        if (@($compiled | Where-Object { $_.Scope -eq 'group' }).Count -gt 0) {
-            if ([string]::IsNullOrWhiteSpace($ResourceGroupPrefix)) {
-                throw [AvmConfigurationException]::new(
-                    'Resource-group Bicep e2e tests require a safe -ResourceGroupPrefix.')
-            }
-            $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
-                -DestinationPath (Join-Path $runDirectory 'parameters.json') `
-                -Tokens $tokenMap -ParameterFile $ParameterFile `
-                -Parameters $Parameters -Confirm:$false
+        $runs = @(Complete-AvmBicepTestCase -Item $item -StatePath $CleanupStatePath `
+                -SubscriptionId $selection.SubscriptionId -TenantId $tenant -RepositoryRoot $repoRoot `
+                -AzPath $az.Source -KeepResources:$KeepResources -Confirm:$false)
+    }
+    else {
+        $bicep = Resolve-AvmTool -Name bicep -AllowPathFallback:$AllowPathFallback
+        $result.BicepTool = "bicep/$($bicep.Version)"
+        $runDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-bicep-e2e-{0}' -f [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop
+        if (-not $IsWindows) {
+            [System.IO.File]::SetUnixFileMode($runDirectory,
+                [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute)
         }
-
-        foreach ($item in $compiled) {
-            if ($stopForCleanup) {
-                break
-            }
-            if ($item.Scope -ne 'group') {
-                $run = Invoke-AvmBicepScopedTestE2eCase -Item $item `
-                    -AzPath $az.Source -SubscriptionId $SubscriptionId -TenantId $TenantId `
-                    -ManagementGroupId $ManagementGroupId -Location $Location `
-                    -RepositoryRoot $repoRoot -WorkingDirectory $Context.Root -Confirm:$false
-                $attempted += $run.Attempted
-                if ($run.Passed) {
-                    $passed++
+        $prepared = [System.Collections.Generic.List[object]]::new()
+        $runs = [System.Collections.Generic.List[object]]::new()
+        try {
+            for ($index = 0; $index -lt $cases.Count; $index++) {
+                $case = $cases[$index]
+                $subscription = Select-AvmBicepWorkflowSubscription -PoolJson $TestSubscriptionIds `
+                    -FallbackSubscriptionId $SubscriptionId -RandomSeed $SubscriptionSelectionSeed `
+                    -CaseIndex ($SubscriptionJobIndex + $index)
+                $runId = [guid]::NewGuid().ToString('N')
+                $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
+                    -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $runId `
+                    -TokenFile $TokenFile -Tokens $Tokens -DefaultTokens $ci.Tokens
+                $tokenLocation = if ($tokenMap.ContainsKey('resourceLocation')) { $tokenMap['resourceLocation'] } else { '' }
+                $null = $tokenMap.Remove('resourceLocation')
+                $templatePath = Join-Path $runDirectory ("$index.json")
+                $template = New-AvmBicepTestTemplate -SourcePath $case.Path -DestinationPath $templatePath `
+                    -BicepPath $bicep.Path -Tokens $tokenMap -DeferResourceLocation -Confirm:$false
+                if ($template.Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($ResourceGroupPrefix)) {
+                    throw [AvmConfigurationException]::new('Resource-group Bicep e2e cases require -ResourceGroupPrefix.')
                 }
-                if ($run.Failed) {
-                    $failed++
+                if ($template.Scope -eq 'mg' -and [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
+                    throw [AvmConfigurationException]::new('Management-group Bicep e2e cases require -ManagementGroupId.')
                 }
-                foreach ($entry in $run.AssertionResults) {
-                    $assertions.Add($entry)
-                }
-                foreach ($entry in $run.PostResults) {
-                    $postResults.Add($entry)
-                }
-                foreach ($entry in $run.WhatIfChanges) {
-                    $changes.Add($entry)
-                }
-                foreach ($entry in $run.Issues) {
-                    $issues.Add($entry)
-                }
-                foreach ($id in $run.CleanupPending) {
-                    $pending.Add($id)
-                }
-                if ($run.CleanupPending.Count -gt 0) {
-                    $stopForCleanup = $true
-                }
-                continue
-            }
-            $runId = $item.RunId
-            $groupName = '{0}-{1}' -f $ResourceGroupPrefix, $runId
-            $deploymentName = $item.DeploymentName
-            $attemptedGroupCreation = $false
-            $deploymentAttempted = $false
-            $previewPlan = $null
-            $casePassed = $false
-            $armInput = @{
-                AzPath            = $az.Source
-                TemplatePath      = $item.TemplatePath
-                Scope             = 'group'
-                SubscriptionId    = $SubscriptionId
-                DeploymentName    = $deploymentName
-                WorkingDirectory  = $Context.Root
-                ResourceGroupName = $groupName
-                ParameterPath     = $parameterPath
-            }
-            try {
-                if (Test-AvmBicepResourceGroup -AzPath $az.Source `
-                        -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
-                        -WorkingDirectory $Context.Root) {
-                    throw [AvmConfigurationException]::new(
-                        "Refusing to use existing resource group '$groupName' for Bicep e2e.")
-                }
-                $attemptedGroupCreation = $true
-                $attempted++
-                $created = Invoke-AvmProcess -FilePath $az.Source -ArgumentList @(
-                    'group', 'create', '--name', $groupName, '--location', $Location,
-                    '--subscription', $SubscriptionId, '--tags', ('avm-e2e-run-id=' + $runId),
-                    '--output', 'json'
-                ) -WorkingDirectory $Context.Root -IgnoreExitCode
-                if ($created.ExitCode -ne 0) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'group-create-failed' -Message (Add-AvmProcessFailureDetail `
-                            -Message "Failed to create disposable group '$groupName' (exit $($created.ExitCode))." `
-                            -StdErr $created.StdErr)
-                    $failed++
-                    continue
-                }
-                if (-not (Test-Json -Json ([string]$created.StdOut) -ErrorAction SilentlyContinue)) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'group-create-invalid' -Message "Cannot verify newly created group '$groupName': Azure CLI returned invalid JSON."
-                    $failed++
-                    continue
-                }
-                $group = [string]$created.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-                $expectedId = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $groupName
-                if ($group -isnot [System.Collections.IDictionary] -or
-                    -not [string]::Equals([string]$group['id'], $expectedId, [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $group['tags'] -isnot [System.Collections.IDictionary] -or
-                    $group['tags']['avm-e2e-run-id'] -cne $runId) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'group-create-unverified' -Message "Cannot verify ownership of newly created group '$groupName'."
-                    $failed++
-                    continue
-                }
-
-                $validated = Invoke-AvmBicepArmOperation @armInput -Operation Validate
-                if ($validated.ExitCode -ne 0) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'validate-failed' -Message (Add-AvmProcessFailureDetail `
-                            -Message "ARM validate failed in '$groupName' (exit $($validated.ExitCode))." `
-                            -StdErr $validated.StdErr)
-                    $failed++
-                    continue
-                }
-                $preview = Invoke-AvmBicepArmOperation @armInput -Operation WhatIf
-                if ($preview.ExitCode -ne 0) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'what-if-failed' -Message (Add-AvmProcessFailureDetail `
-                            -Message "ARM what-if failed in '$groupName' (exit $($preview.ExitCode))." `
-                            -StdErr $preview.StdErr)
-                    $failed++
-                    continue
-                }
-                try {
-                    $previewPlan = Read-AvmBicepTestGroupWhatIf `
-                        -Output ([string]$preview.StdOut) -File $item.Case.RelativePath `
-                        -Template $item.Template -SubscriptionId $SubscriptionId `
-                        -ResourceGroupName $groupName -RunId $runId
-                }
-                catch [AvmProcessException] {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'what-if-invalid' -Message $_.Exception.Message
-                    $failed++
-                    continue
-                }
-                catch [AvmConfigurationException] {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'what-if-unsafe' -Message $_.Exception.Message
-                    $failed++
-                    continue
-                }
-                foreach ($change in $previewPlan.Changes) {
-                    $changes.Add($change)
-                }
-                $deploymentAttempted = $true
-                $deployed = Invoke-AvmBicepArmOperation @armInput -Operation Create
-                if ($deployed.ExitCode -ne 0) {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'deployment-failed' -Message (Add-AvmProcessFailureDetail `
-                            -Message "ARM deployment failed in '$groupName' (exit $($deployed.ExitCode))." `
-                            -StdErr $deployed.StdErr)
-                    $failed++
-                    continue
-                }
-                try {
-                    Assert-AvmBicepDeploymentSucceeded -Output ([string]$deployed.StdOut) `
-                        -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
-                        -DeploymentName $deploymentName
-                }
-                catch [AvmProcessException] {
-                    Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                        -Code 'deployment-unverified' -Message $_.Exception.Message
-                    $failed++
-                    continue
-                }
-                $assertionResult = Invoke-AvmBicepTestE2eAssertion -Item $item `
-                    -DeploymentName $deploymentName -DeploymentOutput ([string]$deployed.StdOut) `
-                    -RepositoryRoot $repoRoot -Issues $issues
-                $assertions.Add($assertionResult)
-                if ($assertionResult.Status -eq 'fail') {
-                    $failed++
-                    continue
-                }
-                $passed++
-                $casePassed = $true
-            }
-            catch [AvmProcessException] {
-                if (-not $attemptedGroupCreation) {
-                    throw
-                }
-                Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                    -Code 'process-failed' -Message "Bicep e2e operation failed in '$groupName': $($_.Exception.Message)"
-                $failed++
-            }
-            catch [System.TimeoutException] {
-                if (-not $attemptedGroupCreation) {
-                    throw
-                }
-                Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                    -Code 'process-timeout' -Message "Bicep e2e operation timed out in '$groupName': $($_.Exception.Message)"
-                $failed++
-            }
-            finally {
-                if ($attemptedGroupCreation) {
-                    try {
-                        if ($deploymentAttempted) {
-                            $post = Invoke-AvmBicepE2ePostHook -Item $item `
-                                -ModuleRoot $Context.Root -SubscriptionId $SubscriptionId `
-                                -TenantId $TenantId -ResourceGroupName $groupName `
-                                -Location $Location -DeploymentName $deploymentName `
-                                -RunId $runId -Issues $issues
-                            $postResults.Add($post)
-                            if ($post.Status -eq 'fail' -and $casePassed) {
-                                $passed--
-                                $failed++
-                                $casePassed = $false
-                            }
-                        }
-                    }
-                    finally {
-                        try {
-                            $cleanup = Remove-AvmBicepTestResourceGroup -AzPath $az.Source `
-                                -SubscriptionId $SubscriptionId -ResourceGroupName $groupName `
-                                -RunId $runId -WorkingDirectory $Context.Root `
-                                -ExpectCreated -Plan $previewPlan -DeploymentName $deploymentName `
-                                -DeploymentAttempted:$deploymentAttempted
-                        }
-                        catch [AvmProcessException] {
-                            $cleanup = [pscustomobject]@{
-                                Cleaned = $false; Pending = @(); Message = $_.Exception.Message
-                            }
-                        }
-                        catch [System.TimeoutException] {
-                            $cleanup = [pscustomobject]@{
-                                Cleaned = $false; Pending = @(); Message = $_.Exception.Message
-                            }
-                        }
-                        if (-not $cleanup.Cleaned) {
-                            foreach ($id in $cleanup.Pending) {
-                                if (-not $pending.Contains($id)) {
-                                    $pending.Add($id)
-                                }
-                            }
-                            $pending.Add($groupName)
-                            $stopForCleanup = $true
-                            $message = "$($cleanup.Message) Resource group '$groupName' may require manual cleanup."
-                            Add-AvmBicepTestIssue -Issues $issues -File $item.Case.RelativePath `
-                                -Code 'cleanup-failed' -Message $message
-                            Write-AvmLog $message -Level Error
-                            if ($casePassed) {
-                                $passed--
-                                $failed++
-                            }
-                        }
+                $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
+                    -DestinationPath (Join-Path $runDirectory ("$index-parameters.json")) -Tokens $tokenMap `
+                    -ParameterFile $ParameterFile -DeferResourceLocation -Confirm:$false
+                $nativeParameters = Get-AvmBicepNativeParameter -ParameterPath $parameterPath -Parameters $Parameters
+                $references = @{}
+                foreach ($key in @($nativeParameters.psbase.Keys)) {
+                    if ($nativeParameters[$key] -is [hashtable] -and $nativeParameters[$key].ContainsKey('reference')) {
+                        $references[$key] = $nativeParameters[$key]
+                        $nativeParameters.Remove($key)
                     }
                 }
+                $resourceType = ''
+                $metadataPath = Join-Path $case.ModuleRoot 'metadata.json'
+                if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+                    $metadata = ConvertFrom-AvmMetadataJson -Json (Read-AvmMetadataJson -Path $metadataPath)
+                    if (Test-AvmMetadataResourceType -CanonicalType ([string]$metadata['canonicalType'])) {
+                        $resourceType = $metadata['canonicalType']
+                    }
+                    elseif ($metadata['canonicalType'] -cne 'helper' -and
+                        (Get-AvmMetadataModuleType -Context $Context -Path $case.ModuleRoot -Metadata $metadata) -eq 'resource') {
+                        throw [AvmConfigurationException]::new("Resource module metadata has an invalid canonicalType: $metadataPath")
+                    }
+                }
+                $prepared.Add([pscustomobject]@{
+                        Case = $case; Scope = $template.Scope; SubscriptionId = $subscription.SubscriptionId
+                        RunId = $runId; TemplatePath = $templatePath; Template = $template.Template
+                        TemplateContent = [System.IO.File]::ReadAllText($templatePath)
+                        Parameters = $nativeParameters; ReferenceParameters = $references
+                        Tokens = $tokenMap; TokenResourceLocation = $tokenLocation; ResourceType = $resourceType
+                        SourceHash      = Get-AvmBicepTestSourceHash -Case $case
+                        AssertionFiles  = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $case.Path)
+                    })
+            }
+            foreach ($item in $prepared) {
+                $run = Invoke-AvmBicepNativeTestCase -Item $item -TenantId $tenant -Location $Location `
+                    -RepositoryRoot $repoRoot -AzPath $az.Source -CiInput $ci -ManagementGroupId $ManagementGroupId `
+                    -ResourceGroupPrefix $ResourceGroupPrefix -ResourceLocation $ResourceLocation -StatePath $CleanupStatePath `
+                    -Phase $Phase -DeploymentRetryLimit $DeploymentRetryLimit -ValidationRetryLimit $ValidationRetryLimit `
+                    -KeepResources:$KeepResources -Confirm:$false
+                $runs.Add($run)
+                if ($run.CleanupPending.Count -gt 0) { break }
             }
         }
-    }
-    finally {
-        foreach ($item in @(Get-ChildItem -LiteralPath $runDirectory -File -Force)) {
-            Remove-Item -LiteralPath $item.FullName -Force
+        finally {
+            foreach ($file in @(Get-ChildItem -LiteralPath $runDirectory -File -Force)) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+            }
+            Remove-Item -LiteralPath $runDirectory -Force -ErrorAction Stop
         }
-        Remove-Item -LiteralPath $runDirectory -Force
     }
-
-    return [pscustomobject][ordered]@{
-        Engine           = 'bicep'
-        Tool             = 'az'
-        ToolPath         = $az.Source
-        ToolSource       = 'PATH'
-        BicepTool        = "bicep/$($bicep.Version)"
-        Status           = if ($failed -gt 0 -or $pending.Count -gt 0) { 'fail' } elseif ($passed -gt 0) { 'pass' } else { 'skipped' }
-        FilesProcessed   = $attempted
-        IgnoredFiles     = $ignored
-        RunsTotal        = $attempted
-        RunsPassed       = $passed
-        RunsFailed       = $failed
-        RunsSkipped      = $cases.Count - $attempted
-        AssertionResults = $assertions.ToArray()
-        PostResults      = $postResults.ToArray()
-        CleanupPending   = $pending.ToArray()
-        WhatIfChanges    = $changes.ToArray()
-        Issues           = $issues.ToArray()
-    }
-}
-
-function Add-AvmBicepTestIssue {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [System.Collections.Generic.List[object]] $Issues,
-
-        [Parameter(Mandatory)]
-        [string] $File,
-
-        [Parameter(Mandatory)]
-        [string] $Code,
-
-        [Parameter(Mandatory)]
-        [string] $Message,
-
-        [int] $Line = 0
-    )
-
-    $Issues.Add([pscustomobject][ordered]@{
-            File     = $File
-            Line     = $Line
-            Column   = 0
-            Severity = 'error'
-            Code     = "avm.bicep.e2e-$Code"
-            Message  = $Message
-        })
+    $result.FilesProcessed = $runs.Count
+    $result.RunsTotal = $runs.Count
+    $result.RunsPassed = @($runs | Where-Object Status -EQ 'pass').Count
+    $result.RunsFailed = @($runs | Where-Object Status -EQ 'fail').Count
+    $result.RunsSkipped = $cases.Count - $runs.Count
+    $result.AssertionResults = @($runs | ForEach-Object { $_.AssertionResults })
+    $result.PostResults = @($runs | ForEach-Object { $_.PostResults })
+    $result.CleanupPending = @($runs | ForEach-Object { $_.CleanupPending } | Select-Object -Unique)
+    $result.CleanupStatePaths = @($runs | ForEach-Object { $_.StatePath })
+    $result.CleanupDeferred = @($runs | Where-Object CleanupDeferred).Count -gt 0
+    $result.Issues = @($runs | ForEach-Object { $_.Issues })
+    $result.Status = if ($result.RunsFailed -gt 0 -or $result.CleanupPending.Count -gt 0) { 'fail' } else { 'pass' }
+    return [pscustomobject]$result
 }

@@ -2,1311 +2,229 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
 BeforeAll {
-    $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
-        -SourceManifest (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
-    $script:subscription = '00000000-0000-0000-0000-000000000001'
-    $script:groupSchema = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+    $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    & (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
+    . (Join-Path $PSScriptRoot '..' 'Helpers' 'BicepNativeWorkflow.ps1')
 }
+AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
-AfterAll {
-    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
-}
-
-Describe 'Component: Bicep isolated end-to-end deployments' -Tag Component {
+Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
     BeforeEach {
-        $script:root = Join-Path $TestDrive ('bicep-e2e-' + [guid]::NewGuid().ToString('N'))
-        $caseDir = Join-Path $script:root 'tests' 'e2e' 'defaults'
-        $null = New-Item -ItemType Directory -Path $caseDir -Force
-        Set-Content -LiteralPath (Join-Path $script:root 'main.bicep') `
-            -Value 'param name string' -Encoding utf8NoBOM
-        $script:sourcePath = Join-Path $caseDir 'main.test.bicep'
-        Set-Content -LiteralPath $script:sourcePath `
-            -Value "param namePrefix string = 'demo'" -Encoding utf8NoBOM
-
-        $script:state = [pscustomobject]@{
-            Schema              = $script:groupSchema
-            Resources           = @(@{ type = 'Microsoft.Storage/storageAccounts'; name = 'demo' })
-            Groups              = @{}
-            LiveResources       = @{}
-            ForeignContents     = @()
-            Calls               = [System.Collections.Generic.List[object]]::new()
-            GroupExistsOutput   = $null
-            CreateExit          = 0
-            CreateOutput        = $null
-            ShowExit            = 0
-            ShowMismatch        = $false
-            DeleteExit          = 0
-            DeletePersists      = $false
-            ResourceDeleteExit  = 0
-            ResourceDeletes     = 0
-            ContentExit         = 0
-            ContentOutput       = $null
-            ForeignContentMode  = ''
-            ForeignAfterDelete  = $false
-            GroupTagAfterDelete = ''
-            ChildTags           = $null
-            CreateTimeout       = $false
-            FailOperation       = ''
-            WhatIfOutput        = $null
-            WhatIfType          = 'Create'
-            DeploymentState     = 'Succeeded'
-            HistoryState        = 'Succeeded'
-            MissingHistory      = $false
-            MissingOperations   = $false
-            OperationKind       = 'Create'
-            OperationState      = 'Succeeded'
-            DuplicateOperation = $false
-            ForeignOperation    = $false
-            DeploymentOutput    = $null
-            DeploymentOutputs   = @{ account = @{ type = 'String'; value = 'deployed-account' } }
-            PesterResult        = $null
-            PesterExit          = 0
-            PesterTimeout       = $false
-            PesterInput         = $null
-            PostExit            = 0
-            PostTimeout         = $false
-            PostStartFails      = $false
-            ResourceIdOverride  = $null
-            CompiledJson        = ''
-            TemporaryFile       = ''
-            ParameterJson       = ''
-            ParameterPath       = ''
-        }
-        InModuleScope 'Avm.Authoring' -Parameters @{ State = $script:state; S = $script:subscription } {
-            param($State, $S)
-            $script:bicepE2eState = $State
-            $script:bicepE2eSubscription = $S
-            Mock Resolve-AvmTool {
-                [pscustomobject]@{ Name = 'bicep'; Path = 'fake-bicep'; Version = 'pinned'; Source = 'stub' }
-            }
-            Mock Get-Command {
-                [pscustomobject]@{ Source = 'fake-az' }
-            } -ParameterFilter { $Name -eq 'az' }
-            Mock Invoke-AvmProcess {
-                param($FilePath, $ArgumentList, $TimeoutSec, $WorkingDirectory, $EnvVars)
-                $script:bicepE2eState.Calls.Add([pscustomobject]@{
-                        FilePath         = $FilePath
-                        Arguments        = [string[]]$ArgumentList
-                        TimeoutSec       = $TimeoutSec
-                        WorkingDirectory = $WorkingDirectory
-                        EnvVars          = $EnvVars
-                    })
-                if ($FilePath -eq 'fake-bicep') {
-                    $template = @{
-                        '$schema' = $script:bicepE2eState.Schema
-                        resources = $script:bicepE2eState.Resources
-                    }
-                    return [pscustomobject]@{
-                        ExitCode = 0
-                        StdOut   = $template | ConvertTo-Json -Depth 20 -Compress
-                        StdErr   = ''
-                    }
-                }
-                if ($FilePath -eq [System.Environment]::ProcessPath) {
-                    $fileIndex = [array]::IndexOf($ArgumentList, '-File')
-                    if ([System.IO.Path]::GetFileName($ArgumentList[$fileIndex + 1]) -ceq 'post.ps1') {
-                        if ($script:bicepE2eState.PostStartFails) {
-                            throw [AvmProcessException]::new('Fake post hook start failure')
-                        }
-                        if ($script:bicepE2eState.PostTimeout) {
-                            throw [System.TimeoutException]::new('Fake post hook timeout')
-                        }
-                        return [pscustomobject]@{
-                            ExitCode = $script:bicepE2eState.PostExit; StdOut = ''; StdErr = ''
-                        }
-                    }
-                    $inputIndex = [array]::IndexOf($ArgumentList, '-InputPath')
-                    $resultIndex = [array]::IndexOf($ArgumentList, '-ResultPath')
-                    $script:bicepE2eState.PesterInput = Get-Content `
-                        -LiteralPath $ArgumentList[$inputIndex + 1] -Raw -Encoding utf8 |
-                        ConvertFrom-Json -AsHashtable
-                    if ($script:bicepE2eState.PesterTimeout) {
-                        throw [System.TimeoutException]::new('Fake Pester timeout')
-                    }
-                    if ($script:bicepE2eState.PesterExit -ne 0) {
-                        return [pscustomobject]@{
-                            ExitCode = 1; StdOut = ''; StdErr = 'Fake Pester setup error'
-                        }
-                    }
-                    $summary = if ($null -ne $script:bicepE2eState.PesterResult) {
-                        $script:bicepE2eState.PesterResult
-                    }
-                    else {
-                        @{
-                            Version = '5.7.1'; Total = 1; Passed = 1; Failed = 0
-                            Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
-                        }
-                    }
-                    [System.IO.File]::WriteAllText(
-                        $ArgumentList[$resultIndex + 1],
-                        ($summary | ConvertTo-Json -Depth 8 -Compress),
-                        [System.Text.UTF8Encoding]::new($false))
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-                }
-                $nameIndex = [array]::IndexOf($ArgumentList, '--name')
-                $name = if ($nameIndex -ge 0) { $ArgumentList[$nameIndex + 1] } else { '' }
-                if ($ArgumentList[0] -eq 'group') {
-                    switch ($ArgumentList[1]) {
-                        'exists' {
-                            $answer = if ($null -ne $script:bicepE2eState.GroupExistsOutput) {
-                                $script:bicepE2eState.GroupExistsOutput
-                            }
-                            else {
-                                $script:bicepE2eState.Groups.ContainsKey($name).ToString().ToLowerInvariant()
-                            }
-                            return [pscustomobject]@{ ExitCode = 0; StdOut = $answer; StdErr = '' }
-                        }
-                        'create' {
-                            $tagIndex = [array]::IndexOf($ArgumentList, '--tags')
-                            $runId = $ArgumentList[$tagIndex + 1].Substring('avm-e2e-run-id='.Length)
-                            $group = @{
-                                id   = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$name"
-                                name = $name
-                                type = 'Microsoft.Resources/resourceGroups'
-                                tags = @{ 'avm-e2e-run-id' = $runId }
-                            }
-                            $script:bicepE2eState.Groups[$name] = $group
-                            if ($script:bicepE2eState.CreateExit -ne 0) {
-                                return [pscustomobject]@{
-                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake resource group creation failure'
-                                }
-                            }
-                            $output = if ($null -ne $script:bicepE2eState.CreateOutput) {
-                                $script:bicepE2eState.CreateOutput
-                            }
-                            else { $group | ConvertTo-Json -Depth 8 -Compress }
-                            return [pscustomobject]@{ ExitCode = 0; StdOut = $output; StdErr = '' }
-                        }
-                        'show' {
-                            if ($script:bicepE2eState.ShowExit -ne 0) {
-                                return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Show failed' }
-                            }
-                            $group = $script:bicepE2eState.Groups[$name]
-                            if ($script:bicepE2eState.ShowMismatch) {
-                                $group = @{
-                                    id   = $group.id
-                                    name = $group.name
-                                    type = 'Microsoft.Resources/resourceGroups'
-                                    tags = @{ 'avm-e2e-run-id' = 'different-owner' }
-                                }
-                            }
-                            return [pscustomobject]@{
-                                ExitCode = 0; StdOut = $group | ConvertTo-Json -Depth 8 -Compress; StdErr = ''
-                            }
-                        }
-                        'delete' {
-                            if ($script:bicepE2eState.DeleteExit -ne 0) {
-                                return [pscustomobject]@{
-                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake group deletion failure'
-                                }
-                            }
-                            if (-not $script:bicepE2eState.DeletePersists) {
-                                $null = $script:bicepE2eState.Groups.Remove($name)
-                            }
-                            return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-                        }
-                    }
-                }
-                if ($ArgumentList[0] -eq 'resource') {
-                    $idIndex = [array]::IndexOf($ArgumentList, '--ids')
-                    $resourceId = if ($idIndex -ge 0) { $ArgumentList[$idIndex + 1] } else { '' }
-                    switch ($ArgumentList[1]) {
-                        'list' {
-                            if ($script:bicepE2eState.ContentExit -ne 0) {
-                                return [pscustomobject]@{
-                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake inventory failure'
-                                }
-                            }
-                            $contents = @($script:bicepE2eState.LiveResources.Values) +
-                                @($script:bicepE2eState.ForeignContents)
-                            if ($script:bicepE2eState.ForeignContentMode) {
-                                $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
-                                $groupName = $ArgumentList[$groupIndex + 1]
-                                if ($script:bicepE2eState.ForeignContentMode -eq 'duplicate') {
-                                    $contents += $script:bicepE2eState.LiveResources.Values |
-                                        Select-Object -First 1
-                                }
-                                else {
-                                    $foreignGroup = if ($script:bicepE2eState.ForeignContentMode -eq 'outside') {
-                                        'foreign-group'
-                                    }
-                                    else { $groupName }
-                                    $contents += @{
-                                        id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$foreignGroup/providers/Microsoft.Storage/storageAccounts/foreign"
-                                        type = 'Microsoft.Storage/storageAccounts'
-                                        name = 'foreign'
-                                    }
-                                }
-                            }
-                            if ($script:bicepE2eState.ForeignAfterDelete -and
-                                $script:bicepE2eState.ResourceDeletes -gt 0) {
-                                $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
-                                $groupName = $ArgumentList[$groupIndex + 1]
-                                $contents += @{
-                                    id = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Storage/storageAccounts/foreign"
-                                    type = 'Microsoft.Storage/storageAccounts'
-                                    name = 'foreign'
-                                }
-                            }
-                            $output = if ($null -ne $script:bicepE2eState.ContentOutput) {
-                                $script:bicepE2eState.ContentOutput
-                            }
-                            else { ConvertTo-Json -InputObject @($contents) -Depth 8 -Compress }
-                            return [pscustomobject]@{ ExitCode = 0; StdOut = $output; StdErr = '' }
-                        }
-                        'show' {
-                            if (-not $script:bicepE2eState.LiveResources.ContainsKey($resourceId)) {
-                                return [pscustomobject]@{
-                                    ExitCode = 1; StdOut = ''; StdErr = '(ResourceNotFound) missing'
-                                }
-                            }
-                            return [pscustomobject]@{
-                                ExitCode = 0
-                                StdOut = $script:bicepE2eState.LiveResources[$resourceId] |
-                                    ConvertTo-Json -Depth 8 -Compress
-                                StdErr = ''
-                            }
-                        }
-                        'delete' {
-                            if ($script:bicepE2eState.ResourceDeleteExit -ne 0) {
-                                return [pscustomobject]@{
-                                    ExitCode = 1; StdOut = ''; StdErr = 'Fake child deletion failure'
-                                }
-                            }
-                            $null = $script:bicepE2eState.LiveResources.Remove($resourceId)
-                            $script:bicepE2eState.ResourceDeletes++
-                            if ($script:bicepE2eState.GroupTagAfterDelete) {
-                                foreach ($group in $script:bicepE2eState.Groups.Values) {
-                                    $group.tags['avm-e2e-run-id'] =
-                                        $script:bicepE2eState.GroupTagAfterDelete
-                                }
-                            }
-                            return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-                        }
-                    }
-                }
-                if ($ArgumentList[0] -eq 'deployment') {
-                    $groupIndex = [array]::IndexOf($ArgumentList, '--resource-group')
-                    $groupName = $ArgumentList[$groupIndex + 1]
-                    $deploymentNameIndex = [array]::IndexOf($ArgumentList, '--name')
-                    $deploymentName = $ArgumentList[$deploymentNameIndex + 1]
-                    $deploymentId = "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/Microsoft.Resources/deployments/$deploymentName"
-                    if ($ArgumentList[1] -eq 'operation' -and $ArgumentList[3] -eq 'list') {
-                        $operations = @()
-                        if (-not $script:bicepE2eState.MissingOperations) {
-                            $target = $script:bicepE2eState.LiveResources.Values |
-                                Select-Object -First 1
-                            $resourceId = if ($null -ne $script:bicepE2eState.ResourceIdOverride) {
-                                $script:bicepE2eState.ResourceIdOverride
-                            }
-                            else { [string]$target.id }
-                            $operation = @{
-                                id = "$deploymentId/operations/one"
-                                operationId = 'one'
-                                properties = @{
-                                    provisioningOperation = $script:bicepE2eState.OperationKind
-                                    provisioningState = $script:bicepE2eState.OperationState
-                                    targetResource = @{
-                                        id = $resourceId
-                                        resourceType = [string]$target.type
-                                        resourceName = [string]$target.name
-                                    }
-                                }
-                            }
-                            $operations += $operation
-                            if ($script:bicepE2eState.DuplicateOperation) {
-                                $operations += $operation
-                            }
-                            if ($script:bicepE2eState.ForeignOperation) {
-                                $operations += @{
-                                    id = "$deploymentId/operations/foreign"
-                                    operationId = 'foreign'
-                                    properties = @{
-                                        provisioningOperation = 'Create'
-                                        provisioningState = 'Succeeded'
-                                        targetResource = @{
-                                            id = $resourceId.Replace($groupName, 'foreign-group')
-                                            resourceType = [string]$target.type
-                                            resourceName = [string]$target.name
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        return [pscustomobject]@{
-                            ExitCode = 0
-                            StdOut = ConvertTo-Json -InputObject @($operations) -Depth 10 -Compress
-                            StdErr = ''
-                        }
-                    }
-                    if ($ArgumentList[2] -eq 'show') {
-                        if ($script:bicepE2eState.MissingHistory) {
-                            return [pscustomobject]@{
-                                ExitCode = 1; StdOut = ''; StdErr = '(DeploymentNotFound) missing'
-                            }
-                        }
-                        return [pscustomobject]@{
-                            ExitCode = 0
-                            StdOut = @{
-                                id = $deploymentId
-                                name = $deploymentName
-                                properties = @{ provisioningState = $script:bicepE2eState.HistoryState }
-                            } | ConvertTo-Json -Depth 8 -Compress
-                            StdErr = ''
-                        }
-                    }
-                    $templateIndex = [array]::IndexOf($ArgumentList, '--template-file')
-                    $script:bicepE2eState.TemporaryFile = $ArgumentList[$templateIndex + 1]
-                    $script:bicepE2eState.CompiledJson = Get-Content `
-                        -LiteralPath $script:bicepE2eState.TemporaryFile -Raw -Encoding utf8
-                    $compiled = $script:bicepE2eState.CompiledJson | ConvertFrom-Json -AsHashtable
-                    $resourceType = [string]$compiled.resources[0].type
-                    $resourceName = [string]$compiled.resources[0].name
-                    $parameterIndex = [array]::IndexOf($ArgumentList, '--parameters')
-                    if ($parameterIndex -ge 0) {
-                        $script:bicepE2eState.ParameterPath = $ArgumentList[$parameterIndex + 1].Substring(1)
-                        $script:bicepE2eState.ParameterJson = Get-Content `
-                            -LiteralPath $script:bicepE2eState.ParameterPath -Raw -Encoding utf8
-                    }
-                    if ($script:bicepE2eState.FailOperation -eq $ArgumentList[2] -and
-                        $ArgumentList[2] -ne 'create') {
-                        return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Fake ARM failure' }
-                    }
-                    $resourceId = if ($null -ne $script:bicepE2eState.ResourceIdOverride) {
-                        $script:bicepE2eState.ResourceIdOverride
-                    }
-                    else {
-                        "/subscriptions/$script:bicepE2eSubscription/resourceGroups/$groupName/providers/$resourceType/$resourceName"
-                    }
-                    $preview = if ($null -ne $script:bicepE2eState.WhatIfOutput) {
-                        $script:bicepE2eState.WhatIfOutput
-                    }
-                    else {
-                        @{ changes = @(@{
-                                    resourceId = $resourceId
-                                    changeType = $script:bicepE2eState.WhatIfType
-                                    after = @{ type = $resourceType; name = $resourceName }
-                                }) } | ConvertTo-Json -Depth 8 -Compress
-                    }
-                    if ($ArgumentList[2] -eq 'create') {
-                        $script:bicepE2eState.LiveResources[$resourceId] = @{
-                            id = $resourceId
-                            type = $resourceType
-                            name = $resourceName
-                        }
-                        if ($null -ne $script:bicepE2eState.ChildTags) {
-                            $script:bicepE2eState.LiveResources[$resourceId].tags =
-                                $script:bicepE2eState.ChildTags
-                        }
-                        if ($script:bicepE2eState.CreateTimeout) {
-                            $script:bicepE2eState.HistoryState = 'Canceled'
-                            $script:bicepE2eState.OperationState = 'Canceled'
-                            throw [System.TimeoutException]::new('Fake Create timeout after partial deployment')
-                        }
-                        if ($script:bicepE2eState.FailOperation -eq 'create') {
-                            $script:bicepE2eState.HistoryState = 'Failed'
-                            $script:bicepE2eState.OperationState = 'Failed'
-                            return [pscustomobject]@{
-                                ExitCode = 1; StdOut = ''; StdErr = 'Fake ARM failure'
-                            }
-                        }
-                        $script:bicepE2eState.HistoryState = $script:bicepE2eState.DeploymentState
-                    }
-                    $deployment = @{
-                        id = $deploymentId
-                        name = $deploymentName
-                        properties = @{
-                            provisioningState = $script:bicepE2eState.DeploymentState
-                            outputs           = $script:bicepE2eState.DeploymentOutputs
-                        }
-                    } | ConvertTo-Json -Depth 8 -Compress
-                    $output = if ($ArgumentList[2] -eq 'what-if') {
-                        $preview
-                    }
-                    elseif ($ArgumentList[2] -eq 'create' -and
-                        $null -ne $script:bicepE2eState.DeploymentOutput) {
-                        $script:bicepE2eState.DeploymentOutput
-                    }
-                    else { $deployment }
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = $output; StdErr = '' }
-                }
-                throw "Unexpected fake subprocess: $FilePath $($ArgumentList -join ' ')"
-            }
-        }
+        $script:fixture = New-NativeBicepWorkflowFixture -TestRoot $TestDrive
+        $script:options = Get-NativeBicepWorkflowOptions -Fixture $script:fixture
     }
+    AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
-    It 'previews, deploys and deletes one group, without changing source or exposing parameters in argv' {
-        $script:state.Resources[0].name = '#_namePrefix_#'
-        Set-Content -LiteralPath $script:sourcePath `
-            -Value "param namePrefix string = '#_namePrefix_#'" -Encoding utf8NoBOM
-        $original = Get-Content -LiteralPath $script:sourcePath -Raw
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -Tokens @{ namePrefix = 'owned-account' } `
-            -Parameters @{ administrator = 'private-value'; display = 'quote"slash\name' } `
-            -SkipModuleVersionCheck
-
+    It 'uses native validation, recorded deployment, exact operations and durable cleanup state' {
+        $source = Join-Path $script:fixture.Directory 'main.test.bicep'
+        $before = [IO.File]::ReadAllBytes($source)
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
-        $result.RunsTotal | Should -Be 1
         $result.RunsPassed | Should -Be 1
-        $result.RunsFailed | Should -Be 0
-        $result.AssertionResults.Count | Should -Be 1
         $result.AssertionResults[0].Status | Should -Be 'not-present'
-        $result.AssertionResults[0].RunsPassed | Should -Be 0
-        $result.PostResults.Count | Should -Be 1
         $result.PostResults[0].Status | Should -Be 'not-present'
-        $result.CleanupPending.Count | Should -Be 0
-        $result.WhatIfChanges.Count | Should -Be 1
-        $script:state.Groups.Count | Should -Be 0
-        $script:state.LiveResources.Count | Should -Be 0
-        $script:state.ResourceDeletes | Should -Be 1
-        ($script:state.CompiledJson | ConvertFrom-Json -AsHashtable).resources[0].name |
-            Should -Be 'owned-account'
-        ($script:state.ParameterJson | ConvertFrom-Json -AsHashtable).parameters.administrator.value |
-            Should -Be 'private-value'
-        ($script:state.ParameterJson | ConvertFrom-Json -AsHashtable).parameters.display.value |
-            Should -Be 'quote"slash\name'
-        (Get-Content -LiteralPath $script:sourcePath -Raw) | Should -BeExactly $original
-        (Test-Path -LiteralPath $script:state.TemporaryFile) | Should -BeFalse
-        (Test-Path -LiteralPath $script:state.ParameterPath) | Should -BeFalse
-        $sequence = @($script:state.Calls | ForEach-Object {
-                if ($_.FilePath -eq 'fake-bicep') { 'build' }
-                elseif ($_.Arguments[0] -eq 'group') { 'group-' + $_.Arguments[1] }
-                elseif ($_.Arguments[0] -eq 'resource') { 'resource-' + $_.Arguments[1] }
-                elseif ($_.Arguments[1] -eq 'operation') { 'operation-list' }
-                else { $_.Arguments[2] }
-            })
-        $sequence[0..5] | Should -Be @('build', 'group-exists', 'group-create',
-            'validate', 'what-if', 'create')
-        [array]::IndexOf($sequence, 'resource-list') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'resource-delete'))
-        [array]::IndexOf($sequence, 'resource-delete') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'group-delete'))
-        $create = $script:state.Calls |
-            Where-Object { $_.Arguments[0] -eq 'deployment' -and $_.Arguments[2] -eq 'create' } |
-            Select-Object -First 1
-        $create.Arguments | Should -Contain '--mode'
-        $create.Arguments | Should -Contain 'Incremental'
-        $create.Arguments | Should -Contain $script:subscription
-        $create.Arguments | Should -Not -Contain 'private-value'
-        @($script:state.Calls | Where-Object {
-                $_.FilePath -eq [System.Environment]::ProcessPath
-            }).Count | Should -Be 0
+        $result.CleanupPending | Should -BeNullOrEmpty
+        $result.CleanupStatePaths | Should -Be @($script:fixture.StatePath)
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json -AsHashtable
+        $stored['status'] | Should -Be 'Complete'
+        $stored['case']['completionStarted'] | Should -BeTrue
+        $stored['deployments'][0]['status'] | Should -Be 'Succeeded'
+        @($stored['resources'] | Where-Object { -not $_['postProcessed'] }).Count | Should -Be 0
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*-existing' }).Count | Should -Be 0
+        $stored['resources'].Count | Should -Be 2
+        @($stored['resources'] | Where-Object { -not $_['removed'] }).Count | Should -Be 0
+        $script:fixture.Calls | Should -Contain ('remove:' + $stored['ownedResourceGroups'][0]['id'])
+        $script:fixture.Calls | Should -Contain ('purge:' + $script:fixture.CreatedId)
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 1
+        [IO.File]::ReadAllBytes($source) | Should -Be $before
+        Test-Path -LiteralPath $script:fixture.NativeInputs[0].TemplatePath | Should -BeFalse
+        $script:fixture.CurrentSubscription | Should -Be '00000000-0000-0000-0000-000000000099'
     }
 
-    It 'runs the case-local post hook after Pester and before guarded cleanup without passing secrets' {
-            $caseDirectory = Split-Path -Parent $script:sourcePath
-            $postPath = Join-Path $caseDirectory 'post.ps1'
-            Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-            Set-Content -LiteralPath (Join-Path $caseDirectory 'deployed.Tests.ps1') `
-                -Value 'authored assertion' -Encoding utf8NoBOM
-            $result = Invoke-AvmTestE2e -Path $script:root `
-                -SubscriptionId $script:subscription -Location 'westus' `
-                -ResourceGroupPrefix 'avm-e2e' -Parameters @{ password = 'private-value' } `
-                -SkipModuleVersionCheck
-
-            $result.Status | Should -Be 'pass'
-            $result.RunsPassed | Should -Be 1
-            $result.AssertionResults[0].Status | Should -Be 'pass'
-            $result.PostResults.Count | Should -Be 1
-            $result.PostResults[0].Case | Should -Be 'tests/e2e/defaults'
-            $result.PostResults[0].Status | Should -Be 'pass'
-            $result.PostResults[0].ExitCode | Should -Be 0
-            $result.CleanupPending.Count | Should -Be 0
-            $script:state.Groups.Count | Should -Be 0
-            $hook = @($script:state.Calls | Where-Object {
-                    $_.FilePath -eq [System.Environment]::ProcessPath -and
-                    $_.Arguments -contains $postPath
-                })
-            $hook.Count | Should -Be 1
-            $hook[0].Arguments | Should -Be @('-NoProfile', '-NonInteractive', '-File', $postPath)
-            $hook[0].WorkingDirectory | Should -Be $caseDirectory
-            $hook[0].TimeoutSec | Should -Be 300
-            $hook[0].EnvVars.AVM_E2E_SCOPE | Should -Be 'group'
-            $hook[0].EnvVars.AVM_E2E_CASE | Should -Be 'tests/e2e/defaults'
-            $hook[0].EnvVars.AVM_E2E_SUBSCRIPTION_ID | Should -Be $script:subscription
-            $hook[0].EnvVars.AVM_E2E_TENANT_ID | Should -Be ''
-            $hook[0].EnvVars.AVM_E2E_LOCATION | Should -Be 'westus'
-            $hook[0].EnvVars.AVM_E2E_RESOURCE_GROUP_NAME |
-                Should -Match '^avm-e2e-[0-9a-f]{32}$'
-            $hook[0].EnvVars.AVM_E2E_DEPLOYMENT_NAME |
-                Should -Be ('avm-e2e-' + $hook[0].EnvVars.AVM_E2E_RUN_ID)
-            ($hook[0].Arguments -join ' ') | Should -Not -Match 'private-value|deployed-account'
-            ($hook[0].EnvVars.Values -join ' ') |
-                Should -Not -Match 'private-value|deployed-account'
-            $sequence = @($script:state.Calls | ForEach-Object {
-                    if ($_.FilePath -eq [System.Environment]::ProcessPath) {
-                        if ($_.Arguments -contains $postPath) { 'post' } else { 'pester' }
-                    }
-                    elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
-                    else { "$($_.Arguments[0])-$($_.Arguments[1])" }
-                })
-            [array]::IndexOf($sequence, 'create') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'pester'))
-            [array]::IndexOf($sequence, 'pester') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
-            [array]::IndexOf($sequence, 'post') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'resource-delete'))
-            [array]::IndexOf($sequence, 'post') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'group-delete'))
-    }
-
-    It 'runs post.ps1 once after a failed or cancelled Create, before cleanup' -ForEach @(
-            @{ Kind = 'failed'; Field = 'FailOperation'; Value = 'create'; Code = 'deployment-failed' }
-            @{ Kind = 'cancelled'; Field = 'CreateTimeout'; Value = $true; Code = 'process-timeout' }
-    ) {
-            $postPath = Join-Path (Split-Path $script:sourcePath) 'post.ps1'
-            Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-            $script:state.$Field = $Value
-            $result = Invoke-AvmTestE2e -Path $script:root `
-                -SubscriptionId $script:subscription -Location 'westus' `
-                -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-            $result.Status | Should -Be 'fail'
-            $result.RunsTotal | Should -Be 1
-            $result.RunsFailed | Should -Be 1
-            $result.Issues.Code | Should -Contain "avm.bicep.e2e-$Code"
-            $result.AssertionResults.Count | Should -Be 0
-            $result.PostResults.Count | Should -Be 1
-            $result.PostResults[0].Status | Should -Be 'pass'
-            $result.CleanupPending.Count | Should -Be 0
-            $script:state.Groups.Count | Should -Be 0
-            $sequence = @($script:state.Calls | ForEach-Object {
-                    if ($_.Arguments -contains $postPath) { 'post' }
-                    elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
-                    else { "$($_.Arguments[0])-$($_.Arguments[1])" }
-                })
-            [array]::IndexOf($sequence, 'create') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
-            [array]::IndexOf($sequence, 'post') |
-                Should -BeLessThan ([array]::IndexOf($sequence, 'group-delete'))
-    }
-
-    It 'fails the case but still cleans verified resources when post.ps1 <Kind>' -ForEach @(
-            @{ Kind = 'exits nonzero'; Field = 'PostExit'; Value = 17; Code = 'post-hook-failed' }
-            @{ Kind = 'times out'; Field = 'PostTimeout'; Value = $true; Code = 'post-hook-timeout' }
-            @{ Kind = 'cannot start'; Field = 'PostStartFails'; Value = $true; Code = 'post-hook-runner-failed' }
-    ) {
-            $postPath = Join-Path (Split-Path $script:sourcePath) 'post.ps1'
-            Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-            $script:state.$Field = $Value
-            $result = Invoke-AvmTestE2e -Path $script:root `
-                -SubscriptionId $script:subscription -Location 'westus' `
-                -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-            $result.Status | Should -Be 'fail'
-            $result.RunsPassed | Should -Be 0
-            $result.RunsFailed | Should -Be 1
-            $result.PostResults.Count | Should -Be 1
-            $result.PostResults[0].Status | Should -Be 'fail'
-            if ($Kind -eq 'exits nonzero') {
-                $result.PostResults[0].ExitCode | Should -Be 17
-            }
-            $result.Issues.Code | Should -Contain "avm.bicep.e2e-$Code"
-            $result.CleanupPending.Count | Should -Be 0
-            $script:state.Groups.Count | Should -Be 0
-            $script:state.ResourceDeletes | Should -Be 1
-            @($script:state.Calls | Where-Object {
-                    $_.Arguments -contains $postPath
-                }).Count | Should -Be 1
-    }
-
-    It 'reports a malformed post.ps1 without hiding a failed assertion or pending cleanup' {
-            $caseDirectory = Split-Path -Parent $script:sourcePath
-            Set-Content -LiteralPath (Join-Path $caseDirectory 'Post.ps1') `
-                -Value 'wrong casing' -Encoding utf8NoBOM
-            Set-Content -LiteralPath (Join-Path $caseDirectory 'deployed.Tests.ps1') `
-                -Value 'authored assertion' -Encoding utf8NoBOM
-            $script:state.PesterResult = @{
-                Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
-                Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
-            }
-            $script:state.ShowMismatch = $true
-            $result = Invoke-AvmTestE2e -Path $script:root `
-                -SubscriptionId $script:subscription -Location 'westus' `
-                -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-            $result.Status | Should -Be 'fail'
-            $result.RunsFailed | Should -Be 1
-            $result.Issues.Code | Should -Contain 'avm.bicep.e2e-assertion-empty'
-            $result.Issues.Code | Should -Contain 'avm.bicep.e2e-post-hook-invalid'
-            $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
-            $result.PostResults[0].Status | Should -Be 'fail'
-            $result.CleanupPending.Count | Should -Be 1
-            $script:state.Groups.Count | Should -Be 1
-            @($script:state.Calls | Where-Object {
-                    $_.FilePath -eq [System.Environment]::ProcessPath -and
-                    $_.Arguments -contains (Join-Path $caseDirectory 'Post.ps1')
-                }).Count | Should -Be 0
-    }
-
-    It 'runs case-local Pester after deployment and passes ARM outputs without leaking them into argv' {
-        $caseDirectory = Split-Path -Parent $script:sourcePath
-        $testPath = Join-Path $caseDirectory 'deployed.tests.ps1'
-        Set-Content -LiteralPath $testPath `
-            -Value "Describe 'deployed' { It 'passes' { `$true | Should -BeTrue } }" `
-            -Encoding utf8NoBOM
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
+    It 'runs assertions then the exact case hook before cleanup and reselects context between them' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $script:options.Parameters = @{ password = ConvertTo-SecureString 'do-not-persist' -AsPlainText -Force }
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
-        $result.RunsPassed | Should -Be 1
-        $result.AssertionResults.Count | Should -Be 1
-        $result.AssertionResults[0].Case | Should -Be 'tests/e2e/defaults'
-        $result.AssertionResults[0].Status | Should -Be 'pass'
-        $result.AssertionResults[0].FilesProcessed | Should -Be 1
-        $result.AssertionResults[0].RunsPassed | Should -Be 1
-        $script:state.PesterInput.Mode | Should -Be 'E2e'
-        $script:state.PesterInput.Files | Should -Be @($testPath)
-        $script:state.PesterInput.TestInputData.ModuleTestFolderPath |
-            Should -Be $caseDirectory
-        $script:state.PesterInput.TestInputData.DeploymentOutputs.account.value |
-            Should -Be 'deployed-account'
-        $script:state.Groups.Count | Should -Be 0
-        ($script:state.Calls | Where-Object {
-                $_.FilePath -eq [System.Environment]::ProcessPath
-            } | Select-Object -First 1).TimeoutSec | Should -Be 1800
-        $sequence = @($script:state.Calls | ForEach-Object {
-                if ($_.FilePath -eq [System.Environment]::ProcessPath) { 'pester' }
-                elseif ($_.Arguments[0] -eq 'deployment') { $_.Arguments[2] }
-                else { $_.Arguments[1] }
-            })
-        [array]::IndexOf($sequence, 'create') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'pester'))
-        [array]::IndexOf($sequence, 'pester') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
-        @($script:state.Calls | Where-Object {
-                $_.FilePath -eq [System.Environment]::ProcessPath -and
-                $_.Arguments -contains 'deployed-account'
-            }).Count | Should -Be 0
-    }
-
-    It 'fails a Pester assertion and preserves its diagnostic while deleting the owned group' {
-        $caseDirectory = Split-Path -Parent $script:sourcePath
-        $testPath = Join-Path $caseDirectory 'deployed.Tests.ps1'
-        Set-Content -LiteralPath $testPath -Value 'authored assertion' -Encoding utf8NoBOM
-        $script:state.PesterResult = @{
-            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
-            Skipped = 0; Inconclusive = 0; Filtered = 0
-            Issues = @(@{
-                    File = $testPath; Line = 7; Column = 0; Severity = 'error'
-                    Code = 'avm.bicep.pester-failed'; Message = 'deployed: Expected resource to exist.'
-                })
-        }
-        $postPath = Join-Path $caseDirectory 'post.ps1'
-        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
+        $calls = @($script:fixture.Calls)
+        [array]::IndexOf($calls, 'create') | Should -BeLessThan ([array]::IndexOf($calls, 'pester'))
+        [array]::IndexOf($calls, 'pester') | Should -BeLessThan ([array]::IndexOf($calls, 'post'))
+        [array]::IndexOf($calls, 'post') | Should -BeLessThan ([array]::IndexOf($calls, 'discover'))
+        $script:fixture.PesterInput.DeploymentOutputs.account.value | Should -Be 'deployed-account'
+        $script:fixture.PesterInput.ModuleTestFolderPath | Should -Be $script:fixture.Directory
+        $script:fixture.HookInput.psbase.Keys.Count | Should -Be 9
+        $script:fixture.HookInput.AVM_E2E_SCOPE | Should -Be 'group'
+        $script:fixture.HookInput.AVM_E2E_SUBSCRIPTION_ID | Should -Be $script:options.SubscriptionId
         $result.PostResults[0].Status | Should -Be 'pass'
-        $result.RunsPassed | Should -Be 0
-        $result.RunsFailed | Should -Be 1
-        $result.AssertionResults[0].Status | Should -Be 'fail'
-        $result.AssertionResults[0].RunsFailed | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-assertion-failed'
-        $result.Issues[0].File | Should -Be $testPath
-        $result.Issues[0].Line | Should -Be 7
-        $result.Issues[0].Message | Should -Match 'tests/e2e/defaults.*Expected resource'
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 1
-        $sequence = @($script:state.Calls | ForEach-Object {
-                if ($_.Arguments -contains $postPath) { 'post' }
-                elseif ($_.FilePath -eq [System.Environment]::ProcessPath) { 'pester' }
-                elseif ($_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete') {
-                    'delete'
-                }
-                else { $_.Arguments[0] }
-            })
-        [array]::IndexOf($sequence, 'pester') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'post'))
-        [array]::IndexOf($sequence, 'post') |
-            Should -BeLessThan ([array]::IndexOf($sequence, 'delete'))
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw) | Should -Not -Match 'password|do-not-persist|deployed-account'
     }
 
-    It 'never treats skipped, empty or filtered authored Pester suites as passed' -ForEach @(
-        @{
-            Summary = @{
-                Version = '5.7.1'; Total = 0; Passed = 0; Failed = 0
-                Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
-            }
-            Code = 'avm.bicep.e2e-assertion-empty'
-        }
-        @{
-            Summary = @{
-                Version = '5.7.1'; Total = 2; Passed = 1; Failed = 0
-                Skipped = 1; Inconclusive = 0; Filtered = 0; Issues = @()
-            }
-            Code = 'avm.bicep.e2e-assertion-incomplete'
-        }
-        @{
-            Summary = @{
-                Version = '5.7.1'; Total = 1; Passed = 0; Failed = 0
-                Skipped = 0; Inconclusive = 0; Filtered = 1; Issues = @()
-            }
-            Code = 'avm.bicep.e2e-assertion-empty'
-        }
-        @{
-            Summary = @{
-                Version = '5.7.1'; Total = 1; Passed = 0; Failed = 0
-                Skipped = 1; Inconclusive = 0; Filtered = 0
-                Issues = @(@{
-                        File = ''; Line = 2; Column = 0; Severity = 'error'
-                        Code = 'avm.bicep.pester-skipped'; Message = 'deployed: Pester reported Skipped.'
-                    })
-            }
-            Code = 'avm.bicep.e2e-assertion-skipped'
-        }
+    It 'never treats incomplete or failed authored suites as passed: <Mode>' -ForEach @(
+        @{ Mode = 'fail' }, @{ Mode = 'skip' }, @{ Mode = 'inconclusive' },
+        @{ Mode = 'filtered' }, @{ Mode = 'empty' }, @{ Mode = 'throw' }
     ) {
-        $postPath = Join-Path (Split-Path $script:sourcePath) 'post.ps1'
-        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
-            -Value 'authored assertion' -Encoding utf8NoBOM
-        $script:state.PesterResult = $Summary
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.RunsFailed | Should -Be 1
-        $result.AssertionResults[0].Status | Should -Be 'fail'
-        $result.Issues[0].Code | Should -Be $Code
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
-    }
-
-    It 'fails and cleans up when the Pester runner errors, returns invalid data or times out' -ForEach @(
-        @{ Kind = 'exit'; Code = 'assertion-runner-failed' }
-        @{ Kind = 'malformed'; Code = 'assertion-runner-failed' }
-        @{ Kind = 'timeout'; Code = 'assertion-timeout' }
-    ) {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
-            -Value 'authored assertion' -Encoding utf8NoBOM
-        switch ($Kind) {
-            'exit' { $script:state.PesterExit = 1 }
-            'malformed' { $script:state.PesterResult = 'not-json' }
-            'timeout' { $script:state.PesterTimeout = $true }
-        }
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
+        $script:fixture.PesterMode = $Mode
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         $result.AssertionResults[0].Status | Should -Be 'fail'
-        $result.Issues[0].Code | Should -Be "avm.bicep.e2e-$Code"
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
+        $result.CleanupPending | Should -BeNullOrEmpty
+        $result.Issues.Count | Should -BeGreaterThan 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'Complete'
     }
 
-    It 'retains both assertion and cleanup errors when ownership cannot be verified' {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
-            -Value 'authored assertion' -Encoding utf8NoBOM
-        $script:state.PesterResult = @{
-            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
-            Skipped = 0; Inconclusive = 0; Filtered = 0
-            Issues = @(@{
-                    File = ''; Line = 0; Column = 0; Severity = 'error'
-                    Code = 'avm.bicep.pester-failed'; Message = 'Deployed resource was absent.'
-                })
-        }
-        $script:state.ShowMismatch = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-assertion-failed'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
-        $result.CleanupPending.Count | Should -Be 1
-        $script:state.Groups.Count | Should -Be 1
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'rejects invalid deployment outputs before running assertions and still deletes the group' {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
-            -Value 'authored assertion' -Encoding utf8NoBOM
-        $script:state.DeploymentOutputs = 'not-an-output-object'
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-assertion-runner-failed'
-        $result.Issues[0].Message | Should -Match 'invalid outputs'
-        $script:state.PesterInput | Should -BeNullOrEmpty
-        $script:state.Groups.Count | Should -Be 0
-    }
-
-    It 'continues to a separate group after a failed assertion was cleaned up' {
-        $second = Join-Path $script:root 'tests' 'e2e' 'second'
-        $null = New-Item -ItemType Directory -Path $second -Force
-        Set-Content -LiteralPath (Join-Path $second 'main.test.bicep') `
-            -Value "param namePrefix string = 'demo'" -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'assert.tests.ps1') `
-            -Value 'authored assertion' -Encoding utf8NoBOM
-        $script:state.PesterResult = @{
-            Version = '5.7.1'; Total = 1; Passed = 0; Failed = 1
-            Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
-        }
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.RunsTotal | Should -Be 2
-        $result.RunsFailed | Should -Be 1
-        $result.RunsPassed | Should -Be 1
-        $result.AssertionResults.Status | Should -Be @('fail', 'not-present')
-        $script:state.Groups.Count | Should -Be 0
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 2
-    }
-
-    It 'does not run nested examples assertions against the parent example' {
-        $parentAssertion = Join-Path (Split-Path $script:sourcePath) 'parent.tests.ps1'
-        Set-Content -LiteralPath $parentAssertion -Value 'parent' -Encoding utf8NoBOM
-        $nested = Join-Path (Split-Path $script:sourcePath) 'child'
-        $null = New-Item -ItemType Directory -Path $nested -Force
-        Set-Content -LiteralPath (Join-Path $nested 'main.test.bicep') `
-            -Value 'param namePrefix string' -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path $nested 'child.tests.ps1') `
-            -Value 'child' -Encoding utf8NoBOM
-        $result = Invoke-AvmTestE2e -Path $script:root -Example defaults `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'pass'
-        $result.AssertionResults[0].FilesProcessed | Should -Be 1
-        $script:state.PesterInput.Files | Should -Be @($parentAssertion)
-        $script:state.Groups.Count | Should -Be 0
-    }
-
-    It 'does not inherit post.ps1 from the parent of a selected nested case' {
-        $parentDirectory = Split-Path -Parent $script:sourcePath
-        $parentHook = Join-Path $parentDirectory 'post.ps1'
-        Set-Content -LiteralPath $parentHook -Value 'parent hook' -Encoding utf8NoBOM
-        $nested = Join-Path $parentDirectory 'child'
-        $null = New-Item -ItemType Directory -Path $nested -Force
-        Set-Content -LiteralPath (Join-Path $nested 'main.test.bicep') `
-            -Value "param namePrefix string = 'demo'" -Encoding utf8NoBOM
-        $result = Invoke-AvmTestE2e -Path $script:root -Example child `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'pass'
-        $result.PostResults.Count | Should -Be 1
-        $result.PostResults[0].Case | Should -Be 'tests/e2e/defaults/child'
-        $result.PostResults[0].Status | Should -Be 'not-present'
-        @($script:state.Calls | Where-Object {
-                $_.Arguments -contains $parentHook
-            }).Count | Should -Be 0
-    }
-
-    It 'lists runnable paths without tools, credentials or version lookup' {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'post.ps1') `
-            -Value 'authored post hook' -Encoding utf8NoBOM
-        InModuleScope 'Avm.Authoring' {
-            Mock Resolve-AvmTool { throw 'List must not resolve tools' }
-            Mock Test-AvmModuleVersion { throw 'List must not query PowerShell Gallery' }
-        }
-        (Invoke-AvmTestE2e -Path $script:root -List) |
-            Should -Be '["tests/e2e/defaults"]'
-        $script:state.Calls.Count | Should -Be 0
-
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) '.e2eignore') `
-            -Value 'not yet released' -Encoding utf8NoBOM
-        (Invoke-AvmTestE2e -Path $script:root -List) | Should -Be '[]'
-        $script:state.Calls.Count | Should -Be 0
-    }
-
-    It 'skips ignored cases and rejects explicitly selected ignored cases' {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'post.ps1') `
-            -Value 'authored post hook' -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) '.e2eignore') `
-            -Value 'not yet released' -Encoding utf8NoBOM
-        $skipped = Invoke-AvmTestE2e -Path $script:root -SkipModuleVersionCheck
-        $skipped.Status | Should -Be 'skipped'
-        $skipped.IgnoredFiles | Should -Be 1
-        $skipped.PostResults.Count | Should -Be 0
-        { Invoke-AvmTestE2e -Path $script:root -Example defaults -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*opted out*'
-        $script:state.Calls.Count | Should -Be 0
-    }
-
-    It 'requires explicit scope and a safe group prefix before calling Azure' {
-        { Invoke-AvmTestE2e -Path $script:root -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*explicit*SubscriptionId*'
-        { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*explicit -Location*'
-        { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -Location 'westus' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*ResourceGroupPrefix*'
-        { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -Location 'westus' -ResourceGroupPrefix 'not safe!' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*safe -ResourceGroupPrefix*'
-        @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count |
-            Should -Be 0
-    }
-
-    It 'honors WhatIf by skipping all tool and Azure calls' {
-        Set-Content -LiteralPath (Join-Path (Split-Path $script:sourcePath) 'post.ps1') `
-            -Value 'authored post hook' -Encoding utf8NoBOM
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -WhatIf -SkipModuleVersionCheck
-        $result.Status | Should -Be 'skipped'
-        $result.RunsTotal | Should -Be 0
-        $result.RunsSkipped | Should -Be 1
-        $result.PostResults.Count | Should -Be 0
-        $script:state.Calls.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
-    }
-
-    It 'refuses unsupported subscription resources before creating a group' {
-        $script:state.Schema = 'https://schema.management.azure.com/schemas/2019-04-01/subscriptionDeploymentTemplate.json#'
-        { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -TenantId '00000000-0000-0000-0000-000000000002' `
-                -Location 'westus' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*unsupported sub resource type*'
-        @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count | Should -Be 0
-    }
-
-    It 'refuses uninspectable or cross-scope resources before creating a group' -ForEach @(
-        @{ Resource = @{ type = 'Microsoft.Resources/deploymentScripts' }; Message = '*cannot be safely contained*' }
-        @{ Resource = @{ type = 'Microsoft.Resources/resourceGroups' }; Message = '*cannot be safely contained*' }
-        @{ Resource = @{ type = 'Microsoft.Authorization/locks' }; Message = '*cannot be safely contained*' }
-        @{ Resource = @{ type = 'Microsoft.Authorization/roleAssignments' }; Message = '*cannot be safely contained*' }
-        @{ Resource = @{ type = 'Microsoft.Resources/deployments'; properties = @{ templateLink = @{ uri = 'https://example.invalid/a' } } }; Message = '*without an inspectable inline template*' }
-        @{ Resource = @{ type = 'Microsoft.Storage/storageAccounts'; scope = '[subscription()]' }; Message = '*cross-scope*' }
+    It 'fails a hook without suppressing ordinary cleanup: <Mode>' -ForEach @(
+        @{ Mode = 'exit' }, @{ Mode = 'throw' }, @{ Mode = 'timeout' }
     ) {
-        $script:state.Resources = @($Resource)
-        { Invoke-AvmTestE2e -Path $script:root -SubscriptionId $script:subscription `
-                -Location 'westus' -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage $Message
-        @($script:state.Calls | Where-Object { $_.FilePath -eq 'fake-az' }).Count | Should -Be 0
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $script:fixture.PostMode = $Mode
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $result.PostResults[0].Status | Should -Be 'fail'
+        $result.CleanupPending | Should -BeNullOrEmpty
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'Complete'
+        if ($Mode -eq 'timeout') { ($result.Issues.Message -join ' ') | Should -Not -Match '300-second' }
     }
 
-    It 'does not deploy when ARM validation, preview or group creation fails' -ForEach @(
-        @{ Step = 'validate'; Code = 'validate-failed'; Field = 'FailOperation' }
-        @{ Step = 'what-if'; Code = 'what-if-failed'; Field = 'FailOperation' }
-        @{ Step = 'group-create'; Code = 'group-create-failed'; Field = 'CreateExit' }
-        @{ Step = 'invalid-group-output'; Code = 'group-create-invalid'; Field = 'CreateOutput' }
-        @{ Step = 'invalid-preview'; Code = 'what-if-invalid'; Field = 'WhatIfOutput' }
-        @{ Step = 'empty-preview'; Code = 'what-if-unsafe'; Field = 'WhatIfOutput' }
-        @{ Step = 'modified-preview'; Code = 'what-if-unsafe'; Field = 'WhatIfType' }
-        @{ Step = 'outside-preview'; Code = 'what-if-unsafe'; Field = 'ResourceIdOverride' }
+    It 'refuses invalid or unrelated deployment outputs, while retaining ordinary cleanup: <Mode>' -ForEach @(
+        @{ Mode = 'invalid' }, @{ Mode = 'wrong-id' }
     ) {
-        $postPath = Join-Path (Split-Path $script:sourcePath) 'post.ps1'
-        Set-Content -LiteralPath $postPath -Value 'authored post hook' -Encoding utf8NoBOM
-        $value = switch ($Step) {
-            'validate' { 'validate' }
-            'what-if' { 'what-if' }
-            'group-create' { 1 }
-            'invalid-group-output' { 'not-json' }
-            'invalid-preview' { '{}' }
-            'empty-preview' { '{"changes":[]}' }
-            'modified-preview' { 'Modify' }
-            'outside-preview' {
-                "/subscriptions/$script:subscription/resourceGroups/another-group/providers/Microsoft.Storage/storageAccounts/demo"
-            }
-        }
-        $script:state.$Field = $value
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
+        $script:fixture.OutputMode = $Mode
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.PostResults.Count | Should -Be 0
-        $result.RunsFailed | Should -Be 1
-        $result.RunsPassed | Should -Be 0
-        $result.Issues[0].Code | Should -Be "avm.bicep.e2e-$Code"
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'deployment' -and $_.Arguments[2] -eq 'create'
-            }).Count | Should -Be 0
-        @($script:state.Calls | Where-Object {
-                $_.Arguments -contains $postPath
-            }).Count | Should -Be 0
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        $result.CleanupPending | Should -BeNullOrEmpty
     }
 
-    It 'retains foreign contents introduced before deployment when validation fails' {
-        $script:state.FailOperation = 'validate'
-        $script:state.ForeignContentMode = 'foreign'
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
+    It 'keeps a failed deployment visible and runs the post hook once after all confirmed attempts' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $script:fixture.CreateMode = 'failed'
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-validate-failed'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
-        $script:state.Groups.Count | Should -Be 1
-        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
-        @($result.CleanupPending | Where-Object {
-                $_ -match '/storageAccounts/foreign$'
-            }).Count | Should -Be 1
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 3
+        @($script:fixture.Calls | Where-Object { $_ -eq 'post' }).Count | Should -Be 1
+        $result.CleanupPending | Should -BeNullOrEmpty
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 3
     }
 
-    It 'reports a deployment failure while still cleaning up its group' {
-        $script:state.FailOperation = 'create'
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+    It 'does not resubmit or run hooks while a timed-out submission remains unconfirmed' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $script:fixture.CreateMode = 'timeout'
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.RunsFailed | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-deployment-failed'
-        $script:state.Groups.Count | Should -Be 0
+        $result.CleanupDeferred | Should -BeTrue
+        $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'post'
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).case.completionStarted | Should -BeFalse
     }
 
-    It 'refuses to reuse an existing resource group and never attempts to delete it' {
-        $script:state.GroupExistsOutput = 'true'
-        { Invoke-AvmTestE2e -Path $script:root `
-                -SubscriptionId $script:subscription -Location 'westus' `
-                -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck } |
-            Should -Throw -ExpectedMessage '*Refusing to use existing resource group*'
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and
-                $_.Arguments[1] -in @('create', 'delete')
-            }).Count | Should -Be 0
+    It 'propagates cancellation with saved state instead of starting more work in the cancelled host' {
+        $script:fixture.CreateMode = 'cancel'
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExceptionType ([OperationCanceledException])
+        $state = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $state.deployments[0].status | Should -Be 'Unknown'
+        $state.case.completionStarted | Should -BeFalse
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $script:fixture.CurrentSubscription | Should -Be '00000000-0000-0000-0000-000000000099'
     }
 
-    It 'marks a successful creation with an unobservable group as cleanup pending' {
-        $script:state.GroupExistsOutput = 'false'
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-        $result.Status | Should -Be 'fail'
-        $result.RunsPassed | Should -Be 0
-        $result.RunsFailed | Should -Be 1
-        $result.CleanupPending.Count | Should -Be 1
-        $result.Issues[0].Message | Should -Match 'manual cleanup verification'
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'reports a child-process exception or timeout while still cleaning up' -ForEach @(
-        @{ Kind = 'exception'; Code = 'process-failed' }
-        @{ Kind = 'timeout'; Code = 'process-timeout' }
+    It 'cleans a newly owned group but never runs a hook after pre-submission failure: <Kind>' -ForEach @(
+        @{ Kind = 'validation' }, @{ Kind = 'group creation' }
     ) {
-        InModuleScope 'Avm.Authoring' -Parameters @{ FailureKind = $Kind } {
-            param($FailureKind)
-            $script:bicepE2eFailureKind = $FailureKind
-            Mock Invoke-AvmBicepArmOperation {
-                if ($script:bicepE2eFailureKind -eq 'timeout') {
-                    throw [System.TimeoutException]::new('Fake Azure CLI timeout')
-                }
-                throw [AvmProcessException]::new('Fake Azure CLI process exception')
-            }
-        }
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $script:fixture.ValidationFails = $Kind -eq 'validation'
+        $script:fixture.GroupCreateFails = $Kind -eq 'group creation'
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.Issues[0].Code | Should -Be "avm.bicep.e2e-$Code"
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
+        $script:fixture.Calls | Should -Not -Contain 'create'
+        $script:fixture.Calls | Should -Not -Contain 'post'
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 1
+        $result.CleanupPending | Should -BeNullOrEmpty
     }
 
-    It 'fails on an unverified or unsuccessful deployment response and still deletes its group' -ForEach @(
-        @{ Response = 'not-json'; State = 'Succeeded' }
-        @{ Response = '{}'; State = 'Succeeded' }
-        @{ Response = $null; State = 'Failed' }
-    ) {
-        $script:state.DeploymentOutput = $Response
-        $script:state.DeploymentState = $State
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+    It 'never reuses or deletes a pre-existing resource group' {
+        $script:fixture.GroupExists = $true
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-deployment-unverified'
-        $script:state.Groups.Count | Should -Be 0
+        $script:fixture.Calls | Should -Not -Contain 'group-create'
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
     }
 
-    It 'reports ownership mismatches and never deletes a group it cannot verify' {
-        $script:state.ShowMismatch = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
+    It 'retains an unverified owned group and its children instead of broad deletion' {
+        $script:fixture.OwnershipMismatch = $true
+        $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.RunsPassed | Should -Be 0
-        $result.RunsFailed | Should -Be 1
-        $result.CleanupPending.Count | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-cleanup-failed'
-        $result.Issues[0].Message | Should -Match $result.CleanupPending[0]
-        $script:state.Groups.Count | Should -Be 1
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'reports a verification or deletion failure and keeps the group identified' -ForEach @(
-        @{ Failure = 'show'; Field = 'ShowExit' }
-        @{ Failure = 'delete'; Field = 'DeleteExit' }
-    ) {
-        $script:state.$Field = 1
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-        $result.Status | Should -Be 'fail'
-        $result.CleanupPending.Count | Should -Be 1
-        $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-cleanup-failed'
-        $result.Issues[0].Message | Should -Match $result.CleanupPending[0]
-        $script:state.Groups.Count | Should -Be 1
-    }
-
-    It 'marks unfinished deletion as failed and stops before creating further groups' {
-        $second = Join-Path $script:root 'tests' 'e2e' 'second'
-        $null = New-Item -ItemType Directory -Path $second -Force
-        Set-Content -LiteralPath (Join-Path $second 'main.test.bicep') `
-            -Value "param namePrefix string = 'demo'" -Encoding utf8NoBOM
-        $script:state.DeletePersists = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-        $result.Status | Should -Be 'fail'
-        $result.RunsTotal | Should -Be 1
-        $result.RunsFailed | Should -Be 1
-        $result.RunsSkipped | Should -Be 1
-        $result.CleanupPending.Count | Should -Be 1
-        $script:state.Groups.Count | Should -Be 1
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'create'
-            }).Count | Should -Be 1
-    }
-
-    It 'keeps the group and every child when <Case> makes cleanup ownership ambiguous' -ForEach @(
-        @{ Case = 'an untracked sibling'; Change = 'foreign'; Field = 'ForeignContentMode' }
-        @{ Case = 'a foreign group in inventory'; Change = 'outside'; Field = 'ForeignContentMode' }
-        @{ Case = 'a duplicate inventory entry'; Change = 'duplicate'; Field = 'ForeignContentMode' }
-        @{ Case = 'an altered child tag'; Change = 'tag'; Field = 'ChildTags' }
-        @{ Case = 'a case-variant child tag'; Change = 'case-tag'; Field = 'ChildTags' }
-        @{ Case = 'a missing deployment history'; Change = 'history'; Field = 'MissingHistory' }
-        @{ Case = 'missing operation history'; Change = 'operations'; Field = 'MissingOperations' }
-        @{ Case = 'an Update operation'; Change = 'update'; Field = 'OperationKind' }
-        @{ Case = 'a NoChange operation'; Change = 'unchanged'; Field = 'OperationKind' }
-        @{ Case = 'a nonterminal operation'; Change = 'running'; Field = 'OperationState' }
-        @{ Case = 'a repeated operation ID'; Change = 'duplicate-operation'; Field = 'DuplicateOperation' }
-        @{ Case = 'a foreign operation target'; Change = 'foreign-operation'; Field = 'ForeignOperation' }
-        @{ Case = 'an incomplete resource inventory'; Change = 'missing-inventory'; Field = 'ContentOutput' }
-        @{ Case = 'invalid resource inventory'; Change = 'invalid-inventory'; Field = 'ContentOutput' }
-        @{ Case = 'a failed resource inventory request'; Change = 'inventory-error'; Field = 'ContentExit' }
-        @{ Case = 'a failed individual child deletion'; Change = 'child-delete'; Field = 'ResourceDeleteExit' }
-    ) {
-        $value = switch ($Change) {
-            foreign { 'foreign' }
-            outside { 'outside' }
-            duplicate { 'duplicate' }
-            tag { @{ 'avm-e2e-run-id' = 'another-run' } }
-            'case-tag' { @{ 'AVM-E2E-RUN-ID' = 'another-run' } }
-            history { $true }
-            operations { $true }
-            update { 'Update' }
-            unchanged { 'NoChange' }
-            running { 'Running' }
-            'duplicate-operation' { $true }
-            'foreign-operation' { $true }
-            'missing-inventory' { '[]' }
-            'invalid-inventory' { '{}' }
-            'inventory-error' { 1 }
-            'child-delete' { 1 }
-        }
-        $script:state.$Field = $value
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.RunsPassed | Should -Be 0
-        $result.RunsFailed | Should -Be 1
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
-        $script:state.Groups.Count | Should -Be 1
-        $script:state.LiveResources.Count | Should -Be 1
-        $script:state.ResourceDeletes | Should -Be 0
-        $groupName = @($script:state.Groups.Keys)[0]
-        $result.CleanupPending | Should -Contain $groupName
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'leaves the group pending if foreign content arrives after individually deleting its proven child' {
-        $script:state.ForeignAfterDelete = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.RunsPassed | Should -Be 0
-        $script:state.ResourceDeletes | Should -Be 1
-        $script:state.Groups.Count | Should -Be 1
-        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
-        @($result.CleanupPending | Where-Object {
-                $_ -match '/storageAccounts/foreign$'
-            }).Count | Should -Be 1
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'leaves a retagged group pending after deleting only the already verified child' {
-        $script:state.GroupTagAfterDelete = 'another-run'
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $script:state.ResourceDeletes | Should -Be 1
-        $script:state.Groups.Count | Should -Be 1
-        $result.CleanupPending | Should -Contain @($script:state.Groups.Keys)[0]
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
-        @($script:state.Calls | Where-Object {
-                $_.Arguments[0] -eq 'group' -and $_.Arguments[1] -eq 'delete'
-            }).Count | Should -Be 0
-    }
-
-    It 'removes only the proven partial resource after a terminal cancelled Create timeout' {
-        $script:state.CreateTimeout = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-process-timeout'
-        $result.CleanupPending.Count | Should -Be 0
-        $script:state.ResourceDeletes | Should -Be 1
-        $script:state.LiveResources.Count | Should -Be 0
-        $script:state.Groups.Count | Should -Be 0
-    }
-
-    It 'preserves partial resources after cancellation when operation history is incomplete' {
-        $script:state.CreateTimeout = $true
-        $script:state.MissingOperations = $true
-        $result = Invoke-AvmTestE2e -Path $script:root `
-            -SubscriptionId $script:subscription -Location 'westus' `
-            -ResourceGroupPrefix 'avm-e2e' -SkipModuleVersionCheck
-
-        $result.Status | Should -Be 'fail'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-process-timeout'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2e-cleanup-failed'
         $result.CleanupPending.Count | Should -BeGreaterThan 0
-        $script:state.ResourceDeletes | Should -Be 0
-        $script:state.LiveResources.Count | Should -Be 1
-        $script:state.Groups.Count | Should -Be 1
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+    }
+
+    It 'stops later cases when cleanup fails and keeps its state outside temporary staging' {
+        $next = Join-Path $script:fixture.Root 'tests' 'e2e' 'next'
+        $null = New-Item -ItemType Directory -Path $next
+        Set-Content -LiteralPath (Join-Path $next 'main.test.bicep') -Value 'param name string'
+        $script:fixture.StatePath = ''
+        $script:options.Remove('CleanupStatePath')
+        $script:fixture.CleanupFails = $true
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.RunsSkipped | Should -Be 1
+        $result.CleanupPending | Should -Contain $script:fixture.CreatedId
+        $result.CleanupStatePaths.Count | Should -Be 1
+        Test-Path -LiteralPath $result.CleanupStatePaths[0] | Should -BeTrue
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+    }
+
+    It 'retains the parent group when deployment-operation discovery is incomplete' {
+        $script:fixture.MissingOperations = $true
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+    }
+
+    It 'keeps the validated location and baseTime identical across deployment retries' {
+        $script:fixture.FailuresRemaining = 1
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $inputs = @($script:fixture.NativeInputs)
+        $inputs.Count | Should -Be 3
+        @($inputs | ForEach-Object { $_.Parameters.resourceLocation } | Select-Object -Unique) | Should -Be @('eastus')
+        @($inputs | ForEach-Object { $_.Parameters.baseTime } | Select-Object -Unique).Count | Should -Be 1
+        @($inputs | ForEach-Object Location | Select-Object -Unique) | Should -Be @('westus')
+    }
+
+    It 'lists, ignores and previews without tool or Azure activity' {
+        $names = Invoke-AvmTestE2e -Path $script:fixture.Root -List | ConvertFrom-Json
+        @($names) | Should -Be @('tests/e2e/defaults')
+        $null = Invoke-AvmTestE2e @script:options -WhatIf
+        $script:fixture.Calls.Count | Should -Be 0
+        Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory '.e2eignore') -Value 'disabled'
+        (Invoke-AvmTestE2e @script:options).Status | Should -Be 'skipped'
+        { Invoke-AvmTestE2e @script:options -Example defaults } | Should -Throw
+        $script:fixture.Calls.Count | Should -Be 0
+    }
+
+    It 'rejects missing explicit identity and unsafe group prefixes before cloud activity' {
+        $script:options.Remove('TenantId')
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*TenantId*'
+        $script:options.TenantId = '00000000-0000-0000-0000-000000000002'
+        $script:options.ResourceGroupPrefix = 'unsafe/group'
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*ResourceGroupPrefix*'
+        $script:fixture.Calls.Count | Should -Be 0
+    }
+
+    It 'never submits or allocates a group when the two sign-ins disagree' {
+        $script:fixture.IdentityMismatch = $true
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*identity mismatch*'
+        $script:fixture.Calls | Should -Not -Contain 'group-create'
+        $script:fixture.Calls | Should -Not -Contain 'create'
+        Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
     }
 }

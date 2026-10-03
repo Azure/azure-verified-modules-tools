@@ -87,7 +87,9 @@ function Invoke-AvmBicepE2ePostHook {
 
         [string] $ResourceGroupName,
 
-        [string] $Location
+        [string] $Location,
+
+        [switch] $InProcess
     )
 
     Set-StrictMode -Version 3.0
@@ -122,10 +124,17 @@ function Invoke-AvmBicepE2ePostHook {
             AVM_E2E_RUN_ID              = $RunId
             AVM_E2E_LOCATION            = [string]$Location
         }
-        $process = Invoke-AvmProcess -FilePath $pwshPath `
-            -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $hook) `
-            -WorkingDirectory ([System.IO.Path]::GetDirectoryName($hook)) `
-            -EnvVars $environment -TimeoutSec 300 -IgnoreExitCode
+        $process = if ($InProcess) {
+            Invoke-AvmBicepTestScript -Path $hook `
+                -WorkingDirectory ([System.IO.Path]::GetDirectoryName($hook)) `
+                -EnvVars $environment -Confirm:$false
+        }
+        else {
+            Invoke-AvmProcess -FilePath $pwshPath `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $hook) `
+                -WorkingDirectory ([System.IO.Path]::GetDirectoryName($hook)) `
+                -EnvVars $environment -TimeoutSec 300 -IgnoreExitCode
+        }
         $result.ExitCode = $process.ExitCode
         if ($process.ExitCode -ne 0) {
             Add-AvmBicepTestIssue -Issues $Issues -File $Item.Case.RelativePath `
@@ -173,9 +182,16 @@ function Invoke-AvmBicepE2ePostHook {
     }
     catch [System.TimeoutException] {
         $result.Status = 'fail'
+        $detail = if ($InProcess) { 'reported a timeout' } else { 'exceeded its 300-second limit' }
         Add-AvmBicepTestIssue -Issues $Issues -File $Item.Case.RelativePath `
             -Code 'post-hook-timeout' `
-            -Message "Bicep e2e post.ps1 for '$case' exceeded its 300-second limit."
+            -Message "Bicep e2e post.ps1 for '$case' $detail."
+    }
+    catch {
+        if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }
+        $result.Status = 'fail'
+        Add-AvmBicepTestIssue -Issues $Issues -File $Item.Case.RelativePath `
+            -Code 'post-hook-failed' -Message "Bicep e2e post.ps1 for '$case' failed."
     }
     return [pscustomobject]$result
 }
