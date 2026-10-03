@@ -17,8 +17,13 @@ variable "bami_test_settings" {
       id   = string
     }))
   })
-  description = "Complete verified candidate test settings; null retains the legacy identity and subscriptions."
+  description = "Complete verified BAMI test settings; required for normal sync, unused in repository creation."
   default     = null
+
+  validation {
+    condition     = var.repository_creation_mode_enabled || var.bami_test_settings != null
+    error_message = "Normal repository sync requires verified BAMI test settings. The legacy tenant is retired."
+  }
 
   validation {
     condition = var.bami_test_settings == null ? true : (
@@ -47,24 +52,6 @@ variable "bami_test_settings" {
     )
     error_message = "BAMI requires complete GUID settings, separate execution/controller identities, and 28 unique test subscriptions excluding the distinct administration and Persistent subscriptions."
   }
-}
-
-variable "management_group_id" {
-  type        = string
-  description = "Id of the management group to create the role assignment in."
-}
-
-variable "test_subscription_ids" {
-  type = list(object({
-    name = string
-    id   = string
-  }))
-  description = "List of subscription IDs to use for testing."
-}
-
-variable "identity_resource_group_name" {
-  type        = string
-  description = "Name of the resource group to create the identities in."
 }
 
 variable "github_repository_owner" {

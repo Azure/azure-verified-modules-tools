@@ -7,3 +7,7 @@ output "test_identity" {
     repository_owner_id  = var.github_organization_id
   }
 }
+
+output "test_group_contract" {
+  value = module.azure.test_group_contract
+}

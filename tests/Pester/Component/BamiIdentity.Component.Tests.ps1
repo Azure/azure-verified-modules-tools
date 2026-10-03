@@ -44,6 +44,7 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
             Root = Join-Path $TestDrive 'candidate-root'
             TemporaryRoot = $TestDrive
             RepositorySyncRepositoryId = '1239632211'
+            EntraGroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
         }
         Mock Invoke-RepositoryGitHubApi {
             if ($Endpoint -ceq 'repos/Azure/azure-verified-modules-tools') { $script:toolsRepository }
@@ -64,7 +65,8 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
 
     AfterEach {
         foreach ($name in $script:previousGitHubContext.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $script:previousGitHubContext[$name])
+            $value = $script:previousGitHubContext[$name]
+            [Environment]::SetEnvironmentVariable($name, ($null -eq $value ? [NullString]::Value : $value), 'Process')
         }
     }
 
@@ -96,6 +98,8 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         $script:capturedVariables.github_repository_id | Should -BeExactly '1234'
         $script:capturedVariables.github_organization_id | Should -BeExactly '6844498'
         $script:capturedVariables.repository_sync_repository_id | Should -BeExactly '1239632211'
+        $script:capturedVariables.entra_group_names | Should -Be $script:parameters.EntraGroupNames
+        $script:capturedVariables.Keys | Should -Not -Contain 'fabric_admin_apis'
         @(Get-ChildItem -LiteralPath $TestDrive -Directory | Where-Object Name -Like 'avm-bami-*').Count | Should -Be 0
     }
 
@@ -167,11 +171,56 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'output' }
     }
 
-    It 'refuses the known unsafe delegation condition before any candidate apply' {
-        $properties = $script:plan.planned_values.root_module.child_modules[0].resources[1].values.body.properties
-        $properties.condition = $properties.condition.Replace('8e3af657-a8ff-443c-a75c-2fe8c4bcb635, ', '')
-        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*delegation fix*'
+    It 'refuses a wrong group binding before any candidate apply' {
+        $script:plan.planned_values.root_module.child_modules[0].resources[1].values.group_object_id =
+            '10000000-0000-4000-8000-000000000099'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*resolved configured group*'
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
+    }
+
+    It 'keeps a known identity pending until required Owner membership is reconciled' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient
+        $script:plan.resource_changes[1].change.actions = @('create')
+        $script:plan.resource_changes[1].change.before = $null
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        $result.ConsumerSettings | Should -BeNullOrEmpty
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
+    It 'passes arbitrary configured names and rejects edges outside that list' {
+        $script:parameters.EntraGroupNames += 'Data engineering testers'
+        $script:plan = New-AvmTestBamiPlan -KnownClient -GroupNames $script:parameters.EntraGroupNames
+        (Invoke-AvmBamiRepositoryIdentity @script:parameters).Status | Should -BeExactly 'Ready'
+        $script:capturedVariables.entra_group_names | Should -Be $script:parameters.EntraGroupNames
+        $script:parameters.EntraGroupNames = $script:parameters.EntraGroupNames[0..1]
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*scope*'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'apply' }
+    }
+
+    It 'previews exact Owner migration and configured membership removal without applying or advertising readiness' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -RemovedGroup 'former configured group'
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        $result.ConsumerSettings | Should -BeNullOrEmpty
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
+    It 'allows only a guarded saved migration plan at the mocked apply boundary' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -RemovedGroup 'former configured group'
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false
+        $result.Status | Should -BeExactly 'Ready'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 1 -ParameterFilter {
+            $Arguments[0] -ceq 'apply' -and $Arguments[-1].EndsWith('candidate.tfplan')
+        }
+    }
+
+    It 'fails wrong-target migration evidence before any apply' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration
+        $script:plan.resource_changes[-1].change.before.body.properties.principalId =
+            '10000000-0000-4000-8000-000000000011'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*exact obsolete Owner assignment*'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
     }
 
     It 'fails instead of repairing state, retrying an uncertain apply, or using a controller output' {
