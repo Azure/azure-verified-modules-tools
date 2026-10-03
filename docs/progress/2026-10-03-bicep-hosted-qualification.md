@@ -88,8 +88,9 @@ Az.Subscription 0.12.0 was subsequently installed in the approved
 CurrentUser scope without changing its satisfied Accounts dependency.
 Azure PowerShell has no saved test-tenant context. The separately tracked
 import-scope correction passes the real local dependency check, refreshed
-package qualification and ordinary full local gate. Its own hosted
-qualification is still required before sign-in.
+package qualification and ordinary full local gate. All 17 hosted checks
+then passed for its own correction commit, `d25c1fe`, completing the
+prerequisites for the separately tracked approved live smoke.
 
 The user approved one unchanged registry route-table defaults case in the
 existing BAMI test pool's first subscription, fixed to `eastus`, with one

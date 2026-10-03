@@ -1,6 +1,6 @@
 # Native Azure dependency import scope
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-03
 **Updated**: 2026-10-03
 **Branch**: `jaredfholgate-didactic-memory`
@@ -26,7 +26,7 @@ or deployment, not a failure of an Azure resource operation.
 - [x] Recheck the real installed prerequisites without signing in.
 - [x] Requalify the unsigned package with the dependency regressions.
 - [x] Pass the ordinary full development gate.
-- [ ] Confirm hosted checks before using the approved live test.
+- [x] Confirm hosted checks before using the approved live test.
 
 ## Validation
 
@@ -69,15 +69,20 @@ All 5,611 frozen registry files remained unchanged.
 
 The ordinary full development gate passed layout, lint, 2,814 unit tests
 and 1,259 component tests, with nine unit skips and one component skip.
-The complete local gate took 12 minutes 53 seconds. Hosted checks for the
-correction commit remain separate and pending.
+The complete local gate took 12 minutes 53 seconds. The correction was
+committed and pushed as `d25c1fe93119b2afeb7038ce80e968a1b3d31f5e`.
+All 17 hosted checks passed in
+[the matching run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37117924997),
+including lint, CodeQL, all three operating systems, six integration jobs
+and reporting. Windows completed in 16 minutes 17 seconds.
 
-No sign-in, deployment, resource deletion or permission change has occurred.
-The prepared live driver has not run and its single-case approval is unused.
+No sign-in, deployment, resource deletion or permission change occurred
+during this correction. The separately tracked
+[approved live smoke](2026-10-03-bicep-live-route-table.md)
+uses the qualified archive and a new receipt for these exact hosted results.
 
 ## Blockers or dependencies
 
-The one approved route-table smoke still requires a user-completed
-process-only sign-in. New runtime bytes must pass local/package/hosted
-qualification before that test; no other live case, release or registry
-cutover is authorized.
+The dependency blocker is resolved. The one approved route-table smoke
+still requires a user-completed process-only sign-in; no other live case,
+release or registry cutover is authorized.

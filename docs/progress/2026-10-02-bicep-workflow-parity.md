@@ -49,7 +49,7 @@ Implementation baseline:
 - [x] Qualify an unsigned extracted distribution through native contracts
       and unmodified registry cases without live Azure.
 - [x] Confirm hosted checks, including coverage, for the package correction.
-- [ ] Qualify the native dependency import-scope correction before the
+- [x] Qualify the native dependency import-scope correction before the
       approved live smoke.
 - [ ] Complete separately approved release and live Azure qualification
       before replacing registry workflows.
@@ -135,8 +135,12 @@ Only the selected Accounts module now becomes globally visible in the current
 process; other imports and version/provenance checks retain their behavior.
 The isolated regression, real local prerequisites and refreshed package
 qualification pass. The ordinary gate passed 2,814 unit and 1,259 component
-tests, with nine unit skips and one component skip. Hosted qualification of
-the new bytes is still pending.
+tests, with nine unit skips and one component skip. All 17 hosted checks
+then passed for `d25c1fe`. The [single approved live smoke](2026-10-03-bicep-live-route-table.md)
+is prepared against that exact qualified package. Its first browser sign-in
+could not open a window in this host; the approved device-code alternative
+expired before authentication completed. Both stopped before e2e invocation,
+so the live test remains blocked on user sign-in with no resources created.
 
 Reference source was read from immutable Git objects already present
 locally. No Azure deployment, deletion, permission change, reaper execution,
