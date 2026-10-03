@@ -7,13 +7,14 @@ BeforeAll {
 Describe 'Isolated candidate identity orchestration' -Tag Component {
     BeforeEach {
         $script:previousGitHubContext = @{}
-        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF')) {
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'GITHUB_EVENT_NAME')) {
             $script:previousGitHubContext[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:GITHUB_ACTIONS = 'true'
         $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
         $env:GITHUB_REPOSITORY_ID = '1239632211'
         $env:GITHUB_REF = 'refs/heads/main'
+        $env:GITHUB_EVENT_NAME = 'schedule'
         $script:toolsRepository = [pscustomobject]@{
             full_name = 'Azure/azure-verified-modules-tools'
             id = 1239632211
@@ -106,7 +107,54 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
     }
 
-    It 'keeps direct BAMI candidate preparation on trusted main' {
+    It 'rejects a direct BAMI branch apply even when manually dispatched' {
+        $env:GITHUB_REF = 'refs/heads/feature'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*trusted*main*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
+    }
+
+    It 'plans a direct BAMI candidate on a trusted manual branch without applying' {
+        $env:GITHUB_REF = 'refs/heads/jaredfholgate-mapotf-telemetry-alignment'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $script:plan = New-AvmTestBamiPlan -KnownClient
+
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
+
+        $result.Status | Should -BeExactly 'Ready'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'plan' }
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
+    It 'leaves a manual branch preview pending until its validation credential is applied' {
+        $env:GITHUB_REF = 'refs/heads/feature'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $script:plan = New-AvmTestBamiPlan -KnownClient -ValidationPending
+
+        $result = Invoke-AvmBamiRepositoryIdentity @script:parameters
+
+        $result.Status | Should -BeExactly 'PendingCandidateIdentity'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
+    It 'rejects direct BAMI branch plans unless manually dispatched' -ForEach @(
+        @{ Event = 'schedule'; Ref = 'refs/heads/feature' }
+        @{ Event = 'repository_dispatch'; Ref = 'refs/heads/feature' }
+        @{ Event = 'pull_request'; Ref = 'refs/heads/feature' }
+        @{ Event = 'workflow_dispatch'; Ref = 'refs/pull/1/merge' }
+        @{ Event = 'workflow_dispatch'; Ref = 'refs/tags/v1.0.0' }
+    ) {
+        $env:GITHUB_EVENT_NAME = $Event
+        $env:GITHUB_REF = $Ref
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters } | Should -Throw '*trusted*main*'
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0
+    }
+
+    It 'rejects a manual BAMI branch preview outside trusted GitHub Actions' {
+        $env:GITHUB_ACTIONS = 'false'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
         $env:GITHUB_REF = 'refs/heads/feature'
         { Invoke-AvmBamiRepositoryIdentity @script:parameters } | Should -Throw '*trusted*main*'
         Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0

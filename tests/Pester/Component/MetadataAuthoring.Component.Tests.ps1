@@ -25,7 +25,7 @@ BeforeAll {
                 moduleDisplayName = 'Storage'
                 moduleDescription = 'Creates storage.'
                 canonicalType = 'Microsoft.Storage/storageAccounts'
-                telemetryIdPrefix = if ($Ecosystem -eq 'bicep') { '46d3xbcp.res.storage-account' } else { '46d3xtrf.res.storage-account' }
+                telemetryIdPrefix = if ($Ecosystem -eq 'bicep') { '46d3xbcp.res.storage-account' } else { '46d3xtrf.res.a1b2c3d' }
                 owners = @('module-owner', '@Azure/team-name')
             }
         }

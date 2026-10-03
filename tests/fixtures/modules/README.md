@@ -18,8 +18,8 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 
 | Fixture                              | Provider(s)                                  | Purpose                                                                                            |
 | ------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `terraform-azurerm-avm-res-mock/`    | `hashicorp/azurerm` + `azapi` + `modtm` + `random` | Mock AVM resource module with two examples (`default`, `default-ignore`) and a `tests/unit/` `tftest.hcl`. Validates the full `format → lint → test → docs` + `check policy` chain. |
-| `terraform-azure-avm-res-mock/`      | `Azure/azure` (AzAPI-only) + `modtm`         | Mock AVM resource module with **three** examples (`default`, `ignored_example`, `second_example`), all three TFLint override variants, PowerShell lifecycle hooks, dotenv input, example-local policy exceptions, an adversarial Event Hub policy violation, and **both** `tests/unit/` *and* `tests/integration/` `tftest.hcl`. Exercises override merging, policy isolation, lifecycle hooks, integration discovery, and multi-example sorting. |
+| `terraform-azurerm-avm-res-mock/`    | `hashicorp/azurerm` + `azapi` + `random` | Mock AVM resource module with two examples (`default`, `default-ignore`) and a `tests/unit/` `tftest.hcl`. Validates the full `format → lint → test → docs` + `check policy` chain. |
+| `terraform-azure-avm-res-mock/`      | `Azure/azapi` + `hashicorp/random` | Mock AVM resource module with **three** examples (`default`, `ignored_example`, `second_example`), all three TFLint override variants, PowerShell lifecycle hooks, dotenv input, example-local policy exceptions, an adversarial Event Hub policy violation, and **both** `tests/unit/` *and* `tests/integration/` `tftest.hcl`. Exercises override merging, policy isolation, lifecycle hooks, integration discovery, and multi-example sorting. |
 
 ## Source
 

@@ -4,6 +4,21 @@
 . (Join-Path $PSScriptRoot 'RetryHelpers.ps1')
 . (Join-Path $PSScriptRoot 'TerraformOperations.ps1')
 
+function Assert-AvmBamiRepositorySyncRunContext {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [bool] $PlanOnly)
+
+    $manualBranchPreview = $PlanOnly -and
+        $env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch' -and
+        $env:GITHUB_REF -cmatch '^refs/heads/[^\r\n]+$'
+    if ($env:GITHUB_ACTIONS -cne 'true' -or
+        $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+        ($env:GITHUB_REF -cne 'refs/heads/main' -and -not $manualBranchPreview)) {
+        throw [System.InvalidOperationException]::new(
+            'BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions, except for manual plan-only branch previews.')
+    }
+}
+
 function Resolve-AvmRepositorySyncFederationContext {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -355,9 +370,7 @@ function Invoke-AvmBamiRepositoryIdentity {
     if ($Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
         throw [System.ArgumentException]::new('Candidate identities are limited to the selected Azure AVM repository.')
     }
-    if ($env:GITHUB_REF -cne 'refs/heads/main') {
-        throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
-    }
+    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly
     $toolsContext = Resolve-AvmRepositorySyncFederationContext -RepositoryId $RepositorySyncRepositoryId
     $repo = Invoke-RepositoryGitHubApi -Endpoint "repos/$Repository"
     if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or

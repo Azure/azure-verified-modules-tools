@@ -1,5 +1,12 @@
 mock_provider "azurerm" {}
-mock_provider "modtm" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id          = "00000000-0000-0000-0000-000000000000"
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 mock_provider "random" {}
 
 variables {
@@ -10,6 +17,9 @@ variables {
 run "setup" {
   module {
     source = "./tests/unit/setup"
+  }
+  providers = {
+    azapi = azapi
   }
 
   assert {
@@ -22,7 +32,7 @@ run "apply" {
   command = apply
 
   assert {
-    condition     = can(modtm_telemetry.telemetry)
+    condition     = can(azapi_resource.telemetry)
     error_message = "Telemetry resource should be created when enable_telemetry is true (default)."
   }
 

@@ -17,6 +17,10 @@ on:
         description: 'Whether to only plan the changes'
         default: true
         type: boolean
+      use_workflow_authoring_source:
+        description: 'For plan-only runs, use Avm.Authoring from this workflow ref instead of the released Gallery version.'
+        default: true
+        type: boolean
       force_file_update:
         description: 'Force the latest managed-file release onto the selected repositories, even without a new major release.'
         default: false
@@ -47,16 +51,6 @@ concurrency:
   group: repository-sync
   cancel-in-progress: false
 
-env:
-  # The GitHub Project (ProjectV2) that every AVM Terraform repo's issues and PRs
-  # are synced into ("AVM All Up"). A central, fixed target, so it lives here as a
-  # single workflow constant rather than a per-run input.
-  PROJECT_URL: 'https://github.com/orgs/Azure/projects/1011'
-
-defaults:
-  run:
-    working-directory: ./repository-management/repository-sync
-
 jobs:
   generate-matrix:
     name: Generate matrix
@@ -79,260 +73,25 @@ jobs:
           clientId: ${{ vars.AVM_APP_CLIENT_ID }}
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
-  run-sync:
+  sync-repository:
     name: Sync ${{ matrix.repoName }}
-    runs-on: ubuntu-latest
-    environment: avm
     needs: generate-matrix
+    if: needs.generate-matrix.result == 'success'
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJson(needs.generate-matrix.outputs.matrixParallel) }}
       matrix:
         include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: latest
-          terraform_wrapper: false
-
-      - name: Install Avm.Authoring
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
-              break
-            }
-            catch {
-              if ($attempt -eq $maxAttempts) {
-                throw
-              }
-              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
-              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
-              Start-Sleep -Seconds $delaySeconds
-            }
-          }
-          Import-Module Avm.Authoring
-          if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
-            throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
-          }
-
-      - name: Create GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Resolve state backend
-        id: state-backend
-        shell: pwsh
-        env:
-          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
-          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
-          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
-          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
-          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
-        run: |
-          . ./scripts/lib/TerraformOperations.ps1
-          $backend = @{
-            TenantId = $env:ARM_BACKEND_TENANT_ID
-            SubscriptionId = $env:ARM_BACKEND_SUBSCRIPTION_ID
-            ClientId = $env:ARM_BACKEND_CLIENT_ID
-            StorageAccountName = $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME
-            ContainerName = $env:ARM_BACKEND_STORAGE_CONTAINER_NAME
-          }
-          $state = Resolve-RepositorySyncStateConfiguration -Backend $backend
-          "tenant-id=$($state.TenantId)" >> $env:GITHUB_OUTPUT
-          "subscription-id=$($state.SubscriptionId)" >> $env:GITHUB_OUTPUT
-          "client-id=$($state.ClientId)" >> $env:GITHUB_OUTPUT
-          "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
-          "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
-
-      # Only state lock recovery uses this CLI login; providers retain ARM_* below.
-      - name: Azure login for state (OIDC)
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
-        with:
-          client-id: ${{ steps.state-backend.outputs.client-id }}
-          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
-          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
-
-      - name: Run sync for ${{ matrix.repoId }}
-        run: |
-
-          $triggerType = "${{ github.event_name }}"
-
-          $planOnly = $false
-          $forceFileUpdate = $false
-
-          if($triggerType -eq "workflow_dispatch") {
-            $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
-            $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
-          }
-
-          Write-Output "Repositories: $repositories"
-          Write-Output "Plan Only: $planOnly"
-          Write-Output "Force File Update: $forceFileUpdate"
-
-          $testSubscriptionIds = $env:TEST_SUBSCRIPTION_IDS | ConvertFrom-Json
-          $bamiSettings = @{
-            TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
-            TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
-            TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $env:TEST_BAMI_ADMIN_SUBSCRIPTION_ID
-            TEST_BAMI_SUBSCRIPTION_IDS = $env:TEST_BAMI_SUBSCRIPTION_IDS
-            TEST_BAMI_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_MANAGEMENT_GROUP_ID
-            TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
-            TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
-            TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
-          }
-
-          $repoMetaDataJson = $env:REPO_META_DATA_JSON
-          $repoMetaData = $null
-          if ($repoMetaDataJson -and $repoMetaDataJson -ne 'null') {
-            $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
-          }
-
-          Write-Host "Authenticating gh cli"
-          gh auth login -h "GitHub.com"
-          Write-Host "Running repo sync"
-          Import-Module Avm.Authoring -Force -ErrorAction Stop
-          ./scripts/Invoke-RepositorySync.ps1 `
-            -planOnly $planOnly `
-            -managementGroupId "${{ vars.MANAGEMENT_GROUP_ID }}" `
-            -testSubscriptionIds $testSubscriptionIds `
-            -stateStorageAccountName $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME `
-            -stateContainerName $env:ARM_BACKEND_STORAGE_CONTAINER_NAME `
-            -stateTenantId $env:ARM_BACKEND_TENANT_ID `
-            -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
-            -stateClientId $env:ARM_BACKEND_CLIENT_ID `
-            -identityResourceGroupName "${{ vars.IDENTITY_RESOURCE_GROUP_NAME }}" `
-            -repoId "${{ matrix.repoId }}" `
-            -repoUrl "${{ matrix.repoUrl }}" `
-            -repoMetaData $repoMetaData `
-            -outputDirectory "${{ github.workspace }}" `
-            -bamiSettings $bamiSettings `
-            -forceFileUpdate:$forceFileUpdate
-
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
-          AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
-          ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
-          ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
-          ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}
-          ARM_BACKEND_SUBSCRIPTION_ID: ${{ steps.state-backend.outputs.subscription-id }}
-          ARM_BACKEND_CLIENT_ID: ${{ steps.state-backend.outputs.client-id }}
-          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ steps.state-backend.outputs.storage-account }}
-          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ steps.state-backend.outputs.container }}
-          ARM_USE_AZUREAD: true
-          ARM_USE_OIDC: true
-          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS }}
-          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
-          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
-          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
-          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
-          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
-          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
-          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
-          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
-          REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
-
-      - name: Upload issue log JSON
-        if: always() && hashFiles('issue.log.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ matrix.repoId }}.issue.log.json
-          path: issue.log.json
-
-      - name: Report sync issues
-        if: always() && hashFiles('issue.log.json') != ''
-        run: |
-          $issueLogJson = Get-Content -Path "${{ github.workspace }}/issue.log.json" -Raw
-          $issueLog = ConvertFrom-Json $issueLogJson
-          $hasError = $false
-          $issueLog | ForEach-Object {
-            $severity = if ($_.severity) { $_.severity } else { "error" }
-            if ($severity -eq "warning") {
-              echo "::warning title=${{ matrix.repoId }} has issues::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
-            } else {
-              echo "::error title=${{ matrix.repoId }} has issues::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
-              $hasError = $true
-            }
-          }
-          if ($hasError) { exit 1 }
-        shell: pwsh
-
-      - name: Add repository items to the AVM All Up project
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
-        run: |
-
-          $triggerType = "${{ github.event_name }}"
-
-          $planOnly = $false
-          $includeClosed = $false
-          $projectUrl = $env:PROJECT_URL
-          # Default look-back: scheduled/dispatch-by-event runs only consider items
-          # updated in the last 3 days, which keeps steady-state runs well under the
-          # GitHub API rate limits. A manual dispatch can override this (0 = full
-          # sweep for the one-off initial back-fill).
-          $lookbackDays = 3
-
-          if ($triggerType -eq "workflow_dispatch") {
-            $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
-            $includeClosed = "${{ inputs.include_closed_project_items }}".ToLower() -eq "true"
-            $parsedLookback = 0
-            if ([int]::TryParse("${{ inputs.project_lookback_days }}".Trim(), [ref]$parsedLookback)) {
-              $lookbackDays = $parsedLookback
-            }
-            else {
-              Write-Output "Could not parse project_lookback_days '${{ inputs.project_lookback_days }}'; using default $lookbackDays."
-            }
-          }
-
-          Write-Output "Project URL: $projectUrl"
-          Write-Output "Include Closed: $includeClosed"
-          Write-Output "Look-back Days: $lookbackDays"
-          Write-Output "Plan Only: $planOnly"
-
-          ./scripts/Add-RepositoryItemsToProject.ps1 `
-            -repoUrl "${{ matrix.repoUrl }}" `
-            -projectUrl $projectUrl `
-            -includeClosed $includeClosed `
-            -lookbackDays $lookbackDays `
-            -planOnly $planOnly `
-            -outputDirectory "${{ github.workspace }}"
-
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Upload project sync log JSON
-        if: always() && hashFiles('project-sync.log.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ matrix.repoId }}.project-sync.log.json
-          path: project-sync.log.json
-
-      - name: Report project sync issues
-        if: always() && hashFiles('project-sync.log.json') != ''
-        run: |
-          $projectSyncLogJson = Get-Content -Path "${{ github.workspace }}/project-sync.log.json" -Raw
-          $projectSyncLog = ConvertFrom-Json $projectSyncLogJson
-          $projectSyncLog | ForEach-Object {
-            $severity = if ($_.severity) { $_.severity } else { "warning" }
-            if ($severity -eq "warning") {
-              echo "::warning title=${{ matrix.repoId }} project sync::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
-            } else {
-              echo "::error title=${{ matrix.repoId }} project sync::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
-            }
-          }
-        shell: pwsh
+    uses: ./.github/workflows/repository-management-sync-repository.yml
+    with:
+      repo_id: ${{ matrix.repoId }}
+      repo_name: ${{ matrix.repoName }}
+      repo_url: ${{ matrix.repoUrl }}
+      repo_metadata_json: ${{ toJson(matrix.repoMetaData) }}
+      plan_only: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
+      use_workflow_authoring_source: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only && inputs.use_workflow_authoring_source }}
+      force_file_update: ${{ github.event_name == 'workflow_dispatch' && inputs.force_file_update }}
+      sync_project_items: ${{ github.event_name != 'workflow_dispatch' || inputs.sync_project_items }}
+      include_closed_project_items: ${{ github.event_name == 'workflow_dispatch' && inputs.include_closed_project_items }}
+      project_lookback_days: ${{ github.event_name == 'workflow_dispatch' && inputs.project_lookback_days || '3' }}
+    secrets: inherit

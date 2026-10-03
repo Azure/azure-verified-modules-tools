@@ -13,6 +13,7 @@ Describe "Repository management migration layout" {
             "repository-management/repository-sync/actions/avm-repos/action.yml"
             "repository-management/repository-sync/scripts/lib/RepositoryMetadata.ps1"
             ".github/workflows/repository-management-sync.yml"
+            ".github/workflows/repository-management-sync-repository.yml"
             ".github/workflows/repository-management-config-test.yml"
         )
 
@@ -57,6 +58,7 @@ Describe "Repository management migration layout" {
         $roots = @(
             (Join-Path $script:repoRoot "repository-management")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml")
+            (Join-Path $script:repoRoot ".github/workflows/repository-management-sync-repository.yml")
             (Join-Path $script:repoRoot ".github/workflows/repository-management-config-test.yml")
         )
         $files = @(
@@ -116,9 +118,10 @@ Describe "Repository management migration layout" {
     }
 
     It "uses avm environment variables and only secrets the app private key" {
-        $workflow = Get-Content -LiteralPath (
-            Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
-        ) -Raw
+        $workflow = @(
+            (Get-Content -LiteralPath (Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml") -Raw)
+            (Get-Content -LiteralPath (Join-Path $script:repoRoot ".github/workflows/repository-management-sync-repository.yml") -Raw)
+        ) -join "`n"
         $environmentVariables = @(
             "ARM_CLIENT_ID"
             "ARM_SUBSCRIPTION_ID"
@@ -139,7 +142,9 @@ Describe "Repository management migration layout" {
         }
 
         ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
-            Should -Be 2
+            Should -Be 3
+        ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm-validation\s*$')).Count |
+            Should -Be 1
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |

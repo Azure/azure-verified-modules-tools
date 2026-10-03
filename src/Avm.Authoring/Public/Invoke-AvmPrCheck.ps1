@@ -126,7 +126,8 @@ function Invoke-AvmPrCheck {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
+        -SkipModuleVersionCheck:$SkipModuleVersionCheck
     Write-AvmLog ("pr-check: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Assert-AvmGitWorkingTreeClean -Path $context.Root
     $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
@@ -178,9 +179,10 @@ function Invoke-AvmPrCheck {
             $stepParameters = @{}
             if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
                 $stepParameters = @{
-                    Path              = $context.Root
-                    Ecosystem         = $context.Ecosystem
-                    AllowPathFallback = $AllowPathFallback
+                    Path                   = $context.Root
+                    Ecosystem              = $context.Ecosystem
+                    AllowPathFallback      = $AllowPathFallback
+                    SkipModuleVersionCheck = $SkipModuleVersionCheck
                 }
             }
             $stepResult = Invoke-AvmNestedCommand {

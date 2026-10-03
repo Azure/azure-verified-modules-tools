@@ -3,7 +3,7 @@
 
 BeforeDiscovery {
     $workflowRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows'
-    $installCases = foreach ($workflowName in 'terraform-module.yml', 'repository-management-sync.yml') {
+    $installCases = foreach ($workflowName in 'terraform-module.yml', 'repository-management-sync-repository.yml') {
         $workflow = Get-Content -LiteralPath (Join-Path $workflowRoot $workflowName) -Raw
         $step = [regex]::Match(
             $workflow,

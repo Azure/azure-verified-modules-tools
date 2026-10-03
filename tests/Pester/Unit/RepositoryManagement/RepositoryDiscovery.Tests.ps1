@@ -33,7 +33,7 @@ BeforeAll {
             moduleDisplayName = 'Azure Storage'
             moduleDescription = 'Deploys a storage account.'
             canonicalType = 'Microsoft.Storage/storageAccounts'
-            telemetryIdPrefix = '46d3xtrf.res.storage-account'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
             owners = @('first-owner', 'second-owner', 'third-owner', '@Azure/storage-owners')
         }
     }

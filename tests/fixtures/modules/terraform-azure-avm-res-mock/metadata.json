@@ -3,6 +3,6 @@
   "moduleDisplayName": "Mock resource",
   "moduleDescription": "Resource fixture for authoring checks.",
   "canonicalType": "Microsoft.Resources/resourceGroups",
-  "telemetryIdPrefix": "46d3xtrf.res.mock",
+  "telemetryIdPrefix": "46d3xtrf.res.a1b2c3d",
   "owners": []
 }

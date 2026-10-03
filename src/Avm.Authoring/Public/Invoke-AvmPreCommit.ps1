@@ -178,7 +178,8 @@ function Invoke-AvmPreCommit {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
+        -SkipModuleVersionCheck:$SkipModuleVersionCheck
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 
@@ -246,9 +247,10 @@ function Invoke-AvmPreCommit {
             $stepParameters = @{}
             if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
                 $stepParameters = @{
-                    Path              = $context.Root
-                    Ecosystem         = $context.Ecosystem
-                    AllowPathFallback = $AllowPathFallback
+                    Path                   = $context.Root
+                    Ecosystem              = $context.Ecosystem
+                    AllowPathFallback      = $AllowPathFallback
+                    SkipModuleVersionCheck = $SkipModuleVersionCheck
                 }
             }
             if ($def.PSObject.Properties.Name -contains 'ExtraArgs') {

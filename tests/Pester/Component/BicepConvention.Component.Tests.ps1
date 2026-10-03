@@ -515,6 +515,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $source = [System.IO.File]::ReadAllText($scaffoldTemplate)
         $source = $source.Replace('<Add module name>', 'Mock scaffold')
         $source = $source.Replace('<Add description>', 'Deploys a mock scaffold.')
+        $source | Should -Match ([regex]::Escape(
+                "@description('Optional. Enable/Disable usage telemetry for module.')"))
         [System.IO.File]::WriteAllText($sourcePath, $source)
         foreach ($name in @('metadata.json', 'version.json')) {
             Copy-Item -LiteralPath (Join-Path $script:modulePath $name) -Destination (Join-Path $scaffold $name)

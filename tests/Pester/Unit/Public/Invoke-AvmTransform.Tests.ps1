@@ -16,6 +16,11 @@ Describe 'Invoke-AvmTransform' {
             Should -Not -BeNullOrEmpty
     }
 
+    It 'offers WhatIf for source and test migration' {
+        (Get-Command Invoke-AvmTransform -Module Avm.Authoring -ErrorAction Stop).
+            Parameters.ContainsKey('WhatIf') | Should -BeTrue
+    }
+
     It 'is wired into the verb registry as "avm transform"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'transform' }
@@ -66,6 +71,26 @@ Describe 'Invoke-AvmTransform' {
                 $ThrottleLimit -eq 6
             }
             Should -Invoke Invoke-AvmBicepTransform -Times 0 -Exactly
+        }
+    }
+
+    It 'forwards public WhatIf without allowing the engine to write files' {
+        $dir = Join-Path $TestDrive ("tf-transform-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContext {
+                [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform' }
+            }
+            Mock Invoke-AvmTerraformTransform {
+                [pscustomobject]@{ Engine = 'terraform'; Status = 'skipped' }
+            }
+
+            (Invoke-AvmTransform -Path $D -WhatIf).Status | Should -Be 'skipped'
+            Should -Invoke Invoke-AvmTerraformTransform -Exactly 1 -ParameterFilter {
+                $WhatIf
+            }
         }
     }
 

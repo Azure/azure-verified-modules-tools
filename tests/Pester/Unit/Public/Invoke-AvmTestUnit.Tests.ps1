@@ -23,6 +23,27 @@ Describe 'Invoke-AvmTestUnit' {
         $entry.Cmdlet | Should -Be 'Invoke-AvmTestUnit'
     }
 
+    It 'passes the explicit source-preview version opt-out into real module context resolution' {
+        $dir = Join-Path $TestDrive ('unit-version-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $dir
+        [System.IO.File]::WriteAllText((Join-Path $dir 'main.tf'), "terraform {}`n")
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Test-AvmModuleVersion {
+                if (-not $SkipModuleVersionCheck) {
+                    throw [System.InvalidOperationException]::new('A nested Gallery version check was not skipped.')
+                }
+            }
+            Mock Invoke-AvmTerraformTestSuite { [pscustomobject]@{ Status = 'pass' } }
+            $run = Invoke-AvmTestUnit -Path $D -Ecosystem terraform -SkipModuleVersionCheck
+            Should -Invoke Test-AvmModuleVersion -Exactly 2 -ParameterFilter { $SkipModuleVersionCheck }
+            $run
+        }
+
+        $result.Status | Should -Be 'pass'
+    }
+
     It 'dispatches a terraform context to Invoke-AvmTerraformTestSuite with -Tier unit' {
         $dir = Join-Path $TestDrive ("tf-unit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
