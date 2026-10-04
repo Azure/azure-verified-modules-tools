@@ -14,7 +14,8 @@ BeforeAll {
             -OwnerMigration:$OwnerMigration -RemovedGroup $RemovedGroup -GroupNames $GroupNames `
             -RepositoryOwnerId '5678' -RepositorySyncRepositoryId '9012'
         $plan.planned_values.outputs.test_identity.value.repository_owner_id = '5678'
-        foreach ($resource in $plan.planned_values.root_module.child_modules[0].resources) {
+        foreach ($resource in @($plan.planned_values.root_module.child_modules[0].resources) +
+            @($plan.prior_state.values.root_module.child_modules[0].resources)) {
             $resource.sensitive_values = @{}
         }
         return $plan
@@ -180,8 +181,12 @@ Describe 'BAMI candidate plan summary' -Tag Component {
     }
 
     It 'excludes sentinel secrets in unselected plan, state, output, resource, process and environment fields' {
-        foreach ($field in @('variables', 'prior_state', 'configuration', 'output_changes', 'raw_plan')) {
+        foreach ($field in @('variables', 'configuration', 'output_changes', 'raw_plan')) {
             $script:plan[$field] = @{ credential = "DO_NOT_LOG_$field" }
+        }
+        $script:plan.prior_state.credential = 'DO_NOT_LOG_PRIOR_STATE'
+        foreach ($resource in $script:plan.prior_state.values.root_module.child_modules[0].resources) {
+            $resource.values.unselected = @{ credential = 'DO_NOT_LOG_REFRESHED_DATA' }
         }
         $script:plan.planned_values.outputs.credential = @{ value = 'DO_NOT_LOG_PLANNED_OUTPUT'; sensitive = $true }
         foreach ($resource in $script:plan.planned_values.root_module.child_modules[0].resources) {
@@ -196,7 +201,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
             if ($change.change.before) { $change.change.before.unselected = 'DO_NOT_LOG_BEFORE' }
             $change.change.after.unselected = 'DO_NOT_LOG_AFTER'
         }
-        $script:plan.planned_values.root_module.child_modules[0].resources += @{
+        $script:plan.prior_state.values.root_module.child_modules[0].resources += @{
             address = 'data.synthetic.unselected'
             mode = 'data'
             values = @{ credential = 'DO_NOT_LOG_UNSELECTED_DATA' }
@@ -239,9 +244,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
     It 'distinguishes absent fields and actions from explicit apply-time unknowns' {
         $script:plan.planned_values.root_module.child_modules[0].resources[0].values.Remove('id')
         $script:plan.resource_changes = @($script:plan.resource_changes | Where-Object { $_.address -cne 'module.azure.azapi_resource.identity' })
-        $script:plan.planned_values.root_module.child_modules[0].resources = @(
-            $script:plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.mode -ceq 'managed' }
-        )
+        $script:plan.prior_state.values.root_module.child_modules[0].resources = @()
         Write-AvmBamiIdentityPlanSummary -Plan $script:plan -Repository $script:repo `
             -TenantId $script:parameters.BamiValues.TEST_BAMI_TENANT_ID -InformationVariable information 6>$null
         $summary = Read-AvmTestBamiSummary -Information $information
@@ -290,7 +293,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         $resource = $script:plan.planned_values.root_module.child_modules[0].resources[3]
         $resource.values.body.properties.audiences = @('DO_NOT_LOG_SENSITIVE_AUDIENCE')
         $resource.sensitive_values = @{ body = @{ properties = @{ audiences = @($true) } } }
-        $group = @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
+        $group = @($script:plan.prior_state.values.root_module.child_modules[0].resources | Where-Object {
                 $_.address -ceq 'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]'
             })[0]
         $group.values.display_name = "synthetic`n::warning::not-an-annotation"
@@ -301,6 +304,20 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         ($summary.groups | ForEach-Object { $_['display_name'] }) |
             Should -Contain "synthetic`n::warning::not-an-annotation"
         $information.MessageData | Should -Not -Match 'DO_NOT_LOG|(?m)^::warning::'
+    }
+
+    It 'honors sensitive masks on groups read from the refreshed snapshot' {
+        foreach ($resource in $script:plan.prior_state.values.root_module.child_modules[0].resources) {
+            if ($resource.type -ceq 'azuread_group') {
+                $resource.sensitive_values = @{ object_id = $true }
+            }
+        }
+        $null = Invoke-AvmBamiRepositoryIdentity @script:parameters -InformationVariable information 6>$null
+        $summary = Read-AvmTestBamiSummary -Information $information
+        $summary.groups.Count | Should -Be 2
+        foreach ($group in $summary.groups) {
+            $group.object_id | Should -BeExactly '[redacted: sensitive]'
+        }
     }
 
     It 'keeps a known identity pending when its validation credential still needs applying' {
@@ -349,7 +366,7 @@ Describe 'BAMI candidate plan summary' -Tag Component {
         @{ Case = 'identity replacement'; Mutate = { param($Plan) $Plan.resource_changes[0].change.actions = @('create', 'delete') } }
         @{ Case = 'identity scope'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[0].values.parent_id = '/subscriptions/wrong/resourceGroups/wrong' } }
         @{ Case = 'Owner group binding'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[1].values.group_object_id = '10000000-0000-4000-8000-000000000099' } }
-        @{ Case = 'bootstrap Fabric group'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[-1].values.display_name = 'avm-bootstrap-fabric-admins' } }
+        @{ Case = 'bootstrap Fabric group'; Mutate = { param($Plan) $Plan.prior_state.values.root_module.child_modules[0].resources[-1].values.display_name = 'avm-bootstrap-fabric-admins' } }
         @{ Case = 'controller principal'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[0].values.output.properties.principalId = '10000000-0000-4000-8000-000000000011' } }
         @{ Case = 'validation trust'; Mutate = { param($Plan) $Plan.planned_values.root_module.child_modules[0].resources[6].values.body.properties.subject = 'repo:untrusted/repo:environment:avm-validation' } }
         @{ Case = 'errored plan'; Mutate = { param($Plan) $Plan.errored = $true } }

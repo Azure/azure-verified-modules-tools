@@ -136,8 +136,55 @@ Describe 'Candidate plan and output safety' {
     }
 
     It 'accepts only the bounded group-based identity plan without a direct Owner assignment' {
+        @($script:plan.planned_values.root_module.child_modules[0].resources |
+            Where-Object { $_['mode'] -ceq 'data' }).Count | Should -Be 0
+        @($script:plan.prior_state.values.root_module.child_modules[0].resources).Count | Should -Be 4
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Not -Throw
+    }
+
+    It 'requires the refreshed snapshot rather than configured values or planned data: <Case>' -ForEach @(
+        @{ Case = 'missing'; Snapshot = $null }
+        @{ Case = 'wrong snapshot type'; Snapshot = 'not a state document' }
+        @{ Case = 'missing values'; Snapshot = @{} }
+        @{ Case = 'wrong values type'; Snapshot = @{ values = @() } }
+        @{ Case = 'missing root module'; Snapshot = @{ values = @{} } }
+        @{ Case = 'wrong root module type'; Snapshot = @{ values = @{ root_module = @() } } }
+    ) {
+        $script:plan.planned_values.root_module.child_modules[0].resources +=
+            $script:plan.prior_state.values.root_module.child_modules[0].resources
+        $script:plan.prior_state = $Snapshot
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
+            Should -Throw '*requires refreshed Terraform data-source evidence*'
+    }
+
+    It 'never treats historical managed resources as planned identity scope' {
+        $script:plan.prior_state.values.root_module.child_modules[0].resources += @{
+            address = 'module.azure.azapi_resource.previous_identity'
+            mode = 'managed'; type = 'azapi_resource'; values = @{ name = 'unrelated prior resource' }
+        }
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Not -Throw
+        $script:plan.planned_values.root_module.child_modules[0].resources[0].values.name = 'wrong planned identity'
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw '*expected repository*'
+    }
+
+    It 'rejects stale evidence when a required data source will be reread at apply: <Address>' -ForEach @(
+        @{ Address = 'module.azure.data.azapi_client_config.current' }
+        @{ Address = 'module.azure.data.azuread_client_config.current' }
+        @{ Address = 'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]' }
+        @{ Address = 'module.azure.data.azuread_group.test_permissions["avm-test-identity-owners"]' }
+    ) {
+        $resource = @($script:plan.prior_state.values.root_module.child_modules[0].resources |
+            Where-Object { $_['address'] -ceq $Address })[0]
+        $script:plan.resource_changes += @{
+            address = $Address; mode = 'data'; type = $resource['type']
+            change = @{ actions = @('read'); before = $resource['values']; after = @{}; after_unknown = $true }
+        }
+        $script:plan.planned_values.root_module.child_modules[0].resources += @{
+            address = $Address; mode = 'data'; type = $resource['type']; values = @{}
+        }
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
+            Should -Throw '*requires completed plan-time data reads*'
     }
 
     It 'requires exactly the tools validation credential alongside the existing three environment credentials' {
@@ -223,9 +270,29 @@ Describe 'Candidate plan and output safety' {
         @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'client_id' }
         @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'object_id' }
     ) {
-        $resource = @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $Address)[0]
+        $resource = @($script:plan.prior_state.values.root_module.child_modules[0].resources | Where-Object address -CEQ $Address)[0]
         $resource.values[$Field] = [guid]::Empty.ToString()
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw '*Candidate membership requires*'
+    }
+
+    It 'rejects missing, duplicated, wrong-mode, wrong-type or malformed provider evidence: <Address>' -ForEach @(
+        @{ Address = 'module.azure.data.azapi_client_config.current' }
+        @{ Address = 'module.azure.data.azuread_client_config.current' }
+    ) {
+        foreach ($mutation in @('missing', 'duplicate', 'mode', 'type', 'values')) {
+            $invalid = New-AvmTestBamiPlan
+            $module = $invalid.prior_state.values.root_module.child_modules[0]
+            $resource = @($module.resources | Where-Object { $_['address'] -ceq $Address })[0]
+            switch ($mutation) {
+                'missing' { $module.resources = @($module.resources | Where-Object { $_['address'] -cne $Address }) }
+                'duplicate' { $module.resources += $resource.Clone() }
+                'mode' { $resource.mode = 'managed' }
+                'type' { $resource.type = 'terraform_remote_state' }
+                'values' { $resource.values = @() }
+            }
+            { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } |
+                Should -Throw '*requires verified Azure and Graph tenant/controller evidence*'
+        }
     }
 
     It 'rejects missing, duplicated, renamed, invalid-ID or nonsecurity group evidence' {
@@ -235,7 +302,7 @@ Describe 'Candidate plan and output safety' {
         )) {
             foreach ($field in @('object_id', 'display_name', 'security_enabled')) {
                 $invalid = New-AvmTestBamiPlan
-                $resource = @($invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $address)[0]
+                $resource = @($invalid.prior_state.values.root_module.child_modules[0].resources | Where-Object address -CEQ $address)[0]
                 $resource.values[$field] = switch ($field) {
                     'object_id' { [guid]::Empty.ToString() }
                     'display_name' { 'different configured group' }
@@ -244,13 +311,13 @@ Describe 'Candidate plan and output safety' {
                 { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*configured security group*'
             }
             $invalid = New-AvmTestBamiPlan
-            $invalid.planned_values.root_module.child_modules[0].resources = @(
-                $invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CNE $address
+            $invalid.prior_state.values.root_module.child_modules[0].resources = @(
+                $invalid.prior_state.values.root_module.child_modules[0].resources | Where-Object address -CNE $address
             )
             { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*exactly one*'
             $invalid = New-AvmTestBamiPlan
-            $invalid.planned_values.root_module.child_modules[0].resources += @(
-                $invalid.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $address
+            $invalid.prior_state.values.root_module.child_modules[0].resources += @(
+                $invalid.prior_state.values.root_module.child_modules[0].resources | Where-Object address -CEQ $address
             )[0].Clone()
             { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*exactly one*'
         }

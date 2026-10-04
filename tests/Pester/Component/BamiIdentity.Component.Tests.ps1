@@ -171,6 +171,32 @@ Describe 'Isolated candidate identity orchestration' -Tag Component {
         Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'output' }
     }
 
+    It 'rejects another provider identity from serialized refreshed evidence before any apply: <Field>' -ForEach @(
+        @{ Address = 'module.azure.data.azapi_client_config.current'; Field = 'tenant_id'; Value = '30000000-0000-4000-8000-000000000001' }
+        @{ Address = 'module.azure.data.azapi_client_config.current'; Field = 'subscription_id'; Value = '30000000-0000-4000-8000-000000000002' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'tenant_id'; Value = '30000000-0000-4000-8000-000000000001' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'client_id'; Value = '30000000-0000-4000-8000-000000000003' }
+        @{ Address = 'module.azure.data.azuread_client_config.current'; Field = 'object_id'; Value = 'not-a-guid' }
+    ) {
+        $resource = @($script:plan.prior_state.values.root_module.child_modules[0].resources |
+            Where-Object { $_['address'] -ceq $Address })[0]
+        $resource.values[$Field] = $Value
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*Candidate membership requires*'
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
+    It 'does not apply or summarize a deferred lookup with stale refreshed evidence' {
+        $resource = $script:plan.prior_state.values.root_module.child_modules[0].resources[1]
+        $script:plan.resource_changes += @{
+            address = $resource.address; mode = 'data'; type = $resource.type
+            change = @{ actions = @('read'); before = $resource.values; after = @{}; after_unknown = $true }
+        }
+        Mock Write-AvmBamiIdentityPlanSummary {}
+        { Invoke-AvmBamiRepositoryIdentity @script:parameters -PlanOnly $false } | Should -Throw '*completed plan-time data reads*'
+        Should -Invoke Write-AvmBamiIdentityPlanSummary -Exactly 0
+        Should -Invoke Invoke-AvmBamiIdentityTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+    }
+
     It 'refuses a wrong group binding before any candidate apply' {
         $script:plan.planned_values.root_module.child_modules[0].resources[1].values.group_object_id =
             '10000000-0000-4000-8000-000000000099'

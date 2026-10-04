@@ -79,6 +79,29 @@ function Get-AvmTerraformPlannedResource {
     }
 }
 
+function Get-AvmTerraformPlanDataResource {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Plan)
+
+    # Completed reads are in the refreshed prior state; planned values contain deferred reads.
+    $priorState = $Plan['prior_state']
+    if ($priorState -isnot [System.Collections.IDictionary] -or
+        $priorState['values'] -isnot [System.Collections.IDictionary] -or
+        $priorState['values']['root_module'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Candidate membership requires refreshed Terraform data-source evidence.')
+    }
+    foreach ($resource in @(Get-AvmTerraformPlannedResource -Module $priorState['values']['root_module'])) {
+        if ($resource['mode'] -cne 'data') { continue }
+        $changes = @($Plan['resource_changes'] | Where-Object { $_['address'] -ceq $resource['address'] })
+        if ($changes.Count -gt 1 -or ($changes.Count -eq 1 -and
+            ($changes[0]['mode'] -cne 'data' -or $changes[0]['type'] -cne $resource['type'] -or
+                (@($changes[0]['change']['actions']) -join ',') -cne 'no-op'))) {
+            throw [System.InvalidOperationException]::new("Candidate membership requires completed plan-time data reads; '$($resource['address'])' has a pending or ambiguous change.")
+        }
+        $resource
+    }
+}
+
 function Test-AvmTerraformPlanUnknownField {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -190,8 +213,9 @@ function Assert-AvmBamiIdentityPlan {
         $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview') {
         throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
     }
-    $azureContexts = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azapi_client_config.current' })
-    $graphContexts = @($resources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_client_config.current' })
+    $dataResources = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
+    $azureContexts = @($dataResources | Where-Object { $_['address'] -ceq 'module.azure.data.azapi_client_config.current' })
+    $graphContexts = @($dataResources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_client_config.current' })
     if ($azureContexts.Count -ne 1 -or $graphContexts.Count -ne 1 -or
         $azureContexts[0]['mode'] -cne 'data' -or $graphContexts[0]['mode'] -cne 'data' -or
         $azureContexts[0]['type'] -cne 'azapi_client_config' -or $graphContexts[0]['type'] -cne 'azuread_client_config' -or
@@ -232,7 +256,7 @@ function Assert-AvmBamiIdentityPlan {
     foreach ($address in $membershipNames.Keys) {
         $groupName = $membershipNames[$address]
         $dataAddress = $address.Replace('azuread_group_member.', 'data.azuread_group.')
-        $evidence = @($resources | Where-Object { $_['address'] -ceq $dataAddress })
+        $evidence = @($dataResources | Where-Object { $_['address'] -ceq $dataAddress })
         if ($evidence.Count -ne 1 -or $evidence[0]['mode'] -cne 'data' -or
             $evidence[0]['type'] -cne 'azuread_group' -or $evidence[0]['values'] -isnot [System.Collections.IDictionary]) {
             throw [System.InvalidOperationException]::new("Candidate membership requires exactly one target-tenant lookup for configured group '$groupName'.")
@@ -362,6 +386,7 @@ function Write-AvmBamiIdentityPlanSummary {
     )
 
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
+    $dataResources = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
     $readField = {
         param(
             [AllowNull()] [System.Collections.IDictionary] $Resource,
@@ -458,7 +483,7 @@ function Write-AvmBamiIdentityPlanSummary {
         }
     )
     $groups = @(
-        foreach ($resource in $resources) {
+        foreach ($resource in $dataResources) {
             if ($resource['mode'] -ceq 'data' -and $resource['type'] -ceq 'azuread_group' -and
                 $resource['address'].StartsWith('module.azure.data.azuread_group.test_permissions[')) {
                 [ordered]@{
