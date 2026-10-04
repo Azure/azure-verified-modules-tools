@@ -479,22 +479,23 @@ task 'test-tenant-terraform' {
                             $evidence['groups'] -isnot [System.Collections.IDictionary]) {
                             throw [System.IO.InvalidDataException]::new('The actual mocked plan must expose observed provider and group evidence.')
                         }
-                        $resources += @{
+                        $dataResources = @(@{
                             address = 'module.azure.data.azapi_client_config.current'
                             mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context']
                         }, @{
                             address = 'module.azure.data.azuread_client_config.current'
                             mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context']
-                        }
+                        })
                         foreach ($name in $evidence['groups'].Keys) {
                             $key = ConvertTo-Json -InputObject $name -Compress
                             $address = "module.azure.data.azuread_group.test_permissions[$key]"
-                            $resources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
+                            $dataResources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
                         }
                         $candidatePlan = @{
                             errored = $false
                             resource_changes = $changes
                             planned_values = @{ root_module = @{ resources = $resources } }
+                            prior_state = @{ values = @{ root_module = @{ resources = $dataResources } } }
                         }
                     }
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')

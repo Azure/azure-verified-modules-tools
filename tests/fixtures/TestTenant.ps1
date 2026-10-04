@@ -194,8 +194,17 @@ AND
         errored = $false
         resource_changes = $changes
         planned_values = @{
-            root_module = @{ child_modules = @(@{ address = 'module.azure'; resources = $resources }) }
+            root_module = @{ child_modules = @(@{
+                address = 'module.azure'
+                resources = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
+            }) }
             outputs = @{ test_identity = @{ value = $identity } }
+        }
+        prior_state = @{
+            values = @{ root_module = @{ child_modules = @(@{
+                address = 'module.azure'
+                resources = @($resources | Where-Object { $_['mode'] -ceq 'data' })
+            }) } }
         }
     }
 }
