@@ -12,11 +12,13 @@ on:
       - repository-management/labels/**
       - repository-management/shared/**
       - repository-management/bicep-test-tenant-sync/**
-      - repository-management/repository-sync/bami-identity/**
       - repository-management/repository-sync/terraform/**
       - repository-management/repository-sync/scripts/lib/TestTenant.ps1
       - tests/Pester/Unit/RepositoryManagement/**
       - tests/fixtures/TestTenant.ps1
+      - tests/fixtures/RepositoryState.ps1
+      - tests/Pester/Integration/RepositoryStateTransfer.Integration.Tests.ps1
+      - repository-management/repository-sync/scripts/Test-RepositoryStateTransfer.ps1
       - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
       - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
       - repository-management/repository-sync/scripts/lib/RepositoryFileSync.ps1
@@ -58,6 +60,11 @@ jobs:
       - name: Validate Terraform without deploying
         shell: pwsh
         run: ./build.ps1 infra,test-tenant-terraform
+      - name: Verify local-only state consolidation
+        shell: pwsh
+        run: |
+          Install-PSResource -Name Pester -Version '[5.7.0,)' -Scope CurrentUser -TrustRepository
+          ./build.ps1 integration -TestName 'Integration: local repository state consolidation*'
 
   test:
     name: Test configuration

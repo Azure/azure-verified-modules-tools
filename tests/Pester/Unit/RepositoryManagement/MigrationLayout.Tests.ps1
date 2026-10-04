@@ -65,7 +65,7 @@ Describe "Repository management migration layout" {
         )
         $retiredReferences = @(
             "tf-repo-mgmt"
-            "repository_sync(?!_repository_id\b)"
+            "repository_sync(?!_(repository_id|state_layout)\b)"
             "repository-meta-data"
             "\.github/actions/avm-repos"
             "validate-vscode-extensions\.sh"
@@ -77,10 +77,12 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It 'permits only the required federation ID input from the retired identifier pattern' {
-        'repository_sync_repository_id' | Should -Not -Match 'repository_sync(?!_repository_id\b)'
-        'repository_sync_repository_id_legacy' | Should -Match 'repository_sync(?!_repository_id\b)'
-        'repository_sync/modules' | Should -Match 'repository_sync(?!_repository_id\b)'
+    It 'permits only the federation ID and explicit cutover setting from the retired identifier pattern' {
+        'repository_sync_repository_id' | Should -Not -Match 'repository_sync(?!_(repository_id|state_layout)\b)'
+        'AVM_REPOSITORY_SYNC_STATE_LAYOUT' | Should -Not -Match 'repository_sync(?!_(repository_id|state_layout)\b)'
+        'repository_sync_repository_id_legacy' | Should -Match 'repository_sync(?!_(repository_id|state_layout)\b)'
+        'repository_sync_state_layout_legacy' | Should -Match 'repository_sync(?!_(repository_id|state_layout)\b)'
+        'repository_sync/modules' | Should -Match 'repository_sync(?!_(repository_id|state_layout)\b)'
     }
 
     It "does not manage the retired Copilot Actions environment or secrets" {

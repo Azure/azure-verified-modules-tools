@@ -278,8 +278,11 @@ function Invoke-AvmProcess {
         if ($narrate) {
             Write-AvmLog ('  TIMEOUT: {0} (after {1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Info
         }
-        throw [System.TimeoutException]::new(
+        $timeout = [System.TimeoutException]::new(
             "Process '$FilePath' did not exit within $TimeoutSec seconds; killed.")
+        $timeout.Data['StdOut'] = $stdOut
+        $timeout.Data['StdErr'] = $stdErr
+        throw $timeout
     }
 
     $succeeded = $SuccessExitCode -contains $exitCode

@@ -303,18 +303,27 @@ Describe 'Invoke-AvmProcess' {
         $err.GetType().Name | Should -Be 'AvmProcessException'
     }
 
-    It 'kills the process and throws TimeoutException on -TimeoutSec' {
+    It 'retains private partial output when timing out with streaming <Streaming>' -ForEach @(
+        @{ Streaming = $false }
+        @{ Streaming = $true }
+    ) {
         $exe = $script:pwsh
-        $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe } {
-            param($E)
+        $err = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe; Streaming = $Streaming } {
+            param($E, $Streaming)
             try {
-                Invoke-AvmProcess -FilePath $E -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 30') -TimeoutSec 1
+                Invoke-AvmProcess -FilePath $E -ArgumentList @(
+                    '-NoProfile', '-NonInteractive', '-Command',
+                    '[Console]::Out.WriteLine("partial stdout"); [Console]::Error.WriteLine("partial stderr"); Start-Sleep -Seconds 30'
+                ) -TimeoutSec 2 -StreamOutput:$Streaming
                 return $null
             }
             catch { return $_.Exception }
         }
         $err | Should -Not -BeNullOrEmpty
         $err.GetType().FullName | Should -Be 'System.TimeoutException'
+        $err.Data['StdOut'] | Should -Match 'partial stdout'
+        $err.Data['StdErr'] | Should -Match 'partial stderr'
+        $err.Message | Should -Not -Match 'partial stdout|partial stderr'
     }
 
     It 'passes argv tokens verbatim (no shell, no quoting)' {

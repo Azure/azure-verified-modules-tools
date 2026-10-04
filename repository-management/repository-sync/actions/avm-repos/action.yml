@@ -39,38 +39,45 @@ runs:
     - name: Generate matrix
       id: matrix
       run: |
+        $ErrorActionPreference = 'Stop'
+        . (Join-Path $env:AVM_REPOS_ACTION_PATH '..' '..' 'scripts' 'lib' 'Logging.ps1')
         $matrixParallel = 5
         Write-Output "matrixParallel=$matrixParallel" >> $env:GITHUB_OUTPUT
 
-        $repositories = "${{ inputs.repositories }}"
-        if($repositories -eq "All") {
+        $selection = ([string]$env:REPOSITORIES).Trim()
+        if ([string]::IsNullOrWhiteSpace($selection) -or $selection -ieq 'All') {
           $repositories = @()
+          Write-Information 'Repository selection: all eligible installed AVM repositories.' -InformationAction Continue
         } else {
-          $repositories = $repositories -split ','
+          $repositories = @($selection -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+          if ($repositories -contains 'All' -or $repositories.Count -eq 0) {
+            throw 'Use All on its own, or a comma-separated list of repository IDs.'
+          }
+          Write-Information "Repository selection: $($repositories.Count) explicit repositories." -InformationAction Continue
         }
 
-        Write-Host "Repositories to include: $(ConvertTo-Json $repositories)"
-
-        $repositoriesToSkip = "${{ inputs.repositoriesToSkip }}"
-        if($repositoriesToSkip -eq "") {
-          $repositoriesToSkip = @()
-        } else {
-          $repositoriesToSkip = $repositoriesToSkip -split ','
-        }
-
-        Write-Host "Repositories to skip from input: $(ConvertTo-Json $repositoriesToSkip)"
-
-        $matrix = @(& "${{ github.action_path }}/scripts/Get-RepositoriesWhereAppInstalled.ps1" `
-          -repoFilter $repositories `
-          -outputDirectory "${{ inputs.outputDirectory }}" `
-          -additionalReposToSkip $repositoriesToSkip)
-
-        $matrixJson = ConvertTo-Json $matrix -Depth 10 -Compress
-        Write-Host (ConvertTo-Json $matrix -Depth 10)
+        $repositoriesToSkip = @($env:REPOSITORIES_TO_SKIP -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        $matrix = @(Invoke-RepositorySyncLogGroup -Name 'Repository discovery and matrix details' -Action {
+          Write-Information "Included IDs: $(ConvertTo-Json -InputObject $repositories -Compress)" -InformationAction Continue
+          Write-Information "Additional exclusions: $(ConvertTo-Json -InputObject $repositoriesToSkip -Compress)" -InformationAction Continue
+          $selected = @(& (Join-Path $env:AVM_REPOS_ACTION_PATH 'scripts' 'Get-RepositoriesWhereAppInstalled.ps1') `
+            -repoFilter $repositories `
+            -outputDirectory $env:OUTPUT_DIRECTORY `
+            -additionalReposToSkip $repositoriesToSkip)
+          Write-Information (ConvertTo-Json -InputObject $selected -Depth 10) -InformationAction Continue
+          $selected
+        })
+        $matrixJson = ConvertTo-Json -InputObject $matrix -Depth 10 -Compress
         Write-Output "matrix=$matrixJson" >> $env:GITHUB_OUTPUT
+        Write-Information "Matrix ready: $($matrix.Count) repositories; maximum parallel jobs: $matrixParallel; additional exclusions: $($repositoriesToSkip.Count)." -InformationAction Continue
+        $global:LASTEXITCODE = 0
       shell: pwsh
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        AVM_REPOS_ACTION_PATH: ${{ github.action_path }}
+        REPOSITORIES: ${{ inputs.repositories }}
+        REPOSITORIES_TO_SKIP: ${{ inputs.repositoriesToSkip }}
+        OUTPUT_DIRECTORY: ${{ inputs.outputDirectory }}
 
     - name: Upload repository log JSON
       if: always() && hashFiles('issues.log.json') != ''

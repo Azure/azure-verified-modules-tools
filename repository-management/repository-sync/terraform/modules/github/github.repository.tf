@@ -15,12 +15,6 @@ resource "github_repository" "this" {
 
   topics = var.topics
 
-  template {
-    owner                = "Azure"
-    repository           = "terraform-azurerm-avm-template"
-    include_all_branches = false
-  }
-
   has_issues             = true
   has_discussions        = false
   has_projects           = false
@@ -43,5 +37,6 @@ resource "github_repository" "this" {
 
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [template]
   }
 }

@@ -1,5 +1,10 @@
 output "client_id" {
   value = azapi_resource.identity.output.properties.clientId
+
+  precondition {
+    condition     = local.member_is_repository_identity
+    error_message = "Only the dedicated repository identity, never the controller or shared Bicep identity, may be published."
+  }
 }
 
 output "tenant_id" {

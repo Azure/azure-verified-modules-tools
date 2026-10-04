@@ -40,9 +40,7 @@ permissions:
   id-token: write
   contents: read
 
-# Each repo's Terraform state is a single blob, and a cancelled run leaves its
-# lease behind. Queue overlapping runs rather than cancelling them, so the sync
-# stays the only writer and any lock it does find is genuinely stale.
+# Queue overlapping runs; state locks are never broken automatically.
 concurrency:
   group: repository-sync
   cancel-in-progress: false
@@ -69,6 +67,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require approved state consolidation
+        shell: pwsh
+        env:
+          AVM_REPOSITORY_SYNC_STATE_LAYOUT: ${{ vars.AVM_REPOSITORY_SYNC_STATE_LAYOUT }}
+        run: |
+          . ./scripts/lib/TestTenant.ps1
+          Assert-AvmRepositorySyncStateLayout -Layout $env:AVM_REPOSITORY_SYNC_STATE_LAYOUT
 
       - name: Generate matrix
         uses: ./repository-management/repository-sync/actions/avm-repos
@@ -156,14 +162,6 @@ jobs:
           "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
-      # Only state lock recovery uses this CLI login; providers use BAMI settings.
-      - name: Azure login for state (OIDC)
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
-        with:
-          client-id: ${{ steps.state-backend.outputs.client-id }}
-          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
-          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
-
       - name: Run sync for ${{ matrix.repoId }}
         run: |
 
@@ -176,10 +174,6 @@ jobs:
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
             $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
           }
-
-          Write-Output "Repositories: $repositories"
-          Write-Output "Plan Only: $planOnly"
-          Write-Output "Force File Update: $forceFileUpdate"
 
           $bamiSettings = @{
             TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
@@ -198,9 +192,6 @@ jobs:
             $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
           }
 
-          Write-Host "Authenticating gh cli"
-          gh auth login -h "GitHub.com"
-          Write-Host "Running repo sync"
           Import-Module Avm.Authoring -Force -ErrorAction Stop
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
@@ -209,8 +200,8 @@ jobs:
             -stateTenantId $env:ARM_BACKEND_TENANT_ID `
             -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
             -stateClientId $env:ARM_BACKEND_CLIENT_ID `
-            -repoId "${{ matrix.repoId }}" `
-            -repoUrl "${{ matrix.repoUrl }}" `
+            -repoId $env:REPO_ID `
+            -repoUrl $env:REPO_URL `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
             -bamiSettings $bamiSettings `
@@ -219,6 +210,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AVM_REPOSITORY_SYNC_STATE_LAYOUT: ${{ vars.AVM_REPOSITORY_SYNC_STATE_LAYOUT }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}
@@ -226,8 +218,6 @@ jobs:
           ARM_BACKEND_CLIENT_ID: ${{ steps.state-backend.outputs.client-id }}
           ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ steps.state-backend.outputs.storage-account }}
           ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ steps.state-backend.outputs.container }}
-          ARM_USE_AZUREAD: true
-          ARM_USE_OIDC: true
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
@@ -237,6 +227,8 @@ jobs:
           TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
+          REPO_ID: ${{ matrix.repoId }}
+          REPO_URL: ${{ matrix.repoUrl }}
 
       - name: Upload issue log JSON
         if: always() && hashFiles('issue.log.json') != ''
@@ -290,11 +282,6 @@ jobs:
             }
           }
 
-          Write-Output "Project URL: $projectUrl"
-          Write-Output "Include Closed: $includeClosed"
-          Write-Output "Look-back Days: $lookbackDays"
-          Write-Output "Plan Only: $planOnly"
-
           ./scripts/Add-RepositoryItemsToProject.ps1 `
             -repoUrl "${{ matrix.repoUrl }}" `
             -projectUrl $projectUrl `
@@ -319,12 +306,15 @@ jobs:
         run: |
           $projectSyncLogJson = Get-Content -Path "${{ github.workspace }}/project-sync.log.json" -Raw
           $projectSyncLog = ConvertFrom-Json $projectSyncLogJson
+          $hasError = $false
           $projectSyncLog | ForEach-Object {
             $severity = if ($_.severity) { $_.severity } else { "warning" }
             if ($severity -eq "warning") {
               echo "::warning title=${{ matrix.repoId }} project sync::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
             } else {
               echo "::error title=${{ matrix.repoId }} project sync::$($_.message) Check the log file artifact for ${{ matrix.repoId }} to see the full details."
+              $hasError = $true
             }
           }
+          if ($hasError) { exit 1 }
         shell: pwsh
