@@ -41,12 +41,13 @@ function Invoke-AvmTerraformInit {
     }
 
     $processParameters = @{
-        FilePath         = $TerraformPath
-        ArgumentList     = $arguments.ToArray()
-        WorkingDirectory = $WorkingDirectory
-        EnvVars          = $EnvVars
-        Label            = $Label
-        StreamOutput     = $StreamOutput
+        FilePath            = $TerraformPath
+        ArgumentList        = $arguments.ToArray()
+        WorkingDirectory    = $WorkingDirectory
+        EnvVars             = $EnvVars
+        Label               = $Label
+        StreamOutput        = $StreamOutput
+        RetryNetworkFailure = $true
     }
 
     $lock = $null

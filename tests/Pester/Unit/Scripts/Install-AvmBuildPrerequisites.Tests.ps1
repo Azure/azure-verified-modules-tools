@@ -11,6 +11,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' }
         } -ParameterFilter { $ListAvailable }
         Mock Import-Module
+        Mock Get-InstalledPSResource
         Mock Install-PSResource
         Mock Start-Sleep
         Mock Write-Warning
@@ -41,11 +42,23 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12'
         }
         Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter {
-            $Seconds -eq 1
+            $Milliseconds -ge 500 -and $Milliseconds -le 1000
         }
         Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
             $Message -match 'attempt 1 of 3'
         }
+    }
+
+    It 'skips an exact pin that is already installed but still resolves version ranges' {
+        Mock Get-InstalledPSResource {
+            [pscustomobject]@{ Name = 'powershell-yaml'; Version = '0.4.12' }
+        } -ParameterFilter { $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12' }
+
+        & $script:scriptPath -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times 2 -Exactly
+        Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter { $Name -eq 'powershell-yaml' }
+        Should -Invoke Get-InstalledPSResource -Times 1 -Exactly
     }
 
     It 'does not retry a deterministic package failure' {

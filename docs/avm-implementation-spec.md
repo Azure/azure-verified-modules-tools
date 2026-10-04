@@ -924,6 +924,7 @@ Schema enforced by `Test-AvmPins`:
 
 - `AVM_OFFLINE=1` → resolver refuses any HTTP traffic. Cache hit succeeds; cache miss fails fast with a clear message naming the missing tool.
 - `AVM_MIRROR=https://internal.example.com/avm-mirror` → every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. With the example above, `https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip` is fetched from `https://internal.example.com/avm-mirror/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip`. The mirror itself MUST be `https://`; an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy cannot silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
+- `AVM_NETWORK_RETRY_MAX_ATTEMPTS=<1-10>` → overrides the attempt limit for every retried network read (default 4 from `Resources/network.json`). `1` disables retry. Advisory lookups such as the module update check never exceed their smaller budget.
 
 ---
 
@@ -1090,7 +1091,7 @@ Assume the user runs multiple `avm` invocations in parallel against different re
 - All `Invoke-WebRequest` / `Invoke-RestMethod` calls go through `Invoke-AvmHttp` in `Private/` which:
   - Sets a `User-Agent: Avm.Authoring/<version> (<os>/<arch>)` header.
   - Times out after 60 seconds by default (overridable).
-  - Retries on 5xx and connection errors with exponential backoff (3 attempts, 1 s / 4 s / 16 s).
+  - Retries transient failures (HTTP 408, 429 and 5xx, timeouts and connection resets) through `Invoke-AvmRetry`, using capped exponential backoff with jitter and honouring `Retry-After`. Limits live in `src/Avm.Authoring/Resources/network.json`; `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) overrides the attempt count.
   - Verifies the certificate chain (no `-SkipCertificateCheck` — ever).
 - Download SHA256 verification is non-negotiable; mismatch throws `AvmToolException` with both expected and actual hashes in the message.
 

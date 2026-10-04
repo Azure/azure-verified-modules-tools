@@ -61,7 +61,7 @@ function Get-AvmBicepPublicationTargetVersion {
         $upstream = 'https://github.com/Azure/bicep-registry-modules.git'
         $tags = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
             -ArgumentList @('ls-remote', '--tags', $upstream, "$($Scope.ModuleRelativePath)/$Version.*") `
-            -TimeoutSec 30 -IgnoreExitCode `
+            -TimeoutSec 30 -IgnoreExitCode -RetryNetworkFailure `
             -EnvVars @{ GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'Never' }
         if ($tags.ExitCode -ne 0) {
             throw [AvmConfigurationException]::new(

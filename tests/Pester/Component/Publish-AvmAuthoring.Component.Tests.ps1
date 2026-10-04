@@ -137,4 +137,56 @@ Describe 'Component: signed release artifact validation' -Tag 'Component' {
                 -WhatIf
         } | Should -Throw '*contains unsigned PowerShell files*'
     }
+
+    Context 'Gallery publication' {
+        BeforeEach {
+            $global:AvmPublishFindCalls = 0
+            Mock Import-Module
+            Mock Start-Sleep
+            Mock Publish-PSResource
+        }
+
+        AfterEach {
+            Remove-Variable -Name AvmPublishFindCalls -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It 'retries a transient existing-version lookup, then publishes once' {
+            Mock Find-PSResource {
+                $global:AvmPublishFindCalls++
+                if ($global:AvmPublishFindCalls -eq 1) {
+                    Write-Error -Exception ([System.Net.Http.HttpRequestException]::new('The operation has timed out.'))
+                }
+            }
+            $artifactPath = New-SignedReleaseFixture -Root (Join-Path $TestDrive 'publish-retry')
+
+            & $script:scriptPath -ReleaseTag v1.2.3 -ArtifactPath $artifactPath -ApiKey $script:apiKey -Confirm:$false -WarningAction SilentlyContinue
+
+            Should -Invoke Find-PSResource -Times 2 -Exactly
+            Should -Invoke Publish-PSResource -Times 1 -Exactly
+        }
+
+        It 'does not publish when the lookup keeps failing transiently' {
+            Mock Find-PSResource {
+                Write-Error -Exception ([System.Net.Http.HttpRequestException]::new('The operation has timed out.'))
+            }
+            $artifactPath = New-SignedReleaseFixture -Root (Join-Path $TestDrive 'publish-exhausted')
+
+            { & $script:scriptPath -ReleaseTag v1.2.3 -ArtifactPath $artifactPath -ApiKey $script:apiKey -Confirm:$false -WarningAction SilentlyContinue } |
+                Should -Throw '*timed out*'
+            Should -Invoke Publish-PSResource -Times 0 -Exactly
+        }
+
+        It 'treats a not-found lookup as unpublished without retrying' {
+            Mock Find-PSResource {
+                Write-Error -Message "Package with name 'Avm.Authoring' and version '1.2.3' could not be found in repository 'PSGallery'."
+            }
+            $artifactPath = New-SignedReleaseFixture -Root (Join-Path $TestDrive 'publish-new')
+
+            & $script:scriptPath -ReleaseTag v1.2.3 -ArtifactPath $artifactPath -ApiKey $script:apiKey -Confirm:$false
+
+            Should -Invoke Find-PSResource -Times 1 -Exactly
+            Should -Invoke Publish-PSResource -Times 1 -Exactly
+            Should -Invoke Start-Sleep -Times 0 -Exactly
+        }
+    }
 }

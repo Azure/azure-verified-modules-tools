@@ -77,7 +77,8 @@ function Invoke-AvmTerraformTest {
                     -EnvVars $environment `
                     -StreamOutput:(Test-AvmVerboseEnabled) `
                     -Label ('terraform init {0}' -f $example.RelativePath) `
-                    -IgnoreExitCode
+                    -IgnoreExitCode `
+                    -RetryNetworkFailure
 
                 if ($initResult.ExitCode -ne 0) {
                     $message = Add-AvmProcessFailureDetail `

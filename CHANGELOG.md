@@ -107,6 +107,18 @@ section when cutting a release.
 
 ### Changed
 
+- Network reads now share one bounded retry for transient failures (HTTP
+  408, 429 and 5xx, timeouts and connection resets), with capped exponential
+  backoff, `Retry-After` support and limits in `Resources/network.json`.
+  This covers tool and schema downloads, catalog and registry lookups,
+  `terraform init`, `tflint --init`, the MAPOTF transform, Git fetch, clone
+  and `ls-remote`, GitHub API reads, the PowerShell Gallery update check and
+  `avm update`. Authentication, configuration and not-found errors fail at
+  once; pushes, publishes and deployments are never replayed, and
+  `avm update` checks what is installed before trying again. Set
+  `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) to change the attempt limit.
+- `avm init` for Terraform reads the repository metadata once instead of
+  twice.
 - The Terraform module scaffold published by `avm init` now deploys an AzAPI
   virtual network into a supplied `parent_id` and exposes the AzAPI
   `resource_types`, `retry`, `timeouts` and `ignore_body_changes` inputs.

@@ -42,7 +42,7 @@ function Get-AvmBicepPublicationGitState {
     $upstream = 'https://github.com/Azure/bicep-registry-modules.git'
     $latest = Invoke-AvmProcess -FilePath $gitPath -WorkingDirectory $RepositoryRoot `
         -ArgumentList @('ls-remote', '--heads', $upstream, 'main') -TimeoutSec 30 `
-        -IgnoreExitCode -EnvVars $gitEnvironment
+        -IgnoreExitCode -RetryNetworkFailure -EnvVars $gitEnvironment
     if ($latest.ExitCode -ne 0 -or
         $latest.StdOut.Trim() -cnotmatch '^(?<sha>[0-9a-f]{40,64})\trefs/heads/main\z') {
         throw [AvmConfigurationException]::new(

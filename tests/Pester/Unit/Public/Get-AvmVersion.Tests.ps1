@@ -214,6 +214,7 @@ Describe 'avm version (dispatcher)' {
                 Mock Find-PSResource {
                     throw [System.Net.Http.HttpRequestException]::new('offline')
                 }
+                Mock Wait-AvmRetryDelay { }
 
                 $records = @(Invoke-Avm version 3>&1)
                 $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
@@ -223,7 +224,8 @@ Describe 'avm version (dispatcher)' {
                 $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
                 $warnings.Count | Should -Be 1
                 [string]$warnings[0] | Should -Match 'The Gallery request failed'
-                Should -Invoke Find-PSResource -Times 1 -Exactly
+                # One lookup, retried once within the advisory budget.
+                Should -Invoke Find-PSResource -Times 2 -Exactly
             }
             finally {
                 $env:AVM_TEST_SKIP_MODULE_VERSION_CHECK = $previousTestSkip

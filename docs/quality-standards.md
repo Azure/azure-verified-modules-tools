@@ -203,7 +203,7 @@ if ($obj.PSObject.Properties['Children']) { $obj.Children }
 
 - `User-Agent: Avm.Authoring/<version> (<os>/<arch>)` header on every request.
 - 60-second default timeout (overridable).
-- Retries on 5xx and connection errors with exponential backoff (3 attempts, 1 s / 4 s / 16 s).
+- Retries transient failures (HTTP 408, 429 and 5xx, timeouts and connection resets) through `Invoke-AvmRetry`, using capped exponential backoff with jitter and honouring `Retry-After`. Limits live in `src/Avm.Authoring/Resources/network.json`; `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) overrides the attempt count.
 - Honours proxy env vars (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) via the native `Invoke-WebRequest` plumbing.
 - Verifies the certificate chain. **Never** use `-SkipCertificateCheck`. Ever.
 - SHA256 verifies every download against the lock entry or pinned-asset descriptor. Mismatch throws `AvmToolException` with both expected and actual hashes in the message. Partial files are cleaned up on hash mismatch so the next attempt isn't poisoned by garbage on disk.
@@ -212,6 +212,7 @@ if ($obj.PSObject.Properties['Children']) { $obj.Children }
 
 **`AVM_MIRROR`.** When set, every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. The mirror itself **MUST** be `https://` — an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy can't silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
 
+**Network retry.** Every network read goes through the shared retry: `Invoke-AvmWebRequest` for HTTP, `Invoke-AvmProcess -RetryNetworkFailure` (or `Invoke-AvmGit -RetryNetworkFailure`) for network-performing tools, and `Invoke-AvmRetry` for cmdlets such as `Find-PSResource`. `Get-AvmNetworkFailureKind` decides what is transient from status codes and the message patterns in `Resources/network.json`; authentication, configuration, not-found and cancellation errors are never retried. Do not add private retry loops, and do not wrap a call that already retries (Azure SDK clients, Az PowerShell, Azure CLI and `bicep` registry restore) because budgets multiply. Never retry pushes, publishes, deployments or other mutations whose outcome is ambiguous; observe the result first, as `Update-AvmAuthoring` does with `Get-InstalledPSResource`. Repository scripts outside the module dot-source `scripts/Import-AvmNetworkRetry.ps1`. Tests mock `Wait-AvmRetryDelay` (inside the module) or `Start-Sleep` (scripts) so no test sleeps for real.
 **Tool binary supply chain.** Pinned in `src/Avm.Authoring/Resources/avm.pins.jsonc`. The lock file is the only sanctioned source of truth for SHA256s. `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation records what was updated and which upstream release notes were reviewed. No precompiled binaries in the repo — everything is fetched at first use and cached under `Get-AvmFolder Tools`.
 
 > See also: [`avm-implementation-spec.md` §10](avm-implementation-spec.md#10-tool-resolver-and-cache), [`avm-implementation-spec.md` §16](avm-implementation-spec.md#16-networking), [`avm-implementation-spec.md` §17](avm-implementation-spec.md#17-security).

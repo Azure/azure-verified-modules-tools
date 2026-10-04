@@ -217,7 +217,8 @@ function Invoke-AvmTerraformTestE2e {
                 -WorkingDirectory $exampleDir `
                 -EnvVars $envVars `
                 -StreamOutput `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -RetryNetworkFailure
 
             if ($init.ExitCode -ne 0) {
                 $detail = if ($init.StdErr) { $init.StdErr.Trim() } elseif ($init.StdOut) { $init.StdOut.Trim() } else { '' }

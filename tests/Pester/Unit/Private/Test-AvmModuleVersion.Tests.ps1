@@ -128,10 +128,12 @@ Describe 'Test-AvmModuleVersion' {
             Mock Find-PSResource {
                 throw [System.Net.Http.HttpRequestException]::new('private diagnostic')
             }
+            Mock Wait-AvmRetryDelay { }
 
             $warnings = @(Test-AvmModuleVersion 3>&1)
 
             $warnings.Count | Should -Be 1
+            Should -Invoke Find-PSResource -Exactly 2
             [string]$warnings[0] | Should -Match 'Unable to check PowerShell Gallery'
             [string]$warnings[0] | Should -Match 'The Gallery request failed'
             [string]$warnings[0] | Should -Not -Match 'private diagnostic'

@@ -893,7 +893,7 @@ function Get-AvmManagedFilesCheckout {
     $cacheRoot = Join-Path (Join-Path (Join-Path (Join-Path $homeDir 'cache') 'managed-files') $slug) $Ref
 
     if (Test-Path -LiteralPath (Join-Path $cacheRoot '.git') -PathType Container) {
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) | Out-Null
+        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) -RetryNetworkFailure | Out-Null
         Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'checkout', '-q', 'FETCH_HEAD') | Out-Null
     }
     else {
@@ -908,7 +908,7 @@ function Get-AvmManagedFilesCheckout {
                 -Force `
                 -ProgressAction SilentlyContinue
         }
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) | Out-Null
+        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) -RetryNetworkFailure | Out-Null
     }
 
     return $cacheRoot
