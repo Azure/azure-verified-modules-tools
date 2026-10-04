@@ -221,7 +221,7 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
         Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
         Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
-            $script:nativeWorkflow.Calls.Add("register:$SubscriptionId:$($Feature.FullName -join ',')")
+            $script:fixture.Calls.Add("register:${SubscriptionId}:$($Feature.FullName -join ',')")
             [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
         }
         $result = Invoke-AvmTestE2e @script:options
@@ -235,7 +235,9 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
         Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
         Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
-            throw [AvmException]::new('Feature Microsoft.Compute/EncryptionAtHost is Pending in subscription test.', 'AVM1070')
+            throw (& (Get-Module Avm.Authoring) {
+                    [AvmException]::new('Feature Microsoft.Compute/EncryptionAtHost is Pending in subscription test.', 'AVM1070')
+                })
         }
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'

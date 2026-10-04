@@ -104,6 +104,10 @@ function script:Invoke-AvmPester {
         $env:GITHUB_ACTIONS = ''
         $env:GITHUB_STEP_SUMMARY = ''
         $result = Invoke-Pester -Configuration $Configuration
+        if ($result.FailedContainersCount -gt 0) {
+            $paths = @($result.Containers | Where-Object Result -eq 'Failed' | ForEach-Object { $_.Item })
+            throw "$($result.FailedContainersCount) Pester test file(s) failed to load or run: $($paths -join ', ')"
+        }
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
         }

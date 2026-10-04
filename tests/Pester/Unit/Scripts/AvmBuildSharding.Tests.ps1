@@ -131,3 +131,18 @@ Describe 'Get-AvmComponentShardCount' {
         Get-AvmComponentShardCount | Should -Be 3
     }
 }
+
+Describe 'Invoke-AvmPesterShard' {
+    It 'fails a shard when a test file cannot be loaded, even if other tests pass' {
+        $passing = Join-Path $TestDrive 'Passing.Tests.ps1'
+        $broken = Join-Path $TestDrive 'Broken.Tests.ps1'
+        [IO.File]::WriteAllText($passing, "Describe 'ok' { It 'passes' { 1 | Should -Be 1 } }")
+        [IO.File]::WriteAllText($broken, 'Describe ''broken'' { It ''never runs'' { "value:$Name:" } }')
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'shard.xml'
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard `
+            -Path ($passing + [IO.Path]::PathSeparator + $broken) -OutputPath $output 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+    }
+}

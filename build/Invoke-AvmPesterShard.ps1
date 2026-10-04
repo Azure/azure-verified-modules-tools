@@ -8,7 +8,7 @@
     directory), so shards must not share a process. The build task starts one
     pwsh per shard pointing at this script with a disjoint set of test files.
 
-    Exit codes: 0 all passed, 1 one or more failed, 2 the shard ran no tests.
+    Exit codes: 0 all passed, 1 a test or test file failed, 2 the shard ran no tests.
 #>
 
 #Requires -Version 7.4
@@ -60,10 +60,10 @@ $env:GITHUB_STEP_SUMMARY = ''
 $result = Invoke-Pester -Configuration $config
 
 $selectedCount = $result.PassedCount + $result.FailedCount + $result.SkippedCount
+if ($result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
+    exit 1
+}
 if ($selectedCount -eq 0) {
     exit 2
-}
-if ($result.FailedCount -gt 0) {
-    exit 1
 }
 exit 0

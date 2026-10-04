@@ -31,3 +31,4 @@ the repository-root manifest; other modules keep the module-root array.
 
 - Targeted feature, `Register-AvmFeature` and scoped Bicep e2e suites: 77 passed in 11s.
 - `./build.ps1 pre-commit`: green in 11m26s (2,906 unit tests; component shards all passed, 1 existing skip).
+- Correction: the scoped Bicep component file had a parse error in its new feature tests, so Pester skipped the whole file and the gate above still passed. The tests and their mocks were fixed in the Pester container gate slice (`2026-10-04-pester-container-gate.md`); the file now runs 20 tests with no failures.
