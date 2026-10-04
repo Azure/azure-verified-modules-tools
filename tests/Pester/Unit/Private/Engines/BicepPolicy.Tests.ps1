@@ -72,6 +72,57 @@ Describe 'Bicep PSRule token replacement' {
             else { $env:localToken_namePrefix = $localBefore }
         }
     }
+
+
+    Context 'subscription token source' {
+        BeforeEach {
+            $script:savedTokenEnvironment = @{}
+            foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId')) {
+                $script:savedTokenEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+            }
+        }
+
+        AfterEach {
+            foreach ($name in $script:savedTokenEnvironment.Keys) {
+                $saved = $script:savedTokenEnvironment[$name]
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved) { [NullString]::Value } else { $saved }))
+            }
+        }
+
+        It 'uses the first authored pool entry even without a fallback subscription' {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"22222222-2222-4222-8222-222222222222","name":"b"},{"id":"11111111-1111-4111-8111-111111111111","name":"a"}]'
+            $env:VALIDATE_SUBSCRIPTION_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope 'Avm.Authoring' { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
+                Should -BeExactly '22222222-2222-4222-8222-222222222222'
+        }
+
+        It 'uses the validation subscription only when no pool is configured' {
+            $env:VALIDATE_SUBSCRIPTION_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope 'Avm.Authoring' { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
+                Should -BeExactly '33333333-3333-4333-8333-333333333333'
+        }
+
+        It 'rejects a configured pool that is <Label>' -ForEach @(
+            @{ Label = 'whitespace'; Pool = '  ' }
+            @{ Label = 'not an array'; Pool = '{"id":"22222222-2222-4222-8222-222222222222","name":"b"}' }
+            @{ Label = 'missing a GUID'; Pool = '[{"id":"not-a-guid","name":"b"}]' }
+        ) {
+            $env:TEST_SUBSCRIPTION_IDS = $Pool
+            $env:VALIDATE_SUBSCRIPTION_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope 'Avm.Authoring' {
+                try { $null = Get-AvmBicepPolicyToken; 'no error' }
+                catch { $_.Exception.GetType().Name }
+            } | Should -BeExactly 'AvmConfigurationException'
+        }
+
+        It 'keeps an explicit local subscription override' {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"22222222-2222-4222-8222-222222222222","name":"b"}]'
+            $env:localToken_subscriptionId = '44444444-4444-4444-8444-444444444444'
+            InModuleScope 'Avm.Authoring' { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
+                Should -BeExactly '44444444-4444-4444-8444-444444444444'
+        }
+    }
 }
 
 Describe 'Bicep PSRule configuration boundaries' {

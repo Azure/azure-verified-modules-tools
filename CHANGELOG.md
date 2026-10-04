@@ -338,6 +338,10 @@ section when cutting a release.
   modules read their exact `avm/...` entry from the repository-root
   `.required-features.json` object, which `avm register-features` now also
   reads. A failed or pending registration fails the case before any deployment.
+- The Bicep PSRule `subscriptionId` token uses the first subscription in a
+  configured `TEST_SUBSCRIPTION_IDS` pool, matching the registry workflow, and
+  falls back to `VALIDATE_SUBSCRIPTION_ID` only when no pool is set. An invalid
+  pool fails clearly; `localToken_subscriptionId` still overrides both.
 - `-SkipModuleVersionCheck` now takes effect for commands that resolve module
   context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
   `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer
