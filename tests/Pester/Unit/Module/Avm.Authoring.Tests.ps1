@@ -49,6 +49,19 @@ Describe 'Avm.Authoring module' {
                 Should -Not -BeNullOrEmpty
         }
 
+        It 'keeps one exception type identity when a reimport follows script-cache eviction' {
+            $clearCache = [scriptblock].GetMethod('ClearScriptBlockCache', [System.Reflection.BindingFlags]'NonPublic,Static')
+            if ($null -eq $clearCache) {
+                Set-ItResult -Skipped -Because 'this PowerShell version does not expose the parsed-script cache'
+                return
+            }
+            $before = & (Get-Module 'Avm.Authoring') { [AvmProcessException] }
+            $null = $clearCache.Invoke($null, @())
+            Import-Module $script:manifestPath -Force
+            $after = & (Get-Module 'Avm.Authoring') { [AvmProcessException] }
+            [object]::ReferenceEquals($before, $after) | Should -BeTrue
+        }
+
         It 'exports the avm alias pointing at Invoke-Avm' {
             $alias = Get-Alias -Name 'avm' -ErrorAction SilentlyContinue
             $alias | Should -Not -BeNullOrEmpty

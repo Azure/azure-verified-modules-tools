@@ -35,8 +35,22 @@ $privateRoot = Join-Path $PSScriptRoot 'Private'
 $enginesRoot = Join-Path $PSScriptRoot 'Engines'
 $publicRoot = Join-Path $PSScriptRoot 'Public'
 
+# Reparsing a script that declares classes creates new types, and PowerShell may evict its parsed-script cache at
+# any time. Reuse one parsed copy of the exception classes per runspace so reimports keep a single type identity
+# for each exception; a changed file hashes differently and is redefined.
+$exceptionsPath = Join-Path -Path $privateRoot -ChildPath 'Exceptions' -AdditionalChildPath 'AvmExceptions.ps1'
+$exceptionsKey = 'Avm.Authoring.Exceptions/{0}/{1}' -f [runspace]::DefaultRunspace.InstanceId,
+(Get-FileHash -LiteralPath $exceptionsPath -Algorithm SHA256).Hash
+$exceptionsScript = [AppDomain]::CurrentDomain.GetData($exceptionsKey)
+if ($exceptionsScript -isnot [scriptblock]) {
+    $exceptionsScript = (Get-Command -Name $exceptionsPath -CommandType ExternalScript).ScriptBlock
+    [AppDomain]::CurrentDomain.SetData($exceptionsKey, $exceptionsScript)
+}
+. $exceptionsScript
+
 if (Test-Path -LiteralPath $privateRoot) {
     foreach ($file in Get-ChildItem -Path $privateRoot -Filter '*.ps1' -Recurse -File) {
+        if ($file.FullName -ceq $exceptionsPath) { continue }
         . $file.FullName
     }
 }
