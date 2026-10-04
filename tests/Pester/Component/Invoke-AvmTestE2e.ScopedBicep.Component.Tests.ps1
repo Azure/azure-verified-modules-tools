@@ -216,4 +216,42 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
             Should -Be @('eastus', 'eastus')
         @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
     }
+
+    It 'registers declared features in the selected subscription before validation' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+        Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+            $script:nativeWorkflow.Calls.Add("register:$SubscriptionId:$($Feature.FullName -join ',')")
+            [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+        }
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $registration = 'register:{0}:Microsoft.Compute/EncryptionAtHost' -f $script:fixture.NativeInputs[0].SubscriptionId
+        $script:fixture.Calls | Should -Contain $registration
+        $script:fixture.Calls.IndexOf($registration) | Should -BeLessThan $script:fixture.Calls.IndexOf('validate')
+    }
+
+    It 'reports a failed registration without validating or deploying' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+        Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+            throw [AvmException]::new('Feature Microsoft.Compute/EncryptionAtHost is Pending in subscription test.', 'AVM1070')
+        }
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.e2e-feature-registration-failed')
+        $issue.Count | Should -Be 1
+        $issue[0].Message | Should -BeLike '*is Pending*'
+        $script:fixture.Calls | Should -Not -Contain 'validate'
+        $script:fixture.Calls | Should -Not -Contain 'create'
+        $result.CleanupPending.Count | Should -Be 0
+    }
+
+    It 'rejects an invalid feature manifest before any Azure operation' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["not-a-feature"]'
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*Namespace/FeatureName*'
+        Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+        $script:fixture.Calls | Should -Not -Contain 'validate'
+    }
 }

@@ -327,12 +327,19 @@ only ever reads it:
 ```
 
 Module roots may separately contain `.required-features.json`, a hand-authored
-JSON array of `"Namespace/FeatureName"` strings. `avm register-features`
+JSON array of `"Namespace/FeatureName"` strings. Bicep registry modules
+(`.../avm/res|ptn|utl/...`) instead use the repository-root
+`.required-features.json`, an object keyed by exact module paths such as
+`avm/res/compute/virtual-machine`; the whole object is validated and a
+module-root manifest is rejected. `avm register-features`
 reads this file only; an absent or empty array does nothing. The command
 requires an explicit subscription GUID, validates every entry before calling
 Azure CLI, verifies that the CLI is selected to that subscription, and never
 unregisters a feature. The protected Terraform integration and e2e jobs run it
-only when the manifest is nonempty.
+only when the manifest is nonempty. Bicep `avm test e2e` reads the manifest
+before confirmation and registers the features once per selected subscription
+after the identity check and before validation; a registration failure fails
+the case without deploying.
 
 Rules:
 

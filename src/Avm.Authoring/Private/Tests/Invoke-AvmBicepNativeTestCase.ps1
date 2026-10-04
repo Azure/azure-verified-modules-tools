@@ -65,6 +65,22 @@ function Invoke-AvmBicepNativeTestCase {
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
+        $features = @(Get-AvmPropertyValue -InputObject $Item -Name 'RequiredFeatures')
+        if ($features.Count -gt 0) {
+            try {
+                $null = Invoke-AvmFeatureRegistration -Cli (Resolve-AvmAzureCli) -Root $executionOptions.RepositoryRoot `
+                    -SubscriptionId ([guid]$Item.SubscriptionId).ToString('D') -Feature $features
+            }
+            catch [AvmException] {
+                $registrationIssues = [System.Collections.Generic.List[object]]::new()
+                Add-AvmBicepTestIssue -Issues $registrationIssues -File $Item.Case.RelativePath `
+                    -Code 'feature-registration-failed' -Message $_.Exception.Message
+                return [pscustomobject]@{
+                    Status = 'fail'; AssertionResults = @(); PostResults = @(); Issues = $registrationIssues.ToArray()
+                    CleanupPending = @(); CleanupDeferred = $false; StatePath = ''
+                }
+            }
+        }
         $environment = Get-AvmPropertyValue -InputObject (Get-AzContext -ErrorAction Stop) -Name 'Environment'
         $environmentName = [string](Get-AvmPropertyValue -InputObject $environment -Name 'Name')
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `

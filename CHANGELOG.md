@@ -333,6 +333,11 @@ section when cutting a release.
   deployment fails only for regional reasons, matching the registry workflow.
   It first removes that deployment's resources and records and confirms they
   are gone; if cleanup cannot confirm this, relocation stops.
+- Bicep e2e registers the module's required Azure features in the selected test
+  subscription before validation, matching the registry workflow. Registry
+  modules read their exact `avm/...` entry from the repository-root
+  `.required-features.json` object, which `avm register-features` now also
+  reads. A failed or pending registration fails the case before any deployment.
 - `-SkipModuleVersionCheck` now takes effect for commands that resolve module
   context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
   `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer
