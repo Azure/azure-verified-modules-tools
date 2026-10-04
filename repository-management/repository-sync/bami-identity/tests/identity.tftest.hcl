@@ -11,19 +11,42 @@ override_data {
 }
 
 override_data {
-  target = module.azure.data.azuread_group.entra_readers
+  target = module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]
   values = {
-    object_id = "10000000-0000-4000-8000-000000000007"
+    object_id        = "10000000-0000-4000-8000-000000000008"
+    display_name     = "avm-test-entra-readers"
+    security_enabled = true
+    types            = []
+  }
+}
+
+override_data {
+  target = module.azure.data.azuread_client_config.current
+  values = {
+    tenant_id = "10000000-0000-4000-8000-000000000001"
+    client_id = "10000000-0000-4000-8000-000000000002"
+    object_id = "10000000-0000-4000-8000-000000000011"
+  }
+}
+
+override_data {
+  target = module.azure.data.azuread_group.test_permissions["avm-test-identity-owners"]
+  values = {
+    object_id        = "10000000-0000-4000-8000-000000000009"
+    display_name     = "avm-test-identity-owners"
+    security_enabled = true
+    types            = []
   }
 }
 
 override_resource {
-  target = module.azure.azapi_resource.identity
+  target          = module.azure.azapi_resource.identity
+  override_during = plan
   values = {
     id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
     output = {
       properties = {
-        principalId = "10000000-0000-4000-8000-000000000008"
+        principalId = "10000000-0000-4000-8000-000000000007"
         clientId    = "10000000-0000-4000-8000-000000000006"
         tenantId    = "10000000-0000-4000-8000-000000000001"
       }
@@ -35,8 +58,8 @@ variables {
   tenant_id                     = "10000000-0000-4000-8000-000000000001"
   controller_client_id          = "10000000-0000-4000-8000-000000000002"
   subscription_id               = "10000000-0000-4000-8000-000000000003"
-  management_group_id           = "mg-bami-test"
   identity_resource_group_name  = "rg-bami-test"
+  entra_group_names             = ["avm-test-entra-readers", "avm-test-identity-owners"]
   github_repository_owner       = "Azure"
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_organization_id        = "6844498"
@@ -73,7 +96,7 @@ run "candidate_plan_binds_the_expected_tenant" {
 }
 
 run "mocked_candidate_uses_repository_identity_not_controller" {
-  command = apply
+  command = plan
 
   assert {
     condition     = output.test_identity.client_id == "10000000-0000-4000-8000-000000000006" && output.test_identity.client_id != var.controller_client_id

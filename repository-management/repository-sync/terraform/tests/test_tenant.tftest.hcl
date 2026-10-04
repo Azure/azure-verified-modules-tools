@@ -2,15 +2,6 @@ mock_provider "azapi" {}
 mock_provider "azuread" {}
 mock_provider "github" {}
 
-override_module {
-  target = module.azure[0]
-  outputs = {
-    client_id            = "20000000-0000-4000-8000-000000000001"
-    tenant_id            = "20000000-0000-4000-8000-000000000002"
-    identity_resource_id = "/subscriptions/20000000-0000-4000-8000-000000000003/resourceGroups/legacy/providers/Microsoft.ManagedIdentity/userAssignedIdentities/legacy"
-  }
-}
-
 override_data {
   target = module.github.data.github_organization.this
   values = {
@@ -28,17 +19,23 @@ override_resource {
 }
 
 variables {
-  management_group_id           = "legacy"
-  identity_resource_group_name  = "legacy"
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_teams                  = {}
   module_id                     = "avm-ptn-example-repo"
   module_name                   = "Example"
   repository_sync_repository_id = "1239632211"
-  test_subscription_ids = [{
-    name = "legacy"
-    id   = "20000000-0000-4000-8000-000000000003"
-  }]
+  bami_test_settings = {
+    tenant_id                  = "10000000-0000-4000-8000-000000000001"
+    client_id                  = "10000000-0000-4000-8000-000000000006"
+    controller_client_id       = "10000000-0000-4000-8000-000000000002"
+    bicep_client_id            = "10000000-0000-4000-8000-000000000004"
+    admin_subscription_id      = "10000000-0000-4000-8000-000000000003"
+    persistent_subscription_id = "10000000-0000-4000-8000-000000000005"
+    test_subscription_ids = [for number in range(1, 29) : {
+      name = "test-${number}"
+      id   = format("00000000-0000-4000-8000-%012d", number)
+    }]
+  }
 }
 
 run "standard_labels_are_read_from_tools_json" {
@@ -55,26 +52,13 @@ run "standard_labels_are_read_from_tools_json" {
   }
 }
 
-run "legacy_is_unchanged" {
+run "normal_sync_requires_verified_bami_settings" {
   command = plan
 
-  assert {
-    condition     = local.test_settings.client_id == module.azure[0].client_id && local.test_settings.tenant_id == module.azure[0].tenant_id
-    error_message = "Legacy must retain its existing Azure identity."
+  variables {
+    bami_test_settings = null
   }
-  assert {
-    condition     = local.test_settings.test_subscription_ids == var.test_subscription_ids
-    error_message = "Legacy subscriptions must be unchanged."
-  }
-  assert {
-    condition = (
-      length(keys(output.test_settings)) == 3 &&
-      output.test_settings.client_id == module.azure[0].client_id &&
-      output.test_settings.tenant_id == module.azure[0].tenant_id &&
-      output.test_settings.test_subscription_ids == var.test_subscription_ids
-    )
-    error_message = "The plan must expose the existing test identity and configured subscription list."
-  }
+  expect_failures = [var.bami_test_settings]
 }
 
 run "repository_creation_remains_independent" {
@@ -83,9 +67,10 @@ run "repository_creation_remains_independent" {
   variables {
     repository_creation_mode_enabled = true
     repository_sync_repository_id    = null
+    bami_test_settings               = null
   }
   assert {
-    condition     = length(module.azure) == 0 && local.test_settings.client_id == "" && length(local.test_settings.test_subscription_ids) == 0
+    condition     = local.test_settings.client_id == "" && length(local.test_settings.test_subscription_ids) == 0
     error_message = "Repository creation must not provision test identities or publish test settings."
   }
   assert {
@@ -98,7 +83,7 @@ run "repository_creation_remains_independent" {
   }
 }
 
-run "bami_uses_complete_tuple_and_retains_legacy_identity" {
+run "bami_uses_complete_tuple_without_legacy_execution" {
   command = plan
 
   variables {
@@ -123,10 +108,6 @@ run "bami_uses_complete_tuple_and_retains_legacy_identity" {
       local.test_settings.test_subscription_ids == var.bami_test_settings.test_subscription_ids
     )
     error_message = "BAMI must replace all three effective settings together."
-  }
-  assert {
-    condition     = length(module.azure) == 1 && module.azure[0].client_id == "20000000-0000-4000-8000-000000000001"
-    error_message = "The legacy Azure module must remain in the same root and state."
   }
   assert {
     condition = (

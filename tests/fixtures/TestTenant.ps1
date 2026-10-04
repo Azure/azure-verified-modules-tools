@@ -28,8 +28,13 @@ function New-AvmTestBamiPlan {
     param(
         [switch] $KnownClient,
         [switch] $ValidationPending,
+        [switch] $OwnerMigration,
+        [switch] $LegacyMembershipMigration,
+        [string] $RemovedGroup,
+        [string[]] $GroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
-        [string] $RepositorySyncRepositoryId = '1239632211'
+        [string] $RepositorySyncRepositoryId = '1239632211',
+        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
     )
 
     $condition = @'
@@ -54,6 +59,8 @@ AND
 )
 '@
     $identity = New-AvmTestBamiIdentity
+    $settings = New-AvmTestBamiSettings
+    $principalId = '10000000-0000-4000-8000-000000000007'
     if (-not $KnownClient) { $identity.Remove('client_id') }
     $resources = @(
         @{
@@ -61,62 +68,127 @@ AND
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
+                type = 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview'
                 parent_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test'
                 name = 'Azure-terraform-azurerm-avm-ptn-example-repo'
+                id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
+                output = if ($KnownClient) {
+                    @{ properties = @{ tenantId = $identity.tenant_id; clientId = $identity.client_id; principalId = $principalId } }
+                } else { $null }
             }
         }
-        @{
-            address = 'module.azure.azapi_resource.identity_role_assignment'
+    )
+    $groups = @{}
+    $number = 8
+    foreach ($groupName in $GroupNames) {
+        $groups[$groupName] = '10000000-0000-4000-8000-{0:000000000000}' -f $number
+        $key = ConvertTo-Json -InputObject $groupName -Compress
+        $resources += @{
+            address = "module.azure.azuread_group_member.test_permissions[$key]"
+            mode = 'managed'; type = 'azuread_group_member'
+            values = @{
+                group_object_id = $groups[$groupName]
+                member_object_id = if ($KnownClient) { $principalId } else { $null }
+            }
+        }
+        $number++
+    }
+    foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
+        $resources += @{
+            address = if ($environment -ceq 'avm-validation') { 'module.azure.azapi_resource.validation_federated_credential' } else {
+                'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+            }
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
-                parent_id = '/providers/Microsoft.Management/managementGroups/mg-bami-test'
+                type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+                name = "Azure-terraform-azurerm-avm-ptn-example-repo-$environment"
+                parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
-                        roleDefinitionId = '/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
-                        conditionVersion = '2.0'
-                        condition = $condition
+                        audiences = @('api://AzureADTokenExchange')
+                        issuer = 'https://token.actions.githubusercontent.com'
+                        subject = if ($environment -ceq 'avm-validation') {
+                            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+                        } else {
+                            "repository_owner_id:${RepositoryOwnerId}:repository_id:1234:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+                        }
                     }
-                }
-            }
-        }
-        @{ address = 'module.azure.azuread_group_member.example'; mode = 'managed'; type = 'azuread_group_member'; values = @{} }
-    )
-    foreach ($environment in @('pr-check', 'integration-test', 'examples-test')) {
-        $resources += @{
-            address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
-            mode = 'managed'
-            type = 'azapi_resource'
-            values = @{}
-        }
-    }
-    $resources += @{
-        address = 'module.azure.azapi_resource.validation_federated_credential'
-        mode = 'managed'
-        type = 'azapi_resource'
-        values = @{
-            type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
-            name = 'Azure-terraform-azurerm-avm-ptn-example-repo-avm-validation'
-            parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
-            body = @{
-                properties = @{
-                    audiences = @('api://AzureADTokenExchange')
-                    issuer = 'https://token.actions.githubusercontent.com'
-                    subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
                 }
             }
         }
     }
     $changes = @($resources | ForEach-Object {
-            $actions = if ($KnownClient -and (-not $ValidationPending -or
+            $actions = @(if ($KnownClient -and (-not $ValidationPending -or
                     $_.address -cne 'module.azure.azapi_resource.validation_federated_credential')) {
-                @('no-op')
+                'no-op'
             }
             else {
-                @('create')
+                'create'
+            })
+            $unknown = if ($KnownClient) { @{} } elseif ($_.type -ceq 'azuread_group_member') {
+                @{ member_object_id = $true }
+            } elseif ($_.address -ceq 'module.azure.azapi_resource.identity') {
+                @{ id = $true; output = $true }
+            } else {
+                @{ parent_id = $true }
             }
-            @{ address = $_.address; change = @{ actions = $actions } }
+            @{ address = $_.address; mode = $_.mode; type = $_.type
+                change = @{
+                    actions = $actions; after = $_.values.Clone(); after_unknown = $unknown; after_sensitive = @{}
+                    before = if ($KnownClient -and $actions[0] -ceq 'no-op') { $_.values.Clone() } else { $null }
+                }
+            }
         })
+    if ($OwnerMigration) {
+        $assignmentName = Get-AvmBamiOwnerAssignmentName -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -Settings $settings
+        $scope = "/providers/Microsoft.Management/managementGroups/$($settings.TEST_BAMI_MANAGEMENT_GROUP_ID)"
+        $changes += @{
+            address = 'module.azure.azapi_resource.identity_role_assignment[0]'
+            previous_address = 'module.azure.azapi_resource.identity_role_assignment'
+            mode = 'managed'; type = 'azapi_resource'
+            change = @{
+                actions = @('delete'); after = $null
+                before = @{
+                    type = 'Microsoft.Authorization/roleAssignments@2022-04-01'
+                    name = $assignmentName; parent_id = $scope
+                    id = "$scope/providers/Microsoft.Authorization/roleAssignments/$assignmentName"
+                    body = @{ properties = @{
+                        roleDefinitionId = '/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+                        principalType = 'ServicePrincipal'; principalId = $principalId
+                        conditionVersion = '2.0'; condition = $condition
+                    } }
+                }
+            }
+        }
+    }
+    if ($RemovedGroup -or $LegacyMembershipMigration) {
+        $key = ConvertTo-Json -InputObject $RemovedGroup -Compress
+        $changes += @{
+            address = if ($LegacyMembershipMigration) { 'module.azure.azuread_group_member.example' } else {
+                "module.azure.azuread_group_member.test_permissions[$key]"
+            }
+            mode = 'managed'; type = 'azuread_group_member'
+            change = @{
+                actions = @('delete'); after = $null
+                before = @{ group_object_id = '10000000-0000-4000-8000-000000000099'; member_object_id = $principalId }
+            }
+        }
+    }
+    $resources += @{
+        address = 'module.azure.data.azapi_client_config.current'; mode = 'data'; type = 'azapi_client_config'
+        values = @{ tenant_id = $settings.TEST_BAMI_TENANT_ID; subscription_id = $settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }
+    }, @{
+        address = 'module.azure.data.azuread_client_config.current'; mode = 'data'; type = 'azuread_client_config'
+        values = @{ tenant_id = $settings.TEST_BAMI_TENANT_ID; client_id = $settings.TEST_BAMI_CONTROLLER_CLIENT_ID; object_id = '10000000-0000-4000-8000-000000000011' }
+    }
+    foreach ($groupName in $GroupNames) {
+        $key = ConvertTo-Json -InputObject $groupName -Compress
+        $resources += @{
+            address = "module.azure.data.azuread_group.test_permissions[$key]"; mode = 'data'; type = 'azuread_group'
+            values = @{ object_id = $groups[$groupName]; display_name = $groupName; security_enabled = $true; types = @() }
+        }
+    }
     return @{
         format_version = '1.2'
         errored = $false
