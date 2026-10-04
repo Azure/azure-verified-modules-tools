@@ -218,6 +218,7 @@ Describe 'CI workflow' {
         $lint.Value | Should -Match 'run: \./build\.ps1 lint'
         ([regex]::Matches($script:ci, '(?m)run: \./build\.ps1 lint\r?$')).Count | Should -Be 1
         $build.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
+        $build.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
         $build.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         $build.Value | Should -Match 'run: \./build\.ps1 ci-tests'
     }

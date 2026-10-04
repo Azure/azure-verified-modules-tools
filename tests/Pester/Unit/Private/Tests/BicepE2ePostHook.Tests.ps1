@@ -3,7 +3,8 @@
 
 BeforeAll {
     $script:moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring'
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    . (Join-Path $PSScriptRoot '..' '..' '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
 }
 
 AfterAll {
@@ -154,7 +155,7 @@ Describe 'Bicep e2e post hook subprocess' {
             Should -BeExactly 'tests/e2e/case with spaces|group|cafebabe'
     }
 
-    It 'honors the scoped case ShouldProcess refusal without attempting a hook' {
+    It 'honors the native case ShouldProcess refusal without attempting a hook' {
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
             param($R)
             Mock Invoke-AvmBicepE2ePostHook {
@@ -163,14 +164,13 @@ Describe 'Bicep e2e post hook subprocess' {
             Mock Invoke-AvmProcess { throw 'ShouldProcess refusal must not run Azure' }
             $item = [pscustomobject]@{
                 Scope = 'sub'
-                DeploymentName = 'avm-e2e-cafebabe'
-                Case = [pscustomobject]@{ RelativePath = 'tests/e2e/example/main.test.bicep' }
+                Case = [pscustomobject]@{ RelativeDirectory = 'tests/e2e/example' }
             }
-            $result = Invoke-AvmBicepScopedTestE2eCase -Item $item -AzPath 'fake-az' `
-                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+            $result = Invoke-AvmBicepNativeTestCase -Item $item -AzPath 'fake-az' `
                 -TenantId '00000000-0000-0000-0000-000000000002' `
-                -Location 'westus' -RepositoryRoot $R -WorkingDirectory $R -WhatIf
-            $result.Attempted | Should -Be 0
+                -Location 'westus' -RepositoryRoot $R -CiInput @{} -WhatIf
+            $result.Status | Should -Be 'skipped'
+            $result.StatePath | Should -BeExactly ''
             $result.PostResults.Count | Should -Be 0
             Should -Invoke Invoke-AvmBicepE2ePostHook -Exactly 0
             Should -Invoke Invoke-AvmProcess -Exactly 0

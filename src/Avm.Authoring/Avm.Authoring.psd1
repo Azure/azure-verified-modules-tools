@@ -30,6 +30,7 @@
         'Invoke-AvmPreCommit',
         'Invoke-AvmSync',
         'Invoke-AvmTest',
+        'Invoke-AvmTestCleanup',
         'Invoke-AvmTestE2e',
         'Invoke-AvmTestIntegration',
         'Invoke-AvmTestUnit',

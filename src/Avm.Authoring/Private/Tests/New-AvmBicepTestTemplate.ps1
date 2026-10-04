@@ -20,14 +20,17 @@ function New-AvmBicepTestTemplate {
 
         [string] $OwnedGroupRunId,
 
-        [string] $SourceRoot
+        [string] $SourceRoot,
+
+        [switch] $DeferResourceLocation
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $build = Invoke-AvmProcess -FilePath $BicepPath `
-        -ArgumentList @('build', '--stdout', $SourcePath) -IgnoreExitCode
+    $arguments = @('build', '--stdout', $SourcePath)
+    if ($env:AVM_OFFLINE -eq '1') { $arguments += '--no-restore' }
+    $build = Invoke-AvmProcess -FilePath $BicepPath -ArgumentList $arguments -IgnoreExitCode
     if ($build.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($build.StdOut)) {
         $message = Add-AvmProcessFailureDetail `
             -Message "Bicep test compilation failed for '$SourcePath' (exit $($build.ExitCode))." `
@@ -63,7 +66,7 @@ function New-AvmBicepTestTemplate {
         $Tokens
     }
     $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
-        -SourcePath $SourcePath -Tokens $effectiveTokens
+        -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
     $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $hasGroupDeployment = $false
     if ($scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {

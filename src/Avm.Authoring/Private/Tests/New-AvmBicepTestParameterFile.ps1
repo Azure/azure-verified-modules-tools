@@ -13,16 +13,18 @@ function New-AvmBicepTestParameterFile {
 
         [string] $ParameterFile,
 
-        [System.Collections.IDictionary] $Parameters = @{}
+        [System.Collections.IDictionary] $Parameters = @{},
+
+        [switch] $DeferResourceLocation
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if (-not [string]::IsNullOrWhiteSpace($ParameterFile) -and $Parameters.Count -gt 0) {
+    if (-not [string]::IsNullOrWhiteSpace($ParameterFile) -and $Parameters.psbase.Count -gt 0) {
         throw [AvmConfigurationException]::new('Use either -ParameterFile or -Parameters, not both.')
     }
-    if ([string]::IsNullOrWhiteSpace($ParameterFile) -and $Parameters.Count -eq 0) {
+    if ([string]::IsNullOrWhiteSpace($ParameterFile) -and $Parameters.psbase.Count -eq 0) {
         return $null
     }
 
@@ -42,7 +44,7 @@ function New-AvmBicepTestParameterFile {
     }
     else {
         $parameterValues = [ordered]@{}
-        foreach ($name in $Parameters.Keys) {
+        foreach ($name in $Parameters.psbase.Keys) {
             if ($name -isnot [string] -or [string]::IsNullOrWhiteSpace($name)) {
                 throw [AvmConfigurationException]::new('Bicep test parameter names must be nonempty strings.')
             }
@@ -60,14 +62,15 @@ function New-AvmBicepTestParameterFile {
         $path = '<PowerShell parameters>'
     }
 
-    $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path -Tokens $Tokens
+    $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path `
+        -Tokens $Tokens -DeferResourceLocation:$DeferResourceLocation
     $parsed = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     if ($parsed -isnot [System.Collections.IDictionary] -or
         $parsed['parameters'] -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new(
             "Bicep test parameter file must contain an ARM parameters object: $path")
     }
-    foreach ($name in $parsed['parameters'].Keys) {
+    foreach ($name in $parsed['parameters'].psbase.Keys) {
         $parameter = $parsed['parameters'][$name]
         if ($parameter -isnot [System.Collections.IDictionary] -or
             (-not $parameter.Contains('value') -and -not $parameter.Contains('reference'))) {

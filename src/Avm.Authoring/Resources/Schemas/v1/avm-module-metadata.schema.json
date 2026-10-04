@@ -1,5 +1,6 @@
 {
-  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Use the canonical HTTP identifier so Test-Json resolves its bundled draft-07 meta-schema without a download.",
   "$id": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
   "title": "AVM module metadata v1",
   "description": "Owner-authored metadata shared by Bicep and Terraform. Module kind and parent identity are derived from the repository, not authored here.",
@@ -36,7 +37,7 @@
       "description": "Stable telemetry prefix. The ecosystem and module kind must also match the containing module.",
       "anyOf": [
         { "pattern": "^46d3x(bcp|trf)\\.(res|ptn|utl)\\.[a-z0-9_-]+$" },
-        { "const": "46d3xbcp.resourcegraph-query", "description": "Preserve the existing published Resource Graph identifier without rewriting telemetry." }
+        { "const": "46d3xbcp.resourcegraph-query", "description": "Published Resource Graph prefix: valid as the current value in existing v1 metadata; when rotating to a new 46d3xbcp.res.<seven lowercase hexadecimal characters> prefix, retain this value in alternativeTelemetryIdPrefixes for Microsoft.ResourceGraph/queries only." }
       ],
       "if": { "pattern": "^46d3xbcp\\." },
       "then": { "maxLength": 50 },

@@ -134,9 +134,10 @@ The CLI is one command with a small, stable verb surface. Each verb routes to a 
 | `avm check convention`        | Compliance Pester suite (`module.tests.ps1`)                             | `grept run`                                                                |
 | `avm transform`               | Compile root and child main.bicep into main.json; README + repeatable test regeneration (`Set-AVMModule`) follows in later slices | `mapotf transform` + clean-backup                                          |
 | `avm docs`                    | Pinned `bicep docs generate --stdout` with a repository-selected Scriban template; source-derived supplemental data, Notes sidecars, and non-writing drift comparison. Registry cutover waits for independent whole-registry byte comparison, with only the documented eight-line Key Vault exception. | `terraform-docs`                                                           |
-| `avm test unit`               | Pester unit tests                                                        | `terraform test` against `tests/unit/`                                     |
-| `avm test integration`        | ARM what-if via `Test-TemplateDeployment.ps1`                            | `terraform test` against `tests/integration/`                              |
-| `avm test e2e`                | Actual deployment via `New-TemplateDeployment.ps1`                       | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
+| `avm test unit`               | Isolated module-owned Pester; registry compliance is an explicit opt-in | `terraform test` against `tests/unit/`                                     |
+| `avm test integration`        | ARM validation and what-if from temporary compiled templates            | `terraform test` against `tests/integration/`                              |
+| `avm test e2e`                | Native Azure PowerShell deployment, case-local Pester and post hook, then operation-based cleanup at all four ARM scopes | `terraform apply` per example via porch (Phase 0–2) or built-in (Phase 3+) |
+| `avm test cleanup`            | Resume native cleanup from trusted local state with explicit subscription and tenant; never replay assertions or hooks | Not applicable |
 | `avm register-features`       | Optional manual preflight for root-declared Azure features               | Register root-declared features only on the explicitly selected test subscription before integration/e2e runs |
 | `avm pre-commit`              | `metadata` → `format` → `lint` → `validate` → `transform` → `docs`      | `metadata` → `sync` → `check convention` → `transform` → `format` → `docs` |
 | `avm pr-check`                | Requires a clean Git worktree, then composes `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`; unit tests remain a separate CI job | Same clean-worktree preflight and 9-step chain |
@@ -177,6 +178,30 @@ Both authoring chains require valid root and child `metadata.json` files.
 Required tools are resolved before the metadata step. Metadata failure then
 stops the chain before other steps or module-file changes, regardless of
 `StopOnFail`.
+
+### Bicep deployment workflow migration
+
+The runner owns normal cleanup; the reaper is only a fallback. Preserve
+existing authored deployments, assertions and resource-specific cleanup,
+including nested groups, cross-scope resources and idempotency loops.
+Operation-based cleanup can remove resources updated by a test, not only
+new resources. This supersedes the earlier narrowly allowlisted runner.
+
+The normal e2e lifecycle is `All`. Hosted callers can separate `Deploy`
+and `Complete` to renew their existing Azure sign-ins without exporting
+credentials. A local temporary JSON file retains minimal cleanup state.
+Actions callers may upload it, including after a failed deployment phase;
+an unfinished upload provides no recovery artifact. `avm test cleanup`
+resumes removal without source or authored-script execution. No external
+journal is required.
+
+Local compilation and simulated Azure tests qualify source behavior only.
+Release, live Azure qualification and registry workflow replacement remain
+separate approval gates. Existing registry workflows stay active until
+their replacement is qualified. The operator procedure should then also
+be documented in the team's
+[Azure-Verified-Modules-Docs](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
+repository.
 
 ### Developer experience
 
