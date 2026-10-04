@@ -758,7 +758,10 @@ must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
 `baseTime` stay fixed. Record every attempt before submission, verify the
 native response's exact deployment ID, and retry only confirmed failure or
-exact preflight rejection. Unknown or cancelled outcomes never resubmit.
+exact preflight rejection. A submission timeout watches the same deployment
+for up to an hour (stopping after three consecutive read timeouts); a
+recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
+never resubmit.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support

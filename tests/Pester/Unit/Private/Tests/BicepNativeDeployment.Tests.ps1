@@ -164,15 +164,44 @@ Describe 'Bicep native deployment retries' {
         }
     }
 
+    It 'watches the same deployment after a submission timeout: <Recovered>' -ForEach @(
+        @{ Recovered = 'Succeeded'; Status = 'pass'; Submissions = 1 }
+        @{ Recovered = 'Failed'; Status = 'pass'; Submissions = 2 }
+        @{ Recovered = 'unreadable'; Status = 'fail'; Submissions = 1 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Recovered, $Status, $Submissions)
+            Mock Invoke-AvmBicepNativeArmOperation {
+                if ($DeploymentName -like '*-t1') { throw [System.TimeoutException]::new('Timed out.') }
+                @{
+                    Id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
+                    ProvisioningState = 'Succeeded'
+                }
+            }
+            Mock Wait-AvmBicepNativeDeployment {
+                if ($Recovered -eq 'unreadable') { throw [System.TimeoutException]::new('Recovery timed out.') }
+                [pscustomobject]@{ State = $Recovered; Outputs = @{ fromWatch = @{ value = 1 } } }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+            $result.Status | Should -Be $Status
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly $Submissions
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 1 -ParameterFilter { $DeploymentId -like '*-t1' }
+            switch ($Recovered) {
+                'Succeeded' { $result.Outputs['fromWatch']['value'] | Should -Be 1 }
+                'Failed' { $script:state.deployments[0].status | Should -Be 'Failed' }
+                default { $result.Outcome | Should -Be 'Unknown'; $result.ErrorKind | Should -Be 'Timeout' }
+            }
+        }
+    }
+
     It 'never resubmits an unknown outcome: <Failure>' -ForEach @(
-        @{ Failure = 'timeout' }, @{ Failure = 'transport' }, @{ Failure = 'null' }
+        @{ Failure = 'transport' }, @{ Failure = 'null' }
         @{ Failure = 'running' }, @{ Failure = 'unclassified exception' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Failure = $Failure } {
             param($Failure)
             Mock Invoke-AvmBicepNativeArmOperation {
                 switch ($Failure) {
-                    'timeout' { throw [System.TimeoutException]::new('Timed out.') }
                     'transport' { throw [System.Net.Http.HttpRequestException]::new('Transport failed.') }
                     'null' { return $null }
                     'running' {
@@ -214,6 +243,28 @@ Describe 'Bicep native deployment retries' {
         }
     }
 
+    It 'retries a confirmed failure reported with an error summary: <Summary>' -ForEach @(
+        @{ Summary = '' }
+        @{ Summary = 'Showing 1 out of 1 error(s). Status Message: Quota exceeded. ' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Summary)
+            Mock Invoke-AvmBicepNativeArmOperation {
+                if ($DeploymentName -like '*-t1') {
+                    throw [System.InvalidOperationException]::new(
+                        "10:20:30 - The deployment '$DeploymentName' failed with error(s). $($Summary)(Code: DeploymentFailed)")
+                }
+                @{
+                    Id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
+                    ProvisioningState = 'Succeeded'
+                }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+            $result.Status | Should -Be 'pass'
+            $script:state.deployments[0].status | Should -Be 'Failed'
+        }
+    }
+
     It 'persists cancellation as unknown and propagates it without another submission' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepNativeArmOperation { throw [System.OperationCanceledException]::new('Canceled.') }
@@ -221,6 +272,80 @@ Describe 'Bicep native deployment retries' {
                 Should -Throw -ExpectedMessage '*Canceled*'
             $script:persisted[-1] | Should -BeLike '*:Unknown'
             Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+        }
+    }
+}
+
+Describe 'Bicep native deployment timeout recovery' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:id = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/attempt'
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+        }
+    }
+
+    It 'polls until the exact deployment is terminal and returns its outputs: <Terminal>' -ForEach @(
+        @{ Terminal = 'Succeeded' }, @{ Terminal = 'Failed' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Terminal)
+            $script:reads = 0
+            Mock Invoke-AzRestMethod {
+                $script:reads++
+                if ($script:reads -eq 1) { throw [System.TimeoutException]::new('Read timed out.') }
+                $state = if ($script:reads -eq 2) { 'Running' } else { $Terminal }
+                @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{
+                                provisioningState = $state; outputs = @{ name = @{ type = 'String'; value = 'x' } } } } |
+                        ConvertTo-Json -Depth 5) }
+            }
+            $result = Wait-AvmBicepNativeDeployment -DeploymentId $script:id -PollIntervalSeconds 0
+            $result.State | Should -Be $Terminal
+            $result.Outputs['name']['value'] | Should -Be 'x'
+            Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter { $Method -eq 'GET' -and $Path -like "$script:id`?*" }
+        }
+    }
+
+    It 'stops with an unknown outcome when recovery cannot confirm the deployment: <Condition>' -ForEach @(
+        @{ Condition = 'three timeouts'; Message = '*three consecutive*' }
+        @{ Condition = 'missing'; Message = '*HTTP 404*' }
+        @{ Condition = 'wrong ID'; Message = '*did not return exactly*' }
+        @{ Condition = 'unsupported state'; Message = "*unsupported recovery state 'Canceled'*" }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Condition, $Message)
+            Mock Invoke-AzRestMethod {
+                switch ($Condition) {
+                    'three timeouts' { throw [System.TimeoutException]::new('Read timed out.') }
+                    'missing' { @{ StatusCode = 404; Content = '{}' } }
+                    'wrong ID' { @{ StatusCode = 200; Content = '{"id":"/another","properties":{"provisioningState":"Succeeded"}}' } }
+                    default {
+                        @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{ provisioningState = 'Canceled' } } | ConvertTo-Json) }
+                    }
+                }
+            }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -PollIntervalSeconds 0 } |
+                Should -Throw -ExpectedMessage $Message
+        }
+    }
+
+    It 'stops when the recovery window ends while the deployment is still running' {
+        InModuleScope Avm.Authoring {
+            Mock Start-Sleep { [System.Threading.Thread]::Sleep(1100) }
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{ provisioningState = 'Running' } } | ConvertTo-Json) }
+            }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -TimeoutSeconds 1 -PollIntervalSeconds 1 } |
+                Should -Throw -ExpectedMessage '*recovery window*'
+        }
+    }
+
+    It 'propagates cancellation while watching' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AzRestMethod { throw [System.OperationCanceledException]::new('Canceled.') }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -PollIntervalSeconds 0 } |
+                Should -Throw -ExpectedMessage '*Canceled*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
         }
     }
 }

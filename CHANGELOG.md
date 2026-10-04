@@ -325,6 +325,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Bicep e2e now watches the same deployment after a submission timeout instead
+  of failing with an unknown outcome. A recovered failure is retried as a
+  confirmed failure; the timed-out deployment is never resubmitted. Confirmed
+  failures reported with an ARM error summary are also recognised.
 - `-SkipModuleVersionCheck` now takes effect for commands that resolve module
   context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
   `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer

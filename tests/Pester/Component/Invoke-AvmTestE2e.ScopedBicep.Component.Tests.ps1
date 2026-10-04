@@ -158,15 +158,26 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         $result.CleanupPending.Count | Should -Be 0
     }
 
-    It 'cleans a confirmed late terminal outcome without masking the original submission timeout' {
+    It 'watches a timed-out submission to a late success without resubmitting it' {
         $script:fixture.CreateMode = 'timeout'
         $script:fixture.ReadinessState = 'Succeeded'
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending.Count | Should -Be 0
         @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
         $script:fixture.Calls | Should -Contain 'pester'
         $script:fixture.Calls | Should -Contain 'post'
+        $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
+    }
+
+    It 'fails and cleans a timed-out submission that later fails like any confirmed failure' {
+        $script:fixture.CreateMode = 'timeout'
+        $script:fixture.ReadinessState = 'Failed'
+        $result = Invoke-AvmTestE2e @script:options -DeploymentRetryLimit 1
+        $result.Status | Should -Be 'fail'
+        $result.CleanupPending.Count | Should -Be 0
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'pester'
         $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
     }
 }
