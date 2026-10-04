@@ -217,7 +217,7 @@ jobs:
         # environment subject (not a branch ref), so it covers the pull_request
         # and workflow_dispatch runs regardless of the selected ref.
         if: ${{ vars.ARM_CLIENT_ID != '' }}
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
@@ -296,7 +296,7 @@ jobs:
           name: coverage-report-powershell
 
       - name: Upload coverage to GitHub
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
+        uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34 # v1.4.2
         with:
           file: coverage.cobertura.xml
           language: PowerShell
