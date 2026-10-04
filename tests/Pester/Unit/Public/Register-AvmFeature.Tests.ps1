@@ -38,7 +38,7 @@ Describe 'Register-AvmFeature unit orchestration without filesystem or Azure acc
         $scenario = $script:scenario
 
         Mock Test-AvmModuleVersion -ModuleName Avm.Authoring {}
-        Mock Get-AvmModuleContext -ModuleName Avm.Authoring {
+        Mock Get-AvmModuleContextInternal -ModuleName Avm.Authoring {
             [pscustomobject]@{ Root = 'virtual-module-root' }
         }
         Mock Get-ChildItem -ModuleName Avm.Authoring {

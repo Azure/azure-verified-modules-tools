@@ -21,7 +21,7 @@ Describe 'Get-AvmTerraformScaffoldPlan' {
 
         $relative = @($plans | ForEach-Object { [System.IO.Path]::GetRelativePath($root, $_.Path).Replace('\', '/') })
         $relative | Should -Be @(
-            '_header.md', 'examples/default/_header.md', 'examples/default/main.tf',
+            '_header.md', 'examples/default/_header.md', 'examples/default/main.tf', 'examples/default/variables.tf',
             'main.tf', 'outputs.tf', 'terraform.tf', 'variables.tf', 'tests/.gitkeep'
         )
         ($plans | Where-Object { $_.Path -like '*_header.md' -and $_.Path -notlike '*examples*' }).Content |
@@ -48,7 +48,7 @@ Describe 'Get-AvmTerraformScaffoldPlan' {
 
         @($plans.Path) | Should -Not -Contain (Join-Path $root 'main.tf')
         @($plans | Where-Object { $_.Path -like '*.gitkeep' }) | Should -HaveCount 0
-        @($plans) | Should -HaveCount 6
+        @($plans) | Should -HaveCount 7
     }
 
     It 'rejects an existing scaffold path with different casing' {

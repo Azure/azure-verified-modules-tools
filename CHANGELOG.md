@@ -107,6 +107,11 @@ section when cutting a release.
 
 ### Changed
 
+- The Terraform module scaffold published by `avm init` now deploys an AzAPI
+  virtual network into a supplied `parent_id` and exposes the AzAPI
+  `resource_types`, `retry`, `timeouts` and `ignore_body_changes` inputs.
+  Its default example selects a recommended region with
+  `Azure/avm-utl-regions/azurerm` and names resources with `Azure/naming/azurerm`.
 - New `metadata.json` files written by `avm init` and `avm metadata initialize`
   list their properties in schema order, starting with `$schema`, whatever the
   order of the supplied values. Existing files are not rewritten.
@@ -320,6 +325,10 @@ section when cutting a release.
 
 ### Fixed
 
+- `-SkipModuleVersionCheck` now takes effect for commands that resolve module
+  context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
+  `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer
+  repeat the PowerShell Gallery check without the opt-out.
 - Metadata validation no longer downloads the JSON Schema draft-07 meta-schema.
   Root and child metadata validate offline without changing authored `$schema`
   references or relaxing validation.

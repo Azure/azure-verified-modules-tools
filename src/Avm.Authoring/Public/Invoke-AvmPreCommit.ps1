@@ -178,7 +178,7 @@ function Invoke-AvmPreCommit {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
 

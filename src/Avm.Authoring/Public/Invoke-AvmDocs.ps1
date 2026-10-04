@@ -84,8 +84,7 @@ function Invoke-AvmDocs {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
-        -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
     switch ($context.Ecosystem) {
         'bicep' {

@@ -32,7 +32,7 @@ Describe 'Invoke-AvmTestIntegration' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestSuite {
                 param($Context, $Tier)
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Tier = $Tier; FilesProcessed = 1; Issues = @() }
@@ -55,7 +55,7 @@ Describe 'Invoke-AvmTestIntegration' {
         InModuleScope 'Avm.Authoring' -Parameters @{ Flag = $Token; Budget = $Budget } {
             param($Flag, $Budget)
             Mock Test-AvmDisableSentinel { $null }
-            Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
+            Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
             Mock Invoke-AvmTerraformTestSuite {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
             }
@@ -75,7 +75,7 @@ Describe 'Invoke-AvmTestIntegration' {
     It 'keeps the CLI failure terminating after retry exhaustion' {
         InModuleScope 'Avm.Authoring' {
             Mock Test-AvmDisableSentinel { $null }
-            Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
+            Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
             Mock Invoke-AvmTerraformTestSuite {
                 [pscustomobject]@{
                     Engine = 'terraform'; Status = 'fail'; FilesProcessed = 1
@@ -92,7 +92,7 @@ Describe 'Invoke-AvmTestIntegration' {
 
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmBicepTestIntegration {
@@ -116,7 +116,7 @@ Describe 'Invoke-AvmTestIntegration' {
 
     It 'rejects Bicep-only switches in Terraform and Terraform-only switches in Bicep' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' }
             }
             Mock Invoke-AvmTerraformTestSuite { throw 'Must not run on invalid options' }
@@ -124,7 +124,7 @@ Describe 'Invoke-AvmTestIntegration' {
                 Should -Throw -ExpectedMessage '*only supported for Bicep*'
             { Invoke-AvmTestIntegration -Operation Validate } |
                 Should -Throw -ExpectedMessage '*only supported for Bicep*'
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'bicep' }
             }
             { Invoke-AvmTestIntegration -NoInit } |
@@ -134,13 +134,13 @@ Describe 'Invoke-AvmTestIntegration' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-int-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{

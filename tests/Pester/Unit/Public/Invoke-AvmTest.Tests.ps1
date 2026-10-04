@@ -32,7 +32,7 @@ Describe 'Invoke-AvmTest' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmBicepTest {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 4; Issues = @() }
             }
@@ -57,7 +57,7 @@ Describe 'Invoke-AvmTest' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTest {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() }
             }
@@ -71,13 +71,13 @@ Describe 'Invoke-AvmTest' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-test-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{

@@ -66,7 +66,7 @@ BeforeAll {
             param($ModuleContext, $CommandName, $Actions, $LogVerbose)
             $script:metadataLaterCalls = 0
             $script:metadataToolResolutions = 0
-            Mock Get-AvmModuleContext { $ModuleContext }
+            Mock Get-AvmModuleContextInternal { $ModuleContext }
             Mock Test-AvmModuleVersion {}
             Mock Resolve-AvmCommandTool { $script:metadataToolResolutions++; @() }
             Mock Assert-AvmGitWorkingTreeClean {}

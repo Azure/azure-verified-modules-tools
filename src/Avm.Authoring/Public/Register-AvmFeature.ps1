@@ -61,7 +61,7 @@ function Register-AvmFeature {
     process {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-        $context = Get-AvmModuleContext -Path $Path
+        $context = Get-AvmModuleContextInternal -Path $Path
         $features = @(Read-AvmRequiredFeature -Root $context.Root)
         $subscription = [guid]::Empty
         if (-not [guid]::TryParseExact($SubscriptionId, 'D', [ref]$subscription) -or

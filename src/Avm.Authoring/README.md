@@ -308,7 +308,10 @@ stops the run:
    access is kept.
 1. Publish the first commit to `main` from a temporary clone: the portal's
    seed files, `metadata.json`, the minimal scaffold from
-   `Resources/Scaffolds/Terraform`, and the current managed files, telemetry,
+   `Resources/Scaffolds/Terraform` (an AzAPI virtual network that takes
+   `parent_id`, with the AzAPI `resource_types`, `retry`, `timeouts` and
+   `ignore_body_changes` inputs, and a default example that uses the regions
+   and naming utility modules), and the current managed files, telemetry,
    and README added by `avm pre-commit`. Nothing else from your folder is
    published, and a `main` that already holds module files is never
    overwritten. When `main` already has `metadata.json`, the run checks that

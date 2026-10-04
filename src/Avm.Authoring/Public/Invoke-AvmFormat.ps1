@@ -80,7 +80,7 @@ function Invoke-AvmFormat {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
     $action = if ($CheckDrift) {
         "Check $($context.Ecosystem) module source formatting"

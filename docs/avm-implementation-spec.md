@@ -501,7 +501,11 @@ in `microsoft/github-operations` unless the repository is listed there or an
 open request exists, and clone the repository into an empty folder. The first
 commit is built in a temporary clone from the portal's seed files,
 metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
-and `avm pre-commit` output; no other local content is published. Interrupted
+and `avm pre-commit` output. The scaffold is an AzAPI virtual network that takes
+`parent_id` and exposes the AzAPI `resource_types`, `retry`, `timeouts` and
+`ignore_body_changes` interfaces; its default example picks a recommended
+region through `Azure/avm-utl-regions/azurerm` and names resources through
+`Azure/naming/azurerm`. No other local content is published. Interrupted
 or non-interactive runs stop with instructions and resume on the next run.
 Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child

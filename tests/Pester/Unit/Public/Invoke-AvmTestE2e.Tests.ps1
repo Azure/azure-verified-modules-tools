@@ -33,7 +33,7 @@ Describe 'Invoke-AvmTestE2e' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestE2e {
                 param($Context)
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
@@ -57,7 +57,7 @@ Describe 'Invoke-AvmTestE2e' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestE2e {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
@@ -76,7 +76,7 @@ Describe 'Invoke-AvmTestE2e' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestE2e { throw 'Terraform must not run' }
             Mock Invoke-AvmBicepTestE2e {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; RunsPassed = 1 }
@@ -100,7 +100,7 @@ Describe 'Invoke-AvmTestE2e' {
 
     It 'rejects ecosystem-specific options before invoking the wrong engine' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Root = '.'; Ecosystem = $Ecosystem }
             }
             Mock Invoke-AvmBicepTestE2e { throw 'Bicep engine must not run' }
@@ -118,13 +118,13 @@ Describe 'Invoke-AvmTestE2e' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-e2e-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{
@@ -151,7 +151,7 @@ Describe 'Invoke-AvmTestE2e per-example targeting (F26/F27)' {
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
 
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestE2e {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
             }
@@ -218,25 +218,24 @@ Describe 'Invoke-AvmTestE2e native workflow options' {
     BeforeEach {
         InModuleScope Avm.Authoring {
             Mock Test-AvmModuleVersion {}
-            Mock Get-AvmModuleContext { [pscustomobject]@{ Root = 'test-root'; Ecosystem = $Ecosystem } }
+            Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'test-root'; Ecosystem = $Ecosystem } }
             Mock Invoke-AvmBicepTestE2e { [pscustomobject]@{ Status = 'pass'; Engine = 'bicep' } }
             Mock Invoke-AvmTerraformTestE2e { [pscustomobject]@{ Status = 'pass'; Engine = 'terraform' } }
         }
     }
 
-    It 'forwards the explicit version-check policy to context discovery: <SkipCheck>' -ForEach @(
+    It 'checks the module version once with the explicit policy: <SkipCheck>' -ForEach @(
         @{ SkipCheck = $true }
         @{ SkipCheck = $false }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ SkipCheck = $SkipCheck } {
             param($SkipCheck)
             $null = Invoke-AvmTestE2e -Ecosystem bicep -SkipModuleVersionCheck:$SkipCheck
+            Should -Invoke Test-AvmModuleVersion -Exactly 1
             Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter {
                 [bool]$SkipModuleVersionCheck -eq $SkipCheck
             }
-            Should -Invoke Get-AvmModuleContext -Exactly 1 -ParameterFilter {
-                [bool]$SkipModuleVersionCheck -eq $SkipCheck
-            }
+            Should -Invoke Get-AvmModuleContextInternal -Exactly 1
         }
     }
 

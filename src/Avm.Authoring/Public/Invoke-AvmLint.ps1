@@ -64,7 +64,7 @@ function Invoke-AvmLint {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck | Out-Null
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("lint: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Write-AvmLog ("lint: running {0} lint engine" -f $context.Ecosystem) -Level Info | Out-Null
 

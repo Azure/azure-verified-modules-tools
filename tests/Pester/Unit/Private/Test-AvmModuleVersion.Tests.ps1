@@ -188,4 +188,32 @@ Describe 'Test-AvmModuleVersion' {
             Should -Invoke Find-PSResource -Times 0 -Exactly
         }
     }
+
+    Context 'public commands that resolve module context' {
+        It 'honours -SkipModuleVersionCheck when the Gallery has a newer version: <Command>' -ForEach @(
+            @{ Command = 'Invoke-AvmLint'; Engine = 'Invoke-AvmTerraformLint' }
+            @{ Command = 'Invoke-AvmFormat'; Engine = 'Format-AvmTerraformModule' }
+            @{ Command = 'Invoke-AvmTransform'; Engine = 'Invoke-AvmTerraformTransform' }
+            @{ Command = 'Invoke-AvmDocs'; Engine = 'Invoke-AvmTerraformDocs' }
+            @{ Command = 'Invoke-AvmTest'; Engine = 'Invoke-AvmTerraformTest' }
+        ) {
+            $root = Join-Path $TestDrive "skip-$Command"
+            $null = New-Item -ItemType Directory -Path $root -Force
+            [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), "terraform {}`n")
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root; Command = $Command; Engine = $Engine } {
+                param($Root, $Command, $Engine)
+                Mock Find-PSResource { [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '9999.0.0' } }
+                Mock $Engine { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() } }
+                Mock Write-AvmLog
+
+                { & $Command -Path $Root -Ecosystem terraform } | Should -Throw -ExceptionType ([AvmModuleVersionException])
+                Should -Invoke $Engine -Exactly 0
+
+                $script:AvmLatestModuleVersion = $null
+                $script:AvmModuleVersionCheckCompleted = $false
+                $null = & $Command -Path $Root -Ecosystem terraform -SkipModuleVersionCheck 3>$null
+                Should -Invoke $Engine -Exactly 1
+            }
+        }
+    }
 }
