@@ -761,7 +761,12 @@ native response's exact deployment ID, and retry only confirmed failure or
 exact preflight rejection. A submission timeout watches the same deployment
 for up to an hour (stopping after three consecutive read timeouts); a
 recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
-never resubmit.
+never resubmit. A confirmed deployment failure whose operation errors are all regional
+may also relocate an eligible case: strict cleanup must first confirm every
+deployment is terminal and fully discovered, remove its resources (no retained
+or soft-deleted names) and delete its deployment records. Otherwise relocation
+stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
+forward, so relocation never exceeds the validation or deployment budgets.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support

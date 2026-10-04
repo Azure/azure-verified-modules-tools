@@ -11,7 +11,10 @@ function Get-AvmBicepDeploymentCleanupTarget {
         [int] $SearchRetryLimit = 40,
 
         [ValidateRange(0, 3600)]
-        [int] $SearchRetryInterval = 60
+        [int] $SearchRetryInterval = 60,
+
+        # Relocation mode: every record must be terminal and fully resolved, with complete Create targets.
+        [switch] $RequireCompleteRemoval
     )
 
     Set-StrictMode -Version 3.0
@@ -26,6 +29,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
         $records[$deployment.resourceId] = @{
             Id                = $deployment.resourceId
             Required          = $true
+            Depth             = 0
             PreflightRejected = $false
             Status            = 'Pending'
             ErrorCode         = ''
@@ -55,9 +59,12 @@ function Get-AvmBicepDeploymentCleanupTarget {
             $visitedPages = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::Ordinal)
             try {
+                if ($RequireCompleteRemoval) {
+                    Assert-AvmBicepCleanupDeploymentTerminal -Record $record
+                }
                 while (-not [string]::IsNullOrEmpty($nextPath)) {
-                    if (-not $visitedPages.Add($nextPath)) {
-                        throw [AvmProcessException]::new("Repeated deployment operations page: $nextPath")
+                    if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
+                        throw [AvmProcessException]::new("Repeated or excessive deployment operations page: $nextPath")
                     }
                     $response = Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
                     $document = $response.Content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
@@ -96,11 +103,15 @@ function Get-AvmBicepDeploymentCleanupTarget {
                         if ($properties -isnot [System.Collections.IDictionary]) {
                             throw [AvmProcessException]::new("Invalid deployment operation properties: $($record.Id)")
                         }
+                        if ($RequireCompleteRemoval -and
+                            (Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState') -cnotin @('Succeeded', 'Failed')) {
+                            throw [AvmProcessException]::new("Deployment has a non-terminal operation: $($record.Id)")
+                        }
                         if ((Get-AvmPropertyValue -InputObject $properties -Name 'provisioningOperation') -ine 'Create') {
                             continue
                         }
                         $target = Get-AvmPropertyValue -InputObject $properties -Name 'targetResource'
-                        if ($null -eq $target) {
+                        if ($null -eq $target -and -not $RequireCompleteRemoval) {
                             continue
                         }
                         $targetId = Get-AvmPropertyValue -InputObject $target -Name 'id'
@@ -113,6 +124,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                                     $records.Add($resource.resourceId, @{
                                             Id                = $resource.resourceId
                                             Required          = $false
+                                            Depth             = $record.Depth + 1
                                             PreflightRejected = $false
                                             Status            = 'Pending'
                                             ErrorCode         = ''
@@ -126,7 +138,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                             }
                         }
                     }
-                    $nextPath = Resolve-AvmBicepCleanupNextLink -NextLink (
+                    $nextPath = Resolve-AvmBicepCleanupNextLink -ExpectedPath ($record.Id + '/operations') -NextLink (
                         Get-AvmPropertyValue -InputObject $document -Name 'nextLink')
                     if ([string]::IsNullOrEmpty($nextPath)) {
                         $record.Status = 'Resolved'
@@ -163,7 +175,11 @@ function Get-AvmBicepDeploymentCleanupTarget {
             $record.Status = 'Missing'
             $record.ErrorMessage = "Deployment record not found after $SearchRetryLimit lookups: $($record.Id)"
         }
-        if ($record.Status -in @('Missing', 'Failed')) {
+        $unresolved = $RequireCompleteRemoval -and $record.Status -in @('NestedRecordAbsent', 'ContainerRemoved')
+        if ($unresolved) {
+            $record.ErrorMessage = "Deployment record could not be resolved ($($record.Status)): $($record.Id)"
+        }
+        if ($record.Status -in @('Missing', 'Failed') -or $unresolved) {
             $issues.Add([pscustomobject]@{
                     DeploymentId = $record.Id
                     Code         = $record.ErrorCode

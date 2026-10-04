@@ -31,6 +31,8 @@ function New-NativeBicepWorkflowFixture {
         NestedExtensions = @(); MissingOperations = $false; ReadinessState = 'Running'
         Outputs = @{ account = @{ type = 'String'; value = 'deployed-account' } }
         CreatedId = ''; LastDeploymentId = ''
+        RegionalFailures = 0; RecordDeleteFails = $false
+        RemovedRecords = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     }
     & (Get-Module Avm.Authoring) {
         function script:Get-AzContext { [CmdletBinding()] param() throw 'Unmocked Azure context.' }
@@ -74,7 +76,10 @@ function New-NativeBicepWorkflowFixture {
                 Account = @{ Id = 'fixture-account' }
             }
         }
-        Mock Get-AvmBicepResourceLocation { [pscustomobject]@{ Location = 'eastus'; IsGlobal = $false } }
+        Mock Get-AvmBicepResourceLocation {
+            $region = @('eastus', 'centralus', 'westus2') | Where-Object { $_ -notin $UnavailableRegions } | Select-Object -First 1
+            [pscustomobject]@{ Location = $region; IsGlobal = $false }
+        }
         Mock Invoke-AvmProcess {
             if ($FilePath -ne 'fake-bicep' -or $ArgumentList[0] -ne 'build') {
                 throw "Unmocked process: $FilePath"
@@ -153,7 +158,12 @@ function New-NativeBicepWorkflowFixture {
             }
             $state.CreatedId = $target
             $state.LastDeploymentId = $id
-            $provisioning = if ($state.FailuresRemaining -gt 0) {
+            $regional = $state.RegionalFailures -gt 0
+            $provisioning = if ($regional) {
+                $state.RegionalFailures--
+                'Failed'
+            }
+            elseif ($state.FailuresRemaining -gt 0) {
                 $state.FailuresRemaining--
                 'Failed'
             }
@@ -168,6 +178,16 @@ function New-NativeBicepWorkflowFixture {
                 }, @{
                     properties = @{ provisioningOperation = 'Read'; targetResource = @{ id = $target + '-existing' } }
                 })
+            if ($regional) {
+                $state.OperationMap[$id] = @(@{
+                        properties = @{
+                            provisioningOperation = 'Create'; provisioningState = 'Failed'; targetResource = @{ id = $target }
+                            statusMessage = @{ error = @{ code = 'AllocationFailed'; message = 'Insufficient capacity in the region.' } }
+                        }
+                    }, @{
+                        properties = @{ provisioningOperation = 'Read'; provisioningState = 'Succeeded'; targetResource = @{ id = $target + '-existing' } }
+                    })
+            }
             if ($state.Nested) {
                 $nestedSubscription = if ($state.NestedSubscription) { $state.NestedSubscription } else { $state.CurrentSubscription }
                 $group = "/subscriptions/$nestedSubscription/resourceGroups/nested-$runId"
@@ -198,7 +218,17 @@ function New-NativeBicepWorkflowFixture {
         }
         Mock Invoke-AzRestMethod {
             $state = $script:nativeWorkflow
+            $recordId = $Path.Split('?')[0]
+            if ($Method -eq 'DELETE' -and $state.Deployments.ContainsKey($recordId)) {
+                $state.Calls.Add("delete-record:$recordId")
+                if ($state.RecordDeleteFails) { return @{ StatusCode = 500; Content = '{}' } }
+                $null = $state.RemovedRecords.Add($recordId)
+                return @{ StatusCode = 202; Content = '' }
+            }
             if ($Method -ne 'GET') { throw 'Unexpected mutating REST request.' }
+            if ($state.RemovedRecords.Contains($recordId) -or $state.RemovedRecords.Contains(($recordId -replace '/operations$', ''))) {
+                return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
+            }
             $groupMatch = [regex]::Match($Path, '^/subscriptions/([^/]+)/resourceGroups/([^/?]+)\?api-version=2021-04-01$')
             if ($groupMatch.Success) {
                 $groupMatch.Groups[1].Value | Should -BeExactly $state.CurrentSubscription

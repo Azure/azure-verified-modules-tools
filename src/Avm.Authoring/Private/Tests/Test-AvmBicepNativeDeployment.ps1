@@ -16,6 +16,9 @@ function Test-AvmBicepNativeDeployment {
 
         [switch] $ParameterResourceLocationToken,
 
+        # Regions already rejected for this case. They count towards RetryLimit and are never selected again.
+        [string[]] $UnavailableRegions = @(),
+
         [ValidateRange(1, 3)]
         [int] $RetryLimit = 3
     )
@@ -38,19 +41,19 @@ function Test-AvmBicepNativeDeployment {
     $hasToken = $TemplateContent -match '#_resourceLocation_#' -or $ParameterResourceLocationToken
     $hasParameter = $parameters.ContainsKey('resourceLocation')
     $canRetry = $pinned.Count -eq 0 -and $DeploymentInput.Scope -ne 'group' -and ($hasParameter -or $hasToken)
-    $attempted = @()
-    for ($attempt = 1; $attempt -le $RetryLimit; $attempt++) {
+    $attempted = [System.Collections.Generic.List[string]]::new([string[]]@($UnavailableRegions))
+    while ($attempted.Count -lt $RetryLimit) {
         $selection = if ($pinned.Count -gt 0) {
             [pscustomobject]@{ Location = $pinned[0]; IsGlobal = $false }
         }
         else {
             Get-AvmBicepResourceLocation -ResourceType $ResourceType `
-                -MetadataLocation $DeploymentInput.MetadataLocation -UnavailableRegions $attempted
+                -MetadataLocation $DeploymentInput.MetadataLocation -UnavailableRegions $attempted.ToArray()
         }
         if ($selection.Location -in $attempted) {
             throw [AvmProcessException]::new('Resource location selection repeated a rejected region.')
         }
-        $attempted += $selection.Location
+        $attempted.Add($selection.Location)
         $inputOptions = $DeploymentInput.Clone()
         $inputOptions.Parameters = $parameters.Clone()
         if ($hasParameter) { $inputOptions.Parameters['resourceLocation'] = $selection.Location }
@@ -66,13 +69,19 @@ function Test-AvmBicepNativeDeployment {
             [System.IO.File]::WriteAllText($DeploymentInput.TemplatePath, $content, [System.Text.UTF8Encoding]::new($false))
             Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Validate -Confirm:$false
             $validated = $true
-            return [pscustomobject]@{ Location = $selection.Location; DeploymentInput = $inputOptions; Attempts = $attempt }
+            return [pscustomobject]@{
+                Location         = $selection.Location
+                DeploymentInput  = $inputOptions
+                Attempts         = $attempted.Count - $UnavailableRegions.Count
+                AttemptedRegions = $attempted.ToArray()
+                CanRelocate      = $canRetry -and -not $selection.IsGlobal
+            }
         }
         catch {
-            if (-not $canRetry -or $selection.IsGlobal -or $attempt -eq $RetryLimit -or
+            if (-not $canRetry -or $selection.IsGlobal -or $attempted.Count -ge $RetryLimit -or
                 -not (Test-AvmBicepRegionalValidationError -ErrorRecord $_)) { throw }
             Write-AvmLog -Level Warning -Message (
-                "Regional validation failed in '$($selection.Location)'; selecting another eligible region ($attempt/$RetryLimit).")
+                "Regional validation failed in '$($selection.Location)'; selecting another eligible region ($($attempted.Count)/$RetryLimit).")
         }
         finally {
             if (-not $validated) {
@@ -81,4 +90,5 @@ function Test-AvmBicepNativeDeployment {
             }
         }
     }
+    throw [AvmProcessException]::new('The regional candidate budget is exhausted.')
 }

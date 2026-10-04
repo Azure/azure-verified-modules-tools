@@ -145,13 +145,43 @@ function Invoke-AvmBicepNativeTestCase {
                     throw [AvmProcessException]::new('The new resource group identity and ownership tag could not be verified.')
                 }
             }
-            $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options `
-                -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
-                -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
-                -ParameterResourceLocationToken:($references.Contains('resourceLocation')) -RetryLimit $executionOptions.ValidationRetryLimit
-            $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
-                -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit -Confirm:$false
-            if ($deployed.Status -ne 'pass') {
+            $unavailableRegions = @()
+            $relocationBlocked = $false
+            $firstAttempt = 1
+            while ($true) {
+                $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options `
+                    -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
+                    -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
+                    -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
+                    -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
+                $canRelocate = $validated.CanRelocate -and -not $executionOptions.KeepResources -and
+                $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit
+                $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
+                    -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit `
+                    -FirstAttempt $firstAttempt -AllowRelocation:$canRelocate -Confirm:$false
+                if ($deployed.Status -ne 'relocate') { break }
+
+                # A wholly regional failure must be fully removed, including deployment records, before another region is tried.
+                Write-AvmLog -Level Warning -Message "Deployment '$($deployed.DeploymentName)' failed for regional reasons; removing it before relocating."
+                $relocationCleanup = Invoke-AvmBicepCleanup -StatePath $handle.Path -SubscriptionId $Item.SubscriptionId `
+                    -TenantId $TenantId -RequireCompleteRemoval -Confirm:$false
+                if (-not $relocationCleanup.Cleaned) {
+                    foreach ($issue in $relocationCleanup.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
+                    Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'relocation-blocked' `
+                        -Message "Cleanup did not confirm removal of every outstanding deployment, so relocation stopped. Cleanup state: '$($handle.Path)'."
+                    $relocationBlocked = $true
+                    $deployed.Status = 'fail'
+                    break
+                }
+                $state = Read-AvmBicepCleanupState -Path $handle.Path
+                $state['status'] = 'Pending'
+                $state['deployments'] = @()
+                $state['resources'] = @()
+                Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
+                $unavailableRegions = $validated.AttemptedRegions
+                $firstAttempt = $deployed.Attempt + 1
+            }
+            if ($deployed.Status -ne 'pass' -and -not $relocationBlocked) {
                 Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'deployment-failed' `
                     -Message "Deployment '$($deployed.DeploymentId)' ended with '$($deployed.Outcome)' outcome. Cleanup state is retained at '$($handle.Path)'."
             }

@@ -329,6 +329,10 @@ section when cutting a release.
   of failing with an unknown outcome. A recovered failure is retried as a
   confirmed failure; the timed-out deployment is never resubmitted. Confirmed
   failures reported with an ARM error summary are also recognised.
+- Bicep e2e relocates an unpinned case to another eligible region after a
+  deployment fails only for regional reasons, matching the registry workflow.
+  It first removes that deployment's resources and records and confirms they
+  are gone; if cleanup cannot confirm this, relocation stops.
 - `-SkipModuleVersionCheck` now takes effect for commands that resolve module
   context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
   `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer

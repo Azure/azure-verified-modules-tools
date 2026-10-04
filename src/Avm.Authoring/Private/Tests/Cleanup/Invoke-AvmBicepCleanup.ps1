@@ -21,7 +21,11 @@ function Invoke-AvmBicepCleanup {
         [int] $RemovalRetryLimit = 3,
 
         [ValidateRange(0, 3600)]
-        [int] $RemovalRetryInterval = 15
+        [int] $RemovalRetryInterval = 15,
+
+        # Relocation mode: requires terminal, fully discovered deployments, no retained resources,
+        # freed soft-deleted names and removed deployment records before reporting success.
+        [switch] $RequireCompleteRemoval
     )
 
     Set-StrictMode -Version 3.0
@@ -44,12 +48,14 @@ function Invoke-AvmBicepCleanup {
     $az = Get-Command -Name 'az' -CommandType Application -ErrorAction Stop |
         Select-Object -First 1
     $discoveryOptions = @{
-        SearchRetryLimit    = $SearchRetryLimit
-        SearchRetryInterval = $SearchRetryInterval
+        SearchRetryLimit       = $SearchRetryLimit
+        SearchRetryInterval    = $SearchRetryInterval
+        RequireCompleteRemoval = $RequireCompleteRemoval
     }
     $removalOptions = @{
-        RetryLimit    = $RemovalRetryLimit
-        RetryInterval = $RemovalRetryInterval
+        RetryLimit             = $RemovalRetryLimit
+        RetryInterval          = $RemovalRetryInterval
+        RequireCompleteRemoval = $RequireCompleteRemoval
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
         $context = Get-AzContext -ErrorAction Stop
@@ -132,6 +138,13 @@ function Invoke-AvmBicepCleanup {
                 Test-AvmBicepCleanupExclusion -ResourceId $_ -SubscriptionId $state['subscriptionId']
             })
         foreach ($id in $excluded) {
+            if ($RequireCompleteRemoval) {
+                $issues.Add([pscustomobject]@{
+                        ResourceId = $id
+                        Code       = 'ProtectedResourceRetained'
+                        Message    = "Workflow-excluded resource would remain after cleanup: $id"
+                    })
+            }
             Write-AvmLog -Message "Retaining workflow-excluded resource '$id'." -Level Info
             $null = $records.Remove($id)
         }
@@ -162,6 +175,25 @@ function Invoke-AvmBicepCleanup {
         $batch = Remove-AvmBicepCleanupResourceBatch -State $state -StatePath $StatePath `
             -BlockedResourceIds $blocked.ToArray() @removalOptions -Confirm:$false
         foreach ($issue in $batch.Issues) { $issues.Add($issue) }
+        if ($RequireCompleteRemoval -and $batch.Cleaned -and $issues.Count -eq 0) {
+            $recordIds = @($discovery.Deployments | Where-Object { $_.Status -eq 'Resolved' } |
+                    Sort-Object -Property @{ Expression = { $_.Depth }; Descending = $true } |
+                    ForEach-Object { $_.Id })
+            $removedIds = @($state['resources'] | Where-Object { $_['removed'] } | ForEach-Object { $_['id'] })
+            try {
+                Remove-AvmBicepDeploymentRecord -DeploymentIds $recordIds -RemovedParentIds $removedIds `
+                    -RetryLimit $RemovalRetryLimit -RetryInterval $RemovalRetryInterval -Confirm:$false
+            }
+            catch {
+                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') {
+                    throw
+                }
+                $issues.Add([pscustomobject]@{
+                        ResourceId = ''; Code = 'DeploymentRecordRetained'; Message = $_.Exception.Message
+                    })
+                Write-AvmLog -Message $_.Exception.Message -Level Warning
+            }
+        }
         $cleaned = $batch.Cleaned -and $issues.Count -eq 0
         $state['status'] = if ($cleaned) { 'Complete' } else { 'CleanupPending' }
         Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false

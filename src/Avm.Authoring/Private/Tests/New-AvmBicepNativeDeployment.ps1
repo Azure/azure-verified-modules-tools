@@ -12,13 +12,20 @@ function New-AvmBicepNativeDeployment {
         [hashtable] $DeploymentInput,
 
         [ValidateRange(1, 3)]
-        [int] $RetryLimit = 3
+        [int] $RetryLimit = 3,
+
+        # Continues the shared attempt budget, and deployment names, after a relocation.
+        [ValidateRange(1, 3)]
+        [int] $FirstAttempt = 1,
+
+        # Return 'relocate' instead of retrying in place when a confirmed failure is wholly regional.
+        [switch] $AllowRelocation
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    for ($attempt = 1; $attempt -le $RetryLimit; $attempt++) {
+    for ($attempt = $FirstAttempt; $attempt -le $RetryLimit; $attempt++) {
         $name = 'avm-e2e-{0}-t{1}' -f $State['runId'], $attempt
         $idOptions = @{
             Scope             = $DeploymentInput.Scope
@@ -94,6 +101,20 @@ function New-AvmBicepNativeDeployment {
             return [pscustomobject]@{
                 Status = 'fail'; DeploymentName = $name; DeploymentId = $id; Outputs = @{}
                 ErrorKind = $kind; Outcome = $entry['status']
+            }
+        }
+        if ($AllowRelocation -and $entry['status'] -eq 'Failed') {
+            $regional = $false
+            try { $regional = Test-AvmBicepRegionalDeploymentFailure -DeploymentId $id }
+            catch {
+                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }
+                Write-AvmLog -Level Warning -Message "Regional classification for '$name' failed; retrying in place."
+            }
+            if ($regional) {
+                return [pscustomobject]@{
+                    Status = 'relocate'; DeploymentName = $name; DeploymentId = $id; Outputs = @{}
+                    ErrorKind = 'Other'; Outcome = 'Failed'; Attempt = $attempt
+                }
             }
         }
         Write-AvmLog -Level Warning -Message (
