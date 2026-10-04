@@ -13,7 +13,7 @@ virtual network that takes `parent_id` and follows the AVM AzAPI interface
 specifications (TFFR6 `resource_types`, TFFR7 `retry`/`timeouts`, TFFR8
 `ignore_body_changes`). The default example selects a recommended region with
 `Azure/avm-utl-regions/azurerm` 0.12.0, names resources with
-`Azure/naming/azurerm` 0.4.4, creates its resource group through AzAPI, and
+`Azure/avm-utl-naming/azure` 0.2.0, creates its resource group through AzAPI, and
 declares the `enable_telemetry` variable that the example telemetry transform
 would otherwise generate.
 

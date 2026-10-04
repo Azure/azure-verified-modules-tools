@@ -29,15 +29,15 @@ resource "random_integer" "region_index" {
 }
 
 module "naming" {
-  source  = "Azure/naming/azurerm"
-  version = "0.4.4"
+  source  = "Azure/avm-utl-naming/azure"
+  version = "0.2.0"
 }
 
 data "azapi_client_config" "current" {}
 
 resource "azapi_resource" "resource_group" {
   location               = module.regions.regions[random_integer.region_index.result].name
-  name                   = module.naming.resource_group.name_unique
+  name                   = module.naming.names.resource_group.name_unique
   parent_id              = "/subscriptions/${data.azapi_client_config.current.subscription_id}"
   type                   = "Microsoft.Resources/resourceGroups@2024-11-01"
   response_export_values = []
@@ -48,7 +48,7 @@ module "test" {
 
   address_space    = ["10.0.0.0/16"]
   location         = azapi_resource.resource_group.location
-  name             = module.naming.virtual_network.name_unique
+  name             = module.naming.names.virtual_network.name_unique
   parent_id        = azapi_resource.resource_group.id
   enable_telemetry = var.enable_telemetry
 }

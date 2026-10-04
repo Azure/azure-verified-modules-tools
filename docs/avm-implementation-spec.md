@@ -505,7 +505,7 @@ and `avm pre-commit` output. The scaffold is an AzAPI virtual network that takes
 `parent_id` and exposes the AzAPI `resource_types`, `retry`, `timeouts` and
 `ignore_body_changes` interfaces; its default example picks a recommended
 region through `Azure/avm-utl-regions/azurerm` and names resources through
-`Azure/naming/azurerm`. No other local content is published. Interrupted
+`Azure/avm-utl-naming/azure`. No other local content is published. Interrupted
 or non-interactive runs stop with instructions and resume on the next run.
 Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child

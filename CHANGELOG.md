@@ -111,7 +111,7 @@ section when cutting a release.
   virtual network into a supplied `parent_id` and exposes the AzAPI
   `resource_types`, `retry`, `timeouts` and `ignore_body_changes` inputs.
   Its default example selects a recommended region with
-  `Azure/avm-utl-regions/azurerm` and names resources with `Azure/naming/azurerm`.
+  `Azure/avm-utl-regions/azurerm` and names resources with `Azure/avm-utl-naming/azure`.
 - New `metadata.json` files written by `avm init` and `avm metadata initialize`
   list their properties in schema order, starting with `$schema`, whatever the
   order of the supplied values. Existing files are not rewritten.
