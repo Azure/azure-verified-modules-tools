@@ -24,7 +24,7 @@ function New-NativeBicepWorkflowFixture {
         CurrentTenant = '00000000-0000-0000-0000-000000000002'
         IdentityMismatch = $false; GroupExists = $false; GroupCreateFails = $false
         OwnershipMismatch = $false; RetagDuringMetadata = $false
-        ValidationFails = $false; CreateMode = 'success'
+        ValidationFails = $false; ValidationError = $null; CreateMode = 'success'
         CleanupFails = $false; OutputMode = 'valid'; PesterMode = 'pass'; PostMode = 'pass'
         PesterInput = $null; HookInput = $null; FailuresRemaining = 0
         Nested = $false; NestedSubscription = ''; NestedResourceType = 'Microsoft.Storage/storageAccounts'
@@ -142,6 +142,7 @@ function New-NativeBicepWorkflowFixture {
                 })
             if ($Operation -eq 'Validate') {
                 if ($state.ValidationFails) { throw [UnauthorizedAccessException]::new('Validation denied.') }
+                if ($null -ne $state.ValidationError) { throw $state.ValidationError }
                 return
             }
             $id = Get-AvmBicepScopedDeploymentId -Scope $Scope -SubscriptionId $state.CurrentSubscription `

@@ -342,6 +342,10 @@ section when cutting a release.
   configured `TEST_SUBSCRIPTION_IDS` pool, matching the registry workflow, and
   falls back to `VALIDATE_SUBSCRIPTION_ID` only when no pool is set. An invalid
   pool fails clearly; `localToken_subscriptionId` still overrides both.
+- When Bicep e2e preparation, validation or submission fails, the issue now
+  lists the distinct nested Azure error codes (for example
+  `InvalidTemplateDeployment, AllocationFailed`). Azure messages and raw
+  parameters are still never logged.
 - `-SkipModuleVersionCheck` now takes effect for commands that resolve module
   context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
   `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer

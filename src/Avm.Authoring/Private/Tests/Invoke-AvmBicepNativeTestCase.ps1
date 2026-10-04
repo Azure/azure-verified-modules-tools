@@ -209,7 +209,9 @@ function Invoke-AvmBicepNativeTestCase {
                 throw
             }
             $detail = if ($_.Exception -is [AvmConfigurationException]) { $_.Exception.Message } else {
-                'Native preparation, validation or submission failed. Raw parameters and Azure responses are not logged.'
+                $codes = @(Get-AvmBicepSafeErrorCode -ErrorRecord $_)
+                $codeText = if ($codes.Count -gt 0) { " Azure error codes: $($codes -join ', ')." } else { '' }
+                "Native preparation, validation or submission failed.$codeText Raw parameters and Azure responses are not logged."
             }
             Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'native-execution-failed' `
                 -Message "$detail Cleanup state: '$($handle.Path)'."
