@@ -305,6 +305,8 @@ function Invoke-AvmProcess {
         }
         $timeoutError = [System.TimeoutException]::new(
             "Process '$FilePath' did not exit within $TimeoutSec seconds; killed.")
+        $timeoutError.Data['StdOut'] = $stdOut
+        $timeoutError.Data['StdErr'] = $stdErr
         # The caller's timeout is the overall budget, so a killed process is not retried.
         $timeoutError.Data['AvmTransient'] = $false
         throw $timeoutError

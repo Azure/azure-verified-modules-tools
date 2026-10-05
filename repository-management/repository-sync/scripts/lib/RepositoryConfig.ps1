@@ -11,6 +11,27 @@
 
 . (Join-Path $PSScriptRoot '..' '..' '..' 'shared' 'GroupSettings.ps1')
 
+function Resolve-AvmRepositoryEntraGroups {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Groups,
+        [Parameter(Mandatory)] [string] $RepositoryId
+    )
+
+    foreach ($entry in $Groups) {
+        $group = ConvertTo-AvmSettingDictionary -Value $entry
+        if ($group.Contains('entraGroups')) {
+            $null = ConvertTo-AvmEntraGroupNames -Names $group['entraGroups']
+        }
+    }
+    $names = @(
+        foreach ($entry in @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId)) {
+            if ($entry.Group.Contains('entraGroups')) { $entry.Group['entraGroups'] }
+        }
+    )
+    return ConvertTo-AvmEntraGroupNames -Names $names
+}
+
 function Resolve-RepositorySettings {
     param(
         [object]$repositoryConfig,
@@ -137,5 +158,6 @@ function Resolve-RepositorySettings {
         Topics                                          = $repositoryTopics
         WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
+        EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
     }
 }

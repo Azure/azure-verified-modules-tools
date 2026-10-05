@@ -77,8 +77,9 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It 'permits only the required federation ID input from the retired identifier pattern' {
+    It 'permits only the federation ID from the retired identifier pattern' {
         'repository_sync_repository_id' | Should -Not -Match 'repository_sync(?!_repository_id\b)'
+        'AVM_REPOSITORY_SYNC_STATE_LAYOUT' | Should -Match 'repository_sync(?!_repository_id\b)'
         'repository_sync_repository_id_legacy' | Should -Match 'repository_sync(?!_repository_id\b)'
         'repository_sync/modules' | Should -Match 'repository_sync(?!_repository_id\b)'
     }
@@ -120,18 +121,20 @@ Describe "Repository management migration layout" {
             Join-Path $script:repoRoot ".github/workflows/repository-management-sync.yml"
         ) -Raw
         $environmentVariables = @(
-            "ARM_CLIENT_ID"
-            "ARM_SUBSCRIPTION_ID"
-            "ARM_TENANT_ID"
+            "TEST_BAMI_TENANT_ID"
+            "TEST_BAMI_CONTROLLER_CLIENT_ID"
+            "TEST_BAMI_ADMIN_SUBSCRIPTION_ID"
+            "TEST_BAMI_SUBSCRIPTION_IDS"
+            "TEST_BAMI_MANAGEMENT_GROUP_ID"
+            "TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME"
+            "TEST_BAMI_BICEP_CLIENT_ID"
+            "TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID"
             "ARM_BACKEND_CLIENT_ID"
             "ARM_BACKEND_SUBSCRIPTION_ID"
             "ARM_BACKEND_TENANT_ID"
             "ARM_BACKEND_STORAGE_ACCOUNT_NAME"
             "ARM_BACKEND_STORAGE_CONTAINER_NAME"
             "AVM_APP_CLIENT_ID"
-            "IDENTITY_RESOURCE_GROUP_NAME"
-            "MANAGEMENT_GROUP_ID"
-            "TEST_SUBSCRIPTION_IDS"
         )
 
         foreach ($variable in $environmentVariables) {
@@ -139,13 +142,17 @@ Describe "Repository management migration layout" {
         }
 
         ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
-            Should -Be 2
+            Should -Be 3
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |
                 Sort-Object -Unique
         )
         $secretReferences | Should -Be @("AVM_APP_PRIVATE_KEY")
+        $workflow | Should -Not -Match (
+            '\$\{\{\s*(?:vars|secrets)\.(?:ARM_(?:CLIENT|SUBSCRIPTION|TENANT)_ID|' +
+            'IDENTITY_RESOURCE_GROUP_NAME|MANAGEMENT_GROUP_ID|TEST_SUBSCRIPTION_IDS)\s*\}\}'
+        )
         $workflow | Should -Not -Match "TARGET_SUBSCRIPTION_ID"
     }
 

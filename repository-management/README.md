@@ -120,9 +120,9 @@ the existing cleanup policy.
 for all repositories discovered by the existing Terraform sync, including new
 and otherwise unlisted repositories. Configuration is the source of truth;
 tenant selection is independent of managed-file promotion. Higher `order`
-wins; later declaration wins a tie, so explicit legacy exceptions remain
-supported. If no matching group declares `testTenant`, the resolver still
-falls back to `legacy`.
+wins; later declaration wins a tie. The legacy tenant no longer exists:
+normal Terraform sync rejects a legacy or missing selection before cleanup or
+external work. Repository creation remains independent of test identities.
 
 Tools publishes BAMI execution settings for `Azure/bicep-registry-modules`
 using generic `VALIDATE_*` Variables, without per-module canary selectors.
@@ -152,16 +152,26 @@ environment. There is one current BAMI tenant, not a profile catalog.
 Admin and Persistent must be different subscriptions, and neither may appear
 in the disposable test pool. The shared Bicep-only guard also rejects
 Persistent overlap without copying Admin into the Bicep projection.
+Group names come from flat `repositoryGroups[].entraGroups` arrays in the
+[central configuration](repository-config/config.json), not environment IDs
+or capability flags. Matching lists accumulate and deduplicate; they do not
+override defaults. The default adds `avm-test-entra-readers` and
+`avm-test-identity-owners` to every repository test identity. The separate
+`fabric` group adds `avm-test-fabric-admins` only for
+`avm-ptn-unified-data-platform`. Terraform resolves each arbitrary configured
+display name uniquely in the BAMI tenant and manages only individual
+membership edges. The controller never joins these groups. See
+[group access and migration](repository-sync/README.md#bami-group-access-and-migration).
 
 Terraform sync uses dedicated per-repository identities, never the controller
 or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
-Explicit legacy selections retain the legacy consumer settings. See the
-[candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
+There is no fallback to retired-tenant settings. See the
+[unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 
-Bicep variable sync maps only the five validated execution fields to generic
-target Variables; the eight-field source bundle above is unchanged.
+Bicep variable sync retains its existing eight-field source and five-field
+execution projections. Configured Entra names are not Bicep target Variables.
 
 | BAMI source field | Consumer target Variable |
 | --- | --- |

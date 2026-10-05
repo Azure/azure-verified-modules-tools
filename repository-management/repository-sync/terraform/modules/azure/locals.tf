@@ -1,5 +1,11 @@
 locals {
-  role_definition_name_owner = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
-  owner_repo_name            = replace("${var.github_repository_owner}-${var.github_repository_name}", "windows", "w5s")
-  entra_readers_group_name   = "grp-sec-avm-tf-end-to-end-testing-entra-readers"
+  owner_repo_name = replace("${var.github_repository_owner}-${var.github_repository_name}", "windows", "w5s")
+  member_is_repository_identity = (
+    lower(azapi_resource.identity.output.properties.tenantId) == lower(data.azapi_client_config.current.tenant_id) &&
+    lower(azapi_resource.identity.output.properties.clientId) != lower(data.azuread_client_config.current.client_id) &&
+    lower(azapi_resource.identity.output.properties.principalId) != lower(data.azuread_client_config.current.object_id) &&
+    (var.expected_identity_context.bicep_client_id == null ? true :
+      lower(azapi_resource.identity.output.properties.clientId) != lower(var.expected_identity_context.bicep_client_id)
+    )
+  )
 }

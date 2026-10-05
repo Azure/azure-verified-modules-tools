@@ -1,4 +1,26 @@
-data "azapi_client_config" "current" {}
+data "azapi_client_config" "current" {
+  lifecycle {
+    postcondition {
+      condition = (
+        lower(self.tenant_id) == lower(var.expected_identity_context.tenant_id) &&
+        lower(self.subscription_id) == lower(var.expected_identity_context.subscription_id)
+      )
+      error_message = "The Azure provider must use the selected test identity tenant and subscription."
+    }
+  }
+}
+
+data "azuread_client_config" "current" {
+  lifecycle {
+    postcondition {
+      condition = (
+        lower(self.tenant_id) == lower(data.azapi_client_config.current.tenant_id) &&
+        lower(self.client_id) == lower(var.expected_identity_context.controller_client_id)
+      )
+      error_message = "The Graph provider must match the identity's tenant and selected controller."
+    }
+  }
+}
 
 resource "azapi_resource" "identity" {
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview"
@@ -47,49 +69,33 @@ resource "azapi_resource" "validation_federated_credential" {
   }
 }
 
-# Add owner role assignment.
-# The condition prevents the assignee from creating new role assignments for owner, user access administrator, or role based access control administrator.
-resource "azapi_resource" "identity_role_assignment" {
-  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "${var.github_repository_owner}${var.github_repository_name}${var.management_group_id}${data.azapi_client_config.current.tenant_id}")
-  parent_id = "/providers/Microsoft.Management/managementGroups/${var.management_group_id}"
-  body = {
-    properties = {
-      roleDefinitionId = "/providers/Microsoft.Authorization/roleDefinitions/${local.role_definition_name_owner}"
-      principalType    = "ServicePrincipal"
-      principalId      = azapi_resource.identity.output.properties.principalId
-      description      = "Role assignment for AVM testing. Repo: ${var.github_repository_owner}/${var.github_repository_name}"
-      conditionVersion = "2.0"
-      condition        = <<CONDITION
-(
- (
-  !(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})
- )
- OR
- (
-  @Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAllValues:GuidNotEquals {${local.role_definition_name_owner}, 18d7d88d-d35e-4fb5-a5c3-7773c20a72d9, f58310d9-a9f6-439a-9e8d-f62e7b41a168}
- )
-)
-AND
-(
- (
-  !(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})
- )
- OR
- (
-  @Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAllValues:GuidNotEquals {${local.role_definition_name_owner}, 18d7d88d-d35e-4fb5-a5c3-7773c20a72d9, f58310d9-a9f6-439a-9e8d-f62e7b41a168}
- )
-)
-CONDITION
+data "azuread_group" "test_permissions" {
+  for_each = var.entra_group_names
+
+  display_name     = each.value
+  security_enabled = true
+
+  lifecycle {
+    postcondition {
+      condition = (
+        self.display_name == each.value &&
+        self.security_enabled && !contains(self.types, "DynamicMembership")
+      )
+      error_message = "Configured Entra names must resolve uniquely to security groups that permit individual membership management."
     }
   }
 }
 
-data "azuread_group" "entra_readers" {
-  display_name = local.entra_readers_group_name
-}
+resource "azuread_group_member" "test_permissions" {
+  for_each = var.entra_group_names
 
-resource "azuread_group_member" "example" {
-  group_object_id  = data.azuread_group.entra_readers.object_id
+  group_object_id  = data.azuread_group.test_permissions[each.key].object_id
   member_object_id = azapi_resource.identity.output.properties.principalId
+
+  lifecycle {
+    precondition {
+      condition     = local.member_is_repository_identity
+      error_message = "Only the dedicated repository test identity, never the controller, may receive configured group memberships."
+    }
+  }
 }

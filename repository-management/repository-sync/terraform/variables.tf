@@ -6,32 +6,39 @@ variable "repository_creation_mode_enabled" {
 
 variable "bami_test_settings" {
   type = object({
-    tenant_id                  = string
-    client_id                  = string
-    controller_client_id       = string
-    bicep_client_id            = string
-    admin_subscription_id      = string
-    persistent_subscription_id = string
+    tenant_id                    = string
+    controller_client_id         = string
+    bicep_client_id              = string
+    admin_subscription_id        = string
+    persistent_subscription_id   = string
+    management_group_id          = string
+    identity_resource_group_name = string
     test_subscription_ids = list(object({
       name = string
       id   = string
     }))
   })
-  description = "Complete verified candidate test settings; null retains the legacy identity and subscriptions."
+  description = "Complete BAMI configuration; the repository execution client ID is produced by this root, not supplied."
   default     = null
+
+  validation {
+    condition     = var.repository_creation_mode_enabled || var.bami_test_settings != null
+    error_message = "Normal repository sync requires verified BAMI test settings. The legacy tenant is retired."
+  }
 
   validation {
     condition = var.bami_test_settings == null ? true : (
       alltrue([
         for id in [
-          var.bami_test_settings.tenant_id, var.bami_test_settings.client_id,
+          var.bami_test_settings.tenant_id,
           var.bami_test_settings.controller_client_id, var.bami_test_settings.bicep_client_id,
           var.bami_test_settings.admin_subscription_id, var.bami_test_settings.persistent_subscription_id
         ] : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id)) && lower(id) != "00000000-0000-0000-0000-000000000000"
       ]) &&
-      lower(var.bami_test_settings.client_id) != lower(var.bami_test_settings.controller_client_id) &&
-      lower(var.bami_test_settings.client_id) != lower(var.bami_test_settings.bicep_client_id) &&
       lower(var.bami_test_settings.controller_client_id) != lower(var.bami_test_settings.bicep_client_id) &&
+      can(regex("^[a-zA-Z0-9-]{1,90}$", var.bami_test_settings.management_group_id)) &&
+      can(regex("^[a-zA-Z0-9_.()-]{1,90}$", var.bami_test_settings.identity_resource_group_name)) &&
+      !endswith(var.bami_test_settings.identity_resource_group_name, ".") &&
       lower(var.bami_test_settings.admin_subscription_id) != lower(var.bami_test_settings.persistent_subscription_id) &&
       !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.admin_subscription_id)) &&
       !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.persistent_subscription_id)) &&
@@ -49,22 +56,10 @@ variable "bami_test_settings" {
   }
 }
 
-variable "management_group_id" {
-  type        = string
-  description = "Id of the management group to create the role assignment in."
-}
-
-variable "test_subscription_ids" {
-  type = list(object({
-    name = string
-    id   = string
-  }))
-  description = "List of subscription IDs to use for testing."
-}
-
-variable "identity_resource_group_name" {
-  type        = string
-  description = "Name of the resource group to create the identities in."
+variable "entra_group_names" {
+  type        = set(string)
+  description = "Accumulated configured Entra security group names for the dedicated repository identity."
+  default     = []
 }
 
 variable "github_repository_owner" {
@@ -164,8 +159,8 @@ variable "repository_sync_repository_id" {
   default     = null
 
   validation {
-    condition     = var.repository_sync_repository_id == null || can(regex("^[1-9][0-9]*$", var.repository_sync_repository_id))
-    error_message = "repository_sync_repository_id must be a positive decimal GitHub repository ID when provided."
+    condition     = var.repository_creation_mode_enabled || can(regex("^[1-9][0-9]*$", var.repository_sync_repository_id))
+    error_message = "Normal sync requires the verified positive decimal GitHub ID of the tools repository."
   }
 }
 

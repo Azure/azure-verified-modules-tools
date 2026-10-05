@@ -128,6 +128,89 @@ Describe "Repository discovery built-in exclusions" {
         Remove-Item (Join-Path $TestDrive "issues.log.json") -ErrorAction SilentlyContinue
     }
 
+    Context 'Composite action selection and folded matrix logs' {
+        BeforeAll {
+            $script:actionDirectory = Split-Path (Split-Path $script:discoveryScript -Parent) -Parent
+            $action = Get-Content -LiteralPath (Join-Path $script:actionDirectory 'action.yml') -Raw
+            $match = [regex]::Match($action, '(?ms)^      run: \|\r?\n(?<code>.*?)^      shell: pwsh')
+            $match.Success | Should -BeTrue
+            $script:matrixCode = [scriptblock]::Create(($match.Groups['code'].Value -replace '(?m)^        ', ''))
+        }
+
+        BeforeEach {
+            $script:matrixEnvironment = @{}
+            foreach ($key in @('AVM_REPOS_ACTION_PATH', 'OUTPUT_DIRECTORY', 'GITHUB_OUTPUT', 'REPOSITORIES', 'REPOSITORIES_TO_SKIP', 'GITHUB_ACTIONS')) {
+                $script:matrixEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+            }
+            $env:AVM_REPOS_ACTION_PATH = $script:actionDirectory
+            $env:OUTPUT_DIRECTORY = $TestDrive
+            $env:GITHUB_OUTPUT = Join-Path $TestDrive "$([guid]::NewGuid().ToString('N')).output"
+            $env:GITHUB_ACTIONS = 'true'
+            $env:REPOSITORIES_TO_SKIP = ''
+            $script:discoveryState.Installation = @{
+                repositories = @(
+                    (New-TestRepository -Name 'terraform-azurerm-avm-res-normal')
+                    (New-TestRepository -Name 'terraform-azurerm-avm-res-custom')
+                )
+                total_count = 2
+            }
+        }
+
+        AfterEach {
+            foreach ($key in $script:matrixEnvironment.Keys) {
+                $value = $script:matrixEnvironment[$key]
+                [Environment]::SetEnvironmentVariable($key, ($null -eq $value ? [NullString]::Value : $value), 'Process')
+            }
+        }
+
+        It 'logs effective selection and keeps array-shaped output for <Label>' -ForEach @(
+            @{ Label = 'missing input'; Selection = $null; Count = 2 }
+            @{ Label = 'blank input'; Selection = ' '; Count = 2 }
+            @{ Label = 'All'; Selection = ' All '; Count = 2 }
+            @{ Label = 'one repository'; Selection = 'avm-res-normal'; Count = 1 }
+            @{ Label = 'deduplicated repositories'; Selection = ' avm-res-normal, avm-res-custom,avm-res-normal '; Count = 2 }
+        ) {
+            [Environment]::SetEnvironmentVariable('REPOSITORIES', ($null -eq $Selection ? [NullString]::Value : $Selection), 'Process')
+            $records = @(& $script:matrixCode 6>&1)
+            @($records | Where-Object { $_ -isnot [System.Management.Automation.InformationRecord] }) | Should -HaveCount 0
+            $messages = @($records | ForEach-Object { $_.MessageData.ToString() })
+            @($messages | Where-Object { $_ -like 'Repository selection: *' }) | Should -HaveCount 1
+            @($messages | Where-Object { $_ -like "Matrix ready: $Count repositories;*" }) | Should -HaveCount 1
+            @($messages | Where-Object { $_ -ceq '::group::Repository discovery and matrix details' }) | Should -HaveCount 1
+            @($messages | Where-Object { $_ -ceq '::endgroup::' }) | Should -HaveCount 1
+            $line = Get-Content -LiteralPath $env:GITHUB_OUTPUT | Where-Object { $_ -clike 'matrix=*' }
+            $json = $line.Substring('matrix='.Length)
+            $json | Should -Match '^\['
+            @($json | ConvertFrom-Json) | Should -HaveCount $Count
+            $global:LASTEXITCODE | Should -Be 0
+        }
+
+        It 'retains trimmed exclusions and an empty matrix without inventing repositories' {
+            $env:REPOSITORIES = 'avm-res-custom'
+            $env:REPOSITORIES_TO_SKIP = ' terraform-azurerm-avm-res-custom, terraform-azurerm-avm-res-custom, '
+            $records = @(& $script:matrixCode 6>&1)
+            Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -Contain 'matrix=[]'
+            ($records.MessageData | Out-String) | Should -Match 'Matrix ready: 0 repositories;.*additional exclusions: 1'
+        }
+
+        It 'rejects mixed All and empty explicit lists before discovery: <Selection>' -ForEach @(
+            @{ Selection = 'All,avm-res-normal' }, @{ Selection = ', , ' }
+        ) {
+            $env:REPOSITORIES = $Selection
+            { & $script:matrixCode } | Should -Throw '*Use All on its own*'
+            $script:discoveryState.Requests | Should -HaveCount 0
+        }
+
+        It 'closes the matrix detail group and fails without publishing success after discovery errors' {
+            $env:REPOSITORIES = 'All'
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw 'discovery transport fixture failed' }
+            $records = [System.Collections.Generic.List[object]]::new()
+            { & $script:matrixCode 6>&1 | ForEach-Object { $records.Add($_) } } | Should -Throw '*discovery transport fixture failed*'
+            @($records | Where-Object { $_.MessageData.ToString() -ceq '::endgroup::' }) | Should -HaveCount 1
+            @(Get-Content -LiteralPath $env:GITHUB_OUTPUT | Where-Object { $_ -clike 'matrix=*' }) | Should -HaveCount 0
+        }
+    }
+
     It "applies built-in exclusions when no additional parameter is supplied" {
         $repositories = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
