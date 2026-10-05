@@ -7,7 +7,6 @@ BeforeAll {
     $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-convention'
     . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
-    . (Join-Path $PSScriptRoot '..' 'Import-AvmBicepConventionRule.ps1')
 
     function Invoke-CompiledTelemetryFixture {
         param($Template, $Scope, [string]$SourcePath, [string]$Root, [switch]$AllDiagnostics)
@@ -55,10 +54,32 @@ BeforeAll {
                 VersionInputs = @((Get-AvmBicepVersionInput -Scope (Get-AvmBicepConventionScope -Path $Path)))
                 MajorVersionAllowedModules = $Allowed
             }
+
             $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Version.Tests.ps1'
             $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Path `
                 -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
             @{ Summary = $summary; Expected = $data.NativeVersionExpected }
+        }
+    }
+
+    function Invoke-NativeLayoutFixture {
+        param([string] $Root, [object[]] $Scopes)
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $Root; Scopes = $Scopes } {
+            param($Root, $Scopes)
+            $data = @{
+                LayoutInputs = @($Scopes | ForEach-Object { Get-AvmBicepLayoutInput -Scope $_ })
+                LayoutExemptions = (Get-AvmBicepConfiguration)['conventionExemptions']
+            }
+            $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Layout.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Root `
+                -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+            @{
+                Summary = $summary
+                Expected = $data.NativeLayoutExpected
+                Issues = @($summary.Issues | ForEach-Object {
+                        New-AvmBicepConventionIssue -Root $Root -Path $_.File -Code $_.Code -Message $_.Message -Severity $_.Severity
+                    })
+            }
         }
     }
 }
@@ -250,6 +271,74 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $result.Status | Should -Be 'fail'
         $result.Issues.Code | Should -Contain 'avm.bicep.test-source-read'
+    }
+
+    It 'executes twenty-two independent native root and child layout requirements' {
+        $scopes = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
+            param($Path)
+            Get-AvmBicepConventionScope -Path $Path
+            Get-AvmBicepConventionScope -Path (Join-Path $Path 'child')
+        }
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scopes)
+        $run.Expected | Should -Be 22
+        $run.Summary.Total | Should -Be 22
+        $run.Summary.Passed | Should -Be 22 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        $run.Issues | Should -HaveCount 0
+    }
+
+    It 'executes four native publication requirements from prepared history and changelog data' {
+        $run = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath; Root = $script:workingRoot } {
+            param($Path, $Root)
+            $scope = Get-AvmBicepConventionScope -Path $Path
+            $publication = Get-AvmBicepPublicationInput -RepositoryRoot $Root -Scopes @($scope)
+            @($publication.Issues) | Should -HaveCount 0
+            $data = @{
+                PublicationConventionInput = Get-AvmBicepPublicationConventionInput -RepositoryRoot $Root `
+                    -Publication $publication -VersionInputs @((Get-AvmBicepVersionInput -Scope $scope))
+            }
+            $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Publication.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Root `
+                -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+            @{ Summary = $summary; Expected = $data.NativePublicationExpected }
+        }
+        $run.Expected | Should -Be 4
+        $run.Summary.Total | Should -Be 4
+        $run.Summary.Passed | Should -Be 4
+        @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
+    It 'rejects noncanonical layout casing at <RelativePath>' -ForEach @(
+        @{ RelativePath = 'tests'; NewName = 'Tests'; Code = 'avm.bicep.tests-missing' }
+        @{ RelativePath = 'tests/e2e'; NewName = 'E2e'; Code = 'avm.bicep.e2e-missing' }
+        @{ RelativePath = 'tests/e2e/defaults/main.test.bicep'; NewName = 'Main.test.bicep'; Code = 'avm.bicep.test-file-missing' }
+        @{ RelativePath = 'CHANGELOG.md'; NewName = 'ChangeLog.md'; Code = 'avm.bicep.publication-changelog' }
+    ) {
+        Rename-Item -LiteralPath (Join-Path $script:modulePath $RelativePath) -NewName $NewName
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain $Code
+    }
+
+    It 'reports malformed UTF-8 deployment exclusion content' {
+        [System.IO.File]::WriteAllBytes((Join-Path $script:modulePath 'tests' 'e2e' 'max' '.e2eignore'), [byte[]]@(0xC3, 0x28))
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-read'
+    }
+
+    It 'rejects a mis-cased deployment exclusion file' {
+        Rename-Item -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'max' '.e2eignore') -NewName '.E2eignore'
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-file'
+    }
+
+    It 'reports unreadable publication changelog content without a family crash' {
+        [System.IO.File]::WriteAllBytes((Join-Path $script:modulePath 'CHANGELOG.md'), [byte[]]@(0xC3, 0x28))
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.publication-changelog'
+        $result.Issues.Code | Should -Not -Contain 'avm.bicep.convention-rule-failed'
     }
 
     It 'checks the complete root and child fixture without uncovered convention families' {
@@ -1091,12 +1180,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             param($P)
             Get-AvmBicepConventionScope -Path $P
         }
-        $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-                R = $script:workingRoot; S = $scope
-            } {
-                param($R, $S)
-                Test-AvmBicepConventionLayout -Root $R -Scope $S
-            })
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
+        $run.Summary.Total | Should -Be $run.Expected
+        $issues = @($run.Issues)
         $names = @($issues | Where-Object Code -EQ 'avm.bicep.resource-folder-name')
         if ($Valid) {
             $names.Count | Should -Be 0

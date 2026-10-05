@@ -22,7 +22,7 @@ The checkout was clean. No replacement branch or review was created.
 - [x] Verify same-branch ownership and preserve the newer remote commits.
 - [x] Read progress protocol, active records, agent contract, and relevant standards.
 - [ ] Compare pinned registry assertions with packaged native requirements.
-- [ ] Replace convention family wrappers with independent native assertions.
+- [x] Replace convention family wrappers with independent native assertions.
 - [x] Move explicit shared JSON and Bicep source-literal checks into native Pester.
 - [x] Migrate compiled telemetry/metadata agreement with the convention assertions.
 - [x] Package common PSRule defaults and remove policy's required registry utility reads.
@@ -115,6 +115,13 @@ The [native test-source slice](2026-10-05-native-test-source-conventions.md)
 replaces the test-file checker and reuses the compiler's collected source
 inventory. Its native-only control runs 27 requirements; Pester 5/6 and the
 full gate are green. Layout and publication are the remaining family wrappers.
+
+The [final convention-family slice](2026-10-05-final-native-convention-families.md)
+removes the layout/publication checkers, generic family wrapper and test-only
+importer. All twelve former families now use native Pester requirements.
+The Pester 6 full gate and Pester 5 focused run pass; native-only controls
+execute 22 layout and four publication cases. Default unit compliance,
+native README comparison, complete package acceptance and CI review remain.
 
 ## Blockers or dependencies
 

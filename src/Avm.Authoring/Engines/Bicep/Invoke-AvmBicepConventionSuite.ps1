@@ -4,10 +4,8 @@ function Invoke-AvmBicepConventionSuite {
         Run the packaged Bicep convention Pester suite against prepared input.
 
     .DESCRIPTION
-        Executes Resources/bicep/conventions/Conventions.Tests.ps1 in the current
-        process and returns the convention issues it recorded. A rule that throws,
-        a suite that cannot run, or a suite that ran fewer tests than expected is
-        reported as an error issue rather than a silent pass.
+        Executes native packaged requirements in one Pester run. Translates
+        failures and preserves preparation diagnostics, rejecting incomplete runs.
 
     .OUTPUTS
         Convention issue objects.
@@ -15,7 +13,6 @@ function Invoke-AvmBicepConventionSuite {
     [CmdletBinding()]
     [OutputType([object[]])]
     param(
-        # Prepared suite input; Findings and Crashes are added here.
         [Parameter(Mandatory)]
         [System.Collections.IDictionary] $Convention
     )
@@ -24,8 +21,6 @@ function Invoke-AvmBicepConventionSuite {
     $ErrorActionPreference = 'Stop'
 
     $root = [string]$Convention.Root
-    $Convention.Findings = [System.Collections.Generic.List[object]]::new()
-    $Convention.Crashes = [System.Collections.Generic.List[object]]::new()
     $Convention.NativeCompiledExpected = 0
     $Convention.NativeWorkflowExpected = 0
     $Convention.NativeOwnershipExpected = 0
@@ -33,46 +28,60 @@ function Invoke-AvmBicepConventionSuite {
     $Convention.NativeVersionExpected = -1
     $Convention.NativeApiVersionExpected = 0
     $Convention.NativeTestSourceExpected = -1
-    $suitePath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
-        -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions', 'Conventions.Tests.ps1'
-    $suitePath = [System.IO.Path]::GetFullPath($suitePath)
+    $Convention.NativeLayoutExpected = -1
+    $Convention.NativePublicationExpected = -1
+    $suiteDirectory = Join-Path -Path $PSScriptRoot -ChildPath '..' `
+        -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions'
+    $suiteDirectory = [System.IO.Path]::GetFullPath($suiteDirectory)
     $issues = [System.Collections.Generic.List[object]]::new()
 
     $compiledCount = @($Convention.CompiledModules).Count
     $scopeCount = @($Convention.Scopes).Count
     $workflowCount = @($Convention.Workflows).Count
-    $expected = $scopeCount + [int]($scopeCount -gt 0)
-    if ($expected -eq 0 -and $workflowCount -eq 0 -and $compiledCount -eq 0) {
+    $expected = 0
+    if ($scopeCount -eq 0 -and $workflowCount -eq 0 -and $compiledCount -eq 0) {
         return $issues.ToArray()
     }
 
     try {
         $Convention.CompiledInputs = @($Convention.CompiledModules | ForEach-Object { Get-AvmBicepCompiledConventionInput -Module $_ })
-        $files = @($suitePath)
+        $files = @()
         if ($compiledCount -gt 0) {
-            $files += Join-Path (Split-Path $suitePath) 'Compiled.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'Compiled.Tests.ps1'
             $Convention.ApiVersionInputs = @($Convention.CompiledModules | ForEach-Object { Get-AvmBicepApiVersionInput -Module $_ })
-            $files += Join-Path (Split-Path $suitePath) 'ApiVersion.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'ApiVersion.Tests.ps1'
         }
         if ($workflowCount -gt 0) {
-            $files += Join-Path (Split-Path $suitePath) 'Workflow.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'Workflow.Tests.ps1'
         }
         if ($scopeCount -gt 0) {
             $Convention.CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Convention.RepositoryRoot
-            $files += Join-Path (Split-Path $suitePath) 'Ownership.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'Ownership.Tests.ps1'
             $Convention.ChildPublishInput = Get-AvmBicepChildPublishInput -RepositoryRoot $Convention.RepositoryRoot `
                 -Scopes @($Convention.Scopes)
-            $files += Join-Path (Split-Path $suitePath) 'ChildPublish.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'ChildPublish.Tests.ps1'
             $Convention.VersionInputs = @(foreach ($scope in @($Convention.Scopes)) {
                     $versionInput = Get-AvmBicepVersionInput -Scope $scope
                     if ($null -ne $versionInput) { $versionInput }
                 })
             $Convention.MajorVersionAllowedModules = (Get-AvmBicepConfiguration)['conventionExemptions']['majorVersionAllowedModules']
-            $files += Join-Path (Split-Path $suitePath) 'Version.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'Version.Tests.ps1'
             $Convention.TestSourceInputs = @($Convention.TestSources | ForEach-Object {
                     Get-AvmBicepTestSourceInput -SourceFile $_ -CompiledTests $Convention.CompiledTests
                 })
-            $files += Join-Path (Split-Path $suitePath) 'TestSource.Tests.ps1'
+            $files += Join-Path $suiteDirectory 'TestSource.Tests.ps1'
+            $Convention.LayoutInputs = @($Convention.Scopes | ForEach-Object { Get-AvmBicepLayoutInput -Scope $_ })
+            $Convention.LayoutExemptions = (Get-AvmBicepConfiguration)['conventionExemptions']
+            $files += Join-Path $suiteDirectory 'Layout.Tests.ps1'
+            foreach ($issue in @($Convention.Publication.Issues)) { $issues.Add($issue) }
+            $Convention.PublicationConventionInput = Get-AvmBicepPublicationConventionInput `
+                -RepositoryRoot $Convention.RepositoryRoot -Publication $Convention.Publication -VersionInputs $Convention.VersionInputs
+            $files += Join-Path $suiteDirectory 'Publication.Tests.ps1'
+            if (@($Convention.Publication.Entries | Where-Object { $null -eq $_.Target -or $null -eq $_.Published }).Count -gt 0 -and
+                @($Convention.Publication.Issues).Count -eq 0) {
+                $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
+                            -Code 'avm.bicep.convention-suite-incomplete' -Message 'Publication input is missing target/tag data without a preparation diagnostic.'))
+            }
         }
         $summary = Invoke-AvmBicepPesterSuite -Files $files -WorkingDirectory $root `
             -Mode Convention -ConventionData $Convention -EnvVars @{} -InProcess
@@ -84,14 +93,6 @@ function Invoke-AvmBicepConventionSuite {
         return $issues.ToArray()
     }
 
-    foreach ($finding in $Convention.Findings) {
-        $issues.Add($finding)
-    }
-    foreach ($crash in $Convention.Crashes) {
-        $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
-                    -Code 'avm.bicep.convention-rule-failed' `
-                    -Message "Convention rule '$($crash.Rule)' failed: $($crash.Message)"))
-    }
     $nativeFindings = 0
     foreach ($suiteIssue in @($summary.Issues)) {
         if ($suiteIssue -is [System.Collections.IDictionary] -and $suiteIssue.Contains('NativeConvention') -and $suiteIssue.NativeConvention) {
@@ -108,8 +109,7 @@ function Invoke-AvmBicepConventionSuite {
                     -Code 'avm.bicep.convention-rule-failed' `
                     -Message "Convention suite reported $($suiteIssue.Code): $($suiteIssue.Message)"))
     }
-    $hasError = @($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0
-    if ($summary.Failed -gt $nativeFindings -and -not $hasError) {
+    if ($summary.Failed -gt $nativeFindings) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-rule-failed' `
                     -Message "The convention suite reported $($summary.Failed) failed test(s) without a recorded finding."))
@@ -119,6 +119,7 @@ function Invoke-AvmBicepConventionSuite {
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeChildPublishExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeVersionExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeTestSourceExpected) }
+    if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeLayoutExpected) + [Math]::Max(0, $Convention.NativePublicationExpected) }
     if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
         ($compiledCount -gt 0 -and $Convention.NativeApiVersionExpected -lt 1) -or
         $Convention.NativeWorkflowExpected -lt $workflowCount -or
@@ -126,6 +127,7 @@ function Invoke-AvmBicepConventionSuite {
         ($scopeCount -gt 0 -and $Convention.NativeChildPublishExpected -lt 0) -or
         ($scopeCount -gt 0 -and $Convention.NativeVersionExpected -lt 0) -or
         ($scopeCount -gt 0 -and $Convention.NativeTestSourceExpected -lt 0) -or
+        ($scopeCount -gt 0 -and ($Convention.NativeLayoutExpected -lt 0 -or $Convention.NativePublicationExpected -lt 0)) -or
         $summary.Total -ne $expected -or $summary.Passed + $summary.Failed -ne $expected) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-suite-incomplete' `
