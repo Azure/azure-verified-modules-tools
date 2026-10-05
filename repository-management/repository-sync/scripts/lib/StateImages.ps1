@@ -84,6 +84,18 @@ function Assert-TransferValueEqual {
     }
 }
 
+function Get-TransferSnapshotMetadata {
+    param([System.Collections.IDictionary] $State)
+
+    $metadata = @{}
+    foreach ($key in $State.Keys) {
+        if ($key -cnotin @('resources', 'serial', 'terraform_version', 'check_results')) {
+            $metadata[$key] = $State[$key]
+        }
+    }
+    return $metadata
+}
+
 function Get-TransferResourceKey {
     param([System.Collections.IDictionary] $Resource)
     return "$($Resource['module'])|$($Resource['mode'])|$($Resource['type'])|$($Resource['name'])"

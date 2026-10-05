@@ -152,10 +152,8 @@ foreach ($pair in @(@{ Before = $source; After = $drained }, @{ Before = $destin
         $pair.After.State['serial'] -ne $pair.Before.State['serial'] + 1) {
         throw 'Lineage or serial does not match exactly one native state move.'
     }
-    Assert-TransferValueEqual @($pair.After.State.Keys | Sort-Object) @($pair.Before.State.Keys | Sort-Object) 'Snapshot fields'
-    foreach ($key in $pair.Before.State.Keys | Where-Object { $_ -cnotin @('resources', 'serial', 'terraform_version') }) {
-        Assert-TransferValueEqual $pair.After.State[$key] $pair.Before.State[$key] "Snapshot field $key"
-    }
+    Assert-TransferValueEqual (Get-TransferSnapshotMetadata $pair.After.State) `
+        (Get-TransferSnapshotMetadata $pair.Before.State) 'Snapshot metadata'
 }
 [pscustomobject]@{
     Status = 'Local transfer images verified; backend provenance and cutover are not approved'

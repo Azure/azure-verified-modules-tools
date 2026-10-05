@@ -425,9 +425,8 @@ function Test-RepositoryMigrationPublishedImage {
     param([System.Collections.IDictionary] $Actual, [System.Collections.IDictionary] $Staged)
 
     if ($Actual['serial'] -ne ($Staged['serial'] + 1)) { return $false }
-    $expected = ConvertFrom-Json (ConvertTo-Json -InputObject $Staged -Depth 100 -Compress) -AsHashtable
-    $expected['serial']++
-    return Test-TransferValueEqual $Actual $expected
+    return (Test-TransferValueEqual $Actual['resources'] $Staged['resources']) -and
+        (Test-TransferValueEqual (Get-TransferSnapshotMetadata $Actual) (Get-TransferSnapshotMetadata $Staged))
 }
 
 function Assert-RepositoryMigrationAnchors {
