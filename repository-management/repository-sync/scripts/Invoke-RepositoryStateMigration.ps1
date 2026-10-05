@@ -36,6 +36,13 @@ if ($IsWindows) {
 }
 $sourcePrefix = "bami-identities/$($settings['TEST_BAMI_TENANT_ID'])/"
 $backupPrefix = "bami-consolidation/$($settings['TEST_BAMI_TENANT_ID'])/"
+$historicalRepositories = @{
+    'avm-template' = 'Azure/terraform-azurerm-avm-template'
+    'avm-gh-app' = 'Azure/avm-gh-app'
+    'avm-container-images-cicd-agents-and-runners' = 'Azure/avm-container-images-cicd-agents-and-runners'
+}
+$legacyAliasKey = 'avm-res-redhatopenShift-openshiftcluster.tfstate'
+$legacyCanonicalId = 'avm-res-redhatopenshift-openshiftcluster'
 
 Write-Information 'Temporary state migration inventories all configured-tenant state keys, including repositories excluded from ordinary sync.' -InformationAction Continue
 try {
@@ -45,24 +52,41 @@ try {
         $destinations = @(Get-RepositoryMigrationBlobList -Backend $Backend -Prefix 'avm-')
         $sourceIds = @{}
         $backupIds = @{}
+        $backupKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $destinationIds = @{}
+        $ordinaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($item in $destinations) {
+            $key = [string]$item['name']
+            if (-not $ordinaryKeys.Add($key)) {
+                throw "Duplicate ordinary repository state key $(Format-RepositoryMigrationKey -Backend $Backend -Prefix 'avm-' -Name $key). Expected unique physical keys; no publication will start."
+            }
+        }
         foreach ($item in $sources) {
-            $match = [regex]::Match($item['name'], ('^' + [regex]::Escape($sourcePrefix) + '(avm-(?:res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate$'))
-            if (-not $match.Success -or $sourceIds.ContainsKey($match.Groups[1].Value)) { throw 'Unexpected or aliased source key in the configured BAMI prefix.' }
+            $match = [regex]::Match($item['name'], ('\A' + [regex]::Escape($sourcePrefix) + '(avm-(?:res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate\z'))
+            if (-not $match.Success -or $sourceIds.ContainsKey($match.Groups[1].Value)) {
+                throw "Unexpected or duplicate/aliased source key $(Format-RepositoryMigrationKey -Backend $Backend -Prefix $sourcePrefix -Name $item['name']). Expected one canonical AVM module state per repository in the configured BAMI prefix; no publication will start."
+            }
             $sourceIds[$match.Groups[1].Value] = $item['name']
         }
         foreach ($item in $backups) {
-            $match = [regex]::Match($item['name'], ('^' + [regex]::Escape($backupPrefix) + '(avm-(?:res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)/(backup\.zip|complete\.json)$'))
-            if (-not $match.Success) { throw 'Unexpected recovery object in the configured migration prefix.' }
+            $match = [regex]::Match($item['name'], ('\A' + [regex]::Escape($backupPrefix) + '(avm-(?:res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)/(backup\.zip|complete\.json)\z'))
+            if (-not $match.Success -or -not $backupKeys.Add($item['name'])) {
+                throw "Unexpected or duplicate recovery key $(Format-RepositoryMigrationKey -Backend $Backend -Prefix $backupPrefix -Name $item['name']). Expected unique canonical AVM module backup.zip or complete.json objects; no publication will start."
+            }
             $backupIds[$match.Groups[1].Value] = $true
         }
         foreach ($item in $destinations) {
-            $match = [regex]::Match($item['name'], '^(avm-(?:res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate$')
-            if (-not $match.Success -or $destinationIds.ContainsKey($match.Groups[1].Value)) { throw 'Unexpected or aliased ordinary repository state key.' }
+            if ($item['name'] -ceq $legacyAliasKey) { continue }
+            $match = [regex]::Match($item['name'], '\A(avm-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate\z')
+            if (-not $match.Success -or ($match.Groups[1].Value -cnotmatch '\Aavm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*\z' -and
+                $match.Groups[1].Value -cnotin $historicalRepositories.Keys)) {
+                throw "Unexpected or aliased ordinary repository state key $(Format-RepositoryMigrationKey -Backend $Backend -Prefix 'avm-' -Name $item['name']). Expected a canonical avm-(res|ptn|utl)-*.tfstate or an explicitly recognized historical repository key; no key is normalized or ignored and no publication will start."
+            }
             $destinationIds[$match.Groups[1].Value] = $item['name']
         }
         $transfers = [Collections.Generic.List[hashtable]]::new()
-        $owned = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $owned = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $canonicalOwner = $null
         $withoutSource = 0
         foreach ($repoId in @(@($sourceIds.Keys) + @($backupIds.Keys) + @($destinationIds.Keys) | Sort-Object -Unique)) {
             if (-not $destinationIds.ContainsKey($repoId) -or ($backupIds.ContainsKey($repoId) -and -not $sourceIds.ContainsKey($repoId))) {
@@ -74,6 +98,19 @@ try {
             if (-not (Get-RepositoryMigrationBlob -Backend $Backend -Name "$repoId.tfstate" -Path $destinationPath)) {
                 throw "$repoId disappeared during inventory."
             }
+            if ($historicalRepositories.ContainsKey($repoId)) {
+                $keyDescription = Format-RepositoryMigrationKey -Backend $Backend -Prefix 'avm-' -Name $destinationIds[$repoId]
+                try {
+                    $destination = Read-TransferImage $destinationPath
+                    Assert-RepositoryMigrationHistoricalState -State $destination.State -Settings $settings `
+                        -Repository $historicalRepositories[$repoId] -OriginalRepository $historicalRepositories[$repoId]
+                }
+                catch { throw "Historical state audit failed for $keyDescription. $($_.Exception.Message)" }
+                Add-RepositoryMigrationOwners -State $destination.State -Owners $owned -Key $keyDescription
+                $withoutSource++
+                Write-Information "$repoId`: excluded historical flat repository state audited; no transfer." -InformationAction Continue
+                continue
+            }
             $destination = Read-TransferImage $destinationPath
             Assert-RepositoryMigrationBindings -State $destination.State -Destination
             $repositories = @($destination.State.resources | Where-Object {
@@ -82,50 +119,72 @@ try {
             if ($repositories.Count -ne 1 -or $repositories[0]['instances'].Count -ne 1) {
                 throw "$repoId lacks unambiguous GitHub ownership."
             }
-            $name = $repositories[0]['instances'][0]['attributes']['full_name']
-            if ($name -cnotmatch ('^Azure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '$')) {
+            $repositoryState = $repositories[0]['instances'][0]['attributes']
+            $name = $repositoryState['full_name']
+            if ($name -cnotmatch ('\AAzure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '\z')) {
                 throw "$repoId has a renamed or foreign repository alias."
             }
+            if ([string]$repositoryState['repo_id'] -cnotmatch '\A[1-9][0-9]*\z') {
+                throw "$repoId lacks a valid immutable GitHub repository ID."
+            }
             $repository = Invoke-RepositoryGitHubApi -Endpoint "repos/$name"
-            if ([string]$repository.owner.id -cne $toolsContext.OrganizationId -or
-                [string]$repository.id -cne [string]$repositories[0]['instances'][0]['attributes']['repo_id']) {
+            if ($repository.full_name -cne $name -or $repository.owner.login -cne 'Azure' -or $repository.fork -ne $false -or
+                [string]$repository.id -cnotmatch '\A[1-9][0-9]*\z' -or
+                [string]$repository.owner.id -cne $toolsContext.OrganizationId -or
+                [string]$repository.id -cne [string]$repositoryState['repo_id']) {
                 throw "$repoId GitHub identity differs from its state."
             }
-            $scope = Get-RepositoryMigrationScope -Backend $Backend -Settings $settings -RepoId $repoId -Repository $repository
-            $states = @($destination.State)
+            if ($repoId -ceq $legacyCanonicalId) {
+                $canonicalOwner = @{ Repository = $repositories[0]['instances'][0]['attributes']; Lineage = $destination.State.lineage }
+            }
+            $states = @(@{ State = $destination.State; Key = $destinationIds[$repoId]; Prefix = 'avm-' })
             if ($sourceIds.ContainsKey($repoId)) {
+                $scope = Get-RepositoryMigrationScope -Backend $Backend -Settings $settings -RepoId $repoId -Repository $repository
                 $transfer = New-RepositoryMigrationTransfer -Scope $scope -Directory (Join-Path $directory 'transfer') `
                     -Terraform $terraform.Path -TerraformVersion $terraform.Version -OriginalDestinationPath $destinationPath
                 $transfer['BackendDirectory'] = Join-Path $work 'backends'
                 if ($transfer.Inventory.destination.Hash -cne $destination.Hash) { throw "$repoId changed during inventory." }
-                $states += $transfer.Inventory.source.State
+                $states += @{ State = $transfer.Inventory.source.State; Key = $sourceIds[$repoId]; Prefix = $sourcePrefix }
                 $transfers.Add($transfer)
                 Write-Information "$repoId`: $($transfer.Position)." -InformationAction Continue
             } else {
                 $bami = @($destination.State.resources | Where-Object { $_['module'] -ceq 'module.bami[0]' })
                 foreach ($legacy in $destination.State.resources | Where-Object { $_['module'] -ceq 'module.azure[0]' }) {
                     if (@($legacy.instances | Where-Object {
-                        [string]$_['attributes']['id'] -ilike "/subscriptions/$($scope.SubscriptionId)/*"
+                        [string]$_['attributes']['id'] -ilike "/subscriptions/$($settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/*"
                     }).Count) {
                         throw "$repoId has live BAMI ownership at a retired address; review it instead of creating another owner."
                     }
                 }
                 if ($bami.Count) {
+                    $scope = Get-RepositoryMigrationScope -Backend $Backend -Settings $settings -RepoId $repoId -Repository $repository
                     $identity = Get-RepositoryMigrationIdentity -Scope $scope -State $destination.State -Module 'module.bami[0]'
                     Assert-RepositoryMigrationOwnership -Scope $scope -State $destination.State -Identity $identity -Module 'module.bami[0]' -Destination
                 }
                 $withoutSource++
                 Write-Information "$repoId`: no former split-state owner; no transfer." -InformationAction Continue
             }
-            foreach ($state in $states) {
-                foreach ($resource in $state.resources | Where-Object { $_['mode'] -ceq 'managed' -and $_['type'] -cmatch '^(azapi|azuread)_' }) {
-                    foreach ($instance in $resource.instances) {
-                        if (-not $owned.Add("$($resource['type'])|$($instance['attributes']['id'])")) {
-                            throw 'The full inventory contains duplicate managed Azure/Graph ownership; publication is blocked.'
-                        }
-                    }
-                }
+            foreach ($snapshot in $states) {
+                Add-RepositoryMigrationOwners -State $snapshot.State -Owners $owned `
+                    -Key (Format-RepositoryMigrationKey -Backend $Backend -Prefix $snapshot.Prefix -Name $snapshot.Key)
             }
+        }
+        if ($ordinaryKeys.Contains($legacyAliasKey)) {
+            $legacyPath = Join-Path $work 'inventory-legacy-alias.tfstate'
+            $keyDescription = Format-RepositoryMigrationKey -Backend $Backend -Prefix 'avm-' -Name $legacyAliasKey
+            if (-not (Get-RepositoryMigrationBlob -Backend $Backend -Name $legacyAliasKey -Path $legacyPath)) {
+                throw "Historical state $keyDescription disappeared during inventory."
+            }
+            try {
+                $legacy = Read-TransferImage $legacyPath
+                Assert-RepositoryMigrationHistoricalState -State $legacy.State -Settings $settings -CaseAlias `
+                    -Repository "Azure/terraform-azurerm-$legacyCanonicalId" `
+                    -OriginalRepository 'Azure/terraform-azurerm-avm-res-redhatopenShift-openshiftcluster' -CanonicalOwner $canonicalOwner
+            }
+            catch { throw "Historical state audit failed for $keyDescription. $($_.Exception.Message)" }
+            Add-RepositoryMigrationOwners -State $legacy.State -Owners $owned -Key $keyDescription
+            $withoutSource++
+            Write-Information "$legacyAliasKey`: distinct retired-tenant flat ownership audited; preserved at its exact key with no transfer." -InformationAction Continue
         }
         @{ Transfers = $transfers; Sources = @($sourceIds.Values | Sort-Object); WithoutSource = $withoutSource }
     }

@@ -151,14 +151,36 @@ Describe 'Repository migration complete inventory' -Tag Component {
         $env:GITHUB_OUTPUT = Join-Path $TestDrive 'migration-output'
         Remove-Item -LiteralPath $env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
         $script:pair = New-AvmTestMigrationStatePair
+        $script:templateState = New-AvmTestHistoricalRepositoryState -Repository 'Azure/terraform-azurerm-avm-template' -RepositoryId 2345
+        $script:appState = New-AvmTestHistoricalRepositoryState -Repository 'Azure/avm-gh-app' -RepositoryId 3456
+        $script:imagesState = New-AvmTestHistoricalRepositoryState -Repository 'Azure/avm-container-images-cicd-agents-and-runners' -RepositoryId 4567
+        $script:aliasPair = New-AvmTestLegacyAliasStatePair
         $script:settings = New-AvmTestBamiSettings
         $script:fixture = @{
             SourcePrefix = "bami-identities/$($script:settings.TEST_BAMI_TENANT_ID)/"
             BackupPrefix = "bami-consolidation/$($script:settings.TEST_BAMI_TENANT_ID)/"
             Sources = @(); Backups = @(); Destinations = @()
             Pair = $script:pair
+            States = @{
+                'avm-ptn-example-repo.tfstate' = $script:pair.Destination
+                'avm-template.tfstate' = $script:templateState
+                'avm-gh-app.tfstate' = $script:appState
+                'avm-container-images-cicd-agents-and-runners.tfstate' = $script:imagesState
+            }
+            Repositories = @{
+                $script:pair.Repository = $script:pair.GitHubRepository
+            }
+            Reads = [Collections.Generic.List[string]]::new()
+            Paths = [Collections.Generic.List[string]]::new()
+            PublicationReads = [Collections.Generic.List[object]]::new()
             Events = [Collections.Generic.List[string]]::new()
         }
+        $states = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($entry in $script:fixture.States.GetEnumerator()) { $states.Add($entry.Key, $entry.Value) }
+        $states.Add($script:aliasPair.LegacyKey, $script:aliasPair.Legacy)
+        $states.Add($script:aliasPair.CanonicalKey, $script:aliasPair.Canonical.Destination)
+        $script:fixture.States = $states
+        $script:fixture.Repositories[$script:aliasPair.Canonical.Repository] = $script:aliasPair.Canonical.GitHubRepository
         $fixture = $script:fixture
         Mock Assert-RepositoryMigrationWriters { }
         Mock Assert-RepositoryMigrationStorage { }
@@ -166,7 +188,12 @@ Describe 'Repository migration complete inventory' -Tag Component {
         Mock Resolve-AvmTool -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'synthetic-terraform'; Version = '1.15.8' } }
         Mock Invoke-RepositorySyncProcess { throw 'External execution forbidden in component inventory tests.' }
         Mock Invoke-RepositoryMigrationAzure { throw 'Azure transport forbidden in component inventory tests.' }
-        Mock Invoke-RepositoryGitHubApi ({ $fixture.Pair.GitHubRepository }.GetNewClosure())
+        Mock Invoke-RepositoryGitHubApi ({
+            param($Endpoint)
+            $name = $Endpoint.Substring('repos/'.Length)
+            if (-not $fixture.Repositories.ContainsKey($name)) { throw 'Unexpected repository lookup.' }
+            $fixture.Repositories[$name]
+        }.GetNewClosure())
         Mock Get-RepositoryMigrationScope ({
             param($Backend, $Settings, $RepoId, $Repository)
             @{ RepoId = $RepoId; SubscriptionId = $Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'] }
@@ -180,8 +207,10 @@ Describe 'Repository migration complete inventory' -Tag Component {
         }.GetNewClosure())
         Mock Get-RepositoryMigrationBlob ({
             param($Backend, $Name, $Path)
-            if ($Name -cne 'avm-ptn-example-repo.tfstate') { throw 'Unexpected state key.' }
-            [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $fixture.Pair.Destination -Depth 100))
+            if (-not $fixture.States.ContainsKey($Name)) { throw 'Unexpected state key.' }
+            $fixture.Reads.Add($Name)
+            $fixture.Paths.Add($Path)
+            [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $fixture.States[$Name] -Depth 100))
             return $true
         }.GetNewClosure())
         Mock New-RepositoryMigrationTransfer ({
@@ -201,6 +230,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
         Mock Invoke-RepositoryMigrationTransfer ({
             param($Transfer, $PlanOnly)
             $fixture.Events.Add($PlanOnly ? 'preview' : 'publish')
+            $fixture.PublicationReads.Add($fixture.Reads.ToArray())
             return $PlanOnly ? 'Preview' : 'Complete'
         }.GetNewClosure())
     }
@@ -223,6 +253,53 @@ Describe 'Repository migration complete inventory' -Tag Component {
         $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings
         $result.Ready | Should -BeTrue
         $script:fixture.Events | Should -HaveCount 0
+    }
+
+    It 'audits the excluded historical <RepoId> state without creating a transfer in <Mode> mode' -ForEach @(
+        @{ RepoId = 'avm-template'; Repository = 'Azure/terraform-azurerm-avm-template'; Preview = $true; Mode = 'preview' }
+        @{ RepoId = 'avm-template'; Repository = 'Azure/terraform-azurerm-avm-template'; Preview = $false; Mode = 'apply' }
+        @{ RepoId = 'avm-gh-app'; Repository = 'Azure/avm-gh-app'; Preview = $true; Mode = 'preview' }
+        @{ RepoId = 'avm-gh-app'; Repository = 'Azure/avm-gh-app'; Preview = $false; Mode = 'apply' }
+        @{ RepoId = 'avm-container-images-cicd-agents-and-runners'; Repository = 'Azure/avm-container-images-cicd-agents-and-runners'; Preview = $true; Mode = 'preview' }
+        @{ RepoId = 'avm-container-images-cicd-agents-and-runners'; Repository = 'Azure/avm-container-images-cicd-agents-and-runners'; Preview = $false; Mode = 'apply' }
+    ) {
+        $script:fixture.Destinations = @(@{ name = "$RepoId.tfstate" })
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$Preview
+        $result.Ready | Should -BeTrue
+        $result.MigrationRequired | Should -Be 0
+        $script:fixture.Reads | Should -Be @("$RepoId.tfstate")
+        $script:fixture.Events | Should -HaveCount 0
+        $state = $script:fixture.States["$RepoId.tfstate"]
+        $state.resources | Should -HaveCount 14
+        @($state.resources | ForEach-Object { $_.instances }) | Should -HaveCount 56
+        @($state.resources | Where-Object mode -CEQ 'managed' | ForEach-Object { $_.instances }) | Should -HaveCount 52
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly -ParameterFilter {
+            $Endpoint -ceq "repos/$Repository"
+        }
+        Should -Invoke Get-RepositoryMigrationScope -Times 0 -Exactly
+        Should -Invoke New-RepositoryMigrationTransfer -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+    }
+
+    It 'includes all recognized historical states in the full inventory before any <Mode> transfer' -ForEach @(
+        @{ Preview = $true; Ready = $false; Event = 'preview'; Mode = 'preview' }
+        @{ Preview = $false; Ready = $true; Event = 'publish'; Mode = 'apply' }
+    ) {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(
+            @{ name = 'avm-ptn-example-repo.tfstate' }, @{ name = 'avm-template.tfstate' }
+            @{ name = 'avm-gh-app.tfstate' }, @{ name = 'avm-container-images-cicd-agents-and-runners.tfstate' }
+        )
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$Preview
+        $result.Ready | Should -Be $Ready
+        $result.MigrationRequired | Should -Be 1
+        $script:fixture.Events | Should -Be @('prepare', $Event)
+        $script:fixture.PublicationReads | Should -HaveCount 1
+        $script:fixture.PublicationReads[0] | Should -Be @(
+            'avm-container-images-cicd-agents-and-runners.tfstate', 'avm-gh-app.tfstate'
+            'avm-ptn-example-repo.tfstate', 'avm-template.tfstate'
+        )
+        Should -Invoke Get-RepositoryMigrationScope -Times 0 -Exactly -ParameterFilter { $RepoId -cne 'avm-ptn-example-repo' }
     }
 
     It 'includes former state regardless of worker selection and reports ready <Ready> in <Mode> mode' -ForEach @(
@@ -264,6 +341,245 @@ Describe 'Repository migration complete inventory' -Tag Component {
         }
         { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings } | Should -Throw
         $script:fixture.Events | Should -Not -Contain 'publish'
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'rejects unexpected or duplicate keys before state downloads: <Case>' -ForEach @(
+        @{ Case = 'unknown ordinary state'; Kind = 'ordinary repository'; Key = 'avm-unrecognized.tfstate'; List = 'Destinations' }
+        @{ Case = 'ordinary key case alias'; Kind = 'ordinary repository'; Key = 'avm-ptn-Example-repo.tfstate'; List = 'Destinations' }
+        @{ Case = 'ordinary key trailing newline'; Kind = 'ordinary repository'; Key = "avm-ptn-example-repo.tfstate`n::error::injected"; List = 'Destinations' }
+        @{ Case = 'ordinary key trailing hyphen'; Kind = 'ordinary repository'; Key = 'avm-ptn-example-repo-.tfstate'; List = 'Destinations' }
+        @{ Case = 'ordinary backup suffix'; Kind = 'ordinary repository'; Key = 'avm-ptn-example-repo.tfstate.backup'; List = 'Destinations' }
+        @{ Case = 'duplicate ordinary state'; Kind = 'ordinary repository'; Key = 'avm-ptn-example-repo.tfstate'; List = 'Destinations'; Duplicate = $true }
+        @{ Case = 'duplicate template state'; Kind = 'ordinary repository'; Key = 'avm-template.tfstate'; List = 'Destinations'; Duplicate = $true }
+        @{ Case = 'template source state'; Kind = 'source'; Key = 'avm-template.tfstate'; List = 'Sources' }
+        @{ Case = 'historical alias source state'; Kind = 'source'; Key = 'avm-res-redhatopenShift-openshiftcluster.tfstate'; List = 'Sources' }
+        @{ Case = 'source key trailing newline'; Kind = 'source'; Key = "avm-ptn-example-repo.tfstate`n"; List = 'Sources' }
+        @{ Case = 'duplicate source state'; Kind = 'source'; Key = 'avm-ptn-example-repo.tfstate'; List = 'Sources'; Duplicate = $true }
+        @{ Case = 'template recovery'; Kind = 'recovery'; Key = 'avm-template/backup.zip'; List = 'Backups' }
+        @{ Case = 'historical alias recovery'; Kind = 'recovery'; Key = 'avm-res-redhatopenShift-openshiftcluster/backup.zip'; List = 'Backups' }
+        @{ Case = 'unexpected recovery file'; Kind = 'recovery'; Key = 'avm-ptn-example-repo/other.json'; List = 'Backups' }
+        @{ Case = 'duplicate recovery file'; Kind = 'recovery'; Key = 'avm-ptn-example-repo/backup.zip'; List = 'Backups'; Duplicate = $true }
+    ) {
+        param($Case, $Kind, $Key, $List, [bool] $Duplicate = $false)
+
+        $prefix = switch ($List) {
+            'Sources' { $script:fixture.SourcePrefix }
+            'Backups' { $script:fixture.BackupPrefix }
+            default { '' }
+        }
+        $keyName = "$prefix$Key"
+        $script:fixture[$List] = @(@{ name = $keyName; metadata = @{ private = 'synthetic-private-blob-metadata' } })
+        if ($Duplicate) { $script:fixture[$List] += @{ name = $keyName } }
+        $failure = $null
+        try { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false }
+        catch { $failure = $_.Exception }
+        $failure | Should -Not -BeNullOrEmpty
+        $failure.Message | Should -Match ([regex]::Escape($Kind))
+        $failure.Message | Should -Match ([regex]::Escape((ConvertTo-Json -InputObject $keyName -Compress)))
+        $failure.Message | Should -Match 'syntheticstate/repositories'
+        $failure.Message | Should -Match 'Expected'
+        $failure.Message | Should -Not -Match "synthetic-private-blob-metadata|`n|`r"
+        Should -Invoke Get-RepositoryMigrationBlob -Times 0 -Exactly
+        Should -Invoke New-RepositoryMigrationTransfer -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'does not expose a credential embedded in an invalid key diagnostic' {
+        $previous = [Environment]::GetEnvironmentVariable('GH_TOKEN')
+        try {
+            $env:GH_TOKEN = 'synthetic-sensitive-token'
+            $script:fixture.Destinations = @(@{ name = 'avm-synthetic-sensitive-token.tfstate' })
+            $failure = $null
+            try { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false }
+            catch { $failure = $_.Exception }
+            $failure.Message | Should -Match ([regex]::Escape('"avm-***.tfstate"'))
+            $failure.Message | Should -Not -Match 'synthetic-sensitive-token'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('GH_TOKEN', ($null -eq $previous ? [NullString]::Value : $previous), 'Process')
+        }
+    }
+
+    It 'audits disjoint historical and current OpenShift owners in <Order> order before <Mode>' -ForEach @(
+        @{ First = 'avm-res-redhatopenShift-openshiftcluster.tfstate'; Second = 'avm-res-redhatopenshift-openshiftcluster.tfstate'; Order = 'historical first'; Preview = $true; Mode = 'preview' }
+        @{ First = 'avm-res-redhatopenshift-openshiftcluster.tfstate'; Second = 'avm-res-redhatopenShift-openshiftcluster.tfstate'; Order = 'canonical first'; Preview = $true; Mode = 'preview' }
+        @{ First = 'avm-res-redhatopenShift-openshiftcluster.tfstate'; Second = 'avm-res-redhatopenshift-openshiftcluster.tfstate'; Order = 'historical first'; Preview = $false; Mode = 'apply' }
+        @{ First = 'avm-res-redhatopenshift-openshiftcluster.tfstate'; Second = 'avm-res-redhatopenShift-openshiftcluster.tfstate'; Order = 'canonical first'; Preview = $false; Mode = 'apply' }
+    ) {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(
+            @{ name = 'avm-container-images-cicd-agents-and-runners.tfstate' }, @{ name = 'avm-gh-app.tfstate' }
+            @{ name = $First }, @{ name = $Second }, @{ name = 'avm-template.tfstate' }
+            @{ name = 'avm-ptn-example-repo.tfstate' }
+        )
+        $before = ConvertTo-Json -InputObject $script:aliasPair.Legacy -Depth 100
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$Preview
+        $result.Ready | Should -Be (-not $Preview)
+        $result.MigrationRequired | Should -Be 1
+        $script:fixture.PublicationReads | Should -HaveCount 1
+        $script:fixture.PublicationReads[0] | Should -Contain $First
+        $script:fixture.PublicationReads[0] | Should -Contain $Second
+        $script:fixture.PublicationReads[0] | Should -HaveCount 6
+        @($script:fixture.Paths | Sort-Object -Unique) | Should -HaveCount 6
+        $script:fixture.Events | Should -Be @('prepare', ($Preview ? 'preview' : 'publish'))
+        ConvertTo-Json -InputObject $script:aliasPair.Legacy -Depth 100 | Should -BeExactly $before
+        @($script:aliasPair.Legacy.resources | Where-Object mode -CEQ 'managed') | Should -HaveCount 8
+        @($script:aliasPair.Canonical.Destination.resources | ForEach-Object { $_.instances }) | Should -HaveCount 75
+        Should -Invoke Get-RepositoryMigrationScope -Times 1 -Exactly -ParameterFilter { $RepoId -ceq 'avm-ptn-example-repo' }
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 1 -Exactly -ParameterFilter {
+            $Endpoint -ceq 'repos/Azure/terraform-azurerm-avm-res-redhatopenshift-openshiftcluster'
+        }
+    }
+
+    It 'blocks unsafe historical alias ownership before publishing a prepared transfer: <Case>' -ForEach @(
+        @{ Case = 'missing canonical state'; Message = '*same immutable GitHub repository*' }
+        @{ Case = 'different repository ID'; Message = '*same immutable GitHub repository*' }
+        @{ Case = 'different repository node'; Message = '*same immutable GitHub repository*' }
+        @{ Case = 'different repository name'; Message = '*exact recorded GitHub repository identity*' }
+        @{ Case = 'shared lineage'; Message = '*same immutable GitHub repository*' }
+        @{ Case = 'missing resource'; Message = '*Incomplete historical ownership*' }
+        @{ Case = 'unexpected namespace'; Message = '*recognized flat repository root*' }
+        @{ Case = 'aliased resource name'; Message = '*recognized flat repository root*' }
+        @{ Case = 'aliased provider'; Message = '*recognized flat repository root*' }
+        @{ Case = 'unexpected instance'; Message = '*Unexpected historical instance*' }
+        @{ Case = 'string instance index'; Message = '*Unexpected historical instance*' }
+        @{ Case = 'missing tenant proof'; Message = '*retired-tenant ownership*' }
+        @{ Case = 'BAMI tenant'; Message = '*configured BAMI scope*' }
+        @{ Case = 'BAMI identity subscription'; Message = '*configured BAMI scope*' }
+        @{ Case = 'BAMI role subscription'; Message = '*BAMI-scoped historical role*' }
+        @{ Case = 'foreign federation'; Message = '*historical federation ownership*' }
+        @{ Case = 'foreign membership'; Message = '*historical group membership ownership*' }
+        @{ Case = 'foreign role principal'; Message = '*historical role ownership*' }
+        @{ Case = 'foreign GitHub environment'; Message = '*historical GitHub environment ownership*' }
+        @{ Case = 'duplicate GitHub object'; Message = '*duplicate managed ownership*' }
+        @{ Case = 'duplicate Azure object'; Message = '*duplicate managed ownership*' }
+        @{ Case = 'tainted instance'; Message = '*tainted*' }
+        @{ Case = 'deposed instance'; Message = '*Deposed*' }
+    ) {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(
+            @{ name = 'avm-ptn-example-repo.tfstate' }, @{ name = $script:aliasPair.LegacyKey }, @{ name = $script:aliasPair.CanonicalKey }
+        )
+        $legacy = $script:aliasPair.Legacy
+        $identity = @($legacy.resources | Where-Object name -CEQ 'identity')[0].instances[0].attributes
+        $repository = @($legacy.resources | Where-Object type -CEQ 'github_repository')[0].instances[0].attributes
+        switch ($Case) {
+            'missing canonical state' { $script:fixture.Destinations = @($script:fixture.Destinations | Where-Object name -CNE $script:aliasPair.CanonicalKey) }
+            'different repository ID' { $repository.repo_id = 8888 }
+            'different repository node' { $repository.node_id = 'R_synthetic_foreign' }
+            'different repository name' { $repository.full_name += '-renamed' }
+            'shared lineage' { $legacy.lineage = $script:aliasPair.Canonical.Destination.lineage }
+            'missing resource' { $legacy.resources = @($legacy.resources | Where-Object name -CNE 'identity') }
+            'unexpected namespace' { $legacy.resources[0].module = 'module.bami[0]' }
+            'aliased resource name' { $legacy.resources[0].name = 'CURRENT' }
+            'aliased provider' { $legacy.resources[0].provider += '.other' }
+            'unexpected instance' { $legacy.resources[0].instances[0].index_key = 0 }
+            'string instance index' { @($legacy.resources | Where-Object type -CEQ 'github_repository_environment')[0].instances[0].index_key = '0' }
+            'missing tenant proof' { $identity.Remove('output') }
+            'BAMI tenant' {
+                $legacy.resources[0].instances[0].attributes.tenant_id = $script:settings.TEST_BAMI_TENANT_ID
+                $identity.output.value.properties.tenantId = $script:settings.TEST_BAMI_TENANT_ID
+            }
+            'BAMI identity subscription' { $legacy.resources[0].instances[0].attributes.subscription_id = $script:settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }
+            'BAMI role subscription' {
+                @($legacy.resources | Where-Object name -CEQ 'identity_role_assignment')[0].instances[0].attributes.parent_id =
+                    "/subscriptions/$($script:settings.TEST_BAMI_SUBSCRIPTION_IDS[0].id)"
+            }
+            'foreign federation' { @($legacy.resources | Where-Object name -CEQ 'identity_federated_credentials')[0].instances[0].attributes.parent_id += '-foreign' }
+            'foreign membership' { @($legacy.resources | Where-Object type -CEQ 'azuread_group_member')[0].instances[0].attributes.member_object_id = '40000000-0000-4000-8000-000000000007' }
+            'foreign role principal' { @($legacy.resources | Where-Object name -CEQ 'identity_role_assignment')[0].instances[0].attributes.body.value.properties.principalId = '40000000-0000-4000-8000-000000000007' }
+            'foreign GitHub environment' { @($legacy.resources | Where-Object type -CEQ 'github_repository_environment')[0].instances[0].attributes.environment = 'pr-check' }
+            'duplicate GitHub object' {
+                @($script:aliasPair.Canonical.Destination.resources | Where-Object { $_.type -ceq 'github_repository_environment' -and $_.name -ceq 'no_approval' })[0].instances[0].attributes.id =
+                    @($legacy.resources | Where-Object type -CEQ 'github_repository_environment')[0].instances[0].attributes.id
+            }
+            'duplicate Azure object' { $script:pair.Destination.resources[1].instances[0].attributes.id = $identity.id }
+            'tainted instance' { $legacy.resources[0].instances[0].status = 'tainted' }
+            'deposed instance' { $legacy.resources[0].instances[0].deposed = 'synthetic' }
+        }
+        $failure = $null
+        try { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false }
+        catch { $failure = $_.Exception }
+        $failure | Should -Not -BeNullOrEmpty
+        $failure.Message | Should -BeLike $Message
+        $failure.Message | Should -Match ([regex]::Escape($script:aliasPair.LegacyKey))
+        $failure.Message | Should -Match 'syntheticstate/repositories'
+        $failure.Message | Should -Not -Match 'synthetic-private-value-never-logged|synthetic historical opaque private data'
+        $script:fixture.Events | Should -Be @('prepare')
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'audits historical ownership without requiring the excluded repository to still exist in GitHub' {
+        $script:fixture.Destinations = @(@{ name = 'avm-gh-app.tfstate' })
+        Mock Invoke-RepositoryGitHubApi { throw 'Synthetic GitHub repository not found.' }
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false
+        $result.Ready | Should -BeTrue
+        $script:fixture.Reads | Should -Be @('avm-gh-app.tfstate')
+        $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+    }
+
+    It 'rejects unsafe historical template ownership before a prepared transfer is published: <Case>' -ForEach @(
+        @{ Case = 'repository alias'; Message = '*exact recorded GitHub repository identity*' }
+        @{ Case = 'invalid repository ID'; Message = '*exact recorded GitHub repository identity*' }
+        @{ Case = 'missing repository node ID'; Message = '*exact recorded GitHub repository identity*' }
+        @{ Case = 'live BAMI module'; Message = '*recognized flat repository root*' }
+        @{ Case = 'mixed modern root'; Message = '*recognized flat repository root*' }
+        @{ Case = 'BAMI tenant'; Message = '*configured BAMI scope*' }
+        @{ Case = 'missing identity proof'; Message = '*retired-tenant ownership*' }
+        @{ Case = 'foreign label repository'; Message = '*historical GitHub label ownership*' }
+        @{ Case = 'foreign label ID'; Message = '*historical GitHub label ownership*' }
+        @{ Case = 'foreign label index'; Message = '*historical GitHub label ownership*' }
+        @{ Case = 'duplicate label index'; Message = '*Duplicate instance index*' }
+        @{ Case = 'foreign ruleset repository'; Message = '*historical GitHub ruleset ownership*' }
+        @{ Case = 'invalid ruleset ID'; Message = '*historical GitHub ruleset ownership*' }
+        @{ Case = 'missing ruleset'; Message = '*Incomplete historical ownership*' }
+        @{ Case = 'duplicate physical owner'; Message = '*duplicate managed ownership*' }
+        @{ Case = 'duplicate GitHub owner'; Message = '*duplicate managed ownership*' }
+    ) {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(
+            @{ name = 'avm-ptn-example-repo.tfstate' }, @{ name = 'avm-template.tfstate' }
+        )
+        $state = $script:templateState
+        $repository = @($state.resources | Where-Object type -CEQ 'github_repository')[0].instances[0].attributes
+        $identity = @($state.resources | Where-Object name -CEQ 'identity')[0].instances[0].attributes
+        $labels = @($state.resources | Where-Object type -CEQ 'github_issue_label')[0]
+        $ruleset = @($state.resources | Where-Object type -CEQ 'github_repository_ruleset')[0]
+        switch ($Case) {
+            'repository alias' { $repository.full_name = 'Azure/terraform-azure-avm-template' }
+            'invalid repository ID' { $repository.repo_id = 0 }
+            'missing repository node ID' { $repository.Remove('node_id') }
+            'live BAMI module' { $state.resources[0].module = 'module.bami[0]' }
+            'mixed modern root' { $state.resources += $script:pair.Destination.resources[0] }
+            'BAMI tenant' {
+                $state.resources[0].instances[0].attributes.tenant_id = $script:settings.TEST_BAMI_TENANT_ID
+                $identity.output.value.properties.tenantId = $script:settings.TEST_BAMI_TENANT_ID
+            }
+            'missing identity proof' { $identity.Remove('output') }
+            'foreign label repository' { $labels.instances[0].attributes.repository = 'foreign' }
+            'foreign label ID' { $labels.instances[0].attributes.id += '-other' }
+            'foreign label index' { $labels.instances[0].index_key = 'foreign' }
+            'duplicate label index' { $labels.instances[1].index_key = $labels.instances[0].index_key }
+            'foreign ruleset repository' { $ruleset.instances[0].attributes.repository = 'foreign' }
+            'invalid ruleset ID' { $ruleset.instances[0].attributes.id = 'not-a-ruleset-id' }
+            'missing ruleset' { $state.resources = @($state.resources | Where-Object type -CNE 'github_repository_ruleset') }
+            'duplicate physical owner' { $script:pair.Destination.resources[1].instances[0].attributes.id = $identity.id }
+            'duplicate GitHub owner' {
+                $script:pair.Destination.resources += @{
+                    module = 'module.github'; mode = 'managed'; type = 'github_repository_ruleset'; name = 'main'
+                    provider = 'provider["registry.terraform.io/integrations/github"]'; instances = $ruleset.instances
+                }
+            }
+        }
+        { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false } |
+            Should -Throw $Message
+        $script:fixture.Events | Should -Be @('prepare')
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 

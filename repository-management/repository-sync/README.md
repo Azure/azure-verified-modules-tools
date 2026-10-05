@@ -110,6 +110,16 @@ archived repository still receives its required state transfer. A repository
 whose earlier run failed before sync is checked too; absence of a former source
 is not replaced with an invented state.
 
+Known historical template/non-module keys are audited as old flat repository
+roots, not made migration targets or silently ignored. Their recorded GitHub
+identity and label/ruleset ownership are checked without requiring an excluded
+repository to still exist. The exact mixed-case OpenShift key is retained
+only when its old flat root proves consistent non-BAMI ownership, matches the
+canonical state's immutable repository identity, and shares no managed
+objects with another state. It is not renamed, merged, or deleted. Unknown
+keys or unproven historical ownership still stop publication, with an escaped
+key and backend scope in the diagnostic.
+
 The script defaults to preview. The workflow explicitly passes its existing
 `plan_only` value; no additional activation or approval input is introduced.
 
