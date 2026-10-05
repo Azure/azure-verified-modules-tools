@@ -1,0 +1,63 @@
+name: Bicep module release tags
+description: Preview or create scoped Git tags consumed by the existing publication pipeline.
+inputs:
+  avm-authoring-version:
+    description: Exact qualified Avm.Authoring release.
+    required: true
+  modulePath:
+    description: Caller-relative module path.
+    required: true
+  baseCommit:
+    description: Optional full base SHA.
+    required: false
+  targetCommit:
+    description: Full target SHA matching the checkout.
+    required: true
+  forcePublish:
+    description: Include the top-level compiled and versioned module.
+    default: 'false'
+  includeAllVersionedModules:
+    description: Include every versioned module for missing-base previews.
+    default: 'false'
+  preview:
+    description: Report the proposed tags without mutating Git.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Prepare release tooling
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Package -Confirm:$false
+    - name: Process module release tags
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        MODULE_PATH: ${{ inputs.modulePath }}
+        BASE_COMMIT: ${{ inputs.baseCommit }}
+        TARGET_COMMIT: ${{ inputs.targetCommit }}
+        FORCE_PUBLISH: ${{ inputs.forcePublish }}
+        INCLUDE_ALL_VERSIONED_MODULES: ${{ inputs.includeAllVersionedModules }}
+        PREVIEW: ${{ inputs.preview }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Release.ps1')
+        Import-AvmWorkflowPackage
+        $preview = ConvertTo-AvmWorkflowBoolean $env:PREVIEW
+        $includeAll = ConvertTo-AvmWorkflowBoolean $env:INCLUDE_ALL_VERSIONED_MODULES
+        if ($includeAll -and -not $preview) { throw 'The missing-base all-module fallback is preview-only.' }
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH
+          BaseCommit = $env:BASE_COMMIT; TargetCommit = $env:TARGET_COMMIT
+          Force = ConvertTo-AvmWorkflowBoolean $env:FORCE_PUBLISH
+          IncludeAllVersionedModules = $includeAll
+          WhatIf = $preview; Confirm = $false
+        }
+        $tags = @(Set-AvmWorkflowReleaseTags @parameters)
+        if ($tags.Count -eq 0) { Write-Output 'No publishable module changes were found.' }
+        foreach ($tag in $tags) { Write-Output "$($tag.Tag): created=$($tag.Created), reused=$($tag.Reused), preview=$preview" }

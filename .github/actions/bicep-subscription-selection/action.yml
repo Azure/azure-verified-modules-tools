@@ -1,0 +1,50 @@
+name: Bicep subscription selection
+description: Prepare secret-safe subscription and concurrency identities without Azure access.
+inputs:
+  avm-authoring-version:
+    description: Exact qualified Avm.Authoring release.
+    required: true
+  modulePath:
+    description: Caller-relative module path.
+    required: true
+  moduleTestFilePaths:
+    description: Discovered tests as a JSON array.
+    required: true
+  displaySubscriptionNames:
+    description: Show friendly names only when the selected pool came from variables.
+    default: 'false'
+outputs:
+  deploymentMatrix:
+    description: Test cases carrying original subscription positions and digests.
+    value: ${{ steps.selection.outputs.deploymentMatrix }}
+  sharedScope:
+    description: Whether an outer shared-scope deployment lock is required.
+    value: ${{ steps.selection.outputs.sharedScope }}
+runs:
+  using: composite
+  steps:
+    - name: Prepare deployment matrix
+      id: selection
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        MODULE_PATH: ${{ inputs.modulePath }}
+        MODULE_TEST_FILES: ${{ inputs.moduleTestFilePaths }}
+        DISPLAY_SUBSCRIPTION_NAMES: ${{ inputs.displaySubscriptionNames }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
+        $tests = ConvertFrom-Json -InputObject $env:MODULE_TEST_FILES -AsHashtable -NoEnumerate
+        if ($tests -isnot [array]) { throw 'Deployment tests must be a JSON array.' }
+        if (@($tests | Where-Object { -not (ConvertTo-AvmWorkflowBoolean $_.e2eIgnore) }).Count -gt 0) {
+          Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Matrix -Confirm:$false
+        }
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestFiles = $tests
+          PoolJson = $env:TEST_SUBSCRIPTION_IDS; FallbackSubscriptionId = $env:VALIDATE_SUBSCRIPTION_ID
+          RandomSeed = [int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)
+          DisplaySubscriptionNames = ConvertTo-AvmWorkflowBoolean $env:DISPLAY_SUBSCRIPTION_NAMES
+        }
+        $outputs = Get-AvmWorkflowDeploymentMatrix @parameters
+        foreach ($entry in $outputs.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }

@@ -3,7 +3,9 @@ function Get-AvmBicepPolicyTestFile {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
-        [string] $ModulePath
+        [string] $ModulePath,
+
+        [switch] $IncludeAllExamples
     )
 
     Set-StrictMode -Version 3.0
@@ -24,11 +26,13 @@ function Get-AvmBicepPolicyTestFile {
         }
     }
 
+    $pattern = if ($IncludeAllExamples) { '(?i)(?:^|/)main\.test\.bicep$' }
+    else { '(?i)(?:^|/)(?:defaults|waf-aligned)/main\.test\.bicep$' }
     $selected = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     foreach ($file in @(Get-ChildItem -LiteralPath $testRoot -Recurse -File `
                 -Filter '*.test.bicep' -Force)) {
         $relative = [System.IO.Path]::GetRelativePath($testRoot, $file.FullName).Replace('\', '/')
-        if ($relative -notmatch '(?i)(?:^|/)(?:defaults|waf-aligned)/main\.test\.bicep$') {
+        if ($relative -notmatch $pattern) {
             continue
         }
         if ($file.Name -cne 'main.test.bicep' -or

@@ -1,0 +1,264 @@
+name: 'Reusable: Bicep Module Publish'
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Full tools commit SHA, identical to the caller's workflow revision.
+        type: string
+        required: true
+      avm-authoring-version:
+        description: Exact qualified Avm.Authoring release.
+        type: string
+        required: true
+      workflowInput:
+        type: string
+        required: true
+      moduleTestFilePaths:
+        type: string
+        required: true
+      psRuleModuleTestFilePaths:
+        type: string
+        required: true
+      modulePath:
+        type: string
+        required: true
+      baseCommit:
+        type: string
+        required: false
+      targetCommit:
+        type: string
+        required: true
+      forcePublish:
+        type: boolean
+        required: false
+        default: false
+      publishReleaseTag:
+        type: boolean
+        required: false
+        default: false
+      requirePublishApproval:
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+jobs:
+  job_module_static_validation:
+    name: Static validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: fromJSON(inputs.workflowInput).staticValidation == 'true'
+    steps:
+      - &validate-tools-ref
+        name: Validate tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+          TARGET_COMMIT: ${{ inputs.targetCommit }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$' -or $env:TARGET_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Workflow revisions must be full immutable commit SHAs.' }
+      - &checkout-caller
+        name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - &checkout-tools
+        name: Check out workflow support
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ inputs.tools-ref }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions
+            scripts/bicep-workflows
+      - name: Run native static validation
+        uses: ./.avm-tools/.github/actions/bicep-validation
+        with:
+          operation: Static
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}
+
+  job_psrule_must:
+    name: 'Must [${{ matrix.baseline.friendlyName }}] on [${{ matrix.testCases.name }}] - Required PSRule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: inputs.psRuleModuleTestFilePaths != '' && inputs.psRuleModuleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).staticValidation == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        testCases: ${{ fromJSON(inputs.psRuleModuleTestFilePaths) }}
+        baseline:
+          - friendlyName: Reliability
+            baselineName: Azure.Pillar.Reliability
+          - friendlyName: Custom Security
+            baselineName: CB.AVM.WAF.Security
+    steps:
+      - *validate-tools-ref
+      - *checkout-caller
+      - *checkout-tools
+      - name: Run required policy validation
+        uses: ./.avm-tools/.github/actions/bicep-validation
+        with:
+          operation: Policy
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}
+          example: ${{ matrix.testCases.path }}
+          baseline: ${{ matrix.baseline.baselineName }}
+        env: &policy-environment
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+          ARM_MGMTGROUP_ID: ${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID }}
+          TOKEN_NAMEPREFIX: gci
+
+  job_psrule_opt:
+    name: 'Opt [${{ matrix.baseline.friendlyName }}] on [${{ matrix.testCases.name }}] - Optional PSRule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: inputs.psRuleModuleTestFilePaths != '' && inputs.psRuleModuleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).staticValidation == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        testCases: ${{ fromJSON(inputs.psRuleModuleTestFilePaths) }}
+        baseline:
+          - friendlyName: All pillars
+            baselineName: Azure.Default
+          - friendlyName: Security
+            baselineName: Azure.Pillar.Security
+    steps:
+      - *validate-tools-ref
+      - *checkout-caller
+      - *checkout-tools
+      - name: Run advisory policy validation
+        uses: ./.avm-tools/.github/actions/bicep-validation
+        with:
+          operation: Policy
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}
+          example: ${{ matrix.testCases.path }}
+          baseline: ${{ matrix.baseline.baselineName }}
+        env: *policy-environment
+
+  job_initialize_subscription_selection:
+    name: Initialize subscription selection
+    environment: avm-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: fromJSON(inputs.workflowInput).deploymentValidation == 'true'
+    outputs:
+      deploymentMatrix: ${{ steps.selection.outputs.deploymentMatrix }}
+      sharedScope: ${{ steps.selection.outputs.sharedScope }}
+    steps:
+      - *validate-tools-ref
+      - *checkout-caller
+      - *checkout-tools
+      - name: Prepare deployment matrix
+        id: selection
+        uses: ./.avm-tools/.github/actions/bicep-subscription-selection
+        with:
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}
+          moduleTestFilePaths: ${{ inputs.moduleTestFilePaths }}
+          displaySubscriptionNames: ${{ vars.VALIDATE_SUBSCRIPTION_IDS != '' || vars.TEST_SUBSCRIPTION_IDS != '' }}
+        env:
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+
+  job_module_deploy_validation:
+    name: Deployment validation
+    permissions:
+      contents: read
+      id-token: write
+    if: |
+      !cancelled() &&
+      fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
+      inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' &&
+      needs.job_initialize_subscription_selection.result == 'success' &&
+      needs.job_module_static_validation.result != 'failure' &&
+      needs.job_psrule_must.result != 'failure'
+    needs:
+      - job_initialize_subscription_selection
+      - job_module_static_validation
+      - job_psrule_must
+    strategy:
+      fail-fast: false
+      matrix:
+        testCases: ${{ fromJSON(needs.job_initialize_subscription_selection.outputs.deploymentMatrix) }}
+    concurrency:
+      group: ${{ needs.job_initialize_subscription_selection.outputs.sharedScope == 'true' && !matrix.testCases.e2eIgnore && format('avm-deploy-{0}-shared', inputs.modulePath) || format('avm-deploy-{0}-run-{1}-{2}-{3}', inputs.modulePath, github.run_id, github.run_attempt, strategy.job-index) }}
+      queue: max
+    uses: ./.github/workflows/bicep-module-deployment.yml
+    with:
+      tools-ref: ${{ inputs.tools-ref }}
+      avm-authoring-version: ${{ inputs.avm-authoring-version }}
+      workflowInput: ${{ inputs.workflowInput }}
+      modulePath: ${{ inputs.modulePath }}
+      testCase: ${{ toJSON(matrix.testCases) }}
+      tokenNamePrefix: gci
+      targetCommit: ${{ inputs.targetCommit }}
+    secrets: inherit
+
+  job_publish_approval:
+    name: Approve release tag creation
+    environment: publish-approval
+    runs-on: ubuntu-latest
+    permissions: {}
+    if: |
+      !cancelled() &&
+      inputs.requirePublishApproval &&
+      needs.job_module_static_validation.result == 'success' &&
+      needs.job_module_deploy_validation.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'Azure/bicep-registry-modules'
+    needs:
+      - job_module_static_validation
+      - job_module_deploy_validation
+    steps:
+      - name: Record approval
+        shell: pwsh
+        run: Write-Output 'Release tag creation approved.'
+
+  job_publish_module:
+    name: Publishing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: avm-publish-${{ inputs.modulePath }}
+      queue: max
+    if: |
+      !cancelled() &&
+      inputs.publishReleaseTag &&
+      (!inputs.requirePublishApproval || needs.job_publish_approval.result == 'success') &&
+      needs.job_module_static_validation.result == 'success' &&
+      needs.job_module_deploy_validation.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'Azure/bicep-registry-modules'
+    needs:
+      - job_module_static_validation
+      - job_module_deploy_validation
+      - job_publish_approval
+    steps:
+      - *validate-tools-ref
+      - *checkout-caller
+      - *checkout-tools
+      - name: Create module release tags
+        uses: ./.avm-tools/.github/actions/bicep-release-tags
+        with:
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}
+          baseCommit: ${{ inputs.baseCommit }}
+          targetCommit: ${{ inputs.targetCommit }}
+          forcePublish: ${{ inputs.forcePublish }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

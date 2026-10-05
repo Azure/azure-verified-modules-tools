@@ -1,0 +1,32 @@
+name: Bicep module test files
+description: Discover module-owned Bicep tests and adjacent deployment-ignore markers.
+inputs:
+  modulePath:
+    description: Repository-relative module directory.
+    required: true
+  psRuleFilterRegex:
+    description: Path filter for PSRule test cases.
+    required: false
+    default: (defaults|waf-aligned)
+outputs:
+  moduleTestFilePaths:
+    description: Module-relative deployment tests as a JSON array.
+    value: ${{ steps.files.outputs.moduleTestFilePaths }}
+  psRuleModuleTestFilePaths:
+    description: Module-relative policy tests as a JSON array.
+    value: ${{ steps.files.outputs.psRuleModuleTestFilePaths }}
+runs:
+  using: composite
+  steps:
+    - name: Discover module tests
+      id: files
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        MODULE_PATH: ${{ inputs.modulePath }}
+        PSRULE_FILTER: ${{ inputs.psRuleFilterRegex }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Discovery.ps1')
+        $outputs = Get-AvmWorkflowTestFiles -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -PsRuleFilterRegex $env:PSRULE_FILTER
+        foreach ($entry in $outputs.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }

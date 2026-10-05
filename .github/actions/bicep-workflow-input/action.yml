@@ -1,0 +1,28 @@
+name: Bicep workflow input
+description: Resolve the caller workflow's dispatch values or declared defaults.
+inputs:
+  workflowPath:
+    description: Repository-relative caller workflow path.
+    required: true
+outputs:
+  workflowInput:
+    description: Normalized workflow inputs as JSON.
+    value: ${{ steps.input.outputs.workflowInput }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve workflow inputs
+      id: input
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        WORKFLOW_PATH: ${{ inputs.workflowPath }}
+        EVENT_INPUTS: ${{ toJSON(github.event.inputs) }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Discovery.ps1')
+        if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+          $null = Install-AvmWorkflowModule -Name powershell-yaml -Version 0.4.12 -Confirm:$false
+        }
+        $value = Get-AvmWorkflowInput -Root $env:GITHUB_WORKSPACE -WorkflowPath $env:WORKFLOW_PATH -EventName $env:GITHUB_EVENT_NAME -EventInputs $env:EVENT_INPUTS
+        Write-AvmWorkflowOutput -Name workflowInput -Value $value

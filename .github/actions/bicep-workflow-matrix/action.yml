@@ -1,0 +1,90 @@
+name: Bicep workflow matrix
+description: Select changed or requested modules without running validation or deployment.
+inputs:
+  avm-authoring-version:
+    description: Exact qualified Avm.Authoring release.
+    required: true
+  baseCommit:
+    description: Full base commit SHA when available.
+    required: false
+  targetCommit:
+    description: Full target commit SHA.
+    required: true
+  eventName:
+    description: push, pull_request or workflow_dispatch.
+    required: true
+  modulePaths:
+    description: Comma-separated module paths for manual runs.
+    required: false
+  createReleaseTag:
+    description: Whether release tags were requested.
+    default: 'false'
+  publishOnly:
+    description: Whether only release-tag creation was requested.
+    default: 'false'
+  customLocation:
+    description: Optional resource location override.
+    required: false
+  staticValidation:
+    description: Whether static validation was requested.
+    default: 'true'
+  deploymentValidation:
+    description: Whether deployment validation was requested.
+    default: 'true'
+  removeDeployment:
+    description: Whether deployment resources should be removed.
+    default: 'true'
+outputs:
+  baseCommit:
+    description: Available base SHA, or empty for the documented push fallback.
+    value: ${{ steps.matrix.outputs.baseCommit }}
+  targetCommit:
+    description: Validated target SHA.
+    value: ${{ steps.matrix.outputs.targetCommit }}
+  hasModules:
+    description: Whether the matrix has module entries.
+    value: ${{ steps.matrix.outputs.hasModules }}
+  includeAllVersionedModules:
+    description: Whether the missing-push-base static and preview fallback was used.
+    value: ${{ steps.matrix.outputs.includeAllVersionedModules }}
+  moduleMatrix:
+    description: Module include matrix as JSON.
+    value: ${{ steps.matrix.outputs.moduleMatrix }}
+  workflowInput:
+    description: Validation and location inputs as JSON.
+    value: ${{ steps.matrix.outputs.workflowInput }}
+runs:
+  using: composite
+  steps:
+    - name: Select workflow modules
+      id: matrix
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        BASE_COMMIT: ${{ inputs.baseCommit }}
+        TARGET_COMMIT: ${{ inputs.targetCommit }}
+        EVENT_NAME: ${{ inputs.eventName }}
+        MODULE_PATHS: ${{ inputs.modulePaths }}
+        CREATE_RELEASE_TAG: ${{ inputs.createReleaseTag }}
+        PUBLISH_ONLY: ${{ inputs.publishOnly }}
+        CUSTOM_LOCATION: ${{ inputs.customLocation }}
+        STATIC_VALIDATION: ${{ inputs.staticValidation }}
+        DEPLOYMENT_VALIDATION: ${{ inputs.deploymentValidation }}
+        REMOVE_DEPLOYMENT: ${{ inputs.removeDeployment }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Discovery.ps1')
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Package -Confirm:$false
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; EventName = $env:EVENT_NAME
+          BaseCommit = $env:BASE_COMMIT; TargetCommit = $env:TARGET_COMMIT; ModulePaths = $env:MODULE_PATHS
+          CreateReleaseTag = ConvertTo-AvmWorkflowBoolean $env:CREATE_RELEASE_TAG
+          PublishOnly = ConvertTo-AvmWorkflowBoolean $env:PUBLISH_ONLY
+          StaticValidation = ConvertTo-AvmWorkflowBoolean $env:STATIC_VALIDATION
+          DeploymentValidation = ConvertTo-AvmWorkflowBoolean $env:DEPLOYMENT_VALIDATION
+          RemoveDeployment = ConvertTo-AvmWorkflowBoolean $env:REMOVE_DEPLOYMENT
+          CustomLocation = $env:CUSTOM_LOCATION
+        }
+        $outputs = Initialize-AvmWorkflowMatrix @parameters
+        foreach ($entry in $outputs.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
