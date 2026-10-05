@@ -8,6 +8,7 @@ Describe 'Integration: Bicep scaffold telemetry' -Tag Integration {
         . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Import-AvmTestModule.ps1') `
             -SourceManifest (Join-Path -Path $script:repoRoot -ChildPath 'src' `
                 -AdditionalChildPath 'Avm.Authoring', 'Avm.Authoring.psd1')
+        . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Import-AvmBicepConventionRule.ps1')
         $script:scaffoldEnvironment = @{}
         foreach ($name in @('AVM_OFFLINE', 'AVM_NO_AUTO_INSTALL')) {
             $script:scaffoldEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')

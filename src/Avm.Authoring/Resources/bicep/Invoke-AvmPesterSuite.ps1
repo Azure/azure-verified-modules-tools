@@ -50,6 +50,14 @@ $containerData = switch ($inputData.Mode) {
         }
         @{ TestInputData = $testInputData }
     }
+    'Convention' {
+        # The suite records findings into this shared dictionary, so it must not be serialized.
+        if ($PSCmdlet.ParameterSetName -ne 'Object' -or
+            $inputData.Convention -isnot [System.Collections.IDictionary]) {
+            throw [System.ArgumentException]::new('Convention Pester input must be passed in process with Convention data.')
+        }
+        @{ Convention = $inputData.Convention }
+    }
     default {
         throw [System.ArgumentException]::new("Unsupported Bicep Pester mode '$($inputData.Mode)'.")
     }

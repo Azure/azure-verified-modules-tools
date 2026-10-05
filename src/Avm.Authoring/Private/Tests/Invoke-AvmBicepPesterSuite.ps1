@@ -8,7 +8,7 @@ function Invoke-AvmBicepPesterSuite {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
-        [ValidateSet('Unit', 'E2e')]
+        [ValidateSet('Unit', 'E2e', 'Convention')]
         [string] $Mode = 'Unit',
 
         [string[]] $ModulePaths = @(),
@@ -22,6 +22,8 @@ function Invoke-AvmBicepPesterSuite {
         [string[]] $TestName = @(),
 
         [System.Collections.IDictionary] $TestInputData,
+
+        [System.Collections.IDictionary] $ConventionData,
 
         [hashtable] $EnvVars = @{ GITHUB_ACTIONS = $null; GITHUB_STEP_SUMMARY = $null },
 
@@ -43,6 +45,10 @@ function Invoke-AvmBicepPesterSuite {
         Tag            = $Tag
         TestName       = $TestName
         TestInputData  = $TestInputData
+        Convention     = $ConventionData
+    }
+    if ($Mode -eq 'Convention' -and -not $InProcess) {
+        throw [System.ArgumentException]::new('Convention suites must run in process.')
     }
     $runDirectory = $null
     $inputPath = $null

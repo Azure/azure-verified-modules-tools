@@ -3,7 +3,11 @@ function Test-AvmBicepConventionWorkflow {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
-        $Scope
+        $Scope,
+
+        # Located and parsed workflow from Get-AvmBicepConventionWorkflowInput.
+        [Parameter(Mandatory)]
+        $WorkflowInput
     )
 
     Set-StrictMode -Version 3.0
@@ -11,43 +15,15 @@ function Test-AvmBicepConventionWorkflow {
 
     $issues = [System.Collections.Generic.List[object]]::new()
     $root = $Scope.RepositoryRoot
-    $segments = @($Scope.ModuleRelativePath.Split('/'))
-    $filename = ('avm.{0}.{1}.{2}.yml' -f $segments[1], $segments[2], $segments[3]).ToLowerInvariant()
-    $github = Join-Path $root '.github'
-    $directory = Join-Path $github 'workflows'
-    $path = Join-Path $directory $filename
-    $parent = $root
-    foreach ($segment in @('.github', 'workflows')) {
-        $directoryEntries = @(Get-ChildItem -LiteralPath $parent -Force |
-                Where-Object { $_.Name -ieq $segment })
-        if ($directoryEntries.Count -ne 1 -or -not $directoryEntries[0].PSIsContainer -or
-            $directoryEntries[0].Name -cne $segment -or
-            ($directoryEntries[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-            $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $path `
-                        -Code 'avm.bicep.workflow-file' `
-                        -Message "A regular .github/workflows/$filename with exact casing is required; linked workflow directories are not inspected."))
-            return $issues.ToArray()
+    $filename = $WorkflowInput.FileName
+    $path = $WorkflowInput.Path
+    if (@($WorkflowInput.Issues).Count -gt 0) {
+        foreach ($issue in @($WorkflowInput.Issues)) {
+            $issues.Add($issue)
         }
-        $parent = $directoryEntries[0].FullName
-    }
-    $files = @(Get-ChildItem -LiteralPath $directory -Force |
-            Where-Object { $_.Name -ieq $filename })
-    if ($files.Count -ne 1 -or $files[0].PSIsContainer -or $files[0].Name -cne $filename -or
-        ($files[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-        $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $path `
-                    -Code 'avm.bicep.workflow-file' `
-                    -Message "A regular .github/workflows/$filename with exact casing is required."))
         return $issues.ToArray()
     }
-
-    try {
-        $workflow = Get-AvmBicepConventionWorkflow -Path $path
-    }
-    catch [AvmConfigurationException] {
-        $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $path `
-                    -Code 'avm.bicep.workflow-parse' -Message $_.Exception.Message))
-        return $issues.ToArray()
-    }
+    $workflow = $WorkflowInput.Workflow
 
     $environment = if ($workflow.Contains('env') -and
         $workflow['env'] -is [System.Collections.IDictionary]) { $workflow['env'] } else { @{} }

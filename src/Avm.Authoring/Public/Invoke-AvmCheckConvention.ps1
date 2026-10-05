@@ -16,6 +16,9 @@ function Invoke-AvmCheckConvention {
         Bicep workflow checks require powershell-yaml 0.4.12, loaded only
         when a module workflow is inspected. Install it separately with
         Install-PSResource; missing or invalid YAML fails the check.
+        Bicep rules run in process as the packaged Pester suite under
+        Resources/bicep/conventions, so Pester 5.5.0 or later must be
+        installed. A rule that throws is reported as an error issue.
 
         Routed by the dispatcher: 'avm check convention'.
 

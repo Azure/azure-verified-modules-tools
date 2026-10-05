@@ -4,6 +4,7 @@
 BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..')).ProviderPath
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    . (Join-Path $script:repoRoot 'tests' 'Pester' 'Import-AvmBicepConventionRule.ps1')
 }
 
 AfterAll {
@@ -24,27 +25,25 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
                     )
                 }
             }
-            Mock Get-AvmBicepApiSpecList {
-                @{
-                    'Microsoft.Storage' = @{
-                        storageAccounts = @(
-                            '2020-01-01', '2021-01-01', '2022-01-01', '2023-01-01',
-                            '2023-05-01', '2023-12-01', '2024-01-01-preview', '2024-05-01'
-                        )
-                    }
-                    'Microsoft.Insights' = @{
-                        diagnosticSettings = @('2021-05-01-preview')
-                    }
-                    'Microsoft.Authorization' = @{
-                        locks = @('2020-05-01')
-                        roleAssignments = @('2022-04-01')
-                    }
-                    'Microsoft.Network' = @{
-                        privateEndpoints = @('2024-01-01')
-                    }
-                    'Microsoft.ContainerService' = @{
-                        managedClusters = @('2024-09-01')
-                    }
+            $script:apiSpecs = @{
+                'Microsoft.Storage' = @{
+                    storageAccounts = @(
+                        '2020-01-01', '2021-01-01', '2022-01-01', '2023-01-01',
+                        '2023-05-01', '2023-12-01', '2024-01-01-preview', '2024-05-01'
+                    )
+                }
+                'Microsoft.Insights' = @{
+                    diagnosticSettings = @('2021-05-01-preview')
+                }
+                'Microsoft.Authorization' = @{
+                    locks = @('2020-05-01')
+                    roleAssignments = @('2022-04-01')
+                }
+                'Microsoft.Network' = @{
+                    privateEndpoints = @('2024-01-01')
+                }
+                'Microsoft.ContainerService' = @{
+                    managedClusters = @('2024-09-01')
                 }
             }
         }
@@ -58,7 +57,7 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
                 @{ type = 'Microsoft.Resources/deployments'; apiVersion = '2022-09-01' },
                 @{ type = 'Microsoft.Storage/storageAccounts'; apiVersion = '2021-01-01'; existing = $true }
             )
-            @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule)).Count |
+            @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) -ApiSpecs $script:apiSpecs).Count |
                 Should -Be 0
         }
     }
@@ -69,7 +68,7 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
                 @{ type = 'Microsoft.Storage/storageAccounts'; apiVersion = '2021-01-01' },
                 @{ type = 'Microsoft.Storage/storageAccounts'; apiVersion = '2022-01-01' }
             )
-            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule))
+            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) -ApiSpecs $script:apiSpecs)
             $issues.Count | Should -Be 2
             $issues.Code | Should -Contain 'avm.bicep.api-version-outdated'
             $issues.Code | Should -Contain 'avm.bicep.api-version-near-expiry'
@@ -111,7 +110,7 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
                     apiVersion = '2024-01-01'
                 }
             }
-            @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule)).Count |
+            @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) -ApiSpecs $script:apiSpecs).Count |
                 Should -Be 0
         }
     }
@@ -122,7 +121,7 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
                 @{ type = 'Microsoft.Other/widgets'; apiVersion = '2023-05-01' },
                 @{ type = 'Microsoft.Storage/unknownResources'; apiVersion = '2023-05-01' }
             )
-            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule))
+            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) -ApiSpecs $script:apiSpecs)
             $issues.Code | Should -Contain 'avm.bicep.api-provider-unknown'
             $issues.Code | Should -Contain 'avm.bicep.api-type-unknown'
             @($issues | Where-Object Severity -EQ 'warning').Count | Should -Be 2
@@ -131,10 +130,8 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
 
     It 'fails instead of silently passing when the API source is unavailable' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmBicepApiSpecList {
-                throw [AvmConfigurationException]::new('source unavailable')
-            }
-            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule))
+            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) `
+                    -ApiSpecsUnavailableReason 'source unavailable')
             $issues.Count | Should -Be 1
             $issues[0].Code | Should -BeExactly 'avm.bicep.api-specs-unavailable'
             $issues[0].Severity | Should -BeExactly 'error'
@@ -143,16 +140,15 @@ Describe 'Test-AvmBicepConventionApiVersion' -Tag 'Unit' {
 
     It 'fails for malformed known-provider API lists and resource shapes' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmBicepApiSpecList {
-                @{ 'Microsoft.Storage' = @{ storageAccounts = 'not an array' } }
-            }
+            $script:apiSpecs = @{ 'Microsoft.Storage' = @{ storageAccounts = 'not an array' } }
+
             $script:apiModule.Template['resources'] = @(
                 @{ type = 'Microsoft.Storage/storageAccounts'; apiVersion = '2023-05-01' },
                 @{ type = 'BadType'; apiVersion = '2023-05-01' },
                 @{ type = 'Microsoft.Storage/storageAccounts'; apiVersion = 'invalid' },
                 'not a resource object'
             )
-            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule))
+            $issues = @(Test-AvmBicepConventionApiVersion -Root $TestDrive -Modules @($script:apiModule) -ApiSpecs $script:apiSpecs)
             $issues.Code | Should -Contain 'avm.bicep.api-specs-invalid'
             $issues.Code | Should -Contain 'avm.bicep.api-resource-invalid'
             $issues.Code | Should -Contain 'avm.bicep.api-version-invalid'

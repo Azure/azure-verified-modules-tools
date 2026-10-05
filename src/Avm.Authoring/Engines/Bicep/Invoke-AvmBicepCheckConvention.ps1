@@ -59,9 +59,7 @@ function Invoke-AvmBicepCheckConvention {
     if ($scopes.Count -gt 0) {
         $testFiles = @()
         try {
-            $testFiles = @(Get-ChildItem -LiteralPath $scopes[0].RepositoryRoot -File -Recurse `
-                    -Filter 'main.test.bicep' -ErrorAction Stop |
-                    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) })
+            $testFiles = @(Get-AvmBicepRepositoryTestFile -RepositoryRoot $scopes[0].RepositoryRoot)
         }
         catch [System.IO.IOException], [System.UnauthorizedAccessException],
         [System.Management.Automation.ActionPreferenceStopException] {
@@ -191,49 +189,42 @@ function Invoke-AvmBicepCheckConvention {
                             -Code "avm.bicep.json-$drift" `
                             -Message ("The checked-in main.json is $drift; run 'avm pre-commit' and commit the generated artifact.")))
             }
-            foreach ($issue in @(Test-AvmBicepConventionCompiledTemplate -Root $Context.Root `
-                        -Scope $sourceFile.Scope -Template $template -SourcePath $sourceFile.Path)) {
-                $issues.Add($issue)
-            }
         }
     }
-    foreach ($issue in @(Test-AvmBicepConventionApiVersion -Root $Context.Root `
-                -Modules $compiledModules.ToArray())) {
+    $apiSpecs = $null
+    $apiSpecsUnavailableReason = ''
+    if ($compiledModules.Count -gt 0) {
+        try {
+            $apiSpecs = Get-AvmBicepApiSpecList
+        }
+        catch [AvmConfigurationException] {
+            $apiSpecsUnavailableReason = $_.Exception.Message
+        }
+    }
+    $repositoryRoot = if ($scopes.Count -gt 0) { $scopes[0].RepositoryRoot } else { $Context.Root }
+    $workflows = @(foreach ($scope in $scopes) {
+            if ($scope.IsTopLevel) {
+                [pscustomobject]@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope }
+            }
+        })
+    $publication = if ($scopes.Count -gt 0) {
+        Get-AvmBicepPublicationInput -RepositoryRoot $repositoryRoot -Scopes $scopes.ToArray()
+    }
+    $convention = @{
+        Root                      = $Context.Root
+        RepositoryRoot            = $repositoryRoot
+        Scopes                    = $scopes.ToArray()
+        CompiledModules           = $compiledModules.ToArray()
+        ApiSpecs                  = $apiSpecs
+        ApiSpecsUnavailableReason = $apiSpecsUnavailableReason
+        ServiceShortIndex         = $serviceShortIndex
+        CompiledTests             = $compiledTests
+        Workflows                 = $workflows
+        Publication               = $publication
+    }
+    foreach ($issue in @(Invoke-AvmBicepConventionSuite -Convention $convention)) {
         $issues.Add($issue)
     }
-
-    foreach ($scope in $scopes) {
-        foreach ($issue in @(Test-AvmBicepConventionLayout -Root $Context.Root -Scope $scope)) {
-            $issues.Add($issue)
-        }
-        if ($scope.IsTopLevel) {
-            foreach ($issue in @(Test-AvmBicepConventionWorkflow -Scope $scope)) {
-                $issues.Add($issue)
-            }
-        }
-        foreach ($issue in @(Test-AvmBicepConventionVersion -Root $Context.Root -Scope $scope)) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionTestFile -Root $Context.Root `
-                    -Scope $scope -ServiceShortIndex $serviceShortIndex `
-                    -CompiledTestFiles $compiledTests)) {
-            $issues.Add($issue)
-        }
-    }
-    if ($scopes.Count -gt 0) {
-        foreach ($issue in @(Test-AvmBicepConventionCodeowner -RepositoryRoot $scopes[0].RepositoryRoot)) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionChildPublish `
-                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionPublication `
-                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
-            $issues.Add($issue)
-        }
-    }
-
     $status = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0) {
         'fail'
     }

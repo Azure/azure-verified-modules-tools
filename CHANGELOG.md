@@ -107,6 +107,14 @@ section when cutting a release.
 
 ### Changed
 
+- `avm check convention` for Bicep now runs its rules as a packaged Pester
+  suite (`Resources/bicep/conventions`), so it, and therefore Bicep
+  `pre-commit` and `pr-check`, requires Pester 5.5.0 or later. Compilation,
+  Git, API-spec and MCR lookups still happen before the suite starts. Issue
+  codes, severities and lines are unchanged, but issues are grouped by rule
+  rather than interleaved per module. A rule that throws, or a suite that
+  runs fewer checks than expected, is reported as an error issue instead of
+  aborting the command.
 - The Bicep e2e ownership tag, run-ID pattern and convention exemptions now
   live in `Resources/bicep/settings.json`, and the PowerShell module pins
   (`powershell-yaml`, `PSRule`, `PSRule.Rules.Azure`) live in the

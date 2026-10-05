@@ -2,7 +2,7 @@
 
 **Status**: in-progress
 **Started**: 2026-10-03
-**Updated**: 2026-10-03
+**Updated**: 2026-10-05
 **Branch**: `jaredfholgate-avm-authoring-refactor`
 
 ## Outcome
@@ -47,10 +47,11 @@ transformations and publication (244s together).
 - [x] Baseline the gate and find slow tests.
 - [x] Fix the version-check opt-out (separate slice:
   `2026-10-03-terraform-scaffold-azapi-interfaces.md`).
-- [ ] Share the Bicep end-to-end safety checks.
-- [ ] Move pinned versions, policy baselines and the `.e2eignore` allowlist to
-  packaged configuration.
+- [x] Share the Bicep end-to-end safety checks (`2026-10-05-bicep-configuration.md`).
+- [x] Move pinned versions, policy baselines and the `.e2eignore` allowlist to
+  packaged configuration (`2026-10-05-bicep-configuration.md`).
 - [ ] Reduce repeated policy issue construction.
-- [ ] Move Bicep convention checks to a packaged Pester suite.
+- [x] Move Bicep convention checks to a packaged Pester suite
+  (`2026-10-05-bicep-convention-pester.md`).
 - [ ] Prune and speed up tests; extend integration fixtures.
 - [ ] Review help and comments.

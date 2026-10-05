@@ -1,0 +1,122 @@
+#Requires -Version 7.4
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
+
+BeforeAll {
+    $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
+    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+}
+
+AfterAll {
+    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Invoke-AvmBicepConventionSuite' {
+    BeforeEach {
+        InModuleScope 'Avm.Authoring' {
+            # One scope and no compiled modules or workflows: 3 scope checks + 3 repository checks.
+            $script:convention = @{
+                Root            = $TestDrive
+                Scopes          = @([pscustomobject]@{ Path = $TestDrive })
+                CompiledModules = @()
+                Workflows       = @()
+            }
+            $script:summary = [pscustomobject]@{ Total = 6; Passed = 6; Failed = 0; Issues = @() }
+            Mock Invoke-AvmBicepPesterSuite { $script:summary }
+        }
+    }
+
+    It 'does not start Pester when there is nothing to check' {
+        InModuleScope 'Avm.Authoring' {
+            $script:convention.Scopes = @()
+            @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Count | Should -Be 0
+            Should -Invoke Invoke-AvmBicepPesterSuite -Times 0 -Exactly
+        }
+    }
+
+    It 'returns recorded findings from a complete run in process' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-AvmBicepPesterSuite {
+                $ConventionData.Findings.Add([pscustomobject]@{ Code = 'avm.bicep.sample'; Severity = 'warning' })
+                $script:summary
+            }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.sample')
+            Should -Invoke Invoke-AvmBicepPesterSuite -Times 1 -Exactly -ParameterFilter {
+                $Mode -eq 'Convention' -and $InProcess -and
+                $Files[0] -like '*Resources*bicep*conventions*Conventions.Tests.ps1'
+            }
+        }
+    }
+
+    It 'reports a rule crash as an error instead of throwing' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-AvmBicepPesterSuite {
+                $ConventionData.Crashes.Add([pscustomobject]@{ Rule = 'Layout'; Message = 'boom' })
+                [pscustomobject]@{ Total = 6; Passed = 5; Failed = 1; Issues = @() }
+            }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.convention-rule-failed')
+            $issues[0].Severity | Should -Be 'error'
+            $issues[0].Message | Should -Match "'Layout'.*boom"
+        }
+    }
+
+    It 'never lets a failed test without a finding pass' {
+        InModuleScope 'Avm.Authoring' {
+            $script:summary = [pscustomobject]@{ Total = 6; Passed = 5; Failed = 1; Issues = @() }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.convention-rule-failed')
+        }
+    }
+
+    It 'reports a run with fewer checks than expected as incomplete' {
+        InModuleScope 'Avm.Authoring' {
+            $script:summary = [pscustomobject]@{ Total = 4; Passed = 4; Failed = 0; Issues = @() }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.convention-suite-incomplete')
+            $issues[0].Message | Should -Match '4 of 6'
+        }
+    }
+
+    It 'reports skipped checks as incomplete even when the total matches' {
+        InModuleScope 'Avm.Authoring' {
+            $script:summary = [pscustomobject]@{ Total = 6; Passed = 5; Failed = 0; Issues = @() }
+            @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
+                Should -Be @('avm.bicep.convention-suite-incomplete')
+        }
+    }
+
+    It 'surfaces runner diagnostics other than ordinary test failures' {
+        InModuleScope 'Avm.Authoring' {
+            $script:summary = [pscustomobject]@{
+                Total = 6; Passed = 6; Failed = 0
+                Issues = @(
+                    [pscustomobject]@{ Code = 'avm.bicep.pester-failed'; Message = 'ignored' },
+                    [pscustomobject]@{ Code = 'avm.bicep.pester-container-failed'; Message = 'discovery failed' }
+                )
+            }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.convention-rule-failed')
+            $issues[0].Message | Should -Match 'pester-container-failed: discovery failed'
+        }
+    }
+
+    It 'explains how to install Pester when the suite cannot start' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-AvmBicepPesterSuite { throw [AvmProcessException]::new('Pester missing') }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues.Code | Should -Be @('avm.bicep.convention-suite-unavailable')
+            $issues[0].Message | Should -Match 'Install-PSResource -Name Pester'
+        }
+    }
+}
+
+Describe 'Get-AvmBicepChildPublishAllowlist' {
+    It 'reports an unreadable allowlist directory as a configuration error' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-ChildItem { throw [System.UnauthorizedAccessException]::new('denied') }
+            { Get-AvmBicepChildPublishAllowlist -RepositoryRoot $TestDrive } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*denied*'
+        }
+    }
+}

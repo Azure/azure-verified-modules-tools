@@ -103,7 +103,7 @@ if ($Probe) {
     $privateNames = @(
         'Get-AvmBicepMetadataLiteral', 'Get-AvmMetadataSourcePlan', 'Test-AvmBicepTelemetrySourceWiring',
         'Test-AvmMetadataModules', 'Invoke-AvmBicepDocs', 'Invoke-AvmBicepCheckPolicy',
-        'Invoke-AvmBicepCheckConvention', 'Invoke-AvmBicepTestUnit', 'Invoke-AvmBicepPesterSuite',
+        'Invoke-AvmBicepCheckConvention', 'Invoke-AvmBicepConventionSuite', 'Invoke-AvmBicepTestUnit', 'Invoke-AvmBicepPesterSuite',
         'Get-AvmBicepE2ePostHook', 'Invoke-AvmBicepE2ePostHook',
         'Get-AvmBicepApiSpecList', 'Get-AvmBicepMcrTagList'
     )
@@ -131,6 +131,11 @@ if ($Probe) {
         -Segments @('Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1')
     Assert-AvmPackageSmoke -Condition (Test-Path -LiteralPath $runner -PathType Leaf) `
         -Message 'The package omitted the child Pester runner.'
+    $conventions = Join-AvmPackageSmokePath -Root $expectedModule -Segments @('Resources', 'bicep', 'conventions')
+    $conventionRules = @(Get-ChildItem -LiteralPath (Join-Path $conventions 'rules') -Filter 'Test-AvmBicepConvention*.ps1' -File -ErrorAction SilentlyContinue)
+    Assert-AvmPackageSmoke -Condition ((Test-Path -LiteralPath (Join-Path $conventions 'Conventions.Tests.ps1') -PathType Leaf) -and
+        $conventionRules.Count -eq 12) `
+        -Message "The package omitted the convention Pester suite or its rules ($($conventionRules.Count) of 12 rules)."
     $settings = Join-AvmPackageSmokePath -Root $expectedModule -Segments @('Resources', 'bicep', 'settings.json')
     Assert-AvmPackageSmoke -Condition ((Test-Path -LiteralPath $settings -PathType Leaf) -and
         (& $module { (Get-AvmBicepConfiguration)['e2e']['ownershipTag'] }) -ceq 'avm-e2e-run-id' -and

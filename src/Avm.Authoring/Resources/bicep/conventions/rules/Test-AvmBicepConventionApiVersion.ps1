@@ -7,7 +7,14 @@ function Test-AvmBicepConventionApiVersion {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [object[]] $Modules
+        [object[]] $Modules,
+
+        # Provider API-version catalogue from Get-AvmBicepApiSpecList, fetched before the suite runs.
+        [AllowNull()]
+        [System.Collections.IDictionary] $ApiSpecs,
+
+        # Why the catalogue could not be fetched; reported instead of silently passing.
+        [string] $ApiSpecsUnavailableReason = ''
     )
 
     Set-StrictMode -Version 3.0
@@ -17,15 +24,16 @@ function Test-AvmBicepConventionApiVersion {
     if ($Modules.Count -eq 0) {
         return $issues.ToArray()
     }
-    try {
-        $specs = Get-AvmBicepApiSpecList
-    }
-    catch [AvmConfigurationException] {
+    if (-not [string]::IsNullOrEmpty($ApiSpecsUnavailableReason)) {
         $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $Root `
                     -Code 'avm.bicep.api-specs-unavailable' `
-                    -Message $_.Exception.Message))
+                    -Message $ApiSpecsUnavailableReason))
         return $issues.ToArray()
     }
+    if ($null -eq $ApiSpecs) {
+        throw [System.ArgumentException]::new('ApiSpecs or ApiSpecsUnavailableReason is required when modules are compiled.')
+    }
+    $specs = $ApiSpecs
 
     $extensionMappings = @(
         @{ Suffix = 'diagnosticSettings'; Provider = 'Microsoft.Insights' }

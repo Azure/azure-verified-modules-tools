@@ -7,6 +7,7 @@ BeforeAll {
     $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-convention'
     . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
+    . (Join-Path $PSScriptRoot '..' 'Import-AvmBicepConventionRule.ps1')
 }
 
 AfterAll {
@@ -160,6 +161,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
     It 'fails with a named diagnostic when the exact YAML parser is unavailable' {
         InModuleScope 'Avm.Authoring' {
+            Mock Get-Module {
+                & (Get-Command -Name Get-Module -CommandType Cmdlet) @PesterBoundParameters
+            }
             Mock Get-Module { @() } -ParameterFilter {
                 $ListAvailable -and $Name -eq 'powershell-yaml'
             }
@@ -1103,19 +1107,13 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-version-file'
         }
 
-        It 'reports unreadable allowlist directories even if repository-wide test discovery fails first' {
+        It 'still checks the allowlist when repository-wide test discovery fails first' {
             InModuleScope 'Avm.Authoring' {
-                Mock Get-ChildItem {
-                    & (Get-Command -Name Get-ChildItem -CommandType Cmdlet) @PesterBoundParameters
-                }
-                Mock Get-ChildItem {
+                Mock Get-AvmBicepRepositoryTestFile {
                     throw [System.UnauthorizedAccessException]::new('Fixture directory is unreadable.')
-                } -ParameterFilter {
-                    ($File -and $Recurse -and $Filter -eq 'main.test.bicep' -and
-                    $LiteralPath -notmatch '[\\/]tests$') -or
-                    ($LiteralPath -like '*staticValidation*compliance')
                 }
             }
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName 'Helper'
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $result.Issues.Code | Should -Contain 'avm.bicep.test-discovery'
@@ -1200,6 +1198,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         It 'fails closed when MCR is unavailable rather than treating tags as empty' {
             InModuleScope 'Avm.Authoring' {
                 Mock Invoke-WebRequest { throw [System.Net.Http.HttpRequestException]::new('MCR unavailable') }
+                Mock Wait-AvmRetryDelay { }
             }
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.published-tags-unavailable')
