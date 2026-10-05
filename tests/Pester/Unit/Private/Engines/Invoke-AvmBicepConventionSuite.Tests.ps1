@@ -78,6 +78,31 @@ Describe 'Invoke-AvmBicepConventionSuite' {
         }
     }
 
+    It 'preserves a mapped native advisory without hiding an unmapped failure' -TestCases @(
+        @{ Failures = 1; HasUnmappedFailure = $false }
+        @{ Failures = 2; HasUnmappedFailure = $true }
+    ) {
+        param($Failures, $HasUnmappedFailure)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Failures = $Failures; HasUnmappedFailure = $HasUnmappedFailure
+        } {
+            param($Failures, $HasUnmappedFailure)
+            $script:summary = [pscustomobject]@{
+                Total = 6; Passed = 6 - $Failures; Failed = $Failures
+                Issues = @(@{
+                        NativeConvention = $true; Code = 'avm.bicep.parameter-untyped-object'
+                        Severity = 'warning'; File = Join-Path $TestDrive 'main.bicep'
+                        Message = 'Use an explicit object type.'
+                    })
+            }
+            $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
+            $issues[0].Severity | Should -Be 'warning'
+            $issues[0].File | Should -Be 'main.bicep'
+            (@($issues | Where-Object { $_.Code -eq 'avm.bicep.convention-rule-failed' }).Count -gt 0) |
+                Should -Be $HasUnmappedFailure
+        }
+    }
+
     It 'reports skipped checks as incomplete even when the total matches' {
         InModuleScope 'Avm.Authoring' {
             $script:summary = [pscustomobject]@{ Total = 6; Passed = 5; Failed = 0; Issues = @() }

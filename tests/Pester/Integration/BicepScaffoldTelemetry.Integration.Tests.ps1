@@ -8,7 +8,6 @@ Describe 'Integration: Bicep scaffold telemetry' -Tag Integration {
         . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Import-AvmTestModule.ps1') `
             -SourceManifest (Join-Path -Path $script:repoRoot -ChildPath 'src' `
                 -AdditionalChildPath 'Avm.Authoring', 'Avm.Authoring.psd1')
-        . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Import-AvmBicepConventionRule.ps1')
         $script:scaffoldEnvironment = @{}
         foreach ($name in @('AVM_OFFLINE', 'AVM_NO_AUTO_INSTALL')) {
             $script:scaffoldEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
@@ -33,9 +32,23 @@ Describe 'Integration: Bicep scaffold telemetry' -Tag Integration {
                 $template = $result.StdOut | ConvertFrom-Json -AsHashtable
                 $template['resources'].Count | Should -BeGreaterThan 0
                 $scope = Get-AvmBicepConventionScope -Path $P
-                $resources = @(Get-AvmBicepConventionResource -Template $template)
-                @(Test-AvmBicepConventionCompiledTelemetry -Root $P -Scope $scope `
-                        -Template $template -SourcePath $sourcePath -Resources $resources)
+                $compiled = [pscustomobject]@{
+                    Path = $sourcePath; Scope = $scope; Template = $template; Json = $result.StdOut
+                }
+                $convention = @{
+                    Root                   = $P
+                    CompiledInputs         = @(Get-AvmBicepCompiledConventionInput -Module $compiled)
+                    NativeCompiledExpected = 0
+                }
+                $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Compiled.Tests.ps1'
+                $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $P `
+                    -Mode Convention -ConventionData $convention -EnvVars @{} -InProcess
+                $convention.NativeCompiledExpected | Should -BeGreaterThan 11
+                $summary.Total | Should -Be $convention.NativeCompiledExpected
+                ($summary.Passed + $summary.Failed) | Should -Be $convention.NativeCompiledExpected
+                @($summary.Issues | Where-Object { $_.Code -like 'avm.bicep.pester-*' }).Count |
+                    Should -Be 0 -Because (@($summary.Issues | ForEach-Object { $_.Message }) -join '; ')
+                @($summary.Issues | Where-Object { $_.Code -like 'avm.bicep.telemetry-*' })
             }
         }
     }

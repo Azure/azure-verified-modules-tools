@@ -6,6 +6,42 @@ BeforeAll {
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
 }
 
+Describe 'Component: native Bicep convention diagnostics' -Tag Component {
+    It 'maps native assertion locations and never downgrades runtime failures or skips' {
+        $suite = Join-Path $TestDrive 'native.Tests.ps1'
+        Set-Content -LiteralPath $suite -Encoding utf8NoBOM -Value @'
+param($Convention)
+Describe 'native diagnostics' -ForEach @(@{ IssuePath = (Join-Path $Convention.Root 'main.bicep') }) {
+    It 'reports an advisory' -Tag 'avm.bicep.sample-warning', 'severity:warning' {
+        $false | Should -BeTrue
+    }
+    It 'reports a metadata assertion' -Tag 'avm.bicep.sample-metadata', 'file:metadata.json' {
+        'actual' | Should -BeExactly 'expected'
+    }
+    It 'reports a runtime failure' -Tag 'avm.bicep.sample-runtime', 'severity:warning' {
+        throw [System.InvalidOperationException]::new('runtime failure')
+    }
+    It 'reports an unexpected skip' -Tag 'avm.bicep.sample-skip', 'severity:warning' -Skip {}
+}
+'@
+        $summary = InModuleScope 'Avm.Authoring' -Parameters @{ Suite = $suite; Root = $TestDrive } {
+            param($Suite, $Root)
+            Invoke-AvmBicepPesterSuite -Mode Convention -Files @($Suite) -WorkingDirectory $Root `
+                -ConventionData @{ Root = $Root } -EnvVars @{} -InProcess
+        }
+        $summary.Total | Should -Be 4
+        $summary.Failed | Should -Be 3
+        $summary.Skipped | Should -Be 1
+        $summary.Issues.Count | Should -Be 4
+        foreach ($issue in $summary.Issues) {
+            $issue.NativeConvention | Should -BeTrue
+            $issue.Severity | Should -Be $(if ($issue.Code -eq 'avm.bicep.sample-warning') { 'warning' } else { 'error' })
+            $issue.File | Should -Be (Join-Path $TestDrive $(if ($issue.Code -eq 'avm.bicep.sample-metadata') { 'metadata.json' } else { 'main.bicep' }))
+            $issue.Message | Should -Match 'native diagnostics'
+        }
+    }
+}
+
 AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
@@ -29,7 +65,7 @@ Describe 'deployed example' {
 }
 '@
         $data = @{
-            DeploymentOutputs = @{ account = @{ type = 'String'; value = 'account-created' } }
+            DeploymentOutputs    = @{ account = @{ type = 'String'; value = 'account-created' } }
             ModuleTestFolderPath = $script:caseDirectory
         }
         $summary = InModuleScope 'Avm.Authoring' -Parameters @{
@@ -59,7 +95,7 @@ Describe 'deployed example' {
 }
 '@
         $data = @{
-            DeploymentOutputs = @{ account = @{ type = 'String'; value = 'account-created' } }
+            DeploymentOutputs    = @{ account = @{ type = 'String'; value = 'account-created' } }
             ModuleTestFolderPath = $script:caseDirectory
         }
         $summary = InModuleScope 'Avm.Authoring' -Parameters @{
@@ -85,7 +121,7 @@ Describe 'deployed example' {
 throw [System.Exception]::new('Authored suite failed to load.')
 '@
         $data = @{
-            DeploymentOutputs = $null
+            DeploymentOutputs    = $null
             ModuleTestFolderPath = $script:caseDirectory
         }
         $summary = InModuleScope 'Avm.Authoring' -Parameters @{

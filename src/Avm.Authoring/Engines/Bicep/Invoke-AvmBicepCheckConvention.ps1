@@ -170,25 +170,8 @@ function Invoke-AvmBicepCheckConvention {
                     Path     = $sourceFile.Path
                     Scope    = $sourceFile.Scope
                     Template = $template
+                    Json     = $json
                 })
-            $artifactPath = Join-Path $sourceFile.Scope.Path 'main.json'
-            $artifact = @(Get-ChildItem -LiteralPath $sourceFile.Scope.Path -Force |
-                    Where-Object { $_.Name -ieq 'main.json' })
-            $drift = $null
-            if ($artifact.Count -eq 0) {
-                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json -CurrentBytes $null
-            }
-            elseif ($artifact.Count -eq 1 -and $artifact[0].Name -ceq 'main.json' -and
-                -not $artifact[0].PSIsContainer -and
-                -not ($artifact[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json `
-                    -CurrentBytes ([System.IO.File]::ReadAllBytes($artifact[0].FullName))
-            }
-            if ($null -ne $drift) {
-                $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $artifactPath `
-                            -Code "avm.bicep.json-$drift" `
-                            -Message ("The checked-in main.json is $drift; run 'avm pre-commit' and commit the generated artifact.")))
-            }
         }
     }
     $apiSpecs = $null

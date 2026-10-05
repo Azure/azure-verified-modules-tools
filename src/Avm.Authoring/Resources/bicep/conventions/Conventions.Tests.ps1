@@ -51,13 +51,6 @@ BeforeAll {
 Describe 'Bicep conventions' {
     if ($compiledCases.Count -gt 0) {
         Context 'Compiled templates' {
-            It '<Label> compiled template' -ForEach $compiledCases {
-                Invoke-ConventionRule -RuleName 'CompiledTemplate' -RuleBlock {
-                    Test-AvmBicepConventionCompiledTemplate -Root $Convention.Root `
-                        -Scope $Module.Scope -Template $Module.Template -SourcePath $Module.Path
-                }
-            }
-
             It 'resource API versions' {
                 Invoke-ConventionRule -RuleName 'ApiVersion' -RuleBlock {
                     Test-AvmBicepConventionApiVersion -Root $Convention.Root `

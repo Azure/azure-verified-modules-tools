@@ -2,17 +2,43 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
 BeforeAll {
-    $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring')
+    $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
-    . (Join-Path $PSScriptRoot '..' '..' '..' 'Import-AvmBicepConventionRule.ps1')
+
+    function Invoke-NativeCompiledFixture {
+        param($Template, $Scope, [string]$Root)
+
+        $run = InModuleScope Avm.Authoring -Parameters @{ T = $Template; S = $Scope; R = $Root } {
+            param($T, $S, $R)
+            $json = ConvertTo-Json -InputObject $T -Depth 100
+            [System.IO.File]::WriteAllText((Join-Path $R 'main.json'), $json, [System.Text.UTF8Encoding]::new($false))
+            $module = [pscustomobject]@{ Template = $T; Scope = $S; Path = Join-Path $R 'main.bicep'; Json = $json }
+            $convention = @{
+                Root                   = $R
+                CompiledInputs         = @(Get-AvmBicepCompiledConventionInput -Module $module)
+                NativeCompiledExpected = 0
+            }
+            $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Compiled.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $R `
+                -Mode Convention -ConventionData $convention -EnvVars @{} -InProcess
+            @{ Summary = $summary; Expected = $convention.NativeCompiledExpected }
+        }
+        @($run.Summary.Issues | Where-Object { $_.Code -like 'avm.bicep.pester-*' }).Count |
+            Should -Be 0 -Because (@($run.Summary.Issues | ForEach-Object { $_.Message }) -join '; ')
+        $run.Expected | Should -BeGreaterThan 11
+        $run.Summary.Total | Should -Be $run.Expected
+        ($run.Summary.Passed + $run.Summary.Failed) | Should -Be $run.Expected
+        return $run.Summary.Issues
+    }
 }
 
 AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Compiled Bicep convention rules' {
+Describe 'Component: native compiled Bicep requirements' -Tag Component {
     BeforeEach {
+        Set-Content -LiteralPath (Join-Path $TestDrive 'main.bicep') -Value '' -Encoding utf8NoBOM
         $script:scope = [pscustomobject]@{
             Path               = $TestDrive
             ModuleType         = 'res'
@@ -21,16 +47,17 @@ Describe 'Compiled Bicep convention rules' {
             ScopeDirectories   = @()
         }
         $script:template = [ordered]@{
-            '$schema'       = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
-            contentVersion  = '1.0.0.0'
-            resources       = @()
-            parameters      = [ordered]@{
+            '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+            contentVersion = '1.0.0.0'
+            metadata       = @{ name = 'Mock widget'; description = 'Deploys a mock widget.' }
+            resources      = @()
+            parameters     = [ordered]@{
                 settings = [ordered]@{
                     '$ref'   = '#/definitions/settingsType'
                     metadata = @{ description = 'Required. Widget settings.' }
                 }
             }
-            definitions     = [ordered]@{
+            definitions    = [ordered]@{
                 settingsType = [ordered]@{
                     type       = 'object'
                     properties = [ordered]@{
@@ -81,15 +108,19 @@ Describe 'Compiled Bicep convention rules' {
     It 'accepts well-described required and nullable nested properties' {
         $template = $script:template
         $scope = $script:scope
-        $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        })
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Count | Should -Be 0
+    }
+
+    It 'rejects an empty compiled metadata <Property>' -TestCases @(
+        @{ Property = 'name' }
+        @{ Property = 'description' }
+    ) {
+        param($Property)
+        $script:template['metadata'][$Property] = ' '
+        $issues = @(Invoke-NativeCompiledFixture -Template $script:template -Scope $script:scope -Root $TestDrive)
+        $issues.Code | Should -Contain "avm.bicep.compiled-metadata-$Property"
     }
 
     It 'names bad nested parameter casing, requiredness, and conditional descriptions' {
@@ -100,18 +131,12 @@ Describe 'Compiled Bicep convention rules' {
         $properties['optionalCount']['metadata']['description'] = 'Required. A value.'
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Code | Should -Contain 'avm.bicep.parameter-name'
         $issues.Code | Should -Contain 'avm.bicep.parameter-condition'
         $issues.Code | Should -Contain 'avm.bicep.parameter-optional'
-        @($issues | Where-Object Code -eq 'avm.bicep.parameter-name')[0].Message |
+        @($issues | Where-Object Code -EQ 'avm.bicep.parameter-name')[0].Message |
             Should -Match 'settings.Bad_name'
     }
 
@@ -119,13 +144,7 @@ Describe 'Compiled Bicep convention rules' {
         $script:template['parameters']['settings']['metadata']['description'] = 'widget settings'
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Code | Should -Contain 'avm.bicep.parameter-description'
         $issues.Code | Should -Contain 'avm.bicep.parameter-required'
@@ -133,17 +152,17 @@ Describe 'Compiled Bicep convention rules' {
 
     It 'resolves discriminator variants and checks their nested properties' {
         $script:template['parameters']['variant'] = @{
-            '$ref' = '#/definitions/variantType'
+            '$ref'   = '#/definitions/variantType'
             metadata = @{ description = 'Required. Widget variant.' }
         }
         $script:template['definitions']['variantType'] = @{
-            type = 'object'
+            type          = 'object'
             discriminator = @{
                 propertyName = 'kind'; mapping = @{ one = '#/definitions/firstVariantType' }
             }
         }
         $script:template['definitions']['firstVariantType'] = @{
-            type = 'object'
+            type       = 'object'
             properties = @{
                 'Bad_name' = @{
                     type = 'string'; metadata = @{ description = 'Required. Variant value.' }
@@ -152,13 +171,7 @@ Describe 'Compiled Bicep convention rules' {
         }
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         @($issues | Where-Object {
                 $_.Code -eq 'avm.bicep.parameter-name' -and
@@ -171,13 +184,7 @@ Describe 'Compiled Bicep convention rules' {
         $script:template['parameters']['settings']['metadata']['description'] = 'Optional. Widget settings.'
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Code | Should -Contain 'avm.bicep.udt-nullable'
         $issues.Code | Should -Not -Contain 'avm.bicep.parameter-required'
@@ -197,48 +204,45 @@ Describe 'Compiled Bicep convention rules' {
         }
         $template = $script:template
         $scope = $script:scope
-        $results = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            $warning = @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -StrictObjectTypes:$false)
-            $enforced = @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -StrictObjectTypes:$true)
-            [pscustomobject]@{ Warning = $warning; Enforced = $enforced }
-        }
+        Set-Content -LiteralPath (Join-Path $TestDrive 'version.json') -Value '{"version":"0.1"}' -Encoding utf8NoBOM
+        $warning = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
+        Set-Content -LiteralPath (Join-Path $TestDrive 'version.json') -Value '{"version":"1.0"}' -Encoding utf8NoBOM
+        $enforced = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
+        $results = [pscustomobject]@{ Warning = $warning; Enforced = $enforced }
 
-        @($results.Warning | Where-Object Code -eq 'avm.bicep.parameter-untyped-object').Count |
+        @($results.Warning | Where-Object Code -EQ 'avm.bicep.parameter-untyped-object').Count |
             Should -Be 2
-        @($results.Warning | Where-Object Severity -eq 'warning').Count | Should -Be 2
-        @($results.Enforced | Where-Object Code -eq 'avm.bicep.parameter-untyped-object').Count |
+        @($results.Warning | Where-Object Severity -EQ 'warning').Count | Should -Be 2
+        @($results.Enforced | Where-Object Code -EQ 'avm.bicep.parameter-untyped-object').Count |
             Should -Be 2
-        @($results.Enforced | Where-Object Severity -eq 'error').Count | Should -Be 2
+        @($results.Enforced | Where-Object Severity -EQ 'error').Count | Should -Be 2
     }
 
     It 'requires resource interface UDT references and nullable tags' {
         $script:template['parameters']['managedIdentities'] = [ordered]@{
-            type     = 'object'
+            type       = 'object'
             properties = @{}
-            metadata = @{ description = 'Required. Managed identities.' }
+            metadata   = @{ description = 'Required. Managed identities.' }
         }
         $script:template['parameters']['tags'] = [ordered]@{
-            type     = 'object'
+            type       = 'object'
             properties = @{}
-            metadata = @{ description = 'Required. Resource tags.' }
+            metadata   = @{ description = 'Required. Resource tags.' }
         }
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Code | Should -Contain 'avm.bicep.parameter-udt-ref'
         $issues.Code | Should -Contain 'avm.bicep.parameter-tags-nullable'
+        $template['parameters']['managedIdentities'] = @{
+            '$ref' = '#/definitions/settingsType'
+            metadata = @{ description = 'Required. Managed identities.' }
+        }
+        $template['parameters']['tags']['nullable'] = $true
+        $template['parameters']['tags']['metadata']['description'] = 'Optional. Resource tags.'
+        @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive).Count |
+            Should -Be 0
     }
 
     It 'rejects array, nullable, and incorrectly named UDT definitions' {
@@ -251,17 +255,11 @@ Describe 'Compiled Bicep convention rules' {
         }
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            @(Test-AvmBicepConventionCompiledParameter -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep'))
-        }
+        $issues = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
 
         $issues.Code | Should -Contain 'avm.bicep.udt-array'
         $issues.Code | Should -Contain 'avm.bicep.udt-nullable'
-        @($issues | Where-Object Code -eq 'avm.bicep.udt-name').Count | Should -Be 2
+        @($issues | Where-Object Code -EQ 'avm.bicep.udt-name').Count | Should -Be 2
     }
 
     It 'normalizes array and symbolic ARM resources and rejects malformed entries' {
@@ -294,28 +292,25 @@ Describe 'Compiled Bicep convention rules' {
             metadata = @{ description = 'Required. Managed identities.' }
         }
         $script:template['definitions']['managedIdentitiesType'] = @{
-            type = 'object'; properties = @{ systemAssigned = @{ type = 'bool' } }
+            type = 'object'; properties = @{
+                systemAssigned = @{
+                    type = 'bool'; defaultValue = $false
+                    metadata = @{ description = 'Optional. Enable system-assigned identity.' }
+                }
+            }
         }
         $template = $script:template
         $scope = $script:scope
-        $issues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $TestDrive
-        } {
-            param($T, $S, $R)
-            $T['outputs'] = @{}
-            $missing = @(Test-AvmBicepConventionCompiledOutput -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -Resources @())
-            $T['outputs']['systemAssignedMIPrincipalId'] = @{
-                type = 'string'; nullable = $true; value = "[coalesce(variables('principal'), '')]"
-                metadata = @{ description = 'The principal ID.' }
-            }
-            $fallback = @(Test-AvmBicepConventionCompiledOutput -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -Resources @())
-            $T['outputs']['systemAssignedMIPrincipalId']['value'] = "[variables('principal')]"
-            $valid = @(Test-AvmBicepConventionCompiledOutput -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -Resources @())
-            [pscustomobject]@{ Missing = $missing; Fallback = $fallback; Valid = $valid }
+        $template['outputs'] = @{}
+        $missing = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
+        $template['outputs']['systemAssignedMIPrincipalId'] = @{
+            type = 'string'; nullable = $true; value = "[coalesce(variables('principal'), '')]"
+            metadata = @{ description = 'The principal ID.' }
         }
+        $fallback = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
+        $template['outputs']['systemAssignedMIPrincipalId']['value'] = "[variables('principal')]"
+        $valid = @(Invoke-NativeCompiledFixture -Template $template -Scope $scope -Root $TestDrive)
+        $issues = [pscustomobject]@{ Missing = $missing; Fallback = $fallback; Valid = $valid }
 
         $issues.Missing.Code | Should -Contain 'avm.bicep.output-principal-id'
         $issues.Fallback.Code | Should -Contain 'avm.bicep.output-principal-id'

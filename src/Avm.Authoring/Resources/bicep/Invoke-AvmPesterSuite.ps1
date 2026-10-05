@@ -89,6 +89,31 @@ foreach ($test in @($result.Tests)) {
     $detail = if ($null -ne $errorRecord) { $errorRecord.Exception.Message } else { "Pester reported $($test.Result)." }
     $file = if ($null -ne $test.ScriptBlock) { $test.ScriptBlock.File } else { '' }
     $line = if ($null -ne $test.ScriptBlock) { $test.ScriptBlock.StartPosition.StartLine } else { 0 }
+    $nativeCode = @($test.Tag | Where-Object { $_ -like 'avm.bicep.*' }) | Select-Object -First 1
+    if ($inputData.Mode -ceq 'Convention' -and $nativeCode) {
+        $target = $null
+        if ($test.Data -is [System.Collections.IDictionary] -and $test.Data.Contains('IssuePath')) {
+            $target = $test.Data['IssuePath']
+        }
+        $block = $test.Block
+        while (-not $target -and $null -ne $block) {
+            if ($block.Data -is [System.Collections.IDictionary] -and $block.Data.Contains('IssuePath')) {
+                $target = $block.Data['IssuePath']
+            }
+            $block = $block.Parent
+        }
+        $targetFile = @($test.Tag | Where-Object { $_ -like 'file:*' }) | Select-Object -First 1
+        if ($target -and $targetFile) { $target = Join-Path (Split-Path $target) $targetFile.Substring(5) }
+        $assertionFailure = $null -ne $errorRecord -and $errorRecord.FullyQualifiedErrorId -like 'PesterAssertionFailed*'
+        $severity = if ($assertionFailure -and $test.Tag -contains 'severity:warning') { 'warning' } else { 'error' }
+        $issues.Add([pscustomobject]@{
+                File             = if ($target) { [string]$target } else { [string]$inputData.Convention.Root }
+                Line = 1; Column = 1; Severity = $severity; Code = [string]$nativeCode
+                Message          = "$($test.ExpandedPath): $detail"
+                NativeConvention = $true
+            })
+        continue
+    }
     $issues.Add([pscustomobject][ordered]@{
             File     = [string]$file
             Line     = [int]$line

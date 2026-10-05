@@ -24,7 +24,7 @@ The checkout was clean. No replacement branch or review was created.
 - [ ] Compare pinned registry assertions with packaged native requirements.
 - [ ] Replace convention family wrappers with independent native assertions.
 - [x] Move explicit shared JSON and Bicep source-literal checks into native Pester.
-- [ ] Migrate compiled telemetry/metadata agreement with the convention assertions.
+- [x] Migrate compiled telemetry/metadata agreement with the convention assertions.
 - [x] Package common PSRule defaults and remove policy's required registry utility reads.
 - [ ] Wire metadata, convention, unit compliance, and composition entry points.
 - [ ] Add reusable Bicep whole-module fixtures and independent-package acceptance.
@@ -41,9 +41,9 @@ from family names or an aggregate passing command.
 
 | Existing requirement source | Packaged destination | Evidence |
 | --- | --- | --- |
-| `compliance/module.tests.ps1` and twelve convention checker families | Pending native assertion migration | Pending |
+| `compliance/module.tests.ps1` compiled template, parameters/UDTs, telemetry and outputs | `Resources/bicep/conventions/Compiled.Tests.ps1` | Native requirement map and positive/negative controls in the compiled slice; eight other families remain |
 | Shared metadata schema and source-literal validation | `Resources/metadata/Metadata.Tests.ps1`, shared across Bicep and Terraform | Paired native/internal constraints, file/InputObject routing, batched composition, five copied-package acceptance cases |
-| `compliance/metadata.tests.ps1` compiled telemetry-prefix agreement | Pending native compiled convention migration | Pending |
+| `compliance/metadata.tests.ps1` compiled telemetry-prefix agreement | `Resources/bicep/conventions/Compiled.Tests.ps1` | Direct/one-alias agreement, source readers, versioned children, drift failures and five real compiler/scaffold cases |
 | `psrule/ps-rule.yaml` and eight `.ps-rule/*.Rule.yaml` assets | `Resources/bicep/psrule/` | Real built-package baseline execution and insecure-transport rejection; 17 unit and 21 component controls |
 | Module-authored unit/e2e tests and module configuration | Remain consumer-owned | Pending entry-point audit |
 
@@ -77,8 +77,16 @@ passes the full gate: 3,010 unit tests (nine skipped) and 1,478 component tests
 (one skipped), plus five copied-package acceptance cases. Explicit metadata
 validation uses the same six native JSON requirements for both ecosystems;
 Bicep source checks add four cases. Internal guards evaluate the exact same
-schemas without starting Pester. Composition batches all scopes. Compiled
-telemetry agreement and the other convention families remain outstanding.
+schemas without starting Pester. Composition batches all scopes.
+
+The [native compiled slice](2026-10-05-native-compiled-conventions.md) now removes
+four ordinary checker implementations and their family wrapper. Full Pester 6.2.0
+gate: 3,001 unit passed / nine skipped and 1,497 component passed / one skipped.
+Pester 5.7.1 focused compatibility: 153 passed / one skipped. The
+[hosted fixes](2026-10-05-native-validation-hosted-fixes.md) remove dependency
+warning leakage, build package acceptance inputs and preserve failed-setup
+diagnostics. Eight other convention families, default unit compliance,
+child-publish configuration portability and final acceptance remain outstanding.
 
 ## Blockers or dependencies
 

@@ -26,6 +26,7 @@ function Invoke-AvmBicepConventionSuite {
     $root = [string]$Convention.Root
     $Convention.Findings = [System.Collections.Generic.List[object]]::new()
     $Convention.Crashes = [System.Collections.Generic.List[object]]::new()
+    $Convention.NativeCompiledExpected = 0
     $suitePath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions', 'Conventions.Tests.ps1'
     $suitePath = [System.IO.Path]::GetFullPath($suitePath)
@@ -33,14 +34,19 @@ function Invoke-AvmBicepConventionSuite {
 
     $compiledCount = @($Convention.CompiledModules).Count
     $scopeCount = @($Convention.Scopes).Count
-    $expected = $compiledCount + [int]($compiledCount -gt 0) + (3 * $scopeCount) +
+    $expected = [int]($compiledCount -gt 0) + (3 * $scopeCount) +
     @($Convention.Workflows).Count + (3 * [int]($scopeCount -gt 0))
     if ($expected -eq 0) {
         return $issues.ToArray()
     }
 
     try {
-        $summary = Invoke-AvmBicepPesterSuite -Files @($suitePath) -WorkingDirectory $root `
+        $Convention.CompiledInputs = @($Convention.CompiledModules | ForEach-Object { Get-AvmBicepCompiledConventionInput -Module $_ })
+        $files = @($suitePath)
+        if ($compiledCount -gt 0) {
+            $files += Join-Path (Split-Path $suitePath) 'Compiled.Tests.ps1'
+        }
+        $summary = Invoke-AvmBicepPesterSuite -Files $files -WorkingDirectory $root `
             -Mode Convention -ConventionData $Convention -EnvVars @{} -InProcess
     }
     catch [AvmProcessException] {
@@ -58,7 +64,14 @@ function Invoke-AvmBicepConventionSuite {
                     -Code 'avm.bicep.convention-rule-failed' `
                     -Message "Convention rule '$($crash.Rule)' failed: $($crash.Message)"))
     }
+    $nativeFindings = 0
     foreach ($suiteIssue in @($summary.Issues)) {
+        if ($suiteIssue -is [System.Collections.IDictionary] -and $suiteIssue.Contains('NativeConvention') -and $suiteIssue.NativeConvention) {
+            $nativeFindings++
+            $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $suiteIssue.File `
+                        -Code $suiteIssue.Code -Message $suiteIssue.Message -Severity $suiteIssue.Severity))
+            continue
+        }
         if ($suiteIssue.Code -ceq 'avm.bicep.pester-failed') {
             continue
         }
@@ -67,12 +80,14 @@ function Invoke-AvmBicepConventionSuite {
                     -Message "Convention suite reported $($suiteIssue.Code): $($suiteIssue.Message)"))
     }
     $hasError = @($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0
-    if ($summary.Failed -gt 0 -and -not $hasError) {
+    if ($summary.Failed -gt $nativeFindings -and -not $hasError) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-rule-failed' `
                     -Message "The convention suite reported $($summary.Failed) failed test(s) without a recorded finding."))
     }
-    if ($summary.Total -ne $expected -or $summary.Passed + $summary.Failed -ne $expected) {
+    $expected += $Convention.NativeCompiledExpected
+    if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
+        $summary.Total -ne $expected -or $summary.Passed + $summary.Failed -ne $expected) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-suite-incomplete' `
                     -Message "The convention suite ran $($summary.Passed + $summary.Failed) of $expected expected checks."))

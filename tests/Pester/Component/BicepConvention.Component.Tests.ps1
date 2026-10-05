@@ -8,6 +8,43 @@ BeforeAll {
     . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
     . (Join-Path $PSScriptRoot '..' 'Import-AvmBicepConventionRule.ps1')
+
+    function Invoke-CompiledTelemetryFixture {
+        param($Template, $Scope, [string]$SourcePath, [string]$Root, [switch]$AllDiagnostics)
+
+        $run = InModuleScope 'Avm.Authoring' -Parameters @{
+            T = $Template; S = $Scope; P = $SourcePath; R = $Root
+        } {
+            param($T, $S, $P, $R)
+            $inputModule = [pscustomobject]@{
+                Template = $T; Scope = $S; Path = $P
+                Json = ConvertTo-Json -InputObject $T -Depth 100
+            }
+            $convention = @{
+                CompiledInputs         = @(Get-AvmBicepCompiledConventionInput -Module $inputModule)
+                NativeCompiledExpected = 0
+            }
+            $suitePath = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Compiled.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suitePath) -WorkingDirectory $R `
+                -Mode Convention -ConventionData $convention -EnvVars @{} -InProcess
+            @{
+                Summary      = $summary
+                Expected     = $convention.NativeCompiledExpected
+                NativeIssues = @($summary.Issues |
+                        ForEach-Object {
+                            New-AvmBicepConventionIssue -Root $R -Path $_.File -Code $_.Code `
+                                -Message $_.Message -Severity $_.Severity
+                        })
+            }
+        }
+        $run.Expected | Should -BeGreaterThan 11
+        $run.Summary.Total | Should -Be $run.Expected
+        ($run.Summary.Passed + $run.Summary.Failed) | Should -Be $run.Expected
+        @($run.Summary.Issues | Where-Object { $_.Code -like 'avm.bicep.pester-*' }).Count |
+            Should -Be 0
+        if ($AllDiagnostics) { return $run.NativeIssues }
+        return @($run.NativeIssues | Where-Object { $_.Code -like 'avm.bicep.telemetry-*' })
+    }
 }
 
 AfterAll {
@@ -55,10 +92,10 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             }
             Mock Get-AvmBicepPublicationTargetVersion {
                 [pscustomobject]@{
-                    TargetVersion = '0.1.0'
-                    VersionChanged = $true
+                    TargetVersion   = '0.1.0'
+                    VersionChanged  = $true
                     PreviousVersion = $null
-                    ShouldPublish = $true
+                    ShouldPublish   = $true
                 }
             }
             Mock Get-AvmBicepApiSpecList {
@@ -71,9 +108,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Mock Invoke-WebRequest {
                 $name = $Uri.AbsolutePath.Substring(4).Replace('/tags/list', '')
                 [pscustomobject]@{
-                    StatusCode = 200
-                    Content = '{"name":"' + $name + '","tags":["0.1.0"]}'
-                    Headers = @{}
+                    StatusCode   = 200
+                    Content      = '{"name":"' + $name + '","tags":["0.1.0"]}'
+                    Headers      = @{}
                     BaseResponse = [pscustomobject]@{
                         RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
                     }
@@ -99,6 +136,31 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
+    It 'rejects a compiled template missing required element <Element>' -TestCases @(
+        @{ Element = '$schema' }
+        @{ Element = 'contentVersion' }
+        @{ Element = 'resources' }
+    ) {
+        param($Element)
+        $jsonPath = Join-Path $script:modulePath 'main.json'
+        $template = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json -AsHashtable
+        $null = $template.Remove($Element)
+        $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.compile'
+        @($result.Issues | Where-Object { $_.Code -like 'avm.bicep.convention-suite-*' }).Count |
+            Should -Be 0
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
+            param($Path)
+            Get-AvmBicepConventionScope -Path $Path
+        }
+        $issues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                -SourcePath (Join-Path $script:modulePath 'main.bicep') -Root $script:workingRoot -AllDiagnostics)
+        $issues.Code | Should -Contain 'avm.bicep.compiled-required-fields'
+    }
+
     It 'reports an outdated compiled resource API as an advisory without failing the convention check' {
         InModuleScope 'Avm.Authoring' {
             Mock Get-AvmBicepApiSpecList {
@@ -117,8 +179,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
         $result.Status | Should -Be 'pass'
         $result.Issues.Code | Should -Contain 'avm.bicep.api-version-outdated'
-        @($result.Issues | Where-Object Code -eq 'avm.bicep.api-version-outdated' |
-                Where-Object Severity -eq 'warning').Count | Should -BeGreaterThan 0
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.api-version-outdated' |
+                Where-Object Severity -EQ 'warning').Count | Should -BeGreaterThan 0
     }
 
     It 'fails closed when the API-version source cannot be read' {
@@ -132,7 +194,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
         $result.Status | Should -Be 'fail'
         $result.Issues.Code | Should -Contain 'avm.bicep.api-specs-unavailable'
-        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.api-specs-unavailable')
+        $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.api-specs-unavailable')
         $issue.Count | Should -Be 1
         $issue[0].Severity | Should -Be 'error'
     }
@@ -142,7 +204,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         Remove-Item -LiteralPath $path
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $missing = @($result.Issues | Where-Object Code -eq 'avm.bicep.workflow-file')
+        $missing = @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file')
         $missing.Count | Should -Be 1
         $missing[0].File | Should -Be '.github/workflows/avm.res.mock.widget.yml'
         $result.Status | Should -Be 'fail'
@@ -170,7 +232,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $parserIssue = @($result.Issues | Where-Object Code -eq 'avm.bicep.workflow-parse')
+        $parserIssue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-parse')
         $parserIssue.Count | Should -Be 1
         $parserIssue[0].Message | Should -Match 'Install-PSResource'
         $result.Status | Should -Be 'fail'
@@ -201,7 +263,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             param($C)
             Invoke-AvmBicepCheckConvention -Context $C
         }
-        $workflowIssues = @($invalid.Issues | Where-Object Code -eq 'avm.bicep.workflow-file')
+        $workflowIssues = @($invalid.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file')
         $workflowIssues.Count | Should -Be 1
         $workflowIssues[0].File | Should -Be '.github/workflows/avm.res.mock.gadget.yml'
     }
@@ -260,7 +322,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         Remove-Item -LiteralPath $path
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-file')
+        $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-file')
         $issue.Count | Should -Be 1
         $issue[0].File | Should -Be '.github/CODEOWNERS'
     }
@@ -268,9 +330,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
     It 'checks the CODEOWNERS default, ownerless module tree, and final overrides' {
         $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
         $content = [System.IO.File]::ReadAllText($path).
-            Replace('* @Azure/azure-verified-modules-tooling-contributors', '* @Contoso/team').
-            Replace('/avm/', '/avm/ @Contoso/team').
-            Replace('metadata.json @Azure/azure-verified-modules-engineering-owners', 'metadata.json @Contoso/team')
+        Replace('* @Azure/azure-verified-modules-tooling-contributors', '* @Contoso/team').
+        Replace('/avm/', '/avm/ @Contoso/team').
+        Replace('metadata.json @Azure/azure-verified-modules-engineering-owners', 'metadata.json @Contoso/team')
         [System.IO.File]::WriteAllText($path, $content)
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
@@ -285,8 +347,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $path, "/avm/res/mock/widget/ @Contoso/team`nmetadata.json @Contoso/team`n")
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $moduleRule = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-per-module')
-        $duplicate = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-duplicate')
+        $moduleRule = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-per-module')
+        $duplicate = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-duplicate')
         $moduleRule.Count | Should -Be 1
         $moduleRule[0].Line | Should -BeGreaterThan 2
         $duplicate.Count | Should -Be 1
@@ -307,7 +369,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "$Pattern`n$anchor"))
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -eq $ExpectedCode)
+        $issue = @($result.Issues | Where-Object Code -EQ $ExpectedCode)
         $issue.Count | Should -Be 1
         $issue[0].Line | Should -BeGreaterThan 2
     }
@@ -328,7 +390,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.codeowners-read')
+        $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-read')
         $issue.Count | Should -Be 1
         $issue[0].File | Should -Be '.github/CODEOWNERS'
     }
@@ -356,7 +418,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $failed = @($result.Issues | Where-Object Code -eq 'avm.bicep.compile')
+        $failed = @($result.Issues | Where-Object Code -EQ 'avm.bicep.compile')
         $result.CompiledFiles | Should -Be 3
         $failed.Count | Should -Be 2
         $failed.File | Should -Contain 'child/main.bicep'
@@ -508,7 +570,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.telemetry-literal'
         @($result.Issues | Where-Object {
                 $_.Code -eq 'avm.bicep.telemetry-metadata' -and $_.File -eq 'metadata.json'
-            }).Count | Should -Be 1
+            }).Count | Should -Be 2 -Because 'file availability and the nonempty prefix are independently reported requirements'
     }
 
     It 'accepts the shipped canonical scaffold telemetry declaration and description' {
@@ -534,14 +596,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Get-AvmBicepConventionScope -Path $P
         }
 
-        $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; P = $sourcePath; R = $script:workingRoot
-        } {
-            param($T, $S, $P, $R)
-            $resources = @(Get-AvmBicepConventionResource -Template $T)
-            Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
-                -Template $T -SourcePath $P -Resources $resources
-        })
+        $issues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                -SourcePath $sourcePath -Root $script:workingRoot)
         $issues.Count | Should -Be 0 -Because ($issues | ConvertTo-Json -Compress -Depth 6)
     }
 
@@ -567,7 +623,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object Code -like 'avm.bicep.telemetry-*').Count |
+        @($result.Issues | Where-Object Code -Like 'avm.bicep.telemetry-*').Count |
             Should -Be 0
         $result.Issues.Count | Should -Be 0
         $result.Status | Should -Be 'pass'
@@ -680,7 +736,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object Code -like 'avm.bicep.telemetry-*').Count |
+        @($result.Issues | Where-Object Code -Like 'avm.bicep.telemetry-*').Count |
             Should -Be 0
     }
 
@@ -735,14 +791,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 param($P)
                 Get-AvmBicepConventionScope -Path $P
             }
-            $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-                R = $script:workingRoot; P = $sourcePath; S = $scope; T = $template
-            } {
-                param($R, $P, $S, $T)
-                $resources = @(Get-AvmBicepConventionResource -Template $T)
-                Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
-                    -Template $T -SourcePath $P -Resources $resources
-            })
+            $issues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                    -SourcePath $sourcePath -Root $script:workingRoot)
             $issues.Count | Should -Be 0
         }
 
@@ -757,14 +807,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 param($P)
                 Get-AvmBicepConventionScope -Path $P
             }
-            $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-                R = $script:workingRoot; P = $sourcePath; S = $scope; T = $template
-            } {
-                param($R, $P, $S, $T)
-                $resources = @(Get-AvmBicepConventionResource -Template $T)
-                Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
-                    -Template $T -SourcePath $P -Resources $resources
-            })
+            $issues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                    -SourcePath $sourcePath -Root $script:workingRoot)
             $issues.Code | Should -Contain 'avm.bicep.telemetry-condition'
             $issues.Code | Should -Contain 'avm.bicep.telemetry-output'
             $issues.Code | Should -Contain 'avm.bicep.telemetry-prefix'
@@ -806,14 +850,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             IsTopLevel         = $true
             ScopeDirectories   = @()
         }
-        $patternIssues = InModuleScope 'Avm.Authoring' -Parameters @{
-            T = $template; S = $scope; R = $script:modulePath
-        } {
-            param($T, $S, $R)
-            $resources = @(Get-AvmBicepConventionResource -Template $T)
-            @(Test-AvmBicepConventionCompiledTelemetry -Root $R -Scope $S `
-                    -Template $T -SourcePath (Join-Path $R 'main.bicep') -Resources $resources)
-        }
+        $patternIssues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                -SourcePath (Join-Path $script:modulePath 'main.bicep') -Root $script:modulePath)
         @($patternIssues | Where-Object { $_.Code -like 'avm.bicep.telemetry-child-*' }).Count |
             Should -Be 0
     }
@@ -823,10 +861,10 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $template = [System.IO.File]::ReadAllText($rootJson) | ConvertFrom-Json -AsHashtable
         $template['variables']['enableReferencedModulesTelemetry'] = 'false'
         $template['resources'] += @{
-            type = 'Microsoft.Resources/deployments'
-            name = 'nested'
+            type       = 'Microsoft.Resources/deployments'
+            name       = 'nested'
             properties = @{
-                template = @{ parameters = @{ enableTelemetry = @{ type = 'bool' } } }
+                template   = @{ parameters = @{ enableTelemetry = @{ type = 'bool' } } }
                 parameters = @{ enableTelemetry = @{ value = "[variables('enableReferencedModulesTelemetry')]" } }
             }
         }
@@ -840,7 +878,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         [System.IO.File]::WriteAllText((Join-Path $script:workingRoot 'compiled-e2e.json'), '{invalid')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $compiledErrors = @($result.Issues | Where-Object Code -eq 'avm.bicep.compile')
+        $compiledErrors = @($result.Issues | Where-Object Code -EQ 'avm.bicep.compile')
         $compiledErrors.Count | Should -Be 3
         $result.CompiledFiles | Should -Be 2
         @($compiledErrors | Where-Object { $_.File -match '^tests/e2e/[^/]+/main\.test\.bicep$' }).Count |
@@ -894,7 +932,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $script:modulePath = Join-Path (Split-Path $script:modulePath -Parent) $FolderName
         }
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $names = @($result.Issues | Where-Object Code -eq 'avm.bicep.resource-folder-name')
+        $names = @($result.Issues | Where-Object Code -EQ 'avm.bicep.resource-folder-name')
         if ($Valid) {
             $names.Count | Should -Be 0
         }
@@ -921,12 +959,12 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Get-AvmBicepConventionScope -Path $P
         }
         $issues = @(InModuleScope 'Avm.Authoring' -Parameters @{
-            R = $script:workingRoot; S = $scope
-        } {
-            param($R, $S)
-            Test-AvmBicepConventionLayout -Root $R -Scope $S
-        })
-        $names = @($issues | Where-Object Code -eq 'avm.bicep.resource-folder-name')
+                R = $script:workingRoot; S = $scope
+            } {
+                param($R, $S)
+                Test-AvmBicepConventionLayout -Root $R -Scope $S
+            })
+        $names = @($issues | Where-Object Code -EQ 'avm.bicep.resource-folder-name')
         if ($Valid) {
             $names.Count | Should -Be 0
         }
@@ -1007,7 +1045,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         Set-Content -LiteralPath (Join-Path $script:modulePath 'Readme.md') -Value '# Wrong case'
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $missing = @($result.Issues | Where-Object Code -eq 'avm.bicep.required-file')
+        $missing = @($result.Issues | Where-Object Code -EQ 'avm.bicep.required-file')
 
         $missing.Count | Should -Be 2
         $missing.File | Should -Contain 'README.md'
@@ -1047,7 +1085,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 $script:allowlistPath, '{"allowed-child-modules":["avm/res/mock/widget/other"]}')
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-not-allowed')
+            $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.child-publish-not-allowed')
             $issue.Count | Should -Be 1
             $issue[0].File | Should -Be 'avm/res/mock/widget/child/version.json'
             $issue[0].Message | Should -Match 'avm/res/mock/widget/child'
@@ -1057,7 +1095,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Remove-Item -LiteralPath $script:allowlistPath
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-allowlist')
+            $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.child-publish-allowlist')
             $issue.Count | Should -Be 1
             $issue[0].File | Should -Be (
                 'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json')
@@ -1066,7 +1104,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Remove-Item -LiteralPath (Join-Path $script:child 'version.json')
             Remove-Item -LiteralPath (Join-Path $script:child 'CHANGELOG.md')
             $unversioned = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-            @($unversioned.Issues | Where-Object Code -like 'avm.bicep.child-publish-*').Count |
+            @($unversioned.Issues | Where-Object Code -Like 'avm.bicep.child-publish-*').Count |
                 Should -Be 0
         }
 
@@ -1084,7 +1122,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             [System.IO.File]::WriteAllText($script:allowlistPath, $Content)
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
-            @($result.Issues | Where-Object Code -eq 'avm.bicep.child-publish-allowlist').Count |
+            @($result.Issues | Where-Object Code -EQ 'avm.bicep.child-publish-allowlist').Count |
                 Should -Be 1
             $result.Issues.Code | Should -Not -Contain 'avm.bicep.child-publish-not-allowed'
         }
@@ -1144,9 +1182,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             InModuleScope 'Avm.Authoring' {
                 Mock Invoke-WebRequest {
                     [pscustomobject]@{
-                        StatusCode = 200
-                        Content = '{"name":"bicep/avm/res/mock/widget","tags":["0.0.1"]}'
-                        Headers = @{}
+                        StatusCode   = 200
+                        Content      = '{"name":"bicep/avm/res/mock/widget","tags":["0.0.1"]}'
+                        Headers      = @{}
                         BaseResponse = [pscustomobject]@{
                             RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
                         }
@@ -1168,7 +1206,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             [System.IO.File]::WriteAllText($path, $text.Replace('## 0.1.0', '## 0.2.0'))
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-            $unpublished = @($result.Issues | Where-Object Code -eq 'avm.bicep.changelog-unpublished-version')
+            $unpublished = @($result.Issues | Where-Object Code -EQ 'avm.bicep.changelog-unpublished-version')
             $unpublished.Count | Should -Be 1
             $unpublished[0].File | Should -Be 'avm/res/mock/widget/CHANGELOG.md'
             $unpublished[0].Line | Should -BeGreaterThan 0
@@ -1179,9 +1217,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             InModuleScope 'Avm.Authoring' {
                 Mock Invoke-WebRequest {
                     [pscustomobject]@{
-                        StatusCode = 404
-                        Content = '{"errors":[{"code":"NAME_UNKNOWN"}]}'
-                        Headers = @{}
+                        StatusCode   = 404
+                        Content      = '{"errors":[{"code":"NAME_UNKNOWN"}]}'
+                        Headers      = @{}
                         BaseResponse = [pscustomobject]@{
                             RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
                         }
@@ -1201,7 +1239,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 Mock Wait-AvmRetryDelay { }
             }
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-            $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.published-tags-unavailable')
+            $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.published-tags-unavailable')
             $issue.Count | Should -Be 1
             $issue[0].File | Should -Be 'avm/res/mock/widget/CHANGELOG.md'
             $result.Status | Should -Be 'fail'
@@ -1237,7 +1275,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 [System.IO.File]::WriteAllText(
                     (Join-Path $script:childPath 'CHANGELOG.md'),
                     $changelog.Replace('widget/CHANGELOG.md', 'widget/child/CHANGELOG.md').
-                        Replace('## 0.1.0', '## 0.2.0'))
+                    Replace('## 0.1.0', '## 0.2.0'))
                 InModuleScope 'Avm.Authoring' {
                     Mock Get-AvmBicepPublicationTargetVersion {
                         if ($Scope.ModuleRelativePath.EndsWith('/child')) {
@@ -1254,9 +1292,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     Mock Invoke-WebRequest {
                         $name = $Uri.AbsolutePath.Substring(4).Replace('/tags/list', '')
                         [pscustomobject]@{
-                            StatusCode = 200
-                            Content = '{"name":"' + $name + '","tags":["0.1.0"]}'
-                            Headers = @{}
+                            StatusCode   = 200
+                            Content      = '{"name":"' + $name + '","tags":["0.1.0"]}'
+                            Headers      = @{}
                             BaseResponse = [pscustomobject]@{
                                 RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
                             }
@@ -1267,7 +1305,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
             It 'requires the versioned parent to increment when the child resets to a new minor' {
                 $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-                $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.parent-version-not-increased')
+                $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.parent-version-not-increased')
                 $issue.Count | Should -Be 1
                 $issue[0].File | Should -Be 'avm/res/mock/widget/version.json'
                 $issue[0].Message | Should -Match 'avm/res/mock/widget/child'
@@ -1305,7 +1343,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $result.Issues.Code | Should -Contain 'avm.bicep.version-format'
         $result.Issues.Code | Should -Contain 'avm.bicep.changelog-section'
-        @($result.Issues | Where-Object Code -eq 'avm.bicep.changelog-section').Line[0] |
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.changelog-section').Line[0] |
             Should -BeGreaterThan 1
     }
 
@@ -1383,7 +1421,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             -Destination (Join-Path $other 'main.test.bicep')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $duplicates = @($result.Issues | Where-Object Code -eq 'avm.bicep.test-service-short-duplicate')
+        $duplicates = @($result.Issues | Where-Object Code -EQ 'avm.bicep.test-service-short-duplicate')
         $duplicates.Count | Should -Be 1
         $duplicates[0].Message | Should -Match 'avm/ptn/mock/other/tests/e2e/defaults/main.test.bicep'
     }
@@ -1395,7 +1433,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             -Destination (Join-Path $other 'main.test.bicep')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $duplicates = @($result.Issues | Where-Object Code -eq 'avm.bicep.test-service-short-duplicate')
+        $duplicates = @($result.Issues | Where-Object Code -EQ 'avm.bicep.test-service-short-duplicate')
         $duplicates.Count | Should -Be 1
         $duplicates[0].Message | Should -Match 'other/tests/main.test.bicep'
     }
@@ -1406,7 +1444,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $result.Issues.Code | Should -Contain 'avm.bicep.multiscope-version'
-        @($result.Issues | Where-Object Code -eq 'avm.bicep.scope-test-missing').Count | Should -Be 2
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.scope-test-missing').Count | Should -Be 2
         $result.Issues.Code | Should -Contain 'avm.bicep.test-scope-reference'
     }
 
