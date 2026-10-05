@@ -225,7 +225,7 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludeBicepPolicy -Confirm:$false
 
       - name: Run integration task
         shell: pwsh

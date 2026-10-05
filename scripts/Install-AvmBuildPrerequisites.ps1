@@ -2,6 +2,8 @@
 param(
     [switch] $IncludePSScriptAnalyzer,
 
+    [switch] $IncludeBicepPolicy,
+
     [ValidateRange(1, 10)]
     [int] $MaxAttempts = 3,
 
@@ -41,6 +43,11 @@ $pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'src' 'Avm.Author
 $packages.Add(@{ Name = 'powershell-yaml'; Version = $pins['powerShellModules']['powershell-yaml'] })
 if ($IncludePSScriptAnalyzer) {
     $packages.Add(@{ Name = 'PSScriptAnalyzer'; Version = '[1.21.0,)' })
+}
+if ($IncludeBicepPolicy) {
+    foreach ($name in @('PSRule', 'PSRule.Rules.Azure')) {
+        $packages.Add(@{ Name = $name; Version = $pins['powerShellModules'][$name] })
+    }
 }
 
 foreach ($package in $packages) {

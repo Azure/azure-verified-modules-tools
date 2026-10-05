@@ -228,6 +228,15 @@ Describe 'CI workflow' {
                 $script:ci,
                 '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 4
     }
+
+    It 'installs pinned Bicep policy dependencies before integration acceptance only' {
+        $integration = [regex]::Match($script:ci, '(?ms)^  integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $integration.Success | Should -BeTrue
+        $integration.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludeBicepPolicy -Confirm:\$false'
+        ([regex]::Matches($script:ci, '-IncludeBicepPolicy')).Count | Should -Be 1
+        $integration.Value.IndexOf('-IncludeBicepPolicy') |
+            Should -BeLessThan $integration.Value.IndexOf('run: ./build.ps1 integration')
+    }
 }
 
 Describe 'Release workflow' {

@@ -76,6 +76,35 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         Should -Invoke Install-PSResource -Times 1 -Exactly
     }
 
+    It 'installs exact policy pins only when requested' -TestCases @(
+        @{ IncludePolicy = $true; PolicyInstallCount = 2 }
+        @{ IncludePolicy = $false; PolicyInstallCount = 0 }
+    ) {
+        param($IncludePolicy, $PolicyInstallCount)
+        & $script:scriptPath -IncludeBicepPolicy:$IncludePolicy -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times $PolicyInstallCount -Exactly -ParameterFilter {
+            ($Name -eq 'PSRule' -and $Version -eq '2.9.0') -or
+            ($Name -eq 'PSRule.Rules.Azure' -and $Version -eq '1.47.0')
+        }
+        Should -Invoke Install-PSResource -Times (3 + $PolicyInstallCount) -Exactly
+    }
+
+    It 'reuses installed policy pins without Gallery requests' {
+        Mock Get-InstalledPSResource {
+            [pscustomobject]@{ Name = $Name; Version = $Version }
+        } -ParameterFilter {
+            ($Name -eq 'PSRule' -and $Version -eq '2.9.0') -or
+            ($Name -eq 'PSRule.Rules.Azure' -and $Version -eq '1.47.0')
+        }
+        & $script:scriptPath -IncludeBicepPolicy -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times 3 -Exactly
+        Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter {
+            $Name -in @('PSRule', 'PSRule.Rules.Azure')
+        }
+    }
+
     It 'throws after the configured number of transient attempts' {
         Mock Install-PSResource {
             throw [System.Net.Http.HttpRequestException]::new(
