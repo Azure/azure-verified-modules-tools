@@ -45,4 +45,5 @@ Findings:
 - Final gate: layout 5.1s, lint 1m47s; unit 2,963 passed and 9 skipped across six shards; component 1,280 passed and 1 skipped. The added unit tests cover shard count, isolation and stale-result clean-up. Component shard finish times were within 46s of each other.
 - Component times vary between runs because of machine load. The unit tier gained the most.
 - Serial fallback: `AVM_UNIT_SHARD_COUNT=1 ./build.ps1 test` passed 2,962 tests in 4m23s.
+- Hosted baseline (CI run 37307771430 at `fbb47aa`): Windows `ci-tests` 14m27s (coverage 7m36s, component 6m48s with shard durations 403/276/253/229s); Ubuntu 6m39s (coverage 3m01s, component 3m38s). Coverage stays single-process, so this slice only targets the uneven component shards there. No hosted run of the test workflow exists yet for this slice, so no hosted improvement is claimed.
 - A transient PSScriptAnalyzer error ("pipeline already running" or a null reference) passed on rerun with no changes.
