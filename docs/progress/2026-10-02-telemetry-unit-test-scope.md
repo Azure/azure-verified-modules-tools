@@ -1,6 +1,6 @@
 # Telemetry migration for explicit unit-test targets
 
-**Status**: in-progress
+**Status**: blocked
 **Started**: 2026-10-02
 **Updated**: 2026-10-05
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
@@ -14,8 +14,11 @@ The original implementation passed all-platform CI and local ALZ qualification.
 Its plan-only workflow preview reached the selected ALZ repository but
 stopped at a BAMI test-tenant group lookup before telemetry migration.
 The merged prerequisite repairs passed local and hosted qualification.
-Final safety inspection identified automatic state-lock recovery in plan-only
-execution; its approved repair and the single ALZ preview remain outstanding.
+The approved plan-only state-lock repair also passed full qualification.
+The new ALZ preview resolved the required groups, prepared the telemetry
+candidate and passed all eight original mocked unit plans. Complete candidate
+validation remains blocked: TFLint plugin installation hit GitHub's API rate
+limit. Publication was skipped and the single-preview approval is consumed.
 
 ## Checklist
 
@@ -34,7 +37,8 @@ execution; its approved repair and the single ALZ preview remain outstanding.
 - [x] Attempt the ALZ plan-only preview and classify its pre-migration failure.
 - [x] Integrate the merged repository-sync prerequisite fixes and qualify locally.
 - [x] Pass hosted qualification on the combined source.
-- [ ] Make plan-only state-lock handling non-mutating and qualify the repair.
+- [x] Make plan-only state-lock handling non-mutating and qualify the repair.
+- [x] Verify controller group resolution and all eight unit plans in the repaired-source preview.
 - [ ] Complete the narrow ALZ networking preview after its identity prerequisites pass.
 
 ## Evidence
@@ -392,17 +396,65 @@ The full local gate passed layout, lint, 3,055 unit tests (nine skipped) and
 hit a Windows access-denied error while moving an unchanged clone fixture.
 All fifteen clone cases then passed in isolation, followed by the complete
 gate, without changes to that source or its tests. Evidence is retained in
-`out/telemetry-plan-only-lock-*.log`. New-head hosted qualification remains
-required before the preview.
+`out/telemetry-plan-only-lock-*.log`.
+
+The repair at `7a7209684317034a885b752e70b128524aa8cfbb` passed its entire
+[hosted qualification](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37293968321):
+all thirteen jobs and all nineteen current-head checks, including coverage
+and reporting.
+
+### Repaired-source ALZ preview
+
+The single newly approved
+[ALZ-only preview](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37296299963)
+ran at `7a7209684317034a885b752e70b128524aa8cfbb` after all five active or
+pending workflow-state checks and the exact-head duplicate query returned zero.
+The matrix selected only the active ALZ networking repository. Its main
+remained `670c45d48b0c7c6a244cddac8715269b0fc06185`.
+Plan-only mode and workflow authoring source were enabled; managed-file forcing
+and project synchronization were disabled.
+
+Preparation succeeded. The configured BAMI controller resolved
+`avm-test-entra-readers` and `avm-test-identity-owners` to their expected
+object IDs. The guarded identity plan reported all seven managed identity,
+federation and membership resources as `no-op`. Unlike the earlier delegated
+operator reads, this evidence comes from the actual workflow's controller
+OIDC execution. No prerequisite apply was required.
+
+Candidate artifact `11339630143` records `phase=prepared`, `hasChanges=true`,
+`planOnly=true` and `authoringSource=checkout`, with the qualified ALZ base
+above. Its candidate commit is `88492b7039d97a5c75b8ebffcf8e1de62e147b4f`
+and tree is `8508d22119baa5ef27a210f155b86ceccec87497`.
+
+Validation executed all eight original mocked unit plans successfully:
+two firewall public-IP tag runs, three BGP-propagation runs and three
+primary-region runs. Terraform test exited zero. The overall validation job
+nevertheless failed because `tflint --init` could not install the AVM plugin:
+the GitHub repository-metadata request returned HTTP 403 after exhausting the
+60-request API limit. The failure was plugin acquisition, not a reported
+telemetry lint violation. The final result explicitly states
+`pr-check=error (lint: error); unit=pass`.
+
+No validation receipt was produced. Publication and project synchronization
+were skipped. The run finished with failure at 10:32:25Z on October 5;
+it was not retried, and the one-preview approval is consumed.
+Completed preparation and validation logs are retained as
+`out/telemetry-alz-preview-37296299963-prepare.log` and
+`out/telemetry-alz-preview-37296299963-validate.log`; the downloaded candidate
+is under `out/telemetry-alz-preview-37296299963-candidate/`.
+The eight passing remote plans are genuine qualification evidence, but they
+do not replace the remaining candidate checks.
 
 ## Blockers or dependencies
 
-Remote qualification still needs evidence that the configured BAMI
-controller can resolve the required groups using the repaired source.
-The approved preview may verify this without changing access. Do not bypass the identity guard,
-invent a replacement group, grant permissions or switch to the legacy tenant
-to make telemetry qualification pass.
-Investigation used existing workflow logs and local source only. Archived repositories remain excluded.
+Full remote qualification is blocked by TFLint plugin acquisition hitting
+GitHub's API rate limit, not by group lookup or workflow concurrency.
+A candidate fix is safe, narrowly scoped authentication or caching for plugin
+acquisition; do not expose privileged repository-sync credentials to candidate
+execution. Any implementation or fresh preview requires separate approval.
+No automatic retry is authorized when the rate limit resets.
+The identity guard remains intact. Do not invent replacement groups, grant
+permissions or switch tenants. Archived repositories remain excluded.
 No deployment, module publication, protected approval, or source-module repair
 is authorized by this slice.
 The MaPoTF release dependency is satisfied. Release creation, approval and
