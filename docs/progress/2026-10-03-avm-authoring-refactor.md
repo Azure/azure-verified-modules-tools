@@ -1,6 +1,6 @@
 # Avm.Authoring maintainability refactor
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-03
 **Updated**: 2026-10-05
 **Branch**: `jaredfholgate-avm-authoring-refactor`
@@ -56,5 +56,7 @@ transformations and publication (244s together).
   (`2026-10-05-bicep-convention-pester.md`).
 - [x] Review help and comments ([slice](2026-10-05-help-and-comment-review.md)).
 - [x] Prune redundant tests; extend integration fixtures ([record](2026-10-05-test-pruning-and-fixtures.md)).
-- [ ] Final slice, as the user directed: reduce test run time, including safe
-  parallel runs, with before and after timings for the full gate.
+- [x] Final slice, as the user directed: reduce test run time, including safe
+  parallel runs, with before and after timings for the full gate
+  ([record](2026-10-05-test-run-time.md)). The full gate fell from 13m56s at
+  the branch start to 7m38s.

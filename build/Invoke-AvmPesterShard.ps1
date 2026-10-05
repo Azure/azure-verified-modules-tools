@@ -3,10 +3,15 @@
     Run one shard of a Pester tier in an isolated process.
 
 .DESCRIPTION
-    Worker entry point for the sharded `component` task in build/avm.build.ps1.
-    Component tests mutate process-wide state (PATH, AVM_HOME, the current
-    directory), so shards must not share a process. The build task starts one
-    pwsh per shard pointing at this script with a disjoint set of test files.
+    Worker entry point for the sharded `test` and `component` tasks in
+    build/avm.build.ps1. Tests mutate process-wide state (PATH, AVM_HOME, the
+    current directory), so shards must not share a process. The build task
+    starts one pwsh per shard pointing at this script with a disjoint set of
+    test files.
+
+    -TempPath gives the shard its own temp folder, so fixed temp names and
+    TestDrive cannot collide between shards. -AvmHome isolates the AVM
+    config, cache and state folders for tiers that must not share them.
 
     Exit codes: 0 all passed, 1 a test or test file failed, 2 the shard ran no tests.
 #>
@@ -23,6 +28,12 @@ param(
 
     [string] $Tag,
 
+    [string[]] $ExcludeTag = @(),
+
+    [string] $TempPath,
+
+    [string] $AvmHome,
+
     [string[]] $FullName = @()
 )
 
@@ -31,6 +42,17 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 Import-Module -Name 'Pester' -MinimumVersion '5.5.0' -Force -ErrorAction Stop
+
+if ($TempPath) {
+    $null = [System.IO.Directory]::CreateDirectory($TempPath)
+    $env:TEMP = $TempPath
+    $env:TMP = $TempPath
+    $env:TMPDIR = $TempPath
+}
+if ($AvmHome) {
+    $null = [System.IO.Directory]::CreateDirectory($AvmHome)
+    $env:AVM_HOME = $AvmHome
+}
 
 if ($Path.Count -eq 1 -and $Path[0].Contains([System.IO.Path]::PathSeparator)) {
     $Path = $Path[0].Split([System.IO.Path]::PathSeparator, [System.StringSplitOptions]::RemoveEmptyEntries)
@@ -49,6 +71,10 @@ if ($FullName.Count -gt 0) {
 }
 elseif ($Tag) {
     $config.Filter.Tag = @($Tag)
+}
+if ($ExcludeTag.Count -gt 0) {
+    # pwsh -File passes arrays as one comma-separated string.
+    $config.Filter.ExcludeTag = @($ExcludeTag -split ',' | Where-Object { $_ })
 }
 
 $testRunId = [guid]::NewGuid().ToString()
