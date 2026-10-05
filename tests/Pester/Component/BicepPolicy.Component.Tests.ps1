@@ -441,6 +441,30 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         $result.Issues.Message | Should -Match 'Install-PSResource'
     }
 
+    It 'reports known compiler failures verbatim and hides unexpected ones' -TestCases @(
+        @{ Kind = 'tool'; Expected = 'bicep pin is missing' }
+        @{ Kind = 'other'; Expected = 'The pinned Bicep compiler could not be resolved.' }
+    ) {
+        param($Kind, $Expected)
+        InModuleScope 'Avm.Authoring' -Parameters @{ Kind = $Kind } {
+            param($Kind)
+            if ($Kind -eq 'tool') {
+                Mock Resolve-AvmTool { throw [AvmToolException]::new('bicep pin is missing') }
+            }
+            else {
+                Mock Resolve-AvmTool { throw [System.IO.IOException]::new('do-not-echo-this-value') }
+            }
+        }
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.psrule-compiler')
+        $issue.Count | Should -Be 1
+        $issue[0].Message | Should -BeExactly $Expected
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 0
+        }
+    }
+
     It 'does not leak PSRule engine exception details and removes its temporary files' {
         InModuleScope 'Avm.Authoring' {
             Mock Invoke-AvmBicepPolicyBaseline {

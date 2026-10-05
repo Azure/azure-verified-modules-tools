@@ -1058,6 +1058,51 @@ Describe 'Component: module catalog transformations' -Tag Component {
         { Write-AvmCatalogBundle -Bundle $bundle -OutputPath $fixture.Output } | Should -Throw '*new directory*'
     }
 
+    Context 'staging directory move' {
+        BeforeEach {
+            $script:moveRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $script:moveSource = Join-Path $script:moveRoot 'staging'
+            $script:moveTarget = Join-Path $script:moveRoot 'output'
+            $null = New-Item -ItemType Directory -Path $script:moveSource -Force
+            $script:lockedFile = Join-Path $script:moveSource 'catalog.json'
+            [System.IO.File]::WriteAllText($script:lockedFile, '{}')
+            $script:lock = $null
+        }
+
+        AfterEach {
+            if ($null -ne $script:lock) { $script:lock.Dispose() }
+        }
+
+        It 'retries a move refused by a transient file lock' -Skip:(-not $IsWindows) {
+            $script:lock = [System.IO.File]::Open($script:lockedFile, 'Open', 'Read', 'None')
+            Mock Start-Sleep { $script:lock.Dispose(); $script:lock = $null }
+
+            Move-AvmCatalogStagingDirectory -Source $script:moveSource -Destination $script:moveTarget
+
+            [System.IO.File]::Exists((Join-Path $script:moveTarget 'catalog.json')) | Should -BeTrue
+            Should -Invoke Start-Sleep -Exactly 1
+        }
+
+        It 'fails after the bounded attempts while the lock persists' -Skip:(-not $IsWindows) {
+            $script:lock = [System.IO.File]::Open($script:lockedFile, 'Open', 'Read', 'None')
+            Mock Start-Sleep { }
+
+            { Move-AvmCatalogStagingDirectory -Source $script:moveSource -Destination $script:moveTarget -MaxAttempts 3 } |
+                Should -Throw
+            Should -Invoke Start-Sleep -Exactly 2
+            [System.IO.Directory]::Exists($script:moveSource) | Should -BeTrue
+        }
+
+        It 'does not retry when the destination already exists' {
+            $null = New-Item -ItemType Directory -Path $script:moveTarget
+            Mock Start-Sleep { }
+
+            { Move-AvmCatalogStagingDirectory -Source $script:moveSource -Destination $script:moveTarget } |
+                Should -Throw
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
     It 'orders newly discovered children deterministically regardless of file creation order' {
         $fixtures = @((New-CatalogFixture -AdoptAll), (New-CatalogFixture -AdoptAll))
         for ($index = 0; $index -lt 2; $index++) {

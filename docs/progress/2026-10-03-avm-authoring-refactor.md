@@ -50,8 +50,11 @@ transformations and publication (244s together).
 - [x] Share the Bicep end-to-end safety checks (`2026-10-05-bicep-configuration.md`).
 - [x] Move pinned versions, policy baselines and the `.e2eignore` allowlist to
   packaged configuration (`2026-10-05-bicep-configuration.md`).
-- [ ] Reduce repeated policy issue construction.
+- [x] Reduce repeated policy issue construction
+  (`2026-10-05-bicep-policy-issue-construction.md`).
 - [x] Move Bicep convention checks to a packaged Pester suite
   (`2026-10-05-bicep-convention-pester.md`).
-- [ ] Prune and speed up tests; extend integration fixtures.
 - [ ] Review help and comments.
+- [ ] Prune redundant tests; extend integration fixtures.
+- [ ] Final slice, as the user directed: reduce test run time, including safe
+  parallel runs, with before and after timings for the full gate.
