@@ -1089,7 +1089,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         BeforeEach {
             $script:child = Join-Path $script:modulePath 'child'
             $script:allowlistPath = Join-Path $script:workingRoot `
-                'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json'
+                '.avm/child-module-publish-allowed-list.json'
             [System.IO.File]::WriteAllText((Join-Path $script:child 'version.json'), '{"version":"0.1"}')
             $changelog = [System.IO.File]::ReadAllText((Join-Path $script:modulePath 'CHANGELOG.md'))
             [System.IO.File]::WriteAllText((Join-Path $script:child 'CHANGELOG.md'),
@@ -1102,6 +1102,36 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $result.Issues.Count | Should -Be 0
             $result.Status | Should -Be 'pass'
             $result.UncoveredFamilies | Should -Not -Contain 'resource-folder singularization beyond naming syntax'
+        }
+
+        It 'runs independent native child file, configuration and approval requirements' {
+            $run = InModuleScope 'Avm.Authoring' -Parameters @{
+                Path = $script:child; Root = $script:workingRoot
+            } {
+                param($Path, $Root)
+                $data = @{
+                    RepositoryRoot = $Root
+                    ChildPublishInput = Get-AvmBicepChildPublishInput -RepositoryRoot $Root `
+                        -Scopes @((Get-AvmBicepConventionScope -Path $Path))
+                }
+                $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'ChildPublish.Tests.ps1'
+                $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Root `
+                    -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+                @{ Summary = $summary; Expected = $data.NativeChildPublishExpected }
+            }
+            $run.Expected | Should -Be 3
+            $run.Summary.Total | Should -Be 3
+            $run.Summary.Passed | Should -Be 3
+            @($run.Summary.Issues) | Should -HaveCount 0
+        }
+
+        It 'does not fall back to the old registry utility approval file' {
+            $legacy = Join-Path $script:workingRoot 'utilities' 'pipelines' 'staticValidation' 'compliance' 'helper'
+            $null = New-Item -ItemType Directory -Path $legacy -Force
+            Move-Item -LiteralPath $script:allowlistPath -Destination $legacy
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Status | Should -Be 'fail'
+            $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
         }
 
         It 'rejects a versioned child absent from the current checkout allowlist' {
@@ -1122,7 +1152,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.child-publish-allowlist')
             $issue.Count | Should -Be 1
             $issue[0].File | Should -Be (
-                'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json')
+                '.avm/child-module-publish-allowed-list.json')
             $issue[0].Message | Should -Match 'Versioned children cannot be approved'
 
             Remove-Item -LiteralPath (Join-Path $script:child 'version.json')
@@ -1158,7 +1188,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
 
         It 'rejects the wrong casing of an allowlist directory on Windows and Linux' {
-            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName 'Helper'
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.Avm'
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
         }
@@ -1175,7 +1205,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     throw [System.UnauthorizedAccessException]::new('Fixture directory is unreadable.')
                 }
             }
-            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName 'Helper'
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.Avm'
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $result.Issues.Code | Should -Contain 'avm.bicep.test-discovery'

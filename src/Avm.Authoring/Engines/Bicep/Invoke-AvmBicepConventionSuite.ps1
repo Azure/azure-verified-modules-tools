@@ -29,6 +29,7 @@ function Invoke-AvmBicepConventionSuite {
     $Convention.NativeCompiledExpected = 0
     $Convention.NativeWorkflowExpected = 0
     $Convention.NativeOwnershipExpected = 0
+    $Convention.NativeChildPublishExpected = -1
     $suitePath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions', 'Conventions.Tests.ps1'
     $suitePath = [System.IO.Path]::GetFullPath($suitePath)
@@ -37,7 +38,7 @@ function Invoke-AvmBicepConventionSuite {
     $compiledCount = @($Convention.CompiledModules).Count
     $scopeCount = @($Convention.Scopes).Count
     $workflowCount = @($Convention.Workflows).Count
-    $expected = [int]($compiledCount -gt 0) + (3 * $scopeCount) + (2 * [int]($scopeCount -gt 0))
+    $expected = [int]($compiledCount -gt 0) + (3 * $scopeCount) + [int]($scopeCount -gt 0)
     if ($expected -eq 0 -and $workflowCount -eq 0) {
         return $issues.ToArray()
     }
@@ -54,6 +55,9 @@ function Invoke-AvmBicepConventionSuite {
         if ($scopeCount -gt 0) {
             $Convention.CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Convention.RepositoryRoot
             $files += Join-Path (Split-Path $suitePath) 'Ownership.Tests.ps1'
+            $Convention.ChildPublishInput = Get-AvmBicepChildPublishInput -RepositoryRoot $Convention.RepositoryRoot `
+                -Scopes @($Convention.Scopes)
+            $files += Join-Path (Split-Path $suitePath) 'ChildPublish.Tests.ps1'
         }
         $summary = Invoke-AvmBicepPesterSuite -Files $files -WorkingDirectory $root `
             -Mode Convention -ConventionData $Convention -EnvVars @{} -InProcess
@@ -96,9 +100,11 @@ function Invoke-AvmBicepConventionSuite {
                     -Message "The convention suite reported $($summary.Failed) failed test(s) without a recorded finding."))
     }
     $expected += $Convention.NativeCompiledExpected + $Convention.NativeWorkflowExpected + $Convention.NativeOwnershipExpected
+    if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeChildPublishExpected) }
     if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
         $Convention.NativeWorkflowExpected -lt $workflowCount -or
         ($scopeCount -gt 0 -and $Convention.NativeOwnershipExpected -lt 1) -or
+        ($scopeCount -gt 0 -and $Convention.NativeChildPublishExpected -lt 0) -or
         $summary.Total -ne $expected -or $summary.Passed + $summary.Failed -ne $expected) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-suite-incomplete' `

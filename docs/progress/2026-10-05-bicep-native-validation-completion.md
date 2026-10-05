@@ -94,7 +94,19 @@ requirements; full gate is green with Pester 6 and focused compatibility with
 Pester 5. Six families remain: layout, versions, API versions, test files,
 publication history and child publishing.
 
+The [native child publishing slice](2026-10-05-native-child-publishing.md) replaces
+the child wrapper with independent native file, configuration and membership
+requirements. The authoritative consumer configuration is now
+`.avm/child-module-publish-allowed-list.json`; no legacy utility fallback remains.
+Five families remain: layout, versions, API versions, test files and publication.
+Its Pester 5/6 focused runs and full Pester 6 gate are green.
+
 ## Blockers or dependencies
+
+Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's
+missing workflow scope. The coordinator confirmed that no authentication
+change or alternate route is authorized. Preserve qualified commits locally and
+continue source-only migration, tests and documentation.
 
 The user approved shared ordinary schema/parsing/value primitives for internal
 construction, prompts, initialization, and discovery. Explicit metadata

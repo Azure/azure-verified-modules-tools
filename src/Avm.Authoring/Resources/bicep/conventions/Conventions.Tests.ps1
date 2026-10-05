@@ -88,13 +88,6 @@ Describe 'Bicep conventions' {
         }
 
         Context 'Repository' {
-            It 'child module publishing' {
-                Invoke-ConventionRule -RuleName 'ChildPublish' -RuleBlock {
-                    Test-AvmBicepConventionChildPublish -RepositoryRoot $Convention.RepositoryRoot `
-                        -Scopes @($Convention.Scopes)
-                }
-            }
-
             It 'publication versions and changelogs' {
                 Invoke-ConventionRule -RuleName 'Publication' -RuleBlock {
                     Test-AvmBicepConventionPublication -RepositoryRoot $Convention.RepositoryRoot `
