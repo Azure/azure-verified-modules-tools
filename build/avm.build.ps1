@@ -348,18 +348,16 @@ task infra {
 task 'test-tenant-terraform' {
     Import-Module $script:manifestPath -Force
     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RetryHelpers.ps1')
-    foreach ($directory in @('terraform', 'bami-identity', [System.IO.Path]::Combine('terraform', 'modules', 'azure'))) {
+    foreach ($directory in @('terraform', [System.IO.Path]::Combine('terraform', 'modules', 'azure'))) {
         $directoryName = $directory.Replace([string][System.IO.Path]::DirectorySeparatorChar, '-')
         $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
         $formatPaths = @('main.tf', 'variables.tf', 'tests')
         if ($directory -eq 'terraform') {
             $formatPaths += @(
-                'locals.tf', 'terraform.tf', 'retired-identity.tf',
-                'tests/fixtures/retired-identity/main.tf', 'tests/fixtures/retired-identity/azure/main.tf'
+                'locals.tf', 'terraform.tf', 'outputs.tf', 'retired-identity.tf',
+                'tests/fixtures/retired-identity/main.tf', 'tests/fixtures/retired-identity/azure/main.tf',
+                'tests/fixtures/repository-template/main.tf'
             )
-        }
-        elseif ($directory -eq 'bami-identity') {
-            $formatPaths += @('terraform.tf', 'outputs.tf')
         }
         else {
             $formatPaths += @('locals.tf', 'terraform.tf', 'outputs.tf')
@@ -388,6 +386,14 @@ task 'test-tenant-terraform' {
             $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments -WorkingDirectory $root -TimeoutSec 600 `
                 -EnvVars $environment
             if ($result.ExitCode -ne 0) {
+                if ($arguments[0] -eq 'test') {
+                    $events = @($result.StdOut -split '\r?\n' | Where-Object { $_ } | ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable -Depth 100 })
+                    $resultDirectory = Join-Path $script:outRoot 'test-results'
+                    $null = [System.IO.Directory]::CreateDirectory($resultDirectory)
+                    [System.IO.File]::WriteAllText((Join-Path $resultDirectory "$directoryName.terraform.jsonl"), $result.StdOut)
+                    $diagnostics = @($events | Where-Object { $_['@level'] -ceq 'error' } | ForEach-Object { $_['@message'] })
+                    throw [System.InvalidOperationException]::new("Tenant Terraform $directory tests failed (exit $($result.ExitCode)).`n$($diagnostics -join "`n")`n$($result.StdErr)")
+                }
                 throw [System.InvalidOperationException]::new("Tenant Terraform $directory $($arguments[0]) failed: $($result.StdOut) $($result.StdErr)")
             }
             Write-Build Green "  $directory $($arguments[0]) OK"
@@ -459,14 +465,14 @@ task 'test-tenant-terraform' {
                     }
                     Write-Build Green '  retired fixture: seven unchanged forget actions, zero refresh/read/destroy'
                 }
-                if ($directory -eq 'bami-identity') {
+                if ($directory -eq 'terraform') {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
                     $plans = @($events | Where-Object {
-                            $_['type'] -eq 'test_plan' -and $_['@testrun'] -ceq 'candidate_plan_binds_the_expected_tenant'
+                            $_['type'] -eq 'test_plan' -and $_['@testrun'] -ceq 'unified_plan_binds_the_expected_tenant'
                         })
                     if ($plans.Count -ne 1) {
-                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider candidate plan.')
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider unified plan.')
                     }
                     $candidatePlan = $plans[0]['test_plan']
                     if (-not $candidatePlan.Contains('planned_values')) {
@@ -480,15 +486,15 @@ task 'test-tenant-terraform' {
                             throw [System.IO.InvalidDataException]::new('The actual mocked plan must expose observed provider and group evidence.')
                         }
                         $dataResources = @(@{
-                            address = 'module.azure.data.azapi_client_config.current'
+                            address = 'module.bami[0].data.azapi_client_config.current'
                             mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context']
                         }, @{
-                            address = 'module.azure.data.azuread_client_config.current'
+                            address = 'module.bami[0].data.azuread_client_config.current'
                             mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context']
                         })
                         foreach ($name in $evidence['groups'].Keys) {
                             $key = ConvertTo-Json -InputObject $name -Compress
-                            $address = "module.azure.data.azuread_group.test_permissions[$key]"
+                            $address = "module.bami[0].data.azuread_group.test_permissions[$key]"
                             $dataResources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
                         }
                         $candidatePlan = @{
@@ -501,10 +507,29 @@ task 'test-tenant-terraform' {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
                     $repositoryConfig = Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json
                     $groupNames = (Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId 'avm-ptn-example-repo').EntraGroups
-                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
-                        -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
-                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $groupNames
-                    Write-Build Green '  actual candidate plan passes configured memberships and federation guard'
+                    $repository = [pscustomobject]@{
+                        full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+                        id = 1234
+                        owner = [pscustomobject]@{ id = 6844498 }
+                    }
+                    Assert-AvmRepositorySyncPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
+                        -Repository $repository -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $groupNames
+                    $applied = @($events | Where-Object {
+                        $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'single_apply_populates_identity_and_consumer_settings'
+                    })
+                    if ($applied.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual unified mocked apply state.')
+                    }
+                    $appliedResources = @(Get-AvmTerraformPlannedResource -Module $applied[0]['test_state']['root_module'])
+                    $secret = @($appliedResources | Where-Object {
+                        $_['type'] -ceq 'github_actions_secret' -and $_['values']['secret_name'] -ceq 'ARM_CLIENT_ID'
+                    })
+                    $identity = @($appliedResources | Where-Object { $_['address'] -ceq 'module.bami[0].azapi_resource.identity' })
+                    if ($secret.Count -ne 1 -or $identity.Count -ne 1 -or
+                        $secret[0]['values']['value'] -cne $identity[0]['values']['output']['properties']['clientId']) {
+                        throw [System.IO.InvalidDataException]::new('The single mocked apply must publish its own execution client ID through the GitHub secret.')
+                    }
+                    Write-Build Green '  unified plan passes the ownership guard; one apply resolves GitHub and identity dependencies'
                 }
             }
         }

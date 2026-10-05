@@ -1,3 +1,35 @@
+module "bami" {
+  count  = var.repository_creation_mode_enabled || var.bami_test_settings == null ? 0 : 1
+  source = "./modules/azure"
+
+  providers = {
+    azapi   = azapi
+    azuread = azuread
+  }
+
+  github_repository_owner      = var.github_repository_owner
+  github_repository_name       = var.github_repository_name
+  github_organization_id       = module.github.organization_id
+  github_repository_id         = module.github.repository_id
+  identity_resource_group_name = var.bami_test_settings.identity_resource_group_name
+  github_repository_environment_names = [
+    var.github_repository_pr_check_environment_name,
+    var.github_repository_integration_test_environment_name,
+    var.github_repository_examples_test_environment_name,
+  ]
+  location                      = var.location
+  github_job_workflow_ref       = var.github_job_workflow_ref
+  repository_sync_repository_id = var.repository_sync_repository_id
+  is_protected_repo             = var.is_protected_repo
+  entra_group_names             = var.entra_group_names
+  expected_identity_context = {
+    tenant_id            = var.bami_test_settings.tenant_id
+    subscription_id      = var.bami_test_settings.admin_subscription_id
+    controller_client_id = var.bami_test_settings.controller_client_id
+    bicep_client_id      = var.bami_test_settings.bicep_client_id
+  }
+}
+
 module "github" {
   source = "./modules/github"
 

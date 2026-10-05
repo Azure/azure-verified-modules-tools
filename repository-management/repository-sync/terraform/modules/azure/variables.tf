@@ -17,6 +17,7 @@ variable "expected_identity_context" {
     tenant_id            = string
     subscription_id      = string
     controller_client_id = string
+    bicep_client_id      = optional(string)
   })
   description = "Expected BAMI tenant, identity subscription, and provisioning controller."
   nullable    = false

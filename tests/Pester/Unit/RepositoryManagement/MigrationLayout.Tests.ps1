@@ -77,8 +77,9 @@ Describe "Repository management migration layout" {
         }
     }
 
-    It 'permits only the required federation ID input from the retired identifier pattern' {
+    It 'permits only the federation ID from the retired identifier pattern' {
         'repository_sync_repository_id' | Should -Not -Match 'repository_sync(?!_repository_id\b)'
+        'AVM_REPOSITORY_SYNC_STATE_LAYOUT' | Should -Match 'repository_sync(?!_repository_id\b)'
         'repository_sync_repository_id_legacy' | Should -Match 'repository_sync(?!_repository_id\b)'
         'repository_sync/modules' | Should -Match 'repository_sync(?!_repository_id\b)'
     }
@@ -141,7 +142,7 @@ Describe "Repository management migration layout" {
         }
 
         ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
-            Should -Be 2
+            Should -Be 3
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |

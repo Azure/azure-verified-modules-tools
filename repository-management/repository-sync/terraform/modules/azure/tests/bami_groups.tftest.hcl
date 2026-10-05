@@ -79,6 +79,7 @@ variables {
     tenant_id            = "10000000-0000-4000-8000-000000000001"
     subscription_id      = "10000000-0000-4000-8000-000000000003"
     controller_client_id = "10000000-0000-4000-8000-000000000002"
+    bicep_client_id      = "10000000-0000-4000-8000-000000000004"
   }
 }
 
@@ -214,5 +215,30 @@ run "controller_cannot_receive_repository_group_edges" {
     }
   }
 
-  expect_failures = [azuread_group_member.test_permissions]
+  expect_failures = [azuread_group_member.test_permissions, output.client_id]
+}
+
+run "shared_bicep_client_is_rejected_even_without_group_edges" {
+  command = plan
+
+  variables {
+    entra_group_names = []
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000004"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  expect_failures = [output.client_id]
 }

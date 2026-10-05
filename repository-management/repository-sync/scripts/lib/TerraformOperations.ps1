@@ -1,5 +1,4 @@
-# Terraform lifecycle operations: workspace cleanup, init, import-bootstrap,
-# plan, and apply (with retry).
+# Terraform lifecycle operations for the single repository state.
 
 # Removes per-run artifacts from the Terraform module directory so each repo
 # starts from a known-clean state. Skipped when the caller passes
@@ -7,14 +6,14 @@
 function Clear-TerraformWorkspace {
     param([string]$terraformModulePath)
 
+    if (Test-Path -LiteralPath (Join-Path $terraformModulePath 'terraform.tfstate')) {
+        throw [System.InvalidOperationException]::new('Local Terraform state exists. Preserve and inspect it; workspace cleanup must not delete state.')
+    }
     if (Test-Path "$terraformModulePath/.terraform") {
         Remove-Item "$terraformModulePath/.terraform" -Recurse -Force
     }
     if (Test-Path "$terraformModulePath/terraform.tfvars.json") {
         Remove-Item "$terraformModulePath/terraform.tfvars.json" -Force
-    }
-    if (Test-Path "$terraformModulePath/terraform.tfstate") {
-        Remove-Item "$terraformModulePath/terraform.tfstate" -Force
     }
     if (Test-Path "$terraformModulePath/.terraform.lock.hcl") {
         Remove-Item "$terraformModulePath/.terraform.lock.hcl" -Force
@@ -86,9 +85,100 @@ function Resolve-RepositorySyncStateConfiguration {
     }
 }
 
-# Runs `terraform init`. In repository-creation mode this is a local-backend
-# bootstrap (writes `backend_override.tf` first); otherwise it points at the
-# remote AzureRM backend using the supplied state-storage parameters.
+function Get-RepositorySyncTerraformEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [AllowNull()] [System.Collections.IDictionary] $Settings
+    )
+
+    $environment = @{
+        TF_DATA_DIR = Join-Path $Root '.terraform'
+        TF_IN_AUTOMATION = 'true'
+        TF_INPUT = 'false'
+        TF_WORKSPACE = 'default'
+        TF_LOG = $null
+        TF_LOG_CORE = $null
+        TF_LOG_PROVIDER = $null
+        TF_LOG_PATH = $null
+        ARM_CLIENT_SECRET = $null
+        ARM_CLIENT_CERTIFICATE_PATH = $null
+        ARM_CLIENT_CERTIFICATE = $null
+        ARM_CLIENT_CERTIFICATE_PASSWORD = $null
+        ARM_ACCESS_KEY = $null
+        ARM_SAS_TOKEN = $null
+        ARM_OIDC_TOKEN = $null
+        ARM_OIDC_TOKEN_FILE_PATH = $null
+        ARM_USE_OIDC = 'true'
+        ARM_USE_CLI = 'false'
+        ARM_USE_MSI = 'false'
+    }
+    foreach ($name in @('TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_plan', 'TF_CLI_ARGS_apply', 'TF_CLI_ARGS_show') +
+        @([Environment]::GetEnvironmentVariables().Keys | Where-Object { $_ -clike 'TF_CLI_ARGS*' })) {
+        $environment[$name] = $null
+    }
+    if ($null -ne $Settings) {
+        $settings = Get-AvmBamiSettings -Values $Settings
+        $environment.ARM_TENANT_ID = $settings['TEST_BAMI_TENANT_ID']
+        $environment.ARM_SUBSCRIPTION_ID = $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
+        $environment.ARM_CLIENT_ID = $settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
+    }
+    return $environment
+}
+
+function Invoke-RepositorySyncTerraform {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [Parameter(Mandatory)] [string] $Root,
+        [hashtable] $Environment = @{},
+        [switch] $Json
+    )
+
+    if (-not $Json) {
+        Write-Information "Running Terraform $($Arguments[0])..." -InformationAction Continue
+    }
+    try {
+        $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
+            -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800
+    }
+    catch [System.TimeoutException] {
+        $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
+        if (-not $Json) {
+            $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
+                $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
+            ) -join "`n"))
+        }
+        throw [System.TimeoutException]::new($message)
+    }
+    if ($result.ExitCode -ne 0) {
+        $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); no automatic apply retry or state repair was attempted."
+        if (-not $Json) {
+            $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n"))
+        }
+        $exception = [System.InvalidOperationException]::new($message)
+        $exception.Data['ExitCode'] = $result.ExitCode
+        throw $exception
+    }
+    if ($Json) {
+        try {
+            $document = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -Depth 100 -ErrorAction Stop
+        }
+        catch {
+            throw [System.IO.InvalidDataException]::new('Terraform returned invalid plan JSON; raw plan data is not logged.')
+        }
+        if ($document -isnot [System.Collections.IDictionary]) {
+            throw [System.IO.InvalidDataException]::new('Terraform must return one plan JSON object.')
+        }
+        return $document
+    }
+    foreach ($text in @($result.StdOut, $result.StdErr)) {
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            Write-Information (Protect-RepositorySyncLogText -Text $text) -InformationAction Continue
+        }
+    }
+}
+
 function Invoke-TerraformInit {
     param(
         [string]$terraformModulePath,
@@ -100,26 +190,24 @@ function Invoke-TerraformInit {
         [string]$stateTenantId,
         [string]$stateSubscriptionId,
         [string]$stateClientId,
-        [array]$issueLog
+        [array]$issueLog,
+        [hashtable]$environment = @{}
     )
 
     if ($repositoryCreationModeEnabled) {
-        Set-Content -Path "$terraformModulePath/backend_override.tf" -Value @"
+        Set-Content -LiteralPath (Join-Path $terraformModulePath 'backend_override.tf') -Encoding utf8NoBOM -Value @"
 terraform {
     backend "local" {}
 }
 "@
 
-        $result = Invoke-TerraformWithRetry `
-            -commands @(
-                @{
-                    Arguments = @("init", "-upgrade")
-                    OutputLog = "init.log"
-                }
-            ) `
-            -workingDirectory $terraformModulePath `
-            -printOutput
+        $initArguments = @('init', '-upgrade', '-input=false', '-no-color')
     } else {
+        foreach ($name in @('backend_override.tf', 'terraform.tfstate')) {
+            if (Test-Path -LiteralPath (Join-Path $terraformModulePath $name)) {
+                throw [System.InvalidOperationException]::new("Normal sync cannot use a workspace containing '$name'. Preserve and inspect the local bootstrap before continuing.")
+            }
+        }
         $state = Resolve-RepositorySyncStateConfiguration -Backend @{
             TenantId = $stateTenantId
             SubscriptionId = $stateSubscriptionId
@@ -128,11 +216,10 @@ terraform {
             ContainerName = $stateContainerName
         }
         $initArguments = @(
-            "init",
-            "-upgrade",
-            "-backend-config=`"storage_account_name=$($state.StorageAccountName)`"",
-            "-backend-config=`"container_name=$($state.ContainerName)`"",
-            "-backend-config=`"key=$($repoId).tfstate`"",
+            'init', '-upgrade', '-input=false', '-no-color', '-reconfigure',
+            "-backend-config=storage_account_name=$($state.StorageAccountName)",
+            "-backend-config=container_name=$($state.ContainerName)",
+            "-backend-config=key=$repoId.tfstate",
             "-backend-config=tenant_id=$($state.TenantId)",
             "-backend-config=subscription_id=$($state.SubscriptionId)",
             "-backend-config=client_id=$($state.ClientId)",
@@ -142,34 +229,13 @@ terraform {
             "-backend-config=use_msi=false",
             "-backend-config=lookup_blob_endpoint=false"
         )
-        $result = Invoke-TerraformWithRetry `
-            -commands @(
-                @{
-                    Arguments = $initArguments
-                    OutputLog = "init.log"
-                }
-            ) `
-            -workingDirectory $terraformModulePath `
-            -stateStorageAccountName $state.StorageAccountName `
-            -stateContainerName $state.ContainerName `
-            -stateBlobName "$($repoId).tfstate" `
-            -stateSubscriptionId $state.SubscriptionId `
-            -printOutput
     }
-
-    if (!(Test-CommandResultsSucceeded -results $result)) {
-        Write-Warning "Terraform init failed for $orgAndRepoName. Exiting."
-        $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "init-failed" -message "Terraform init failed for $orgAndRepoName." -data $null -issueLog $issueLog
-        exit 1
-    }
-
+    Invoke-RepositorySyncTerraform -Arguments $initArguments -Root $terraformModulePath -Environment $environment
     return $issueLog
 }
 
-# Runs `terraform plan`, parses the resulting plan JSON, applies the
-# can-this-be-destroyed gate, and (if safe) runs `terraform apply` with a
-# one-shot replan/apply retry on first failure.
 function Invoke-TerraformPlanAndApply {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$terraformModulePath,
         [string]$repoId,
@@ -179,106 +245,31 @@ function Invoke-TerraformPlanAndApply {
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
         [string]$stateSubscriptionId,
-        [array]$issueLog
+        [array]$issueLog,
+        [hashtable]$environment = @{},
+        [AllowNull()] [System.Collections.IDictionary] $bamiSettings,
+        [AllowNull()] [object] $repository,
+        [string] $repositorySyncRepositoryId,
+        [string[]] $entraGroupNames = @(),
+        [string] $jobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
     )
 
-    $result = Invoke-TerraformWithRetry `
-        -commands @(
-            @{
-                Arguments = @("plan", "-out=`"$($repoId).tfplan`"")
-                OutputLog = "plan.log"
-            }
-        ) `
-        -workingDirectory $terraformModulePath `
-        -stateStorageAccountName $stateStorageAccountName `
-        -stateContainerName $stateContainerName `
-        -stateBlobName "$($repoId).tfstate" `
-        -stateSubscriptionId $stateSubscriptionId `
-        -printOutput
-
-    if (!(Test-CommandResultsSucceeded -results $result)) {
-        Write-Warning "Terraform plan failed for $orgAndRepoName. Exiting."
-        $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "plan-failed" -message "Terraform plan failed for $orgAndRepoName." -data $null -issueLog $issueLog
-        exit 1
+    if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, 'Plan repository configuration and test identity')) {
+        return $issueLog
     }
-
-    $plan = $(terraform -chdir="$terraformModulePath" show -json "$($repoId).tfplan") | ConvertFrom-Json
-
-    if (!$plan -or !$plan.resource_changes) {
-        Write-Warning "Failed to parse Terraform plan for $orgAndRepoName. Exiting."
-        $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "plan-parse-failed" -message "Failed to parse Terraform plan for $orgAndRepoName." -data $null -issueLog $issueLog
-        exit 1
+    $planPath = Join-Path $terraformModulePath "$repoId.tfplan"
+    Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -Arguments @(
+        'plan', '-input=false', '-no-color', '-lock-timeout=5m', "-out=$planPath"
+    )
+    $plan = Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment `
+        -Arguments @('show', '-json', $planPath) -Json
+    Assert-AvmRepositorySyncPlan -Plan $plan -Settings $bamiSettings -Repository $repository `
+        -RepositorySyncRepositoryId $repositorySyncRepositoryId -EntraGroupNames $entraGroupNames `
+        -JobWorkflowRef $jobWorkflowRef -ResourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed
+    if (-not $planOnly -and $PSCmdlet.ShouldProcess($orgAndRepoName, 'Apply the verified saved repository plan')) {
+        Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -Arguments @(
+            'apply', '-input=false', '-no-color', '-lock-timeout=5m', $planPath
+        )
     }
-
-    $hasDestroy = $false
-    foreach ($resource in $plan.resource_changes) {
-        if ($resource.change.actions -contains "delete") {
-            if ($resourceTypesThatCannotBeDestroyed -contains $resource.type) {
-                Write-Warning "Planning to destroy: $($resource.address). Resource type: $($resource.type) cannot be destroyed, so skipping the apply."
-                $hasDestroy = $true
-            } else {
-                Write-Host "Planning to destroy: $($resource.address). Resource type: $($resource.type) can be destroyed, so allowing the apply to continue."
-            }
-        }
-    }
-
-    if ($hasDestroy) {
-        Write-Warning "Skipping: $orgAndRepoName as it has at least one destroy actions."
-        $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "plan-includes-destroy" -message "Plan includes destroy for $orgAndRepoName." -data $plan -issueLog $issueLog
-    }
-
-    if (!$planOnly -and $plan.errored) {
-        Write-Warning "Skipping: Plan failed for $orgAndRepoName."
-        $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "plan-failed" -message "Plan failed for $orgAndRepoName." -data $plan -issueLog $issueLog
-    }
-
-    if (!$hasDestroy -and !$planOnly -and !$plan.errored) {
-
-        Write-Host "Applying plan for $orgAndRepoName"
-        $result = Invoke-TerraformWithRetry `
-            -commands @(
-                @{
-                    Arguments = @("apply", "$($repoId).tfplan")
-                    OutputLog = "apply.log"
-                }
-            ) `
-            -workingDirectory $terraformModulePath `
-            -stateStorageAccountName $stateStorageAccountName `
-            -stateContainerName $stateContainerName `
-            -stateBlobName "$($repoId).tfstate" `
-            -stateSubscriptionId $stateSubscriptionId `
-            -printOutput `
-            -maxRetries 0
-
-        if (!(Test-CommandResultsSucceeded -results $result)) {
-            Write-Warning "Terraform apply first attempt failed for $orgAndRepoName. Entering plan apply retry loop..."
-            $result = Invoke-TerraformWithRetry `
-                -commands @(
-                    @{
-                        Arguments = @("plan", "-out=`"$($repoId).tfplan`"")
-                        OutputLog = "plan.log"
-                    },
-                    @{
-                        Arguments = @("apply", "$($repoId).tfplan")
-                        OutputLog = "apply.log"
-                    }
-                ) `
-                -workingDirectory $terraformModulePath `
-                -stateStorageAccountName $stateStorageAccountName `
-                -stateContainerName $stateContainerName `
-                -stateBlobName "$($repoId).tfstate" `
-                -stateSubscriptionId $stateSubscriptionId `
-                -printOutput
-        }
-
-        if (!(Test-CommandResultsSucceeded -results $result)) {
-            Write-Warning "Terraform apply failed for $orgAndRepoName. Exiting."
-            $issueLog = Add-IssueToLog -orgAndRepoName $orgAndRepoName -type "apply-failed" -message "Terraform apply failed for $orgAndRepoName." -data $null -issueLog $issueLog
-            exit 1
-        } else {
-            Write-Host "Terraform apply succeeded for $orgAndRepoName"
-        }
-    }
-
     return $issueLog
 }

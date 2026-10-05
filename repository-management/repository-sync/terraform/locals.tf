@@ -5,7 +5,7 @@ locals {
     test_subscription_ids = []
     } : {
     tenant_id             = var.bami_test_settings.tenant_id
-    client_id             = var.bami_test_settings.client_id
+    client_id             = module.bami[0].client_id
     test_subscription_ids = var.bami_test_settings.test_subscription_ids
   }
 

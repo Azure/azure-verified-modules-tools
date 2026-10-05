@@ -147,7 +147,8 @@ function Assert-AvmBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
-        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
+        [ValidateSet('module.azure', 'module.bami[0]')] [string] $ModuleAddress = 'module.azure'
     )
 
     $Settings = Get-AvmBamiSettings -Values $Settings
@@ -164,18 +165,18 @@ function Assert-AvmBamiIdentityPlan {
         throw [System.InvalidOperationException]::new('Candidate Terraform plan must include complete resource changes.')
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
-    $identityAddress = 'module.azure.azapi_resource.identity'
-    $validationCredentialAddress = 'module.azure.azapi_resource.validation_federated_credential'
+    $identityAddress = "$ModuleAddress.azapi_resource.identity"
+    $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential"
     $membershipNames = @{}
     foreach ($groupName in $EntraGroupNames) {
         $key = ConvertTo-Json -InputObject $groupName -Compress
-        $membershipNames["module.azure.azuread_group_member.test_permissions[$key]"] = $groupName
+        $membershipNames["$ModuleAddress.azuread_group_member.test_permissions[$key]"] = $groupName
     }
     $allowed = @(
         $identityAddress,
-        'module.azure.azapi_resource.identity_federated_credentials["pr-check"]',
-        'module.azure.azapi_resource.identity_federated_credentials["integration-test"]',
-        'module.azure.azapi_resource.identity_federated_credentials["examples-test"]',
+        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"pr-check`"]",
+        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"integration-test`"]",
+        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"examples-test`"]",
         $validationCredentialAddress
     )
     $allowed += @($membershipNames.Keys)
@@ -210,12 +211,13 @@ function Assert-AvmBamiIdentityPlan {
     $name = $Repository.Replace('/', '-').Replace('windows', 'w5s')
     $identityId = "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
     if ($identity['parent_id'] -cne $parentId -or $identity['name'] -cne $name -or
+        ($null -ne $identity['id'] -and $identity['id'] -ine $identityId) -or
         $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview') {
         throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
     }
     $dataResources = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
-    $azureContexts = @($dataResources | Where-Object { $_['address'] -ceq 'module.azure.data.azapi_client_config.current' })
-    $graphContexts = @($dataResources | Where-Object { $_['address'] -ceq 'module.azure.data.azuread_client_config.current' })
+    $azureContexts = @($dataResources | Where-Object { $_['address'] -ceq "$ModuleAddress.data.azapi_client_config.current" })
+    $graphContexts = @($dataResources | Where-Object { $_['address'] -ceq "$ModuleAddress.data.azuread_client_config.current" })
     if ($azureContexts.Count -ne 1 -or $graphContexts.Count -ne 1 -or
         $azureContexts[0]['mode'] -cne 'data' -or $graphContexts[0]['mode'] -cne 'data' -or
         $azureContexts[0]['type'] -cne 'azapi_client_config' -or $graphContexts[0]['type'] -cne 'azuread_client_config' -or
@@ -243,6 +245,13 @@ function Assert-AvmBamiIdentityPlan {
         $principal = $identity['output']['properties']['principalId']
         if ($identity['output']['properties']['tenantId'] -ine $Settings['TEST_BAMI_TENANT_ID']) {
             throw [System.InvalidOperationException]::new('Candidate identity output must belong to the pinned BAMI tenant.')
+        }
+        $clientId = [guid]::Empty
+        $client = $identity['output']['properties']['clientId']
+        if ($client -isnot [string] -or -not [guid]::TryParseExact($client, 'D', [ref] $clientId) -or
+            $clientId -eq [guid]::Empty -or
+            $clientId.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID'])) {
+            throw [System.InvalidOperationException]::new('Candidate execution requires a dedicated repository client ID, never the controller or shared Bicep identity.')
         }
     }
     $principalId = [guid]::Empty
@@ -279,7 +288,7 @@ function Assert-AvmBamiIdentityPlan {
     }
     foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
         $address = if ($environment -ceq 'avm-validation') { $validationCredentialAddress } else {
-            'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+            $ModuleAddress + '.azapi_resource.identity_federated_credentials["' + $environment + '"]'
         }
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
         if ($credential['body'] -isnot [System.Collections.IDictionary] -or
@@ -314,8 +323,8 @@ function Assert-AvmBamiIdentityPlan {
         if ($change['mode'] -cne 'managed' -or $before -isnot [System.Collections.IDictionary] -or $null -eq $principal) {
             throw [System.InvalidOperationException]::new('Candidate plans must not delete or replace resources outside verified permission migration or revocation.')
         }
-        $membershipAddress = $change['address'] -ceq 'module.azure.azuread_group_member.example' -or
-            $change['address'] -cmatch '^module\.azure\.azuread_group_member\.test_permissions\["(?:[^"\\]|\\.)+"\]$'
+        $membershipAddress = $change['address'] -ceq "$ModuleAddress.azuread_group_member.example" -or
+            $change['address'] -cmatch ('^' + [regex]::Escape($ModuleAddress) + '\.azuread_group_member\.test_permissions\["(?:[^"\\]|\\.)+"\]$')
         if ($change['type'] -ceq 'azuread_group_member' -and $membershipAddress) {
             $previousGroupId = [guid]::Empty
             $removed = ($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after']
@@ -327,7 +336,7 @@ function Assert-AvmBamiIdentityPlan {
                 continue
             }
         }
-        $ownerAddresses = @('module.azure.azapi_resource.identity_role_assignment', 'module.azure.azapi_resource.identity_role_assignment[0]')
+        $ownerAddresses = @("$ModuleAddress.azapi_resource.identity_role_assignment", "$ModuleAddress.azapi_resource.identity_role_assignment[0]")
         if (($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after'] -and
             $change['address'] -cin $ownerAddresses -and $change['type'] -ceq 'azapi_resource' -and
             $before['body'] -is [System.Collections.IDictionary] -and $before['body']['properties'] -is [System.Collections.IDictionary]) {
@@ -377,175 +386,21 @@ function ConvertTo-AvmBamiConsumerSettings {
     }
 }
 
-function Write-AvmBamiIdentityPlanSummary {
+function Resolve-AvmRepositorySyncContext {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
-        [Parameter(Mandatory)] [object] $Repository,
-        [Parameter(Mandatory)] [string] $TenantId
-    )
-
-    $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
-    $dataResources = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
-    $readField = {
-        param(
-            [AllowNull()] [System.Collections.IDictionary] $Resource,
-            [System.Collections.IDictionary] $Change,
-            [string] $Path
-        )
-
-        $value = if ($Resource) { $Resource['values'] } else { $null }
-        $sensitive = if ($Resource) { $Resource['sensitive_values'] } else { $null }
-        $afterSensitive = $Change['after_sensitive']
-        $unknown = $Change['after_unknown']
-        foreach ($segment in $Path.Split('.')) {
-            if ($value -is [System.Collections.IDictionary]) { $value = $value[$segment] }
-            else { $value = $null }
-            if ($sensitive -is [System.Collections.IDictionary]) { $sensitive = $sensitive[$segment] }
-            if ($afterSensitive -is [System.Collections.IDictionary]) { $afterSensitive = $afterSensitive[$segment] }
-            if ($unknown -is [System.Collections.IDictionary]) { $unknown = $unknown[$segment] }
-        }
-        if ($sensitive -eq $true -or $afterSensitive -eq $true) { return '[redacted: sensitive]' }
-        if ($unknown -eq $true) { return '[unknown until apply]' }
-        if ($null -eq $value) { return '[not present in plan]' }
-        if ($value -is [string]) { return $value }
-        if ($Path -ceq 'body.properties.audiences' -and $value -is [array] -and
-            @($value | Where-Object { $_ -isnot [string] }).Count -eq 0) {
-            return ,$value
-        }
-        return '[unavailable: expected a string or string array]'
-    }
-    $fields = [ordered]@{
-        'module.azure.azapi_resource.identity' = [ordered]@{
-            type = 'type'
-            name = 'name'
-            parent_id = 'parent_id'
-            id = 'id'
-            tenant_id = 'output.properties.tenantId'
-            client_id = 'output.properties.clientId'
-            principal_id = 'output.properties.principalId'
-        }
-    }
-    $federationFields = [ordered]@{
-        type = 'type'
-        name = 'name'
-        parent_id = 'parent_id'
-        issuer = 'body.properties.issuer'
-        audiences = 'body.properties.audiences'
-        subject = 'body.properties.subject'
-    }
-    foreach ($environment in @('pr-check', 'integration-test', 'examples-test')) {
-        $fields['module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'] = $federationFields
-    }
-    $fields['module.azure.azapi_resource.validation_federated_credential'] = $federationFields
-    foreach ($resource in @($resources) + @($Plan['resource_changes'])) {
-        if ($resource['type'] -ceq 'azuread_group_member' -and $resource['mode'] -ceq 'managed') {
-            $fields[$resource['address']] = [ordered]@{ group_object_id = 'group_object_id'; member_object_id = 'member_object_id' }
-        }
-    }
-    foreach ($address in @('module.azure.azapi_resource.identity_role_assignment', 'module.azure.azapi_resource.identity_role_assignment[0]')) {
-        if (@($Plan['resource_changes'] | Where-Object { $_['address'] -ceq $address }).Count -gt 0) {
-            $fields[$address] = [ordered]@{
-                type = 'type'
-                name = 'name'
-                id = 'id'
-                parent_id = 'parent_id'
-                roleDefinitionId = 'body.properties.roleDefinitionId'
-                principalId = 'body.properties.principalId'
-                principalType = 'body.properties.principalType'
-                conditionVersion = 'body.properties.conditionVersion'
-                condition = 'body.properties.condition'
-            }
-        }
-    }
-    $summaryResources = @(
-        foreach ($address in $fields.Keys) {
-            $matchesForAddress = @($resources | Where-Object { $_['address'] -ceq $address })
-            $resource = if ($matchesForAddress.Count -eq 1) { $matchesForAddress[0] } else { $null }
-            $changes = @($Plan['resource_changes'] | Where-Object { $_ -and $_['address'] -ceq $address })
-            $change = if ($changes.Count -eq 1) { $changes[0]['change'] } else { @{} }
-            $actions = @($change['actions'])
-            $fieldChange = $change
-            if ($actions.Count -eq 1 -and $actions[0] -ceq 'delete') {
-                $resource = @{ values = $change['before']; sensitive_values = $change['before_sensitive'] }
-                $fieldChange = @{ after_sensitive = $change['before_sensitive']; after_unknown = @{} }
-            }
-            $entry = [ordered]@{
-                address = $address
-                actions = if ($actions.Count -gt 0 -and @($actions | Where-Object {
-                            $_ -isnot [string] -or $_ -cnotin @('no-op', 'create', 'update', 'delete')
-                        }).Count -eq 0) { ,$actions } else { '[unavailable: missing or ambiguous actions]' }
-            }
-            foreach ($field in $fields[$address].Keys) {
-                $entry[$field] = & $readField -Resource $resource -Change $fieldChange -Path $fields[$address][$field]
-            }
-            $entry
-        }
-    )
-    $groups = @(
-        foreach ($resource in $dataResources) {
-            if ($resource['mode'] -ceq 'data' -and $resource['type'] -ceq 'azuread_group' -and
-                $resource['address'].StartsWith('module.azure.data.azuread_group.test_permissions[')) {
-                [ordered]@{
-                    display_name = & $readField -Resource $resource -Change @{} -Path 'display_name'
-                    object_id = & $readField -Resource $resource -Change @{} -Path 'object_id'
-                }
-            }
-        }
-    )
-    $summary = [ordered]@{
-        repository = $Repository.full_name
-        repository_id = [string]$Repository.id
-        repository_owner_id = [string]$Repository.owner.id
-        expected_tenant_id = $TenantId
-        groups = $groups
-        resources = $summaryResources
-    }
-    Write-Information -MessageData ("BAMI candidate identity plan summary:`n" + (ConvertTo-Json -InputObject $summary -Depth 6)) `
-        -Tags 'AvmBamiIdentityPlanSummary' -InformationAction Continue
-}
-
-function Invoke-AvmBamiIdentityTerraform {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [string[]] $Arguments,
-        [Parameter(Mandatory)] [string] $Root,
-        [Parameter(Mandatory)] [hashtable] $Environment
-    )
-
-    $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
-        -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800
-    if ($result.ExitCode -ne 0) {
-        throw [System.InvalidOperationException]::new("Candidate Terraform $($Arguments[0]) failed; no state repair or automatic apply retry was attempted. $($result.StdErr)")
-    }
-    return $result.StdOut
-}
-
-function Invoke-AvmBamiRepositoryIdentity {
-    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [string] $RepoId,
         [Parameter(Mandatory)] [string] $Repository,
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $BamiValues,
-        [Parameter(Mandatory)] [hashtable] $Backend,
-        [Parameter(Mandatory)] [string] $Root,
-        [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
-        [string] $TemporaryRoot = [System.IO.Path]::GetTempPath(),
-        [bool] $PlanOnly = $true,
-        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames
+        [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $settings = Get-AvmBamiSettings -Values $BamiValues
-    $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
-    $stateKey = Get-AvmBamiIdentityStateKey -TenantId $settings['TEST_BAMI_TENANT_ID'] -RepoId $RepoId
-    $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend
-    if ($Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
-        throw [System.ArgumentException]::new('Candidate identities are limited to the selected Azure AVM repository.')
+    if ($RepoId -cnotmatch '^avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*$' -or
+        $Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
+        throw [System.ArgumentException]::new('Repository sync requires the selected canonical Azure AVM repository.')
     }
     if ($env:GITHUB_REF -cne 'refs/heads/main') {
         throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
@@ -554,100 +409,184 @@ function Invoke-AvmBamiRepositoryIdentity {
     $repo = Invoke-RepositoryGitHubApi -Endpoint "repos/$Repository"
     if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or
         [string]$repo.owner.id -cne $toolsContext.OrganizationId -or $repo.owner.login -cne 'Azure') {
-        throw [System.InvalidOperationException]::new('GitHub returned an unexpected candidate repository identity.')
+        throw [System.InvalidOperationException]::new('GitHub returned an unexpected repository identity.')
     }
-    if (-not $PSCmdlet.ShouldProcess($Repository, 'Prepare an isolated BAMI identity plan')) {
-        return [pscustomobject]@{ Status = 'Preview'; StateKey = $stateKey; ConsumerSettings = $null }
+    return [pscustomobject]@{
+        Repository = $repo
+        RepositoryId = $toolsContext.RepositoryId
+        OrganizationId = $toolsContext.OrganizationId
     }
-    $workspace = Join-Path $TemporaryRoot ('avm-bami-' + [guid]::NewGuid().ToString('N'))
-    $null = [System.IO.Directory]::CreateDirectory($workspace)
-    try {
-        $variablesPath = Join-Path $workspace 'candidate.tfvars.json'
-        $planPath = Join-Path $workspace 'candidate.tfplan'
-        $variables = [ordered]@{
-            tenant_id = $settings['TEST_BAMI_TENANT_ID']
-            subscription_id = $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
-            controller_client_id = $settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
-            identity_resource_group_name = $settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME']
-            entra_group_names = $EntraGroupNames
-            github_repository_owner = $repo.owner.login
-            github_repository_name = $repo.name
-            github_organization_id = [string]$repo.owner.id
-            github_repository_id = [string]$repo.id
-            repository_sync_repository_id = $toolsContext.RepositoryId
-            github_job_workflow_ref = $JobWorkflowRef
+}
+
+function ConvertTo-AvmRepositoryTerraformSettings {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Settings)
+
+    $settings = Get-AvmBamiSettings -Values $Settings
+    return @{
+        tenant_id = $settings['TEST_BAMI_TENANT_ID']
+        controller_client_id = $settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
+        bicep_client_id = $settings['TEST_BAMI_BICEP_CLIENT_ID']
+        admin_subscription_id = $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
+        persistent_subscription_id = $settings['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID']
+        management_group_id = $settings['TEST_BAMI_MANAGEMENT_GROUP_ID']
+        identity_resource_group_name = $settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME']
+        test_subscription_ids = ConvertFrom-AvmTestTenantJson -Json $settings['TEST_BAMI_SUBSCRIPTION_IDS']
+    }
+}
+
+function Assert-AvmRetiredRepositoryIdentityPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]] $Changes,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
+        [Parameter(Mandatory)] [string] $Repository
+    )
+
+    $identityAddress = 'module.azure[0].azapi_resource.identity'
+    $identities = @($Changes | Where-Object { $_['address'] -ceq $identityAddress })
+    if ($identities.Count -ne 1) {
+        throw [System.InvalidOperationException]::new('Partial retired-tenant state requires operator inventory; no objects may be silently forgotten.')
+    }
+    $identity = $identities[0]['change']['before']
+    $tenant = [guid]::Empty
+    $principal = [guid]::Empty
+    if ($identity -isnot [System.Collections.IDictionary] -or
+        $identity['output'] -isnot [System.Collections.IDictionary] -or
+        $identity['output']['properties'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Retired state requires the original identity ownership evidence.')
+    }
+    $properties = $identity['output']['properties']
+    $parentPattern = '^/subscriptions/([0-9a-fA-F-]{36})/resourceGroups/[^/]+$'
+    if (-not [guid]::TryParseExact([string]$properties['tenantId'], 'D', [ref]$tenant) -or
+        $tenant -eq [guid]::Empty -or $tenant.ToString() -ieq $Settings['TEST_BAMI_TENANT_ID'] -or
+        -not [guid]::TryParseExact([string]$properties['principalId'], 'D', [ref]$principal) -or
+        $principal -eq [guid]::Empty -or
+        $identity['parent_id'] -cnotmatch $parentPattern -or
+        $identity['parent_id'].StartsWith("/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/", [StringComparison]::OrdinalIgnoreCase) -or
+        $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview' -or
+        $identity['name'] -cne $Repository.Replace('/', '-').Replace('windows', 'w5s') -or
+        $identity['id'] -ine "$($identity['parent_id'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($identity['name'])") {
+        throw [System.InvalidOperationException]::new('Only the original repository identity in a different, retired tenant may be forgotten; live BAMI ownership must be transferred.')
+    }
+    foreach ($change in $Changes) {
+        $before = $change['change']['before']
+        if ($change['mode'] -cne 'managed' -or (@($change['change']['actions']) -join ',') -cne 'forget' -or
+            $null -ne $change['change']['after'] -or $before -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Retired-tenant entries may only be forgotten without refresh or destruction.')
         }
-        [System.IO.File]::WriteAllText($variablesPath, (ConvertTo-Json -InputObject $variables -Depth 5), [System.Text.UTF8Encoding]::new($false))
-        $environment = @{
-            TF_DATA_DIR = Join-Path $workspace 'data'
-            TF_IN_AUTOMATION = 'true'
-            TF_INPUT = 'false'
-            TF_CLI_ARGS = $null
-            TF_CLI_ARGS_init = $null
-            TF_CLI_ARGS_plan = $null
-            TF_CLI_ARGS_apply = $null
-            GH_TOKEN = $null
-            ARM_TENANT_ID = $settings['TEST_BAMI_TENANT_ID']
-            ARM_SUBSCRIPTION_ID = $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
-            ARM_CLIENT_ID = $settings['TEST_BAMI_CONTROLLER_CLIENT_ID']
-            ARM_CLIENT_SECRET = $null
-            ARM_CLIENT_CERTIFICATE_PATH = $null
-            ARM_CLIENT_CERTIFICATE = $null
-            ARM_ACCESS_KEY = $null
-            ARM_SAS_TOKEN = $null
-            ARM_USE_OIDC = 'true'
-            ARM_USE_CLI = 'false'
-            ARM_USE_MSI = 'false'
+        if ($change['address'] -ceq $identityAddress -and $change['type'] -ceq 'azapi_resource') { continue }
+        if ($change['address'] -ceq 'module.azure[0].azuread_group_member.example' -and
+            $change['type'] -ceq 'azuread_group_member' -and $before['member_object_id'] -ieq $principal.ToString()) {
+            $group = [guid]::Empty
+            if ([guid]::TryParseExact([string]$before['group_object_id'], 'D', [ref]$group) -and $group -ne [guid]::Empty) { continue }
         }
-        $init = @(
-            'init', '-upgrade', '-input=false', '-no-color', '-reconfigure',
-            "-backend-config=storage_account_name=$($state.StorageAccountName)",
-            "-backend-config=container_name=$($state.ContainerName)",
-            "-backend-config=key=$stateKey",
-            "-backend-config=tenant_id=$($state.TenantId)",
-            "-backend-config=subscription_id=$($state.SubscriptionId)",
-            "-backend-config=client_id=$($state.ClientId)",
-            '-backend-config=use_azuread_auth=true', '-backend-config=use_oidc=true',
-            '-backend-config=use_cli=false', '-backend-config=use_msi=false', '-backend-config=lookup_blob_endpoint=false'
-        )
-        $null = Invoke-AvmBamiIdentityTerraform -Arguments $init -Root $Root -Environment $environment
-        $null = Invoke-AvmBamiIdentityTerraform -Arguments @(
-            'plan', '-input=false', '-no-color', '-lock-timeout=5m', "-var-file=$variablesPath", "-out=$planPath"
-        ) -Root $Root -Environment $environment
-        $planJson = Invoke-AvmBamiIdentityTerraform -Arguments @('show', '-json', $planPath) -Root $Root -Environment $environment
-        $plan = ConvertFrom-Json -InputObject $planJson -AsHashtable -Depth 100
-        Assert-AvmBamiIdentityPlan -Plan $plan -Settings $settings -Repository $Repository `
-            -RepositoryId ([string]$repo.id) -RepositoryOwnerId $toolsContext.OrganizationId `
-            -RepositorySyncRepositoryId $toolsContext.RepositoryId -JobWorkflowRef $JobWorkflowRef -EntraGroupNames $EntraGroupNames
-        Write-AvmBamiIdentityPlanSummary -Plan $plan -Repository $repo -TenantId $settings['TEST_BAMI_TENANT_ID']
-        if ($PlanOnly -and @($plan['resource_changes'] | Where-Object {
-                    $_ -and $_['mode'] -ceq 'managed' -and
-                    $_['change']['actions'] -notcontains 'no-op'
-                }).Count -gt 0) {
-            return [pscustomobject]@{ Status = 'PendingCandidateIdentity'; StateKey = $stateKey; ConsumerSettings = $null }
+        if ($change['type'] -ceq 'azapi_resource' -and
+            $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential)$' -and
+            $before['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
+            $before['parent_id'] -ieq $identity['id']) { continue }
+        if ($change['address'] -cin @('module.azure[0].azapi_resource.identity_role_assignment', 'module.azure[0].azapi_resource.identity_role_assignment[0]') -and
+            $change['type'] -ceq 'azapi_resource' -and
+            $before['type'] -ceq 'Microsoft.Authorization/roleAssignments@2022-04-01' -and
+            $before['body'] -is [System.Collections.IDictionary] -and $before['body']['properties'] -is [System.Collections.IDictionary] -and
+            $before['body']['properties']['principalId'] -ieq $principal.ToString() -and
+            $before['body']['properties']['roleDefinitionId'] -ceq '/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635' -and
+            $before['body']['properties']['principalType'] -ceq 'ServicePrincipal') { continue }
+        throw [System.InvalidOperationException]::new('Retired state contains an unexpected address or ownership binding; operator review is required.')
+    }
+}
+
+function Assert-AvmRepositorySyncPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
+        [AllowNull()] [System.Collections.IDictionary] $Settings,
+        [AllowNull()] [object] $Repository,
+        [string] $RepositorySyncRepositoryId,
+        [string[]] $EntraGroupNames = @(),
+        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
+        [string[]] $ResourceTypesThatCannotBeDestroyed = @('github_repository')
+    )
+
+    if ($Plan['errored'] -eq $true -or $Plan['resource_changes'] -isnot [System.Collections.IList] -or
+        $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
+        $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Repository Terraform plan is incomplete or errored.')
+    }
+    $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
+    $addresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $retired = [System.Collections.Generic.List[object]]::new()
+    foreach ($change in $Plan['resource_changes']) {
+        if ($change -isnot [System.Collections.IDictionary] -or $change['address'] -isnot [string] -or
+            $change['change'] -isnot [System.Collections.IDictionary] -or -not $addresses.Add($change['address'])) {
+            throw [System.InvalidOperationException]::new('Repository plan contains missing or ambiguous resource changes.')
         }
-        if ($PlanOnly) {
-            $outputs = $plan['planned_values']['outputs']
-            $identity = if ($outputs -and $outputs.Contains('test_identity')) { $outputs['test_identity']['value'] } else { $null }
-            if ($null -eq $identity -or -not $identity.Contains('client_id') -or [string]::IsNullOrWhiteSpace($identity['client_id'])) {
-                return [pscustomobject]@{ Status = 'PendingCandidateIdentity'; StateKey = $stateKey; ConsumerSettings = $null }
+        if ($change['change']['actions'] -contains 'delete' -and $change['type'] -in $ResourceTypesThatCannotBeDestroyed) {
+            throw [System.InvalidOperationException]::new("Repository plan would destroy protected resource '$($change['address'])'.")
+        }
+        if ($change['address'].StartsWith('module.azure[0].', [StringComparison]::Ordinal)) {
+            $provider = if ($change['type'] -ceq 'azapi_resource') { 'registry.terraform.io/azure/azapi' } else { 'registry.terraform.io/hashicorp/azuread' }
+            if ($change['provider_name'] -cne $provider) {
+                throw [System.InvalidOperationException]::new('Retired state has an unexpected provider binding.')
+            }
+            $retired.Add($change)
+            continue
+        }
+        if ($change['address'].StartsWith('module.github.', [StringComparison]::Ordinal) -and
+            $change['type'] -cmatch '^github_' -and $change['provider_name'] -ceq 'registry.terraform.io/integrations/github') { continue }
+        if ($null -ne $Settings -and $change['address'].StartsWith('module.bami[0].', [StringComparison]::Ordinal) -and
+            (($change['type'] -cmatch '^azapi_' -and $change['provider_name'] -ceq 'registry.terraform.io/azure/azapi') -or
+                ($change['type'] -cmatch '^azuread_' -and $change['provider_name'] -ceq 'registry.terraform.io/hashicorp/azuread'))) { continue }
+        throw [System.InvalidOperationException]::new('Repository plan contains an unexpected resource address or provider binding.')
+    }
+    foreach ($resource in $resources) {
+        if ($resource['mode'] -ceq 'data') { continue }
+        if (-not $addresses.Contains($resource['address'])) {
+            throw [System.InvalidOperationException]::new('Repository plan omits a managed resource change.')
+        }
+    }
+    if ($null -eq $Settings) {
+        if ($retired.Count -gt 0) {
+            throw [System.InvalidOperationException]::new('Repository creation cannot retire identity state.')
+        }
+        return
+    }
+    $githubChanges = @($Plan['resource_changes'] | Where-Object { $_['address'] -ceq 'module.github.github_repository.this' })
+    if ($githubChanges.Count -ne 1 -or $githubChanges[0]['mode'] -cne 'managed' -or $githubChanges[0]['type'] -cne 'github_repository') {
+        throw [System.InvalidOperationException]::new('Repository plan must include exactly the verified GitHub repository.')
+    }
+    $expectedRepository = @{
+        name = $Repository.full_name.Split('/')[1]
+        full_name = $Repository.full_name
+        repo_id = [string]$Repository.id
+    }
+    foreach ($side in @('before', 'after')) {
+        $values = $githubChanges[0]['change'][$side]
+        if ($side -ceq 'before' -and $null -eq $values) { continue }
+        if ($values -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Repository plan has incomplete GitHub ownership values.')
+        }
+        foreach ($field in $expectedRepository.Keys) {
+            if ($side -ceq 'before' -and $field -cne 'repo_id') { continue }
+            $unknown = $githubChanges[0]['change']['after_unknown']
+            if ($side -ceq 'after' -and $field -cne 'name' -and
+                $unknown -is [System.Collections.IDictionary] -and $unknown[$field] -eq $true) { continue }
+            if ([string]$values[$field] -cne $expectedRepository[$field]) {
+                throw [System.InvalidOperationException]::new('Repository plan would manage a different GitHub repository; inspect backend ownership.')
             }
         }
-        else {
-            if (-not $PSCmdlet.ShouldProcess($stateKey, 'Apply the verified candidate identity plan')) {
-                return [pscustomobject]@{ Status = 'Preview'; StateKey = $stateKey; ConsumerSettings = $null }
-            }
-            $null = Invoke-AvmBamiIdentityTerraform -Arguments @(
-                'apply', '-input=false', '-no-color', '-lock-timeout=5m', $planPath
-            ) -Root $Root -Environment $environment
-            $outputsJson = Invoke-AvmBamiIdentityTerraform -Arguments @('output', '-json') -Root $Root -Environment $environment
-            $outputs = ConvertFrom-Json -InputObject $outputsJson -AsHashtable -Depth 30
-            $identity = $outputs['test_identity']['value']
-        }
-        $consumerSettings = ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $settings -Repository $repo
-        return [pscustomobject]@{ Status = 'Ready'; StateKey = $stateKey; ConsumerSettings = $consumerSettings }
     }
-    finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force
+    if ($retired.Count -gt 0) {
+        Assert-AvmRetiredRepositoryIdentityPlan -Changes $retired.ToArray() -Settings $Settings -Repository $Repository.full_name
     }
+    $identityPlan = @{
+        errored = $false
+        resource_changes = @($Plan['resource_changes'] | Where-Object { $_['address'].StartsWith('module.bami[0].', [StringComparison]::Ordinal) })
+        planned_values = @{ root_module = @{ resources = @($resources | Where-Object { $_['address'].StartsWith('module.bami[0].', [StringComparison]::Ordinal) }) } }
+        prior_state = $Plan['prior_state']
+    }
+    Assert-AvmBamiIdentityPlan -Plan $identityPlan -Settings $Settings -Repository $Repository.full_name `
+        -RepositoryId ([string]$Repository.id) -RepositoryOwnerId ([string]$Repository.owner.id) `
+        -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowRef $JobWorkflowRef `
+        -EntraGroupNames $EntraGroupNames -ModuleAddress 'module.bami[0]'
 }

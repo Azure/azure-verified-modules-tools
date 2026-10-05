@@ -476,7 +476,7 @@ Describe 'Terraform effective contract and state wiring' {
     It 'resolves configured display names and creates only dynamic individual edges without a fixed group-ID interface' {
         $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
         $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'variables.tf')
-        $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
+        $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $azure | Should -Match 'resource "azuread_group_member" "test_permissions"'
         $azure | Should -Match 'for_each\s*=\s*var.entra_group_names'
@@ -512,15 +512,18 @@ Describe 'Terraform effective contract and state wiring' {
         $main | Should -Match 'arm_client_id\s*=\s*local.test_settings.client_id'
         $main | Should -Match 'arm_tenant_id\s*=\s*local.test_settings.tenant_id'
         $main | Should -Match 'test_subscription_ids\s*=\s*local.test_settings.test_subscription_ids'
-        $candidate = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'terraform.tf')
-        $candidate | Should -Match 'backend "azurerm" \{\}'
-        $candidate | Should -Not -Match 'provider "github"|storage_account_name\s*='
-        ([regex]::Matches($candidate, 'client_id\s*=\s*var.controller_client_id')).Count | Should -Be 2
-        ([regex]::Matches($candidate, 'use_cli\s*=\s*false')).Count | Should -Be 2
+        $main | Should -Match 'module "bami"'
+        $main | Should -Match 'github_repository_id\s*=\s*module.github.repository_id'
+        $main | Should -Match 'github_organization_id\s*=\s*module.github.organization_id'
+        $main | Should -Not -Match 'depends_on'
+        Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'terraform.tf') | Should -BeFalse
         $retirement = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'retired-identity.tf')
         $retirement | Should -Match '(?s)removed \{\s*from = module.azure\s+lifecycle \{\s*destroy = false'
         $retirement | Should -Not -Match 'module.github|bami-identities|state (rm|mv)|refresh\s*='
         $providers = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'terraform.tf')
+        $providers | Should -Match 'backend "azurerm" \{\}'
+        $providers | Should -Match 'provider "github"'
+        ([regex]::Matches($providers, 'use_cli\s*=\s*false')).Count | Should -Be 2
         $providers | Should -Match 'tenant_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.tenant_id'
         $providers | Should -Match 'client_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.controller_client_id'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
@@ -551,11 +554,9 @@ Describe 'Terraform effective contract and state wiring' {
         $validation | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
         $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
-        $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'bami-identity' 'main.tf')
-        $ordinary | Should -Not -Match 'source\s*=\s*"\./modules/azure"'
-        $bami | Should -Match 'source\s*=\s*"\.\./terraform/modules/azure"'
-        $bami | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
-        $bami | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
+        $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
+        $ordinary | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
+        $ordinary | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
     }
 
     It 'exposes only the verified BAMI test settings to plan-only consumers' {
@@ -563,9 +564,10 @@ Describe 'Terraform effective contract and state wiring' {
         $output | Should -Match '(?s)output "test_settings" \{\s*description\s*=\s*"[^"]+"\s*value\s*=\s*local.test_settings\s*\}'
         $locals = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'locals.tf')
         $locals | Should -Not -Match 'module.azure|var.test_subscription_ids'
-        foreach ($field in @('tenant_id', 'client_id', 'test_subscription_ids')) {
+        foreach ($field in @('tenant_id', 'test_subscription_ids')) {
             $locals | Should -Match ('\b' + $field + '\s*=\s*var.bami_test_settings\.' + $field + '\b')
         }
+        $locals | Should -Match 'client_id\s*=\s*module.bami\[0\].client_id'
         $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
         $subscriptions = ConvertFrom-AvmTestTenantJson -Json $settings.TEST_BAMI_SUBSCRIPTION_IDS
         $subscriptions.Count | Should -Be 28
@@ -573,27 +575,29 @@ Describe 'Terraform effective contract and state wiring' {
         $subscriptions.id | Should -Not -Contain $settings.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
     }
 
-    It 'validates selected settings and trusted main before mutations without an activation switch' {
+    It 'validates settings and trusted main before mutations without a cutover setting' {
         $source = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1')
-        $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation'
+        $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation|stateLayout|state_layout|unified-v1'
         $source | Should -Match '\$env:GITHUB_ACTIONS -eq ''true'''
         $source | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
         $source | Should -Match '\$env:GITHUB_REF -cne ''refs/heads/main'''
         $source.IndexOf('$env:GITHUB_REPOSITORY') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
-        $source.IndexOf('Resolve-AvmRepositorySyncFederationContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
-        $source.IndexOf('Resolve-AvmRepositorySyncFederationContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
+        $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
-        $source.IndexOf('Invoke-AvmBamiRepositoryIdentity') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
-        $source | Should -Match 'if \(\$testTenant.TestTenant -ceq ''bami''\)'
+        $source | Should -Not -Match 'Invoke-AvmBamiRepositoryIdentity|candidateSettings'
+        $source | Should -Match 'ConvertTo-AvmRepositoryTerraformSettings'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $workflow | Should -Match '-bamiSettings \$bamiSettings'
         $source | Should -Match '\[string\]\$repositorySyncRepositoryId = \$env:GITHUB_REPOSITORY_ID'
         $workflow | Should -Not -Match '-repositorySyncRepositoryId'
-        $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled'
+        $workflow | Should -Not -Match 'AVM_BAMI_TEST_TENANT_SYNC_ENABLED|bamiTestTenantSyncEnabled|AVM_REPOSITORY_SYNC_STATE_LAYOUT|StateLayout'
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
-        $helper | Should -Not -Match 'state (mv|rm|push|pull)|force-unlock|Import-Az|az login|Set-Az'
+        $helper | Should -Not -Match 'state (mv|rm|push|pull)|force-unlock|Import-Az|az login|Set-Az|StateLayout|unified-v1'
+        $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'variables.tf')
+        $variables | Should -Not -Match 'state_layout|unified-v1'
     }
 }
