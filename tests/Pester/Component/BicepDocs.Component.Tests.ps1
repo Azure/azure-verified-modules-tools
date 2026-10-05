@@ -161,6 +161,8 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $preview.FilesSelected | Should -Be 2
             $preview.FilesProcessed | Should -Be 2
             $preview.GeneratedReadmes.Count | Should -Be 2
+            $preview.ValidationSummary.Total | Should -Be 2
+            $preview.ValidationSummary.Failed | Should -Be 2
             $preview.GeneratedReadmes[0].Content | Should -BeExactly "# Root`n"
             @($preview.Issues | Where-Object { $_.Code -eq 'avm.bicep.docs-missing' }).Count |
                 Should -Be 2
@@ -170,6 +172,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $written.Status | Should -BeExactly 'pass'
             $written.Changed.Count | Should -Be 2
             $written.FilesProcessed | Should -Be 2
+            $written.ValidationSummary | Should -BeNullOrEmpty
             [System.IO.File]::ReadAllText((Join-Path $F.Module 'README.md')) |
                 Should -BeExactly "# Root`n"
             [System.IO.File]::ReadAllText((Join-Path $F.Module 'child' 'README.md')) |
@@ -180,6 +183,8 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $clean.Status | Should -BeExactly 'pass'
             $clean.Issues.Count | Should -Be 0
             $clean.Changed.Count | Should -Be 0
+            $clean.ValidationSummary.Total | Should -Be 4
+            $clean.ValidationSummary.Passed | Should -Be 4
             [System.IO.File]::GetLastWriteTimeUtc((Join-Path $F.Module 'README.md')) |
                 Should -Be $before
             $script:references | Should -Contain 'avm/res/storage/storage-account'
@@ -187,6 +192,42 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             foreach ($path in $script:customPaths) {
                 Test-Path -LiteralPath $path | Should -BeFalse
             }
+            [System.IO.File]::WriteAllBytes((Join-Path $F.Module 'README.md'), [byte[]]@())
+            $empty = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $empty.Status | Should -Be 'fail'
+            $empty.ValidationSummary.Total | Should -Be 4
+            $empty.ValidationSummary.Failed | Should -Be 1
+            $empty.Issues.Code | Should -Contain 'avm.bicep.docs-stale'
+            $empty.Issues.Code | Should -Not -Contain 'avm.bicep.docs-missing'
+        }
+    }
+
+    It 'rejects an incomplete native README run: <Kind>' -ForEach @(
+        @{ Kind = 'unregistered'; Expected = -1; Passed = 4; Failed = 0 }
+        @{ Kind = 'missing test'; Expected = 4; Passed = 3; Failed = 0 }
+        @{ Kind = 'unmapped failure'; Expected = 4; Passed = 3; Failed = 1 }
+    ) {
+        $fixture = New-BicepDocsFixture -Name ('incomplete-' + $Kind.Replace(' ', '-'))
+        InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture; Expected = $Expected; Passed = $Passed; Failed = $Failed } {
+            param($F, $Expected, $Passed, $Failed)
+            $script:expectedCount = $Expected
+            $script:passedCount = $Passed
+            $script:failedCount = $Failed
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = "# Generated`n"; StdErr = '' } }
+            Mock Invoke-AvmBicepPesterSuite {
+                $ConventionData.NativeReadmeExpected = $script:expectedCount
+                @{
+                    Version = 'test'; Total = $script:passedCount + $script:failedCount
+                    Passed = $script:passedCount; Failed = $script:failedCount
+                    Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+                }
+            }
+            $result = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
+            $result.Status | Should -Be 'fail'
+            $result.Issues.Code | Should -Contain 'avm.bicep.docs-suite-incomplete'
         }
     }
 
@@ -514,9 +555,10 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $result.GeneratedReadmes.Count | Should -Be 1
             $result.GeneratedReadmes[0].Path | Should -BeExactly 'avm/res/storage/storage-account/README.md'
             $result.GeneratedReadmes[0].Content | Should -BeExactly "# Parent`n"
-            @($result.Issues | Where-Object { $_.Code -eq 'avm.bicep.docs-render-failed' }).Count |
-                Should -Be 1
-            $result.Issues[1].Message | Should -Match 'BCP426: child failure'
+            $failure = @($result.Issues | Where-Object { $_.Code -eq 'avm.bicep.docs-render-failed' })
+            $failure | Should -HaveCount 1
+            $failure[0].Message | Should -Match 'BCP426: child failure'
+            $failure[0].File | Should -BeExactly 'avm/res/storage/storage-account/child/README.md'
             Test-Path -LiteralPath (Join-Path $F.Module 'README.md') | Should -BeFalse
         }
     }

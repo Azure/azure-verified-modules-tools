@@ -123,6 +123,11 @@ The Pester 6 full gate and Pester 5 focused run pass; native-only controls
 execute 22 layout and four publication cases. Default unit compliance,
 native README comparison, complete package acceptance and CI review remain.
 
+The [native README slice](2026-10-05-native-readme-compliance.md) moves
+existence, byte comparison and grouping-comment advisories into packaged Pester.
+The full Pester 6 gate, focused Pester 5 checks and five real compiler-only docs
+integration cases pass. The default unit compliance route is the next change.
+
 ## Blockers or dependencies
 
 Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's
