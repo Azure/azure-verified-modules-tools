@@ -23,55 +23,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Read-TransferImage {
-    param([string] $Path)
-
-    $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $Path).Path)
-    $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xfeff)
-    $state = ConvertFrom-Json -InputObject $text -AsHashtable -Depth 100
-    $lineage = [guid]::Empty
-    if ($state -isnot [System.Collections.IDictionary] -or $state['version'] -ne 4 -or
-        $state['serial'] -isnot [long] -or $state['serial'] -lt 0 -or
-        -not [guid]::TryParseExact([string]$state['lineage'], 'D', [ref]$lineage) -or $lineage -eq [guid]::Empty -or
-        $state['resources'] -isnot [System.Collections.IList] -or $state['outputs'] -isnot [System.Collections.IDictionary]) {
-        throw 'State inspection requires a valid version-4 snapshot with serial, lineage, resources, and outputs.'
-    }
-    foreach ($resource in $state['resources']) {
-        if ($resource -isnot [System.Collections.IDictionary] -or $resource['mode'] -cnotin @('managed', 'data') -or
-            $resource['instances'] -isnot [System.Collections.IList] -or
-            $resource['instances'].Count -eq 0) {
-            throw 'An empty or unrecognized resource entry requires operator review.'
-        }
-        foreach ($instance in $resource['instances']) {
-            if ($instance -isnot [System.Collections.IDictionary] -or $instance['attributes'] -isnot [System.Collections.IDictionary] -or
-                $instance.Contains('deposed') -or $instance.Contains('status')) {
-                throw 'Deposed, tainted, or unrecognized instances require operator review before transfer.'
-            }
-            if ($resource['mode'] -ceq 'managed' -and [string]::IsNullOrWhiteSpace([string]$instance['attributes']['id'])) {
-                throw 'A managed instance without its resource ID requires operator review.'
-            }
-        }
-    }
-    return @{
-        State = $state
-        Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
-    }
-}
-
-function Assert-TransferValueEqual {
-    param($Actual, $Expected, [string] $Label)
-
-    $equal = [Text.Json.Nodes.JsonNode]::DeepEquals(
-        [Text.Json.Nodes.JsonNode]::Parse((ConvertTo-Json -InputObject $Actual -Depth 100 -Compress)),
-        [Text.Json.Nodes.JsonNode]::Parse((ConvertTo-Json -InputObject $Expected -Depth 100 -Compress))
-    )
-    if (-not $equal) { throw "$Label changed unexpectedly; no state image is approved for publication." }
-}
-
-function Get-TransferResourceKey {
-    param([System.Collections.IDictionary] $Resource)
-    return "$($Resource['module'])|$($Resource['mode'])|$($Resource['type'])|$($Resource['name'])"
-}
+. (Join-Path $PSScriptRoot 'lib' 'StateImages.ps1')
 
 $source = Read-TransferImage $SourceBefore
 $destination = Read-TransferImage $DestinationBefore
@@ -189,6 +141,9 @@ if ($drained.State['resources'].Count -ne 0 -or $merged.State['resources'].Count
 foreach ($resource in $merged.State['resources']) {
     $key = Get-TransferResourceKey $resource
     if (-not $expectedResources.ContainsKey($key)) { throw 'Unexpected resource address after the staged move.' }
+    foreach ($image in @($resource, $expectedResources[$key])) {
+        $image['instances'] = @($image['instances'] | Sort-Object { ConvertTo-Json -InputObject $_['index_key'] -Compress })
+    }
     Assert-TransferValueEqual $resource $expectedResources[$key] "Resource $key (including private data)"
     $expectedResources.Remove($key)
 }

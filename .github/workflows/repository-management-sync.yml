@@ -77,11 +77,103 @@ jobs:
           clientId: ${{ vars.AVM_APP_CLIENT_ID }}
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
+  migrate-state:
+    name: Consolidate repository state
+    if: github.repository == 'Azure/azure-verified-modules-tools' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: avm
+    needs: generate-matrix
+    timeout-minutes: 330
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      ready: ${{ steps.migration.outputs.ready }}
+    steps:
+      - name: Checkout migration code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Validate migration backend
+        shell: pwsh
+        env:
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+        run: |
+          . ./scripts/lib/TerraformOperations.ps1
+          $null = Resolve-RepositorySyncStateConfiguration -Backend @{
+            TenantId = $env:ARM_BACKEND_TENANT_ID
+            SubscriptionId = $env:ARM_BACKEND_SUBSCRIPTION_ID
+            ClientId = $env:ARM_BACKEND_CLIENT_ID
+            StorageAccountName = $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME
+            ContainerName = $env:ARM_BACKEND_STORAGE_CONTAINER_NAME
+          }
+
+      - name: Sign in with existing state-only identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Inspect or migrate all former BAMI states
+        id: migration
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+          $backend = @{
+            TenantId = $env:ARM_BACKEND_TENANT_ID
+            SubscriptionId = $env:ARM_BACKEND_SUBSCRIPTION_ID
+            ClientId = $env:ARM_BACKEND_CLIENT_ID
+            StorageAccountName = $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME
+            ContainerName = $env:ARM_BACKEND_STORAGE_CONTAINER_NAME
+          }
+          $bami = @{}
+          foreach ($name in @(
+            'TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID',
+            'TEST_BAMI_SUBSCRIPTION_IDS', 'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME',
+            'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
+          )) {
+            $bami[$name] = [Environment]::GetEnvironmentVariable($name)
+          }
+          ./scripts/Invoke-RepositoryStateMigration.ps1 -Backend $backend -BamiSettings $bami `
+            -PlanOnly:($env:PLAN_ONLY -eq 'true') -Confirm:$false
+
   run-sync:
     name: Sync ${{ matrix.repoName }}
     runs-on: ubuntu-latest
     environment: avm
-    needs: generate-matrix
+    needs: [generate-matrix, migrate-state]
+    if: needs.migrate-state.outputs.ready == 'true'
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJson(needs.generate-matrix.outputs.matrixParallel) }}

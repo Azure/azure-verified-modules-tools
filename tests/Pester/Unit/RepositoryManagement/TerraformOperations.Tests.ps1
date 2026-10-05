@@ -152,7 +152,7 @@ Describe 'State identity wiring' {
         $source.IndexOf('Invoke-TerraformPlanAndApply') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
     }
 
-    It 'uses explicit BAMI provider inputs and OIDC backend metadata without CLI login' {
+    It 'uses explicit BAMI provider inputs and OIDC backend metadata without CLI login in ordinary workers' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
@@ -171,7 +171,14 @@ Describe 'State identity wiring' {
             $syncStep | Should -Match ($name + '\s*=\s*\$env:' + $name + '\b')
         }
         $syncStep | Should -Match '-bamiSettings \$bamiSettings'
-        $workflow | Should -Not -Match 'azure/login|gh auth login'
+        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*$').Value
+        $worker | Should -Not -BeNullOrEmpty
+        $worker | Should -Not -Match 'azure/login|gh auth login'
+        $workflow | Should -Not -Match 'gh auth login'
+        $migration = [regex]::Match($workflow, '(?ms)^  migrate-state:.*?(?=^  run-sync:)').Value
+        $migration | Should -Match 'azure/login@'
+        $migration | Should -Match 'allow-no-subscriptions: true'
+        $migration | Should -Not -Match 'subscription-id:'
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'

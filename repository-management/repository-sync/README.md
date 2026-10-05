@@ -43,7 +43,11 @@ never pass tokens, SAS credentials, or account keys through `-backend-config`.
 The state UAMI trusts the same repository-ID/`avm` environment subject as the
 existing provider UAMI, in its own tenant.
 
-No Azure CLI login or automatic lock repair runs during sync. Providers use
+Ordinary sync does not use Azure CLI login or automatic lock repair. The temporary
+migration job signs in with the existing TME state identity for private blob
+reads and create-only backups; tenant-only login needs no subscription Reader
+role. Native Terraform still uses explicit OIDC backend authentication, not CLI
+fallback. Providers use
 the verified BAMI tenant, administration subscription, and controller from the
 settings bundle; old `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`
 and legacy subscription/group inputs are no longer source requirements.
@@ -73,7 +77,8 @@ references. PowerShell and managed-file generation do not need to provision an
 identity first. The eight-field producer and five-field Bicep projection remain
 unchanged. This is not a shared state for all repositories.
 
-Manual `plan_only` defaults to `true`. Both paths produce one complete native
+Manual `plan_only` defaults to `true`. Once state consolidation is ready, both
+paths produce one complete native
 plan, even when a new identity's client ID is unknown. Apply validates that saved
 plan and applies it once. Identity replacements, foreign GitHub ownership,
 unexpected addresses/providers, and unrelated identity deletions are rejected.
@@ -94,56 +99,86 @@ failure instead of reporting an unrelated Projects-permission error.
 
 ## One-time state consolidation
 
-Use a coordinated cutover without a configuration setting. Before merging or
-running this source, obtain approval and freeze every writer, including queued
-runs, retries of old revisions, schedules, dispatches, and manual Terraform.
-Inventory every former BAMI state, including excluded repositories and
-incomplete prior runs. Keep the freeze through ownership transfer, verification,
-and the coordinated switch to the unified code. Normal sync never performs
-migration or checks a separate source state; passing source CI does not make an
-unconsolidated repository safe to run.
+Use a coordinated cutover without a configuration setting. The temporary
+`migrate-state` workflow prerequisite runs
+[`Invoke-RepositoryStateMigration.ps1`](scripts/Invoke-RepositoryStateMigration.ps1)
+before ordinary workers. It inventories the configured container's entire
+`bami-identities/<TEST_BAMI_TENANT_ID>/` prefix, recovery records, and ordinary
+`avm-*.tfstate` keys. Repository selection and exclusions limit ordinary
+configuration changes, not this inventory or ownership transfer. An excluded or
+archived repository still receives its required state transfer. A repository
+whose earlier run failed before sync is checked too; absence of a former source
+is not replaced with an invented state.
 
-Under an approved writer freeze, inventory and preserve untouched backups of
-`bami-identities/<tenantGuid>/<repoId>.tfstate` and `<repoId>.tfstate`. Move the
-whole source `module.azure` to destination `module.bami[0]` on working copies
-using native `terraform state mv -state=... -state-out=...`. Do not select only
-currently desired resources: legacy membership and direct Owner objects must
-move too, so the guarded plan can retire them deliberately. Leave destination
-`module.azure[0]` for the existing, bounded old-tenant forget-only retirement.
+The script defaults to preview. The workflow explicitly passes its existing
+`plan_only` value; no additional activation or approval input is introduced.
+
+The job verifies backend identity, private container access, GitHub IDs, BAMI
+scope, four federation subjects, default providers, and unique ownership.
+It prepares every transfer before publication, using native
+`terraform state mv -state=... -state-out=...` on local copies to move the whole
+source `module.azure` into ordinary `module.bami[0]`. Obsolete membership and
+direct Owner objects move too, preserving ownership for the normal plan's exact
+retirement guards. Destination `module.azure[0]` remains the bounded,
+old-tenant forget-only retirement.
 
 [`Test-RepositoryStateTransfer.ps1`](scripts/Test-RepositoryStateTransfer.ps1)
-only inspects four local before/after files. It checks original hashes, separate
-lineages, one native move's serial increments, frozen GitHub/BAMI identity
+still only inspects four local before/after files and is reused by migration.
+It checks original hashes, separate lineages, one native move's serial increments, GitHub/BAMI identity
 values, default provider bindings, complete address transfer, and preservation
 of attributes, private metadata, sensitive paths, and original outputs.
 Tainted/deposed instances, namespace or physical-object ownership collisions,
-missing original ownership, and changed snapshots require operator review.
-An absent destination or a partial source without its identity output needs a
-separate frozen-inventory procedure; do not invent an empty state or relax
-checks to proceed.
+missing original ownership, and changed snapshots stop before publication.
+An absent destination, partial source, ambiguous repository alias, or incomplete
+recovery record requires operator review; the workflow does not guess a repair.
+
+Before either push, the job creates and reads back
+`bami-consolidation/<tenantGuid>/<repoId>/backup.zip` in the existing private
+container. It contains untouched originals, locally staged images, exact scope,
+tool version, and SHA-256 hashes. Uploads use create-only conditions and hash
+verification, not immutability policies or cryptographic signatures. States
+are published only through native locked `terraform state push`, source first,
+with exact checkpoint checks between operations. No raw state-blob overwrite,
+force push, lease break, or import is used. Private snapshots are never uploaded
+as GitHub artifacts.
 
 Native moves retain root outputs in their original state rather than copying
 them, and clear affected dependency caches. The unified root declares the
 identity/group outputs and rebuilds dependencies on its first guarded apply.
 Keep the drained source and untouched backups; do not delete state to migrate.
-Native publication can advance serial again, so a published snapshot is not
-necessarily byte-identical to the staged file. The local proof covers this
-behavior; confirm the actual backend's expected persistence behavior before
-approving publication.
+Native publication advances serial again; the job verifies the published
+content, lineage, and expected serial rather than assuming byte equality with
+the staged file. A create-only `complete.json` records the accepted publication.
+Later runs accept legitimate ordinary destination serial, output, and membership
+changes while requiring unchanged identity/federation owners and the exact
+drained source. They do not repeat completed transfers.
 
-Cross-state publication is not atomic. The proposed cutover writes the drained
-source first, then the combined destination, with all writers still stopped.
-This avoids duplicate ownership but creates a temporary ownership gap.
-An interrupted cutover must inspect both current images against the recorded
-stage and publication checkpoints before completing the missing step. Never
-blindly restore an older snapshot, force a push, disable locking, or retry apply.
-Backend provenance, frozen inventory, a safe maintenance authentication context,
-the no-unintended-create/destroy/replace plan, and publication all require
-separate operator approval. Verify single ownership for every inventoried
-repository before merging or selecting the approved unified revision under the
-freeze. Then obtain separate approval for the canary apply and writer resumption.
-Do not rerun the old split writer after transfer. Offline checks do not establish
-live readiness.
+Cross-state publication is not atomic: source-first publication creates a
+temporary ownership gap without duplicate ownership. An interrupted run may
+resume only an exact recorded checkpoint, completing the missing push or
+completion record. Unknown changes, locks, authentication failures, and timeouts
+stop without automatic state-write retries. Keep every old or out-of-workflow
+writer paused during recovery; never restore snapshots blindly.
+
+1. Obtain approval, freeze schedules, queued/active old revisions, dispatches,
+   retries, and manual writers, then coordinate the merge. The user/operator
+   controls that freeze; this code never cancels or disables runs.
+1. On approved main, `plan_only=true` performs read-only remote inventory and
+   local staging. It creates no backup/checkpoint blobs and pushes no states.
+   Pending migrations make `ready=false`, visibly skipping ordinary workers
+   rather than planning duplicate identities.
+1. An explicitly approved `plan_only=false` run performs the complete transfer,
+   verifies single ownership, then runs the selected ordinary saved plan/apply.
+   Scheduled and repository-dispatch runs also use apply mode, so keep their
+   launch under operator control. The existing `repository-sync` concurrency
+   group serializes revisions; conflicting active/old queued runs are reported,
+   not cancelled. A rerun after interruption rechecks recovery before writing.
+1. Review migration and normal-plan outcomes, including excluded repositories,
+   before approving writer resumption. Never rerun the split writer. Remove the
+   temporary migration support only in the later cleanup change after verification.
+
+Passing source CI does not establish live inventory, access, or operational
+readiness, and does not authorize a cutover.
 
 Before any operator-approved BAMI run, verify the bootstrap group's Owner
 assignment retains the
