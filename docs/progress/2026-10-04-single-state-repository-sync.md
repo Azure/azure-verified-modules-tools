@@ -1,6 +1,6 @@
 # Single-state repository sync
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-04
 **Updated**: 2026-10-05
 **Branch**: `jaredfholgate-single-state-repository-sync`
@@ -43,7 +43,7 @@ change before resumption.
 - [x] Prepare the follow-up commit and corrected same-draft procedure.
 - [x] Reproduce and remove the hosted integration test's global Terraform dependency.
 - [x] Validate and prepare the coupled test correction.
-- [ ] Verify actual hosted results at the corrected head.
+- [x] Verify actual hosted results at the corrected head.
 
 ## Validation
 
@@ -85,8 +85,8 @@ failed only the four state-transfer cases during container setup. The new test u
 `Get-Command terraform` even though integration jobs resolve native tools from
 the AVM cache rather than a global PATH entry. Logs from both fixtures on Linux,
 Windows, and macOS confirm the same cause. Unit/component, lint, workflow, and
-Config checks passed. This is a source regression, not an external installer or
-provider failure; hosted verification of its correction is still pending.
+Config checks passed. This was a source regression, not an external installer or
+provider failure.
 Removing global Terraform directories from only the reproduction process's PATH
 reproduced the same four-case setup failure locally. The suite now resolves the
 lock-pinned executable through `Resolve-AvmTool`, matching the other integration
@@ -98,6 +98,16 @@ The repeated full `.\build.ps1 pre-commit` passed layout, lint, 2,897 unit
 and 1,292 component tests after this correction, with the same nine unit
 and one component skips. No installer, workflow, pin, or runtime changes
 were needed.
+
+Correction commit `ba8e405b03fd9b25243b9f67081c9f47b260852b` passed all 19
+hosted checks. Both
+[Authoring CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37283819394)
+and
+[Config tests](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37283819384)
+completed successfully. Downloaded integration result artifacts confirm all four
+native state-transfer cases passed without skips in each of the six
+fixture/platform combinations (24 passes). This verifies the source correction,
+not live inventory, state transfer, merge, or writer resumption.
 
 ## Blockers or dependencies
 
