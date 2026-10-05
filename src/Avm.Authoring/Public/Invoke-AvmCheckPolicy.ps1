@@ -15,6 +15,7 @@ function Invoke-AvmCheckPolicy {
         Bicep policy checks use repository-local ps-rule.yaml and .ps-rule/
         under utilities/pipelines/staticValidation/psrule. PSRule 2.9.0 and
         PSRule.Rules.Azure 1.47.0 must be installed separately. Set
+        TEST_SUBSCRIPTION_IDS (the first entry is used) or
         VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* variables for tokens used by the selected tests.

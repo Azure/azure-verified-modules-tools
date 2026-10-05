@@ -41,6 +41,7 @@ function Invoke-AvmBicepNativeTestCase {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
     if (-not $PSCmdlet.ShouldProcess($Item.Case.RelativeDirectory, 'Run native Bicep deployment test')) {
@@ -154,10 +155,10 @@ function Invoke-AvmBicepNativeTestCase {
                 $state['ownedResourceGroups'] = @(@{ id = $groupId; runId = $Item.RunId })
                 Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
                 $group = New-AzResourceGroup -Name $groupName -Location $selectedLocation `
-                    -Tag @{ 'avm-e2e-run-id' = $Item.RunId } -ErrorAction Stop
+                    -Tag @{ $ownerTag = $Item.RunId } -ErrorAction Stop
                 if ((Get-AvmPropertyValue -InputObject $group -Name 'ResourceId') -ine $groupId -or
                     (Get-AvmPropertyValue -InputObject (
-                        Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name 'avm-e2e-run-id') -cne $Item.RunId) {
+                        Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name $ownerTag) -cne $Item.RunId) {
                     throw [AvmProcessException]::new('The new resource group identity and ownership tag could not be verified.')
                 }
             }

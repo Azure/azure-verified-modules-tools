@@ -330,6 +330,40 @@ Describe 'Test-AvmPins' {
         }
     }
 
+    Context 'powerShellModules' {
+        It 'accepts exact module versions' {
+            $pins = script:NewValidLock
+            $pins.powerShellModules = @{ 'PSRule.Rules.Azure' = '1.47.0'; 'powershell-yaml' = '0.4.12' }
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
+                param($L)
+                Test-AvmPins -Pins $L | Should -BeTrue
+            }
+        }
+
+        It 'rejects <Label>' -ForEach @(
+            @{ Label = 'an empty section'; Modules = @{}; Message = '*non-empty object*' }
+            @{ Label = 'a version range'; Modules = @{ PSRule = '[2.9.0,)' }; Message = '*is not semver*' }
+            @{ Label = 'a nonstring version'; Modules = @{ PSRule = 2 }; Message = '*is not semver*' }
+            @{ Label = 'an invalid module name'; Modules = @{ '../PSRule' = '2.9.0' }; Message = '*not a valid module name*' }
+        ) {
+            $pins = script:NewValidLock
+            $pins.powerShellModules = $Modules
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins; M = $Message } {
+                param($L, $M)
+                { Test-AvmPins -Pins $L } | Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage $M
+            }
+        }
+
+        It 'returns bundled pins and rejects an unpinned module' {
+            InModuleScope 'Avm.Authoring' {
+                Get-AvmPowerShellModulePin -Name 'PSRule' | Should -Be ([version]'2.9.0')
+                Get-AvmPowerShellModulePin -Name 'PSRule.Rules.Azure' | Should -Be ([version]'1.47.0')
+                Get-AvmPowerShellModulePin -Name 'powershell-yaml' | Should -Be ([version]'0.4.12')
+                { Get-AvmPowerShellModulePin -Name 'Az.Accounts' } |
+                    Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage "*no powerShellModules pin for 'Az.Accounts'*"
+            }
+        }
+    }
     Context 'bundled production pin manifest' {
         It 'is valid under the strict (https-only) schema' {
             InModuleScope 'Avm.Authoring' {

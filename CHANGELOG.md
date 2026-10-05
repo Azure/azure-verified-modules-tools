@@ -107,6 +107,13 @@ section when cutting a release.
 
 ### Changed
 
+- The Bicep e2e ownership tag, run-ID pattern and convention exemptions now
+  live in `Resources/bicep/settings.json`, and the PowerShell module pins
+  (`powershell-yaml`, `PSRule`, `PSRule.Rules.Azure`) live in the
+  `powerShellModules` section of `Resources/avm.pins.jsonc`. Ownership checks
+  share one helper. Run IDs must now be exactly 32 lowercase hex characters
+  with no trailing newline, and ownership is refused rather than guessed
+  when a resource carries several case-variant owner tags.
 - Network reads now share one bounded retry for transient failures (HTTP
   408, 429 and 5xx, timeouts and connection resets), with capped exponential
   backoff, `Retry-After` support and limits in `Resources/network.json`.

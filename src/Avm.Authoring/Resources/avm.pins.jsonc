@@ -238,5 +238,19 @@
   "tflintPlugins": {
     "terraform": "0.15.0",
     "avm": "1.0.0"
+  },
+
+  // ===========================================================================
+  // powerShellModules -- exact Gallery module versions loaded on demand
+  // ===========================================================================
+  //
+  // Bicep policy checks load PSRule and PSRule.Rules.Azure, and Bicep workflow
+  // checks load powershell-yaml. They are never installed automatically; the
+  // checks require these exact versions and say how to install them.
+  // scripts/Install-AvmBuildPrerequisites.ps1 reads the powershell-yaml pin.
+  "powerShellModules": {
+    "powershell-yaml": "0.4.12",
+    "PSRule": "2.9.0",
+    "PSRule.Rules.Azure": "1.47.0"
   }
 }

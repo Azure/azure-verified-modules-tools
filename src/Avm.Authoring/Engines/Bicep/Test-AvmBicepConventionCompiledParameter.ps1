@@ -21,14 +21,15 @@ function Test-AvmBicepConventionCompiledParameter {
     $ErrorActionPreference = 'Stop'
 
     $issues = [System.Collections.Generic.List[object]]::new()
+    $nameExceptions = @((Get-AvmBicepConfiguration)['conventionExemptions']['parameterNameExceptions'])
     $parameters = $Template['parameters']
     $definitions = $Template['definitions']
     foreach ($entry in @(Get-AvmBicepConventionParameter -Template $Template)) {
         $schema = $entry.Schema
         $leaf = ($entry.Name -split '\.')[-1]
-        $exceptions = @('bandwidthPercentage_SMB', 'priorityValue8021Action_Cluster', 'priorityValue8021Action_SMB')
-        $excepted = $Scope.ModuleRelativePath -clike 'avm/res/azure-stack-hci/cluster/deployment-settings*' -and
-        $leaf -cin $exceptions
+        $excepted = @($nameExceptions | Where-Object {
+                $Scope.ModuleRelativePath -clike $_['modulePathPattern'] -and $leaf -cin $_['parameters']
+            }).Count -gt 0
         if (-not $excepted -and
             ($leaf -cnotmatch '^[a-z]' -or $leaf.Contains('-') -or $leaf.Contains('_'))) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $SourcePath `

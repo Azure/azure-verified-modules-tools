@@ -13,6 +13,7 @@ function Test-AvmBicepConventionLayout {
     $ErrorActionPreference = 'Stop'
 
     $issues = [System.Collections.Generic.List[object]]::new()
+    $exemptions = (Get-AvmBicepConfiguration)['conventionExemptions']
     $items = @(Get-ChildItem -LiteralPath $Scope.Path -Force)
     $source = @($items | Where-Object { $_.Name -ieq 'main.bicep' })
     $metadata = @($items | Where-Object { $_.Name -ceq 'metadata.json' })
@@ -97,7 +98,7 @@ function Test-AvmBicepConventionLayout {
         else {
             foreach ($scopeName in $Scope.ScopeDirectories) {
                 foreach ($kind in @('waf-aligned', 'defaults')) {
-                    if ($Scope.ModuleName -ceq 'aad/domain-service' -and $kind -ceq 'defaults') {
+                    if ($kind -ceq 'defaults' -and $Scope.ModuleRelativePath -cin $exemptions['defaultsTestOptionalModules']) {
                         continue
                     }
                     if (@($testFolders | Where-Object { $_.Name -clike "$scopeName*.$kind" }).Count -eq 0) {
@@ -110,16 +111,6 @@ function Test-AvmBicepConventionLayout {
         }
     }
 
-    $allowedIgnoreModules = @(
-        'avm/res/azure-stack-hci/cluster',
-        'avm/res/azure-stack-hci/cluster/deployment-setting',
-        'avm/res/azure-stack-hci/logical-network',
-        'avm/res/azure-stack-hci/marketplace-gallery-image',
-        'avm/res/azure-stack-hci/network-interface',
-        'avm/res/azure-stack-hci/virtual-hard-disk',
-        'avm/res/azure-stack-hci/virtual-machine-instance',
-        'avm/res/cache/redis'
-    )
     foreach ($folder in $testFolders) {
         if ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $folder.FullName `
@@ -145,7 +136,7 @@ function Test-AvmBicepConventionLayout {
             continue
         }
         if ($Scope.ModuleType -ceq 'res' -and $folder.Name -cmatch '(defaults|waf-aligned)$' -and
-            $Scope.ModuleRelativePath -cnotin $allowedIgnoreModules) {
+            $Scope.ModuleRelativePath -cnotin $exemptions['e2eIgnoreAllowedModules']) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $ignore[0].FullName `
                         -Code 'avm.bicep.e2eignore-required-test' `
                         -Message 'Resource defaults and waf-aligned tests cannot be excluded from deployment.'))

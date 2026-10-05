@@ -10,8 +10,8 @@ function Test-AvmPins {
 
         Schema rules are documented at the head of Resources/avm.pins.jsonc.
 
-        The 'tools' array is required. The 'policyLibrary' and 'tflintPlugins'
-        sections are optional so fixture manifests can pin tools alone, but are
+        The 'tools' array is required. The 'policyLibrary', 'tflintPlugins' and
+        'powerShellModules' sections are optional so fixture manifests can pin tools alone, but are
         fully validated whenever present.
     #>
     [CmdletBinding()]
@@ -279,6 +279,24 @@ function Test-AvmPins {
                 if ([string]$plugins[$name] -notmatch $semverRegex) {
                     throw [System.Data.DataException]::new(
                         "avm.pins: tflintPlugins['$name'] '$($plugins[$name])' is not semver.")
+                }
+            }
+        }
+
+        if ($Pins.ContainsKey('powerShellModules')) {
+            $modules = $Pins['powerShellModules']
+            if ($modules -isnot [hashtable] -or $modules.Count -eq 0) {
+                throw [System.Data.DataException]::new(
+                    "avm.pins: 'powerShellModules' must be a non-empty object.")
+            }
+            foreach ($name in $modules.Keys) {
+                if ($name -cnotmatch '^[A-Za-z][A-Za-z0-9.-]*$') {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: powerShellModules key '$name' is not a valid module name.")
+                }
+                if ($modules[$name] -isnot [string] -or $modules[$name] -notmatch $semverRegex) {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: powerShellModules['$name'] '$($modules[$name])' is not semver.")
                 }
             }
         }

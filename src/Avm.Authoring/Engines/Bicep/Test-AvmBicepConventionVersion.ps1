@@ -42,7 +42,7 @@ function Test-AvmBicepConventionVersion {
                             -Code 'avm.bicep.version-format' -Line 1 `
                             -Message 'version.json must declare a major.minor version.'))
             }
-            elseif ($Scope.ModuleRelativePath -cne 'avm/res/network/nat-gateway') {
+            elseif ($Scope.ModuleRelativePath -cnotin (Get-AvmBicepConfiguration)['conventionExemptions']['majorVersionAllowedModules']) {
                 $major = $value.GetString().Split('.')[0].TrimStart('0')
                 if ($major.Length -gt 0) {
                     $issues.Add((New-AvmBicepConventionIssue -Root $Root -Path $versionPath `

@@ -11,10 +11,10 @@ function Invoke-AvmBicepCheckPolicy {
         original module files are never changed. Missing inputs, tools,
         baselines, or uninspectable results fail the check.
 
-        PSRule 2.9.0 and PSRule.Rules.Azure 1.47.0 are optional, exact-version
-        dependencies loaded only for Bicep policy checks. Install them with
+        The PSRule and PSRule.Rules.Azure versions pinned in avm.pins.jsonc are
+        optional, exact-version dependencies loaded only for Bicep policy checks. Install them with
         Install-PSResource before running this command. Tokens are read from
-        VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
+        TEST_SUBSCRIPTION_IDS (first entry) or VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* environment variables.
 

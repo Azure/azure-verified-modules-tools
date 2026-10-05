@@ -29,6 +29,7 @@ function Invoke-AvmBicepCleanup {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
     $StatePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($StatePath)
@@ -99,7 +100,7 @@ function Invoke-AvmBicepCleanup {
                     $actualId = Get-AvmPropertyValue -InputObject $group -Name 'ResourceId'
                     $tags = Get-AvmPropertyValue -InputObject $group -Name 'Tags'
                     if ($actualId -ine $owned['id'] -or
-                        (Get-AvmPropertyValue -InputObject $tags -Name 'avm-e2e-run-id') -cne $owned['runId']) {
+                        (Get-AvmPropertyValue -InputObject $tags -Name $ownerTag) -cne $owned['runId']) {
                         throw [AvmProcessException]::new("Ownership could not be confirmed for '$($owned['id'])'.")
                     }
                 }
