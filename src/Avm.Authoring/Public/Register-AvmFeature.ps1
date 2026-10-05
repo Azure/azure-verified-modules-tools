@@ -28,6 +28,10 @@ function Register-AvmFeature {
     .PARAMETER PollIntervalSeconds
         Seconds between status checks. Defaults to 10.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with Status, SubscriptionId, FeaturesTotal,
         RegisteredFeatures, AlreadyRegisteredFeatures, and Reason.

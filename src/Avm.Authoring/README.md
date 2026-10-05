@@ -51,7 +51,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
 | `Private/Docs/`                                   | Bicep template, Notes, source-example, and compiled-resource documentation helpers. |
 | `Private/Dispatch/`                               | Verb registry + `.avm/.disable` sentinel.                                          |
-| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations, spec section 14).  |
+| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations).                  |
 | `Private/Folders/Get-AvmFolder.ps1`               | Cross-OS resolver for Config/Cache/Data/State/Tools/Logs/Temp folders.             |
 | `Private/Layout/Test-AvmModuleLayout.ps1`         | Module-shape validator used by `./build.ps1 layout` and the publish gate.          |
 | `Private/Process/Invoke-AvmProcess.ps1`           | Subprocess primitive: argv-verbatim, stdout/stderr capture, exit/timeout policy.   |
@@ -402,7 +402,7 @@ avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved 
 avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
-avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; bicep walker pending)
+avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)
 avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> sync -> check convention -> transform -> format -> docs
 avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 

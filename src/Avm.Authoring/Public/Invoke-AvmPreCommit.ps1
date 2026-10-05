@@ -116,6 +116,10 @@ function Invoke-AvmPreCommit {
         Skip the managed-files release lookup and sync against whatever ref the
         normal precedence resolves. Forwarded only to the Terraform sync step.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root

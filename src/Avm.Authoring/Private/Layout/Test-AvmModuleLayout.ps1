@@ -31,7 +31,7 @@ function Test-AvmModuleLayout {
 
     .PARAMETER MinimumPowerShellVersion
         Minimum value accepted for the manifest's PowerShellVersion field.
-        Defaults to 7.4 (spec section 2).
+        Defaults to 7.4.
 
     .OUTPUTS
         Microsoft.PowerShell.Commands.PSModuleInfo from Test-ModuleManifest.

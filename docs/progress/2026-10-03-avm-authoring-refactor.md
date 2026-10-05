@@ -54,7 +54,7 @@ transformations and publication (244s together).
   (`2026-10-05-bicep-policy-issue-construction.md`).
 - [x] Move Bicep convention checks to a packaged Pester suite
   (`2026-10-05-bicep-convention-pester.md`).
-- [ ] Review help and comments.
+- [x] Review help and comments ([slice](2026-10-05-help-and-comment-review.md)).
 - [ ] Prune redundant tests; extend integration fixtures.
 - [ ] Final slice, as the user directed: reduce test run time, including safe
   parallel runs, with before and after timings for the full gate.

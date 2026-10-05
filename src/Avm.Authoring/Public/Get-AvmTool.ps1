@@ -40,6 +40,10 @@ function Get-AvmTool {
         Also probe PATH, mirroring the engines' -AllowPathFallback opt-in. Off
         by default so the reported status reflects exactly what the gauntlet
         does (cache or auto-install); PATH is never consulted otherwise.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

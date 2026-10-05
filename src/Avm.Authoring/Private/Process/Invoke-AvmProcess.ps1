@@ -11,7 +11,7 @@ function Invoke-AvmProcess {
         AvmProcessException on non-zero exit unless -IgnoreExitCode is supplied.
         On timeout the process tree is killed and a TimeoutException is thrown.
 
-        Per spec section 9 the CLI never invokes a shell and never quotes
+        It never invokes a shell and never quotes
         arguments; every argument is passed verbatim through
         ProcessStartInfo.ArgumentList.
 

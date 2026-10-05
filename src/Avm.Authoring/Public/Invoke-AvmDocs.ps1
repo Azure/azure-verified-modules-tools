@@ -40,6 +40,10 @@ function Invoke-AvmDocs {
         With Bicep and -CheckDrift, return generated README text and relative
         paths for independent raw-byte comparisons, without writing files.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Changed, Issues. Bicep results also include

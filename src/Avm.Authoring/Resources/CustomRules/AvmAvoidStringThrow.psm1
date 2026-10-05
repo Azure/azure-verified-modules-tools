@@ -5,8 +5,7 @@
     PSScriptAnalyzer custom rule that flags `throw 'literal'` / `throw "literal"`.
 
 .DESCRIPTION
-    Spec section 14 ("Error handling") mandates that terminating errors use
-    the typed-exception pattern:
+    Terminating errors must use the typed-exception pattern:
 
         throw [<SpecificException>]::new(<message>, <innerException>)
 
@@ -75,7 +74,7 @@ function Measure-AvmAvoidStringThrow {
             if ($expr -isnot $stringAst -and $expr -isnot $expandableAst) { continue }
 
             $record = [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]@{
-                Message  = "Do not 'throw' a string literal. Use 'throw [<SpecificException>]::new(<message>, <innerException>)' instead (spec section 14)."
+                Message  = "Do not 'throw' a string literal. Use 'throw [<SpecificException>]::new(<message>, <innerException>)' instead."
                 Extent   = $throwAst.Extent
                 RuleName = 'AvmAvoidStringThrow'
                 Severity = 'Warning'

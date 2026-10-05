@@ -32,6 +32,10 @@ function Invoke-AvmLint {
         Maximum number of independent Terraform scopes to process at once.
         Defaults to four. Bicep lint currently ignores this value.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Issues.

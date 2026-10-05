@@ -7,7 +7,7 @@ function Invoke-AvmPrCheck {
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
-        Get-AvmModuleContext, then invokes the full Phase 1 verb chain in
+        Get-AvmModuleContext, then invokes the verb chain above in
         sequence against that same module root. Each step's structured
         result is captured. The overall Status is 'pass' only when every
         executed step reports Status='pass' (or didn't throw, for verbs
@@ -84,6 +84,10 @@ function Invoke-AvmPrCheck {
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform transform targets, lint scopes,
         or policy examples to process at once. Defaults to four.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject with:

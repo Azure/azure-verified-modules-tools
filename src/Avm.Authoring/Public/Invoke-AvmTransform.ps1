@@ -47,6 +47,10 @@ function Invoke-AvmTransform {
         Maximum number of independent Terraform root, module, or example
         targets to transform at once. Defaults to four. Ignored by Bicep.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, Changed, Issues.

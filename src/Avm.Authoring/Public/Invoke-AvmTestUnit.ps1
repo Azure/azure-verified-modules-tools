@@ -63,6 +63,10 @@ function Invoke-AvmTestUnit {
     .PARAMETER RepositoryRoot
         Bicep-only: override the registry root passed to compliance tests.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.

@@ -1,19 +1,10 @@
-# Terraform engine (Phase 1)
+# Terraform engine
 
-This folder is the entry point for the Terraform facade that wraps the
-existing terraform-azure-verified-modules contributor workflows behind the
-`avm` dispatcher.
+Terraform modules use native Terraform tooling: `terraform fmt`/`validate`,
+TFLint, Conftest policies, terraform-docs, Mapotf transforms and
+`terraform test`. These engine functions resolve pinned tools and run them for
+the `avm` verbs; they do not wrap Terraform checks in Pester or PSRule.
 
-Phase 1 will introduce these verbs (per `docs/avm-consolidation-plan.md`
-section 6):
-
-| Verb                                    | Public cmdlet                  | Status   |
-| --------------------------------------- | ------------------------------ | -------- |
-| `avm terraform test`                    | `Invoke-AvmTerraformTest`      | Pending  |
-| `avm terraform publish`                 | `Publish-AvmTerraformModule`   | Pending  |
-| `avm terraform scaffold`                | `New-AvmTerraformModule`       | Pending  |
-| `avm terraform upgrade`                 | `Update-AvmTerraformModule`    | Pending  |
-
-Until Phase 1 lands, this folder is intentionally empty apart from this
-README. Phase 0 ships only the dispatcher, doctor, tool resolver, repo
-classifier, and disable sentinel.
+`avm init -Ecosystem terraform` scaffolds or initialises a module repository.
+`avm test` runs build validation only; `avm test unit`, `avm test integration`
+and `avm test e2e` are the separate test tiers.

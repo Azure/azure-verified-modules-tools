@@ -2,8 +2,7 @@
     Severity            = @('Error', 'Warning', 'Information')
     IncludeDefaultRules = $true
 
-    # Rule configuration kept minimal until Phase 0 stabilises. Tighten over
-    # time rather than disabling default rules.
+    # Tighten rule configuration over time rather than disabling default rules.
     Rules               = @{
         PSUseConsistentIndentation = @{
             Enable          = $true

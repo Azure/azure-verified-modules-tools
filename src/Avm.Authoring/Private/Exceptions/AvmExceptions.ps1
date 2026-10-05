@@ -1,6 +1,6 @@
 #Requires -Version 7.4
 
-# Typed exception classes per spec section 14. Avm.Authoring.psm1 dot-sources
+# Typed exception classes. Avm.Authoring.psm1 dot-sources
 # this file before every other Private/ file, reusing one parsed copy per
 # runspace so the class types stay stable across Import-Module -Force.
 #

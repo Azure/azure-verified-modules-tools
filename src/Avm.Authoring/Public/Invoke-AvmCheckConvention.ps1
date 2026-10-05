@@ -8,7 +8,7 @@ function Invoke-AvmCheckConvention {
 
           - bicep      -> first-party layout, version, changelog, test-source,
                           compiled ARM, checked-in JSON, workflow, and CODEOWNERS
-                          checks; fails closed until registry parity
+                          checks
           - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
@@ -41,6 +41,10 @@ function Invoke-AvmCheckConvention {
     .PARAMETER FixableOnly
         Evaluate only rules that declare a deterministic fix. Pre-commit uses
         this with -Fix; standalone checks and pr-check evaluate every rule.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
