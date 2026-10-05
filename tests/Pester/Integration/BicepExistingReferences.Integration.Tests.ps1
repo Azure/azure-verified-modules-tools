@@ -77,10 +77,10 @@ output observedVaultId string = vaultId
         $vault[0]['apiVersion'] | Should -BeExactly '2026-02-01'
         $vault[0]['existing'] | Should -BeTrue
 
-        $documented = InModuleScope Avm.Authoring -Parameters @{ Template = $template } {
+        $documented = @(InModuleScope Avm.Authoring -Parameters @{ Template = $template } {
             param($Template)
-            @(Get-AvmBicepDocsResourceType -Template $Template)
-        }
+            Get-AvmBicepDocsResourceType -Template $Template
+        })
         $documented.Count | Should -Be 0
     }
 }
