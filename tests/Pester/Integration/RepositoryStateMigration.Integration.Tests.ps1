@@ -223,6 +223,44 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
         @($script:events | Where-Object { $_ -like 'push:*' }) | Should -HaveCount 2
     }
 
+    It 'blocks a cross-provider physical collision after native staging and before publication' {
+        $duplicate = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $script:pair.Source.resources[3] -Depth 100)
+        $duplicate.module = 'module.retained'
+        $duplicate.type = 'azurerm_role_assignment'
+        $duplicate.provider = 'provider["registry.terraform.io/hashicorp/azurerm"].retained'
+        $script:pair.Destination.resources += $duplicate
+        Write-TestMigrationState -Name $script:scope.DestinationKey -State $script:pair.Destination
+
+        { New-TestMigrationTransfer } | Should -Throw '*same managed object*'
+        $script:events | Should -HaveCount 0
+        (Read-TransferImage (Get-TestMigrationBlobPath $script:scope.SourceKey)).State.resources |
+            Should -HaveCount $script:pair.Source.resources.Count
+    }
+
+    It 'preserves arbitrary destination bindings through native staging, publication and completed recovery' {
+        $script:pair.Destination.resources += @(New-AvmTestRetainedRepositoryResources)
+        Write-TestMigrationState -Name $script:scope.DestinationKey -State $script:pair.Destination
+        $transfer = New-TestMigrationTransfer
+
+        Invoke-RepositoryMigrationTransfer -Transfer $transfer -Confirm:$false | Should -Be 'Complete'
+        $position = Get-RepositoryMigrationPosition $transfer
+        foreach ($resource in $transfer.Images['destination-before'].State.resources) {
+            $retained = @($position.Current.destination.State.resources | Where-Object {
+                (Get-TransferResourceKey $_) -ceq (Get-TransferResourceKey $resource)
+            })
+            $retained | Should -HaveCount 1
+            $retained[0].provider | Should -BeExactly $resource.provider
+            $expected = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $resource -Depth 100)
+            foreach ($instance in $expected.instances) {
+                if (-not $instance.Contains('identity_schema_version')) { $instance.identity_schema_version = 0 }
+            }
+            Test-TransferValueEqual $retained[0] $expected | Should -BeTrue
+        }
+        $recovered = New-TestMigrationTransfer
+        Invoke-RepositoryMigrationTransfer -Transfer $recovered -Confirm:$false | Should -Be 'Complete'
+        @($script:events | Where-Object { $_ -like 'push:*' }) | Should -Be @('push:source', 'push:destination')
+    }
+
     It 'stages plan-only without backup uploads, backend initialization, or state writes' {
         $transfer = New-TestMigrationTransfer
         Invoke-RepositoryMigrationTransfer -Transfer $transfer -PlanOnly | Should -Be 'Preview'
@@ -402,12 +440,15 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
 
     It 'runs the native publisher, an ordinary unified saved-plan apply, and a no-op migration rerun' {
         $configuration = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        foreach ($name in @('identity', 'github', 'source', 'destination', 'unified', 'images')) {
+        foreach ($name in @('identity', 'github', 'retained', 'source', 'destination', 'unified', 'images')) {
             $null = [IO.Directory]::CreateDirectory((Join-Path $configuration $name))
         }
         $identityDefinition = $script:nativeIdentityDefinition
         [IO.File]::WriteAllText((Join-Path $configuration 'identity' 'main.tf'), $identityDefinition)
-        [IO.File]::WriteAllText((Join-Path $configuration 'github' 'main.tf'), $script:nativeGitHubDefinition)
+        [IO.File]::WriteAllText((Join-Path $configuration 'github' 'main.tf'),
+            $script:nativeGitHubDefinition + "`nmodule `"retained`" { source = `"../retained`" }`n")
+        [IO.File]::WriteAllText((Join-Path $configuration 'retained' 'main.tf'),
+            'resource "terraform_data" "retained" { input = "synthetic nested resource" }')
         $script:scope.SourceKey = 'synthetic-source.tfstate'
         $script:scope.DestinationKey = 'synthetic-destination.tfstate'
         foreach ($side in @('source', 'destination', 'unified')) {
@@ -417,6 +458,7 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
             if ($side -cne 'source') {
                 $definition += "module `"github`" { source = `"../github`" }`n"
                 $definition += "output `"repository`" { value = module.github.repository }`n"
+                $definition += "resource `"terraform_data`" `"retained`" { input = `"synthetic root resource`" }`n"
             }
             if ($side -ceq 'source') {
                 $definition += "module `"azure`" { source = `"../identity`" }`n"
@@ -476,7 +518,10 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
         )
         $plan = Invoke-RepositoryMigrationTerraform -Terraform $script:tool.Path -Root $unified -PrivateOutput `
             -Arguments @('show', '-json', 'unified.tfplan') | ConvertFrom-Json -AsHashtable -Depth 100
-        $plan.resource_changes | Should -HaveCount 4
+        $plan.resource_changes | Should -HaveCount 6
+        $addresses = @($plan.resource_changes | ForEach-Object { $_['address'] })
+        $addresses | Should -Contain 'terraform_data.retained'
+        $addresses | Should -Contain 'module.github.module.retained.terraform_data.retained'
         @($plan.resource_changes | Where-Object { $_.change.actions -contains 'create' -or $_.change.actions -contains 'delete' }) |
             Should -HaveCount 0
         foreach ($change in $plan.resource_changes) {

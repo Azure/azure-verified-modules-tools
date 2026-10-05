@@ -82,17 +82,25 @@ function Format-RepositoryMigrationKey {
 function Add-RepositoryMigrationOwners {
     param(
         [System.Collections.IDictionary] $State,
-        [Collections.Generic.Dictionary[string, string]] $Owners,
-        [string] $Key
+        [Collections.Generic.Dictionary[string, object]] $Owners,
+        [string] $Key,
+        [switch] $Source
     )
 
     foreach ($resource in $State.resources | Where-Object { $_['mode'] -ceq 'managed' }) {
+        $bami = $Source -or $resource['module'] -ceq 'module.bami[0]'
         foreach ($instance in $resource.instances) {
-            $owner = "$($resource['type'])|$($instance['attributes']['id'])"
+            $owner = Get-TransferManagedObjectKey -Resource $resource -Instance $instance
             if ($Owners.ContainsKey($owner)) {
-                throw "The full inventory contains duplicate managed ownership between $($Owners[$owner]) and $Key; publication is blocked."
+                $previous = $Owners[$owner]
+                if ($bami -or $previous.Bami) {
+                    throw "The full inventory contains duplicate managed ownership between $($previous.Key) and $Key; publication is blocked."
+                }
+                $address = ConvertTo-Json -InputObject (Get-TransferResourceKey $resource) -Compress -EscapeHandling EscapeNonAscii
+                Write-Information "Unchanged ordinary ownership overlaps at $address between $($previous.Key) and $Key; both are preserved, not reconciled by the BAMI transfer." -InformationAction Continue
+                continue
             }
-            $Owners.Add($owner, $Key)
+            $Owners.Add($owner, @{ Key = $Key; Bami = $bami })
         }
     }
 }
@@ -112,6 +120,8 @@ function Assert-RepositoryMigrationHistoricalState {
         'data.azuread_group.entra_readers' = 'hashicorp/azuread'
         'data.github_repository.this' = 'integrations/github'
         'data.github_team.avm_core' = 'integrations/github'
+        'data.github_team.contributors' = 'integrations/github'
+        'data.github_team.owners' = 'integrations/github'
         'managed.azapi_resource.identity' = 'azure/azapi'
         'managed.azapi_resource.identity_federated_credentials' = 'azure/azapi'
         'managed.azapi_resource.identity_role_assignment' = 'azure/azapi'
@@ -119,15 +129,14 @@ function Assert-RepositoryMigrationHistoricalState {
         'managed.github_actions_environment_secret.client_id' = 'integrations/github'
         'managed.github_actions_environment_secret.subscription_id' = 'integrations/github'
         'managed.github_actions_environment_secret.tenant_id' = 'integrations/github'
+        'managed.github_issue_label.this' = 'integrations/github'
         'managed.github_repository_environment.this' = 'integrations/github'
+        'managed.github_repository_ruleset.main' = 'integrations/github'
     }
-    if ($CaseAlias) {
-        $expected['data.github_team.contributors'] = 'integrations/github'
-        $expected['data.github_team.owners'] = 'integrations/github'
-    } else {
-        $expected['managed.github_issue_label.this'] = 'integrations/github'
-        $expected['managed.github_repository_ruleset.main'] = 'integrations/github'
-    }
+    $optional = @(
+        'data.github_team.contributors', 'data.github_team.owners',
+        'managed.github_issue_label.this', 'managed.github_repository_ruleset.main'
+    )
     $attributes = @{}
     foreach ($resource in $State.resources) {
         $address = "$($resource['mode']).$($resource['type']).$($resource['name'])"
@@ -157,7 +166,9 @@ function Assert-RepositoryMigrationHistoricalState {
         }
         $attributes[$address] = $instance['attributes']
     }
-    if ($attributes.Count -ne $expected.Count) { throw 'Incomplete historical ownership; no state is ignored.' }
+    if (@($expected.Keys | Where-Object { $_ -cnotin $optional -and -not $attributes.ContainsKey($_) }).Count) {
+        throw 'Incomplete historical ownership; no state is ignored.'
+    }
 
     $repositoryState = $attributes['data.github_repository.this']
     if ($repositoryState['full_name'] -cne $Repository -or
@@ -173,7 +184,7 @@ function Assert-RepositoryMigrationHistoricalState {
         $CanonicalOwner.Lineage -ieq $State.lineage)) {
         throw 'The historical alias lacks a distinct canonical snapshot for the same immutable GitHub repository.'
     }
-    if (-not $CaseAlias) {
+    if ($attributes.ContainsKey('managed.github_repository_ruleset.main')) {
         $ruleset = $attributes['managed.github_repository_ruleset.main']
         if ($ruleset['repository'] -cne $Repository.Split('/')[1] -or
             [string]$ruleset['id'] -cnotmatch '\A[1-9][0-9]*\z') {
@@ -328,20 +339,22 @@ function Get-RepositoryMigrationIdentity {
 
 function Assert-RepositoryMigrationBindings {
     param([System.Collections.IDictionary] $State, [switch] $Destination)
-    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($resource in $State['resources']) {
         $namespace = [string]$resource['module']
-        $allowed = $Destination ? @('module.github', 'module.azure[0]', 'module.bami[0]') : @('module.azure')
-        if ($namespace -cnotin $allowed) { throw 'Unexpected or partially migrated state namespace.' }
-        $provider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
-        elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
-        elseif ($namespace -ceq 'module.github' -and $resource['type'] -cmatch '^github_') { 'provider["registry.terraform.io/integrations/github"]' }
-        else { throw 'Unexpected migration resource type.' }
-        if ($resource['provider'] -cne $provider) { throw 'Aliased or unexpected migration provider binding.' }
+        $provider = [string]$resource['provider']
+        if (-not $Destination -or $namespace -cmatch '^module\.bami(?:$|\.|\[)') {
+            $address = ConvertTo-Json -InputObject (Get-TransferResourceKey $resource) -Compress -EscapeHandling EscapeNonAscii
+            $expected = $Destination ? 'module.bami[0]' : 'module.azure'
+            if ($namespace -cne $expected) { throw "Unexpected or partially migrated BAMI namespace at $address." }
+            $expectedProvider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
+            elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
+            else { throw "Unexpected BAMI resource type at $address." }
+            if ($provider -cne $expectedProvider) { throw "Aliased or unexpected BAMI provider binding at $address." }
+        }
         foreach ($instance in $resource['instances']) {
-            $attributes = $instance['attributes']
             if ($resource['mode'] -ceq 'managed' -and
-                -not $seen.Add("$provider|$($resource['type'])|$(([string]$attributes['id']).ToLowerInvariant())")) {
+                -not $seen.Add((Get-TransferManagedObjectKey -Resource $resource -Instance $instance))) {
                 throw 'Multiple addresses own the same managed object.'
             }
         }

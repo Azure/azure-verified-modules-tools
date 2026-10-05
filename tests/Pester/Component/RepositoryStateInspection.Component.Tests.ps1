@@ -59,6 +59,52 @@ Describe 'Repository state transfer local inspection' -Tag Component {
         $result.Status | Should -Match 'cutover.*not approved'
     }
 
+    It 'preserves existing root resources, nested modules and provider aliases without policing their format' {
+        $retained = @(New-AvmTestRetainedRepositoryResources)
+        $script:beforeDestination.resources += $retained
+        $after = ConvertFrom-Json (ConvertTo-Json -InputObject $retained -Depth 100) -AsHashtable
+        foreach ($resource in $after) {
+            foreach ($instance in $resource.instances) { $instance.identity_schema_version = 0 }
+        }
+        $script:afterDestination.resources += $after
+
+        (Invoke-StateInspectionFixture).ResourceBlocks | Should -Be 8
+    }
+
+    It 'still rejects changes to retained destination state: <Case>' -ForEach @(
+        @{ Case = 'provider' }, @{ Case = 'private data' }, @{ Case = 'attributes' }
+        @{ Case = 'dependency' }, @{ Case = 'address' }, @{ Case = 'missing resource' }
+    ) {
+        $retained = @(New-AvmTestRetainedRepositoryResources)
+        $script:beforeDestination.resources += $retained
+        $after = ConvertFrom-Json (ConvertTo-Json -InputObject $retained -Depth 100) -AsHashtable
+        foreach ($resource in $after) {
+            foreach ($instance in $resource.instances) { $instance.identity_schema_version = 0 }
+        }
+        switch ($Case) {
+            'provider' { $after[1].provider += '.changed' }
+            'private data' { $after[0].instances[0].private = 'Y2hhbmdlZA==' }
+            'attributes' { $after[0].instances[0].attributes.input.value = 'changed' }
+            'dependency' { $after[0].instances[0].dependencies = @('module.github.github_repository.other') }
+            'address' { $after[0].module = 'module.other' }
+            'missing resource' { $after = @($after[1]) }
+        }
+        $script:afterDestination.resources += $after
+
+        { Invoke-StateInspectionFixture } | Should -Throw
+    }
+
+    It 'rejects an existing BAMI namespace before a new transfer: <Namespace>' -ForEach @(
+        @{ Namespace = 'module.bami' }, @{ Namespace = 'module.bami[1]' }
+        @{ Namespace = 'module.bami[0].module.nested' }
+    ) {
+        $retained = @(New-AvmTestRetainedRepositoryResources)[0]
+        $retained.module = $Namespace
+        $script:beforeDestination.resources += $retained
+
+        { Invoke-StateInspectionFixture } | Should -Throw '*namespace*'
+    }
+
     It 'ignores recomputable snapshot bookkeeping: <Case>' -ForEach @(
         @{ Case = 'omitted checks' }, @{ Case = 'added checks' }, @{ Case = 'cleared checks' }
         @{ Case = 'reordered checks' }, @{ Case = 'changed results' }
@@ -161,6 +207,19 @@ Describe 'Repository state transfer local inspection' -Tag Component {
             $duplicate.module = 'module.azure[0]'
             $script:beforeDestination.resources += $duplicate
         }
+        { Invoke-StateInspectionFixture } | Should -Throw '*same managed object*'
+    }
+
+    It 'rejects a scoped object already owned through <Type>' -ForEach @(
+        @{ Index = 2; Type = 'msgraph_resource'; Provider = 'microsoft/msgraph' }
+        @{ Index = 3; Type = 'azurerm_role_assignment'; Provider = 'hashicorp/azurerm' }
+    ) {
+        $duplicate = $script:beforeSource.resources[$Index] | ConvertTo-Json -Depth 100 | ConvertFrom-Json -AsHashtable
+        $duplicate.module = 'module.retained'
+        $duplicate.type = $Type
+        $duplicate.provider = 'provider["registry.terraform.io/' + $Provider + '"].retained'
+        $script:beforeDestination.resources += $duplicate
+
         { Invoke-StateInspectionFixture } | Should -Throw '*same managed object*'
     }
 }

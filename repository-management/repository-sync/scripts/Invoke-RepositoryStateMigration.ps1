@@ -85,7 +85,7 @@ try {
             $destinationIds[$match.Groups[1].Value] = $item['name']
         }
         $transfers = [Collections.Generic.List[hashtable]]::new()
-        $owned = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $owned = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
         $canonicalOwner = $null
         $withoutSource = 0
         foreach ($repoId in @(@($sourceIds.Keys) + @($backupIds.Keys) + @($destinationIds.Keys) | Sort-Object -Unique)) {
@@ -112,6 +112,27 @@ try {
                 continue
             }
             $destination = Read-TransferImage $destinationPath
+            if (-not $sourceIds.ContainsKey($repoId) -and
+                @($destination.State.resources | Where-Object { -not [string]::IsNullOrEmpty($_['module']) }).Count -eq 0) {
+                $keyDescription = Format-RepositoryMigrationKey -Backend $Backend -Prefix 'avm-' -Name $destinationIds[$repoId]
+                $flatRepositories = @($destination.State.resources | Where-Object {
+                    $_['mode'] -ceq 'data' -and $_['type'] -ceq 'github_repository' -and $_['name'] -ceq 'this'
+                })
+                if ($flatRepositories.Count -ne 1 -or $flatRepositories[0].instances.Count -ne 1 -or
+                    $flatRepositories[0].instances[0].attributes['full_name'] -cnotmatch
+                    ('\AAzure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '\z')) {
+                    throw "Historical state $keyDescription lacks the exact recorded GitHub repository identity."
+                }
+                $name = $flatRepositories[0].instances[0].attributes['full_name']
+                try {
+                    Assert-RepositoryMigrationHistoricalState -State $destination.State -Settings $settings -Repository $name -OriginalRepository $name
+                }
+                catch { throw "Historical state audit failed for $keyDescription. $($_.Exception.Message)" }
+                Add-RepositoryMigrationOwners -State $destination.State -Owners $owned -Key $keyDescription
+                $withoutSource++
+                Write-Information "$repoId`: historical flat module state audited; no former BAMI owner and no transfer." -InformationAction Continue
+                continue
+            }
             Assert-RepositoryMigrationBindings -State $destination.State -Destination
             $repositories = @($destination.State.resources | Where-Object {
                 $_['module'] -ceq 'module.github' -and $_['type'] -ceq 'github_repository' -and $_['name'] -ceq 'this'
@@ -127,12 +148,15 @@ try {
             if ([string]$repositoryState['repo_id'] -cnotmatch '\A[1-9][0-9]*\z') {
                 throw "$repoId lacks a valid immutable GitHub repository ID."
             }
-            $repository = Invoke-RepositoryGitHubApi -Endpoint "repos/$name"
-            if ($repository.full_name -cne $name -or $repository.owner.login -cne 'Azure' -or $repository.fork -ne $false -or
-                [string]$repository.id -cnotmatch '\A[1-9][0-9]*\z' -or
-                [string]$repository.owner.id -cne $toolsContext.OrganizationId -or
-                [string]$repository.id -cne [string]$repositoryState['repo_id']) {
-                throw "$repoId GitHub identity differs from its state."
+            $bami = @($destination.State.resources | Where-Object { $_['module'] -ceq 'module.bami[0]' })
+            if ($sourceIds.ContainsKey($repoId) -or $bami.Count) {
+                $repository = Invoke-RepositoryGitHubApi -Endpoint "repos/$name"
+                if ($repository.full_name -cne $name -or $repository.owner.login -cne 'Azure' -or $repository.fork -ne $false -or
+                    [string]$repository.id -cnotmatch '\A[1-9][0-9]*\z' -or
+                    [string]$repository.owner.id -cne $toolsContext.OrganizationId -or
+                    [string]$repository.id -cne [string]$repositoryState['repo_id']) {
+                    throw "$repoId GitHub identity differs from its state."
+                }
             }
             if ($repoId -ceq $legacyCanonicalId) {
                 $canonicalOwner = @{ Repository = $repositories[0]['instances'][0]['attributes']; Lineage = $destination.State.lineage }
@@ -140,20 +164,24 @@ try {
             $states = @(@{ State = $destination.State; Key = $destinationIds[$repoId]; Prefix = 'avm-' })
             if ($sourceIds.ContainsKey($repoId)) {
                 $scope = Get-RepositoryMigrationScope -Backend $Backend -Settings $settings -RepoId $repoId -Repository $repository
-                $transfer = New-RepositoryMigrationTransfer -Scope $scope -Directory (Join-Path $directory 'transfer') `
-                    -Terraform $terraform.Path -TerraformVersion $terraform.Version -OriginalDestinationPath $destinationPath
+                try {
+                    $transfer = New-RepositoryMigrationTransfer -Scope $scope -Directory (Join-Path $directory 'transfer') `
+                        -Terraform $terraform.Path -TerraformVersion $terraform.Version -OriginalDestinationPath $destinationPath
+                }
+                catch { throw "$repoId migration staging failed. $($_.Exception.Message)" }
                 $transfer['BackendDirectory'] = Join-Path $work 'backends'
                 if ($transfer.Inventory.destination.Hash -cne $destination.Hash) { throw "$repoId changed during inventory." }
                 $states += @{ State = $transfer.Inventory.source.State; Key = $sourceIds[$repoId]; Prefix = $sourcePrefix }
                 $transfers.Add($transfer)
                 Write-Information "$repoId`: $($transfer.Position)." -InformationAction Continue
             } else {
-                $bami = @($destination.State.resources | Where-Object { $_['module'] -ceq 'module.bami[0]' })
-                foreach ($legacy in $destination.State.resources | Where-Object { $_['module'] -ceq 'module.azure[0]' }) {
+                foreach ($legacy in $destination.State.resources | Where-Object {
+                    $_['mode'] -ceq 'managed' -and $_['module'] -cne 'module.bami[0]'
+                }) {
                     if (@($legacy.instances | Where-Object {
                         [string]$_['attributes']['id'] -ilike "/subscriptions/$($settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/*"
                     }).Count) {
-                        throw "$repoId has live BAMI ownership at a retired address; review it instead of creating another owner."
+                        throw "$repoId has live BAMI ownership outside its target namespace; review it instead of creating another owner."
                     }
                 }
                 if ($bami.Count) {
@@ -166,7 +194,8 @@ try {
             }
             foreach ($snapshot in $states) {
                 Add-RepositoryMigrationOwners -State $snapshot.State -Owners $owned `
-                    -Key (Format-RepositoryMigrationKey -Backend $Backend -Prefix $snapshot.Prefix -Name $snapshot.Key)
+                    -Key (Format-RepositoryMigrationKey -Backend $Backend -Prefix $snapshot.Prefix -Name $snapshot.Key) `
+                    -Source:($snapshot.Prefix -ceq $sourcePrefix)
             }
         }
         if ($ordinaryKeys.Contains($legacyAliasKey)) {

@@ -1,5 +1,35 @@
 . (Join-Path $PSScriptRoot 'TestTenant.ps1')
 
+function New-AvmTestRetainedRepositoryResources {
+    @(
+        @{
+            mode = 'managed'; type = 'terraform_data'; name = 'retained'
+            provider = 'provider["terraform.io/builtin/terraform"]'
+            instances = @(@{
+                schema_version = 0
+                attributes = @{
+                    id = '40000000-0000-4000-8000-000000000001'
+                    input = @{ value = 'synthetic-retained-value'; type = 'string' }
+                    output = @{ value = 'synthetic-retained-value'; type = 'string' }
+                    triggers_replace = $null
+                }
+                sensitive_attributes = @()
+                private = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('synthetic retained private data'))
+                dependencies = @('module.github.github_repository.this')
+            })
+        }
+        @{
+            module = 'module.github.module.policy'; mode = 'managed'; type = 'github_repository_ruleset'; name = 'retained'
+            provider = 'provider["registry.terraform.io/integrations/github"].retained'
+            instances = @(@{
+                schema_version = 0
+                attributes = @{ id = '4567'; repository = 'terraform-azurerm-avm-ptn-example-repo'; name = 'synthetic-retained-ruleset' }
+                sensitive_attributes = @()
+            })
+        }
+    )
+}
+
 function New-AvmTestRepositoryStatePair {
     param(
         [string] $Repository = 'Azure/terraform-azurerm-avm-ptn-example-repo',

@@ -24,6 +24,40 @@ Describe 'Repository migration ownership guards' -Tag Component {
         $script:pair.Source.resources.name | Should -Contain 'identity_role_assignment'
     }
 
+    It 'accepts unchanged destination bindings but keeps the moved BAMI module strict' {
+        $state = $script:pair.Destination
+        $state.resources += @(New-AvmTestRetainedRepositoryResources)
+        Assert-RepositoryMigrationBindings -State $state -Destination
+
+        $extra = @(New-AvmTestRetainedRepositoryResources)[0]
+        $extra.module = 'module.bami[1]'
+        $state.resources += $extra
+        { Assert-RepositoryMigrationBindings -State $state -Destination } | Should -Throw '*partially migrated BAMI namespace*'
+    }
+
+    It 'rejects an ownership collision involving <Kind> with protected ownership first: <ProtectedFirst>' -ForEach @(
+        @{ Kind = 'former source'; Source = $true; ProtectedFirst = $true; Namespace = 'module.azure' }
+        @{ Kind = 'former source'; Source = $true; ProtectedFirst = $false; Namespace = 'module.azure' }
+        @{ Kind = 'ordinary BAMI'; Source = $false; ProtectedFirst = $true; Namespace = 'module.bami[0]' }
+        @{ Kind = 'ordinary BAMI'; Source = $false; ProtectedFirst = $false; Namespace = 'module.bami[0]' }
+    ) {
+        $protected = $script:pair.Source
+        foreach ($resource in $protected.resources) { $resource.module = $Namespace }
+        $ordinary = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $protected -Depth 100)
+        foreach ($resource in $ordinary.resources) { $resource.module = 'module.history' }
+        $owners = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+
+        if ($ProtectedFirst) {
+            Add-RepositoryMigrationOwners -State $protected -Owners $owners -Key 'protected.tfstate' -Source:$Source
+            { Add-RepositoryMigrationOwners -State $ordinary -Owners $owners -Key 'ordinary.tfstate' } |
+                Should -Throw '*duplicate managed ownership*protected.tfstate*ordinary.tfstate*'
+        } else {
+            Add-RepositoryMigrationOwners -State $ordinary -Owners $owners -Key 'ordinary.tfstate'
+            { Add-RepositoryMigrationOwners -State $protected -Owners $owners -Key 'protected.tfstate' -Source:$Source } |
+                Should -Throw '*duplicate managed ownership*ordinary.tfstate*protected.tfstate*'
+        }
+    }
+
     It 'rejects unsafe original ownership: <Case>' -ForEach @(
         @{ Case = 'tenant' }, @{ Case = 'subscription' }, @{ Case = 'controller client' }
         @{ Case = 'provider alias' }, @{ Case = 'namespace' }, @{ Case = 'missing federation' }
@@ -53,6 +87,30 @@ Describe 'Repository migration ownership guards' -Tag Component {
         }
         { Assert-RepositoryMigrationOwnership -Scope $script:scope -State $state -Identity $script:pair.Identity -Module 'module.azure' } |
             Should -Throw
+    }
+
+    It 'detects the same scoped object across providers with source first: <SourceFirst>' -ForEach @(
+        @{ Index = 2; Type = 'msgraph_resource'; Provider = 'microsoft/msgraph'; SourceFirst = $true }
+        @{ Index = 2; Type = 'msgraph_resource'; Provider = 'microsoft/msgraph'; SourceFirst = $false }
+        @{ Index = 3; Type = 'azurerm_role_assignment'; Provider = 'hashicorp/azurerm'; SourceFirst = $true }
+        @{ Index = 3; Type = 'azurerm_role_assignment'; Provider = 'hashicorp/azurerm'; SourceFirst = $false }
+    ) {
+        $resource = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $script:pair.Source.resources[$Index] -Depth 100)
+        $resource.module = 'module.retained'
+        $resource.type = $Type
+        $resource.provider = 'provider["registry.terraform.io/' + $Provider + '"].retained'
+        $ordinary = @{ resources = @($resource) }
+        $owners = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+
+        if ($SourceFirst) {
+            Add-RepositoryMigrationOwners -State $script:pair.Source -Owners $owners -Key 'source.tfstate' -Source
+            { Add-RepositoryMigrationOwners -State $ordinary -Owners $owners -Key 'ordinary.tfstate' } |
+                Should -Throw '*duplicate managed ownership*'
+        } else {
+            Add-RepositoryMigrationOwners -State $ordinary -Owners $owners -Key 'ordinary.tfstate'
+            { Add-RepositoryMigrationOwners -State $script:pair.Source -Owners $owners -Key 'source.tfstate' -Source } |
+                Should -Throw '*duplicate managed ownership*'
+        }
     }
 
     It 'rejects aliases and foreign GitHub scope: <Case>' -ForEach @(
@@ -314,6 +372,113 @@ Describe 'Repository migration complete inventory' -Tag Component {
         $script:fixture.Events | Should -HaveCount 0
     }
 
+    It 'audits an untouched flat module state with <Shape> without requiring GitHub availability' -ForEach @(
+        @{ Shape = 'labels, rules and optional teams' }
+        @{ Shape = 'no labels or rules' }
+    ) {
+        $flat = New-AvmTestHistoricalRepositoryState -Repository $script:pair.Repository -RepositoryId 1234
+        $flat.resources += @($script:aliasPair.Legacy.resources | Where-Object {
+            $_.type -ceq 'github_team' -and $_.name -cin @('contributors', 'owners')
+        })
+        if ($Shape -ceq 'no labels or rules') {
+            $flat.resources = @($flat.resources | Where-Object { $_.type -cnotin @('github_issue_label', 'github_repository_ruleset') })
+        }
+        $script:fixture.States['avm-ptn-example-repo.tfstate'] = $flat
+        $script:fixture.Destinations = @(@{ name = 'avm-ptn-example-repo.tfstate' })
+        Mock Invoke-RepositoryGitHubApi { throw 'The unchanged historical repository is unavailable.' }
+
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false
+
+        $result.Ready | Should -BeTrue
+        $result.MigrationRequired | Should -Be 0
+        $script:fixture.Reads | Should -Be @('avm-ptn-example-repo.tfstate')
+        $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly
+        Should -Invoke New-RepositoryMigrationTransfer -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+    }
+
+    It 'audits an unchanged modular repository whose public GitHub lookup is unavailable' {
+        $script:fixture.Destinations = @(@{ name = 'avm-ptn-example-repo.tfstate' })
+        Mock Invoke-RepositoryGitHubApi { throw 'Synthetic GitHub repository not found.' }
+
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false
+
+        $result.Ready | Should -BeTrue
+        $result.MigrationRequired | Should -Be 0
+        $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly
+    }
+
+    It 'preserves and reports pre-existing nonmoving ownership in a renamed ordinary state' {
+        $retained = @(New-AvmTestRetainedRepositoryResources)[1]
+        $script:pair.Destination.resources += $retained
+        $old = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $script:pair.Destination -Depth 100)
+        $old.resources = @($old.resources | Where-Object { $_.type -clike 'github_*' })
+        $oldRepository = $old.resources[0].instances[0].attributes
+        $oldRepository.id = 'terraform-azurerm-avm-ptn-example-old'
+        $oldRepository.name = $oldRepository.id
+        $oldRepository.full_name = "Azure/$($oldRepository.id)"
+        $script:fixture.States.Add('avm-ptn-example-old.tfstate', $old)
+        $script:fixture.Repositories[$oldRepository.full_name] = $script:pair.GitHubRepository
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(
+            @{ name = 'avm-ptn-example-old.tfstate' }, @{ name = 'avm-ptn-example-repo.tfstate' }
+        )
+        $beforeOld = ConvertTo-Json -InputObject $old -Depth 100
+        $beforeCurrent = ConvertTo-Json -InputObject $script:pair.Destination -Depth 100
+        $information = @()
+
+        $result = & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false `
+            -InformationVariable information
+
+        $result.Ready | Should -BeTrue
+        $result.MigrationRequired | Should -Be 1
+        $script:fixture.Events | Should -Be @('prepare', 'publish')
+        ConvertTo-Json -InputObject $old -Depth 100 | Should -BeExactly $beforeOld
+        ConvertTo-Json -InputObject $script:pair.Destination -Depth 100 | Should -BeExactly $beforeCurrent
+        @($information | Where-Object MessageData -Like '*Unchanged ordinary ownership overlaps*') | Should -HaveCount 1
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 1 -Exactly
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly -ParameterFilter {
+            $Endpoint -ceq 'repos/Azure/terraform-azurerm-avm-ptn-example-old'
+        }
+    }
+
+    It 'does not waive independent GitHub identity checks for a former BAMI source' {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(@{ name = 'avm-ptn-example-repo.tfstate' })
+        Mock Invoke-RepositoryGitHubApi { throw 'Synthetic GitHub repository not found.' }
+
+        { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false } |
+            Should -Throw '*not found*'
+        $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 1 -Exactly
+    }
+
+    It 'does not treat a flat repository with a former BAMI owner as an unchanged historical state' {
+        $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.Destinations = @(@{ name = 'avm-ptn-example-repo.tfstate' })
+        $script:fixture.States['avm-ptn-example-repo.tfstate'] =
+            New-AvmTestHistoricalRepositoryState -Repository $script:pair.Repository -RepositoryId 1234
+
+        { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false } |
+            Should -Throw '*GitHub ownership*'
+        $script:fixture.Events | Should -HaveCount 0
+    }
+
+    It 'does not skip a missing BAMI owner at an unchanged <Namespace> address' -ForEach @(
+        @{ Namespace = 'module.azure[0]' }, @{ Namespace = '' }, @{ Namespace = 'module.github.module.legacy' }
+    ) {
+        $script:fixture.Destinations = @(@{ name = 'avm-ptn-example-repo.tfstate' })
+        $script:pair.Destination.resources[1].module = $Namespace
+        $script:pair.Destination.resources[1].instances[0].attributes.id = $script:pair.Identity.identity_resource_id
+
+        { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false } |
+            Should -Throw '*live BAMI ownership outside its target namespace*'
+        $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Invoke-RepositoryMigrationTransfer -Times 0 -Exactly
+    }
+
     It 'audits the excluded historical <RepoId> state without creating a transfer in <Mode> mode' -ForEach @(
         @{ RepoId = 'avm-template'; Repository = 'Azure/terraform-azurerm-avm-template'; Preview = $true; Mode = 'preview' }
         @{ RepoId = 'avm-template'; Repository = 'Azure/terraform-azurerm-avm-template'; Preview = $false; Mode = 'apply' }
@@ -487,7 +652,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
         @($script:aliasPair.Legacy.resources | Where-Object mode -CEQ 'managed') | Should -HaveCount 8
         @($script:aliasPair.Canonical.Destination.resources | ForEach-Object { $_.instances }) | Should -HaveCount 75
         Should -Invoke Get-RepositoryMigrationScope -Times 1 -Exactly -ParameterFilter { $RepoId -ceq 'avm-ptn-example-repo' }
-        Should -Invoke Invoke-RepositoryGitHubApi -Times 1 -Exactly -ParameterFilter {
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0 -Exactly -ParameterFilter {
             $Endpoint -ceq 'repos/Azure/terraform-azurerm-avm-res-redhatopenshift-openshiftcluster'
         }
     }
@@ -512,8 +677,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
         @{ Case = 'foreign membership'; Message = '*historical group membership ownership*' }
         @{ Case = 'foreign role principal'; Message = '*historical role ownership*' }
         @{ Case = 'foreign GitHub environment'; Message = '*historical GitHub environment ownership*' }
-        @{ Case = 'duplicate GitHub object'; Message = '*duplicate managed ownership*' }
-        @{ Case = 'duplicate Azure object'; Message = '*duplicate managed ownership*' }
+        @{ Case = 'duplicate BAMI owner'; Message = '*duplicate managed ownership*' }
         @{ Case = 'tainted instance'; Message = '*tainted*' }
         @{ Case = 'deposed instance'; Message = '*Deposed*' }
     ) {
@@ -550,11 +714,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
             'foreign membership' { @($legacy.resources | Where-Object type -CEQ 'azuread_group_member')[0].instances[0].attributes.member_object_id = '40000000-0000-4000-8000-000000000007' }
             'foreign role principal' { @($legacy.resources | Where-Object name -CEQ 'identity_role_assignment')[0].instances[0].attributes.body.value.properties.principalId = '40000000-0000-4000-8000-000000000007' }
             'foreign GitHub environment' { @($legacy.resources | Where-Object type -CEQ 'github_repository_environment')[0].instances[0].attributes.environment = 'pr-check' }
-            'duplicate GitHub object' {
-                @($script:aliasPair.Canonical.Destination.resources | Where-Object { $_.type -ceq 'github_repository_environment' -and $_.name -ceq 'no_approval' })[0].instances[0].attributes.id =
-                    @($legacy.resources | Where-Object type -CEQ 'github_repository_environment')[0].instances[0].attributes.id
-            }
-            'duplicate Azure object' { $script:pair.Destination.resources[1].instances[0].attributes.id = $identity.id }
+            'duplicate BAMI owner' { $script:pair.Source.resources[0].instances[0].attributes.id = $identity.id }
             'tainted instance' { $legacy.resources[0].instances[0].status = 'tainted' }
             'deposed instance' { $legacy.resources[0].instances[0].deposed = 'synthetic' }
         }
@@ -596,9 +756,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
         @{ Case = 'duplicate label index'; Message = '*Duplicate instance index*' }
         @{ Case = 'foreign ruleset repository'; Message = '*historical GitHub ruleset ownership*' }
         @{ Case = 'invalid ruleset ID'; Message = '*historical GitHub ruleset ownership*' }
-        @{ Case = 'missing ruleset'; Message = '*Incomplete historical ownership*' }
-        @{ Case = 'duplicate physical owner'; Message = '*duplicate managed ownership*' }
-        @{ Case = 'duplicate GitHub owner'; Message = '*duplicate managed ownership*' }
+        @{ Case = 'duplicate BAMI owner'; Message = '*duplicate managed ownership*' }
     ) {
         $script:fixture.Sources = @(@{ name = $script:fixture.SourcePrefix + 'avm-ptn-example-repo.tfstate' })
         $script:fixture.Destinations = @(
@@ -626,14 +784,7 @@ Describe 'Repository migration complete inventory' -Tag Component {
             'duplicate label index' { $labels.instances[1].index_key = $labels.instances[0].index_key }
             'foreign ruleset repository' { $ruleset.instances[0].attributes.repository = 'foreign' }
             'invalid ruleset ID' { $ruleset.instances[0].attributes.id = 'not-a-ruleset-id' }
-            'missing ruleset' { $state.resources = @($state.resources | Where-Object type -CNE 'github_repository_ruleset') }
-            'duplicate physical owner' { $script:pair.Destination.resources[1].instances[0].attributes.id = $identity.id }
-            'duplicate GitHub owner' {
-                $script:pair.Destination.resources += @{
-                    module = 'module.github'; mode = 'managed'; type = 'github_repository_ruleset'; name = 'main'
-                    provider = 'provider["registry.terraform.io/integrations/github"]'; instances = $ruleset.instances
-                }
-            }
+            'duplicate BAMI owner' { $script:pair.Source.resources[0].instances[0].attributes.id = $identity.id }
         }
         { & $script:driver -Backend $script:pair.Backend -BamiSettings $script:settings -PlanOnly:$false } |
             Should -Throw $Message
