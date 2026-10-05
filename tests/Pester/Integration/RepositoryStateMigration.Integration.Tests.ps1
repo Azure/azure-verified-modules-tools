@@ -12,12 +12,11 @@ BeforeAll {
 
     function Get-TestMigrationBlobPath {
         param([string] $Name)
-        $path = $script:store
         foreach ($part in $Name.Split('/')) {
             if ($part -in @('', '.', '..')) { throw 'Unsafe synthetic blob name.' }
-            $path = Join-Path $path $part
         }
-        return $path
+        $keyHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Name)))
+        return Join-Path $script:store "$keyHash.blob"
     }
 
     function Write-TestMigrationState {
@@ -124,19 +123,41 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
         (Get-RepositoryMigrationPosition $transfer).Status | Should -Be 'Prepared'
     }
 
-    It 'runs the workflow entry point through native publication and a completed rerun' {
+    It 'runs native publication and a completed rerun without modifying historical repository states' {
+        $script:aliasPair = New-AvmTestLegacyAliasStatePair
+        $flatStates = @{
+            'avm-template.tfstate' = New-AvmTestHistoricalRepositoryState -Repository 'Azure/terraform-azurerm-avm-template' -RepositoryId 2345
+            'avm-gh-app.tfstate' = New-AvmTestHistoricalRepositoryState -Repository 'Azure/avm-gh-app' -RepositoryId 3456
+            'avm-container-images-cicd-agents-and-runners.tfstate' = New-AvmTestHistoricalRepositoryState -Repository 'Azure/avm-container-images-cicd-agents-and-runners' -RepositoryId 4567
+        }
+        $script:historicalStates = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($key in $flatStates.Keys) {
+            $script:historicalStates.Add($key, $flatStates[$key])
+        }
+        $script:historicalStates.Add($script:aliasPair.CanonicalKey, $script:aliasPair.Canonical.Destination)
+        $script:historicalStates.Add($script:aliasPair.LegacyKey, $script:aliasPair.Legacy)
+        $historicalHashes = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+        foreach ($key in $script:historicalStates.Keys) {
+            Write-TestMigrationState -Name $key -State $script:historicalStates[$key]
+            $historicalHashes[$key] = (Get-FileHash -LiteralPath (Get-TestMigrationBlobPath $key)).Hash
+        }
         Mock Assert-RepositoryMigrationStorage { }
         Mock Resolve-AvmRepositorySyncFederationContext { @{ OrganizationId = $script:scope.RepositoryOwnerId } }
-        Mock Invoke-RepositoryGitHubApi { $script:pair.GitHubRepository } -ParameterFilter {
-            $Endpoint -ceq "repos/$($script:scope.Repository)"
+        Mock Invoke-RepositoryGitHubApi {
+            param($Endpoint)
+            foreach ($pair in @($script:pair, $script:aliasPair.Canonical)) {
+                if ($Endpoint -ceq "repos/$($pair.Repository)") { return $pair.GitHubRepository }
+            }
+        } -ParameterFilter {
+            $Endpoint -cin (@($script:pair, $script:aliasPair.Canonical) | ForEach-Object { "repos/$($_.Repository)" })
         }
         Mock Get-RepositoryMigrationBlobList {
             param($Backend, $Prefix)
-            foreach ($key in @(
+            foreach ($key in (@(
                 $script:scope.SourceKey, $script:scope.DestinationKey,
                 "bami-consolidation/$($script:scope.TenantId)/$($script:scope.RepoId)/backup.zip",
                 "bami-consolidation/$($script:scope.TenantId)/$($script:scope.RepoId)/complete.json"
-            )) {
+            ) + @($script:historicalStates.Keys))) {
                 if ($key.StartsWith($Prefix, [StringComparison]::Ordinal) -and
                     (Test-Path -LiteralPath (Get-TestMigrationBlobPath $key))) {
                     @{ name = $key }
@@ -153,6 +174,11 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
             $env:GITHUB_REPOSITORY_ID = '5678'
             $driver = Join-Path $script:lib '..' 'Invoke-RepositoryStateMigration.ps1'
             # Keep transport mocks in Pester's script scope.
+            $preview = . $driver -Backend $script:pair.Backend -BamiSettings $script:pair.Settings -PlanOnly -Confirm:$false
+            $preview.Ready | Should -BeFalse
+            $preview.MigrationRequired | Should -Be 1
+            Should -Invoke Save-RepositoryMigrationBlob -Times 0 -Exactly
+            Should -Invoke Initialize-RepositoryMigrationBackend -Times 0 -Exactly
             $first = . $driver -Backend $script:pair.Backend -BamiSettings $script:pair.Settings -PlanOnly:$false -Confirm:$false
             $first.Ready | Should -BeTrue
             $first.MigrationRequired | Should -Be 1
@@ -162,7 +188,14 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
             @($script:events | Where-Object { $_ -like 'push:*' }) | Should -Be @('push:source', 'push:destination')
             @($script:events | Where-Object { $_ -ceq 'backup' }) | Should -HaveCount 1
             @($script:events | Where-Object { $_ -ceq 'complete' }) | Should -HaveCount 1
-            Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -Be @('ready=true', 'ready=true')
+            foreach ($key in $historicalHashes.Keys) {
+                (Get-FileHash -LiteralPath (Get-TestMigrationBlobPath $key)).Hash | Should -BeExactly $historicalHashes[$key]
+            }
+            Should -Invoke Save-RepositoryMigrationBlob -Times 0 -Exactly -ParameterFilter {
+                $Name -cnotlike "bami-consolidation/$($script:scope.TenantId)/$($script:scope.RepoId)/*"
+            }
+            Should -Invoke Initialize-RepositoryMigrationBackend -Times 0 -Exactly -ParameterFilter { $Key -cin $script:historicalStates.Keys }
+            Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -Be @('ready=false', 'ready=true', 'ready=true')
         }
         finally {
             foreach ($name in $previous.Keys) {

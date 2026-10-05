@@ -72,6 +72,192 @@ function Assert-RepositoryMigrationWriters {
     }
 }
 
+function Format-RepositoryMigrationKey {
+    param([hashtable] $Backend, [string] $Prefix, [AllowEmptyString()] [string] $Name)
+
+    $key = ConvertTo-Json -InputObject (Protect-RepositorySyncLogText -Text $Name) -Compress -EscapeHandling EscapeNonAscii
+    return "$key in $($Backend.StorageAccountName)/$($Backend.ContainerName) (prefix '$Prefix')"
+}
+
+function Add-RepositoryMigrationOwners {
+    param(
+        [System.Collections.IDictionary] $State,
+        [Collections.Generic.Dictionary[string, string]] $Owners,
+        [string] $Key
+    )
+
+    foreach ($resource in $State.resources | Where-Object { $_['mode'] -ceq 'managed' }) {
+        foreach ($instance in $resource.instances) {
+            $owner = "$($resource['type'])|$($instance['attributes']['id'])"
+            if ($Owners.ContainsKey($owner)) {
+                throw "The full inventory contains duplicate managed ownership between $($Owners[$owner]) and $Key; publication is blocked."
+            }
+            $Owners.Add($owner, $Key)
+        }
+    }
+}
+
+function Assert-RepositoryMigrationHistoricalState {
+    param(
+        [System.Collections.IDictionary] $State,
+        [System.Collections.IDictionary] $Settings,
+        [string] $Repository,
+        [string] $OriginalRepository,
+        [System.Collections.IDictionary] $CanonicalOwner,
+        [switch] $CaseAlias
+    )
+
+    $expected = @{
+        'data.azapi_client_config.current' = 'azure/azapi'
+        'data.azuread_group.entra_readers' = 'hashicorp/azuread'
+        'data.github_repository.this' = 'integrations/github'
+        'data.github_team.avm_core' = 'integrations/github'
+        'managed.azapi_resource.identity' = 'azure/azapi'
+        'managed.azapi_resource.identity_federated_credentials' = 'azure/azapi'
+        'managed.azapi_resource.identity_role_assignment' = 'azure/azapi'
+        'managed.azuread_group_member.example' = 'hashicorp/azuread'
+        'managed.github_actions_environment_secret.client_id' = 'integrations/github'
+        'managed.github_actions_environment_secret.subscription_id' = 'integrations/github'
+        'managed.github_actions_environment_secret.tenant_id' = 'integrations/github'
+        'managed.github_repository_environment.this' = 'integrations/github'
+    }
+    if ($CaseAlias) {
+        $expected['data.github_team.contributors'] = 'integrations/github'
+        $expected['data.github_team.owners'] = 'integrations/github'
+    } else {
+        $expected['managed.github_issue_label.this'] = 'integrations/github'
+        $expected['managed.github_repository_ruleset.main'] = 'integrations/github'
+    }
+    $attributes = @{}
+    foreach ($resource in $State.resources) {
+        $address = "$($resource['mode']).$($resource['type']).$($resource['name'])"
+        if (-not [string]::IsNullOrEmpty($resource['module']) -or $address -cnotin $expected.Keys -or
+            $attributes.ContainsKey($address) -or
+            $resource['provider'] -cne ('provider["registry.terraform.io/' + $expected[$address] + '"]')) {
+            throw 'Historical state must contain only the recognized flat repository root and default providers.'
+        }
+        if ($resource['type'] -ceq 'github_issue_label') {
+            foreach ($instance in $resource['instances']) {
+                $label = $instance['attributes']
+                if ($instance['index_key'] -isnot [string] -or [string]::IsNullOrWhiteSpace($instance['index_key']) -or
+                    $label['repository'] -cne $Repository.Split('/')[1] -or $label['name'] -cne $instance['index_key'] -or
+                    $label['id'] -cne "$($label['repository']):$($instance['index_key'])") {
+                    throw 'Foreign or incomplete historical GitHub label ownership.'
+                }
+            }
+            $attributes[$address] = $true
+            continue
+        }
+        if ($resource['instances'].Count -ne 1) { throw 'Ambiguous historical instance ownership.' }
+        $instance = $resource['instances'][0]
+        $indexed = $resource['type'] -cin @('github_team', 'github_repository_environment', 'github_actions_environment_secret')
+        if (($indexed -and ($instance['index_key'] -isnot [long] -or $instance['index_key'] -ne 0)) -or
+            (-not $indexed -and $instance.Contains('index_key'))) {
+            throw 'Unexpected historical instance address.'
+        }
+        $attributes[$address] = $instance['attributes']
+    }
+    if ($attributes.Count -ne $expected.Count) { throw 'Incomplete historical ownership; no state is ignored.' }
+
+    $repositoryState = $attributes['data.github_repository.this']
+    if ($repositoryState['full_name'] -cne $Repository -or
+        $repositoryState['id'] -cne $OriginalRepository.Split('/')[1] -or
+        [string]$repositoryState['repo_id'] -cnotmatch '\A[1-9][0-9]*\z' -or
+        [string]::IsNullOrWhiteSpace($repositoryState['node_id'])) {
+        throw 'Historical state lacks the exact recorded GitHub repository identity.'
+    }
+    if ($CaseAlias -and ($null -eq $CanonicalOwner -or
+        $CanonicalOwner.Repository['full_name'] -cne $Repository -or
+        [string]$CanonicalOwner.Repository['repo_id'] -cne [string]$repositoryState['repo_id'] -or
+        $CanonicalOwner.Repository['node_id'] -cne $repositoryState['node_id'] -or
+        $CanonicalOwner.Lineage -ieq $State.lineage)) {
+        throw 'The historical alias lacks a distinct canonical snapshot for the same immutable GitHub repository.'
+    }
+    if (-not $CaseAlias) {
+        $ruleset = $attributes['managed.github_repository_ruleset.main']
+        if ($ruleset['repository'] -cne $Repository.Split('/')[1] -or
+            [string]$ruleset['id'] -cnotmatch '\A[1-9][0-9]*\z') {
+            throw 'Foreign or incomplete historical GitHub ruleset ownership.'
+        }
+    }
+
+    $client = $attributes['data.azapi_client_config.current']
+    $identity = $attributes['managed.azapi_resource.identity']
+    $output = $identity['output']
+    if ($output -is [System.Collections.IDictionary] -and $output.Contains('value')) { $output = $output['value'] }
+    if ($output -isnot [System.Collections.IDictionary] -or $output['properties'] -isnot [System.Collections.IDictionary]) {
+        throw 'The historical identity lacks recorded retired-tenant ownership.'
+    }
+    $properties = $output['properties']
+    foreach ($value in @($client['tenant_id'], $client['subscription_id'], $properties['tenantId'], $properties['principalId'], $properties['clientId'])) {
+        $guid = [guid]::Empty
+        if (-not [guid]::TryParseExact([string]$value, 'D', [ref]$guid) -or $guid -eq [guid]::Empty) {
+            throw 'The historical identity lacks valid recorded ownership GUIDs.'
+        }
+    }
+    $testSubscriptions = ConvertFrom-AvmTestTenantJson -Json $Settings['TEST_BAMI_SUBSCRIPTION_IDS']
+    $bamiSubscriptions = @($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'], $Settings['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID']) +
+        @($testSubscriptions | ForEach-Object { $_['id'] })
+    $name = $OriginalRepository.Replace('/', '-')
+    $parent = "/subscriptions/$($client['subscription_id'])/resourceGroups/rg-e2e-testing-module-identities"
+    $identityId = "$parent/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
+    if ($properties['tenantId'] -ine $client['tenant_id'] -or $properties['tenantId'] -ieq $Settings['TEST_BAMI_TENANT_ID'] -or
+        $client['subscription_id'] -iin $bamiSubscriptions -or
+        $properties['clientId'] -iin @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID']) -or
+        $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview' -or
+        $identity['parent_id'] -ine $parent -or $identity['name'] -cne $name -or $identity['id'] -ine $identityId) {
+        throw 'The historical identity is foreign, incomplete, or owns the configured BAMI scope.'
+    }
+
+    $federation = $attributes['managed.azapi_resource.identity_federated_credentials']
+    if ($federation['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+        $federation['parent_id'] -ine $identityId -or $federation['name'] -cne $name -or
+        $federation['id'] -ine "$identityId/federatedIdentityCredentials/$name") {
+        throw 'Foreign or incomplete historical federation ownership.'
+    }
+    $group = $attributes['data.azuread_group.entra_readers']
+    $member = $attributes['managed.azuread_group_member.example']
+    $groupId = [guid]::Empty
+    if (-not [guid]::TryParseExact([string]$group['object_id'], 'D', [ref]$groupId) -or $groupId -eq [guid]::Empty -or
+        $group['id'] -ine $group['object_id'] -or $member['group_object_id'] -ine $group['object_id'] -or
+        $member['member_object_id'] -ine $properties['principalId'] -or
+        $member['id'] -ine "$($group['object_id'])/member/$($properties['principalId'])") {
+        throw 'Foreign or incomplete historical group membership ownership.'
+    }
+    $role = $attributes['managed.azapi_resource.identity_role_assignment']
+    $roleScope = [regex]::Match([string]$role['parent_id'], '\A/subscriptions/([0-9a-fA-F-]{36})\z')
+    $roleSubscription = [guid]::Empty
+    $roleName = [guid]::Empty
+    $body = $role['body']
+    if ($body -is [System.Collections.IDictionary] -and $body.Contains('value')) { $body = $body['value'] }
+    if (-not $roleScope.Success -or
+        -not [guid]::TryParseExact($roleScope.Groups[1].Value, 'D', [ref]$roleSubscription) -or $roleSubscription -eq [guid]::Empty -or
+        $roleScope.Groups[1].Value -iin $bamiSubscriptions -or
+        -not [guid]::TryParseExact([string]$role['name'], 'D', [ref]$roleName) -or $roleName -eq [guid]::Empty -or
+        $role['type'] -cne 'Microsoft.Authorization/roleAssignments@2022-04-01' -or
+        $role['id'] -ine "$($role['parent_id'])/providers/Microsoft.Authorization/roleAssignments/$($role['name'])" -or
+        $body -isnot [System.Collections.IDictionary] -or $body['properties'] -isnot [System.Collections.IDictionary] -or
+        $body['properties']['principalId'] -ine $properties['principalId'] -or
+        $body['properties']['principalType'] -cne 'ServicePrincipal' -or
+        $body['properties']['roleDefinitionId'] -ine "$($role['parent_id'])/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635") {
+        throw 'Foreign, incomplete, or BAMI-scoped historical role ownership.'
+    }
+
+    $repositoryName = $Repository.Split('/')[1]
+    foreach ($entry in @{
+        'managed.github_repository_environment.this' = ''
+        'managed.github_actions_environment_secret.client_id' = ':ARM_CLIENT_ID'
+        'managed.github_actions_environment_secret.subscription_id' = ':ARM_SUBSCRIPTION_ID'
+        'managed.github_actions_environment_secret.tenant_id' = ':ARM_TENANT_ID'
+    }.GetEnumerator()) {
+        $github = $attributes[$entry.Key]
+        if ($github['repository'] -cne $repositoryName -or $github['environment'] -cne 'test' -or
+            $github['id'] -cne "${repositoryName}:test$($entry.Value)") {
+            throw 'Foreign or incomplete historical GitHub environment ownership.'
+        }
+    }
+}
+
 function Get-RepositoryMigrationScope {
     param(
         [hashtable] $Backend, [System.Collections.IDictionary] $Settings, [string] $RepoId, [object] $Repository,
