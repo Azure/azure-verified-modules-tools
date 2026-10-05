@@ -44,9 +44,15 @@ Describe 'Avm.Authoring module' {
             Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
         }
 
-        It 'exports Invoke-Avm' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Invoke-Avm' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
+        It 'exports exactly the manifest functions, one per Public script' {
+            $manifest = Import-PowerShellDataFile -LiteralPath $script:manifestPath
+            $publicRoot = Join-Path (Split-Path -Parent $script:manifestPath) 'Public'
+            $scripts = @(Get-ChildItem -LiteralPath $publicRoot -Filter '*.ps1' -Recurse -File).BaseName |
+                Sort-Object
+            $exported = @((Get-Module 'Avm.Authoring').ExportedFunctions.Keys) | Sort-Object
+
+            $exported | Should -Be (@($manifest.FunctionsToExport) | Sort-Object)
+            $exported | Should -Be $scripts
         }
 
         It 'keeps one exception type identity when a reimport follows script-cache eviction' {
@@ -68,48 +74,13 @@ Describe 'Avm.Authoring module' {
             $alias.Definition | Should -Be 'Invoke-Avm'
         }
 
-        It 'exports Get-AvmVersion' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Get-AvmVersion' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
-        }
-
-        It 'exports Invoke-AvmDoctor' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Invoke-AvmDoctor' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
-        }
-
         It 'retains the Get-AvmAuthoringPlaceholder back-compat shim' {
             Get-Command -Module 'Avm.Authoring' -Name 'Get-AvmAuthoringPlaceholder' -ErrorAction SilentlyContinue |
                 Should -Not -BeNullOrEmpty
         }
 
-        It 'exports Get-AvmTool' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Get-AvmTool' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
-        }
-
-        It 'exports Install-AvmTool' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Install-AvmTool' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
-        }
-
-        It 'exports Update-AvmAuthoring' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Update-AvmAuthoring' -ErrorAction SilentlyContinue |
-                Should -Not -BeNullOrEmpty
-        }
-
-        It 'does not leak private helpers (Get-AvmFolder is module-private)' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Get-AvmFolder' -ErrorAction SilentlyContinue |
-                Should -BeNullOrEmpty
-        }
-
-        It 'does not leak private helpers (Invoke-AvmHttp is module-private)' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Invoke-AvmHttp' -ErrorAction SilentlyContinue |
-                Should -BeNullOrEmpty
-        }
-
-        It 'does not leak private helpers (Test-AvmPins is module-private)' {
-            Get-Command -Module 'Avm.Authoring' -Name 'Test-AvmPins' -ErrorAction SilentlyContinue |
+        It 'does not leak private helper <_>' -ForEach @('Get-AvmFolder', 'Invoke-AvmHttp', 'Test-AvmPins') {
+            Get-Command -Module 'Avm.Authoring' -Name $_ -ErrorAction SilentlyContinue |
                 Should -BeNullOrEmpty
         }
 

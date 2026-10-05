@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmCheckConvention' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmCheckConvention -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm check convention"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object {

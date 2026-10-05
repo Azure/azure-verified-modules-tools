@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmTestUnit' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmTestUnit -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm test unit"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 2 -and $_.Path[0] -eq 'test' -and $_.Path[1] -eq 'unit' }

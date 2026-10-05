@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmFormat' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmFormat -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm format"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'format' }
