@@ -12,8 +12,8 @@ function Invoke-AvmCheckPolicy {
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
-        Bicep policy checks use repository-local ps-rule.yaml and .ps-rule/
-        under utilities/pipelines/staticValidation/psrule. PSRule 2.9.0 and
+        Bicep policy checks use packaged ps-rule.yaml and .ps-rule/ assets
+        under Resources/bicep/psrule. PSRule 2.9.0 and
         PSRule.Rules.Azure 1.47.0 must be installed separately. Set
         TEST_SUBSCRIPTION_IDS (the first entry is used) or
         VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,

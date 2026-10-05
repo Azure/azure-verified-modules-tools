@@ -9,9 +9,14 @@ function Test-AvmMetadataModules {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $issues = [System.Collections.Generic.List[object]]::new()
+    $validations = [System.Collections.Generic.List[object]]::new()
     Write-AvmLog ("metadata: discovering module scopes under {0}" -f $Context.Root) -Level Verbose | Out-Null
     $scopes = @(Get-AvmMetadataScope -Context $Context)
     Write-AvmLog ("metadata: discovered {0} module scope(s)" -f $scopes.Count) -Level Verbose | Out-Null
+    if ($scopes.Count -eq 0) {
+        $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SCOPE' `
+                    -Message 'No module metadata scopes were discovered; no metadata requirements were evaluated.'))
+    }
     foreach ($scope in $scopes) {
         $metadataPath = Join-Path $scope.Path 'metadata.json'
         $relativePath = [System.IO.Path]::GetRelativePath($Context.Root, $metadataPath).Replace('\', '/')
@@ -36,18 +41,26 @@ function Test-AvmMetadataModules {
             continue
         }
         try {
-            $metadata = ConvertFrom-AvmMetadataJson -Json (Read-AvmMetadataJson -Path $metadataPath)
+            $json = Read-AvmMetadataJson -Path $metadataPath
+            $metadata = ConvertFrom-AvmMetadataJson -Json $json
             $moduleType = Get-AvmMetadataModuleType -Context $Context -Path $scope.Path -Metadata $metadata
-            $result = Test-AvmModuleMetadata -Path $scope.Path -Ecosystem $Context.Ecosystem `
-                -ModuleType $moduleType -ChildModule:$scope.ChildModule `
-                -CheckSource:($Context.Ecosystem -eq 'bicep') -SkipModuleVersionCheck
-            foreach ($issue in $result.Issues) {
-                $issue.File = [System.IO.Path]::GetRelativePath($Context.Root, (Join-Path $scope.Path $issue.File)).Replace('\', '/')
-                $issues.Add($issue)
-            }
+            $validations.Add((Get-AvmMetadataValidationInput -Json $json -Path $scope.Path -Ecosystem $Context.Ecosystem `
+                        -ModuleType $moduleType -ChildModule:$scope.ChildModule `
+                        -CheckSource:($Context.Ecosystem -eq 'bicep') `
+                        -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $scope.Path -Ecosystem $Context.Ecosystem `
+                            -ModuleType $moduleType -ChildModule:$scope.ChildModule)))
         }
         catch [System.ArgumentException] {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_INVALID' -File $relativePath -Message $_.Exception.Message))
+        }
+    }
+    if ($validations.Count -gt 0) {
+        $result = Invoke-AvmMetadataValidation -Validations $validations.ToArray()
+        foreach ($issue in $result.Issues) {
+            if ([System.IO.Path]::IsPathRooted($issue.File)) {
+                $issue.File = [System.IO.Path]::GetRelativePath($Context.Root, $issue.File).Replace('\', '/')
+            }
+            $issues.Add($issue)
         }
     }
     foreach ($issue in $issues) {

@@ -23,7 +23,8 @@ The checkout was clean. No replacement branch or review was created.
 - [x] Read progress protocol, active records, agent contract, and relevant standards.
 - [ ] Compare pinned registry assertions with packaged native requirements.
 - [ ] Replace convention family wrappers with independent native assertions.
-- [ ] Move shared Bicep metadata assertions into a packaged native suite.
+- [x] Move explicit shared JSON and Bicep source-literal checks into native Pester.
+- [ ] Migrate compiled telemetry/metadata agreement with the convention assertions.
 - [x] Package common PSRule defaults and remove policy's required registry utility reads.
 - [ ] Wire metadata, convention, unit compliance, and composition entry points.
 - [ ] Add reusable Bicep whole-module fixtures and independent-package acceptance.
@@ -41,7 +42,8 @@ from family names or an aggregate passing command.
 | Existing requirement source | Packaged destination | Evidence |
 | --- | --- | --- |
 | `compliance/module.tests.ps1` and twelve convention checker families | Pending native assertion migration | Pending |
-| `compliance/metadata.tests.ps1`, metadata schema and source validation | Pending packaged metadata suite | Pending |
+| Shared metadata schema and source-literal validation | `Resources/metadata/Metadata.Tests.ps1`, shared across Bicep and Terraform | Paired native/internal constraints, file/InputObject routing, batched composition, five copied-package acceptance cases |
+| `compliance/metadata.tests.ps1` compiled telemetry-prefix agreement | Pending native compiled convention migration | Pending |
 | `psrule/ps-rule.yaml` and eight `.ps-rule/*.Rule.yaml` assets | `Resources/bicep/psrule/` | Real built-package baseline execution and insecure-transport rejection; 17 unit and 21 component controls |
 | Module-authored unit/e2e tests and module configuration | Remain consumer-owned | Pending entry-point audit |
 
@@ -69,6 +71,14 @@ The remaining native assertion migration is not yet qualified.
 No cloud execution, host-security change, release,
 workflow dispatch, merge, or registry cutover is authorized or performed.
 Build and test commands use `.\build.ps1`; broad integration setup is excluded.
+
+The [shared native metadata slice](2026-10-05-shared-native-metadata.md) now
+passes the full gate: 3,010 unit tests (nine skipped) and 1,478 component tests
+(one skipped), plus five copied-package acceptance cases. Explicit metadata
+validation uses the same six native JSON requirements for both ecosystems;
+Bicep source checks add four cases. Internal guards evaluate the exact same
+schemas without starting Pester. Composition batches all scopes. Compiled
+telemetry agreement and the other convention families remain outstanding.
 
 ## Blockers or dependencies
 

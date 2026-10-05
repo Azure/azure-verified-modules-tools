@@ -362,6 +362,11 @@ historical provenance does not define an update or runtime dependency.
 
 Currently vendored:
 
+- `Resources/metadata/Metadata.Tests.ps1` - one native Pester suite for explicit
+  Bicep and Terraform metadata validation, including supplied objects.
+  Composition batches scopes into one invocation. Internal input construction
+  and initialization use the same contextual JSON schemas without running
+  Pester; Bicep source-literal cases are separate from the shared JSON checks.
 - `Resources/bicep/psrule/ps-rule.yaml` and `.ps-rule/*.Rule.yaml` - common
   Bicep options, AVM security baseline, and suppression groups. Policy checks
   resolve these from the installed module, never a consuming repository's
