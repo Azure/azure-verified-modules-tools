@@ -362,6 +362,10 @@ historical provenance does not define an update or runtime dependency.
 
 Currently vendored:
 
+- `Resources/bicep/psrule/ps-rule.yaml` and `.ps-rule/*.Rule.yaml` - common
+  Bicep options, AVM security baseline, and suppression groups. Policy checks
+  resolve these from the installed module, never a consuming repository's
+  `utilities/` tree. Module source and test configuration remain consumer-owned.
 - `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`,
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
   (root / `modules/*` / `examples/*`).

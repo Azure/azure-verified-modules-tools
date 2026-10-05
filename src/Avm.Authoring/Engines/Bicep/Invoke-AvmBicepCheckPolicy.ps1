@@ -4,7 +4,7 @@ function Invoke-AvmBicepCheckPolicy {
         Evaluate the Bicep module's selected tests with PSRule for Azure.
 
     .DESCRIPTION
-        Uses the repository's PSRule options and rule/suppression directory
+        Uses the package's PSRule options and rule/suppression directory
         to evaluate defaults and waf-aligned e2e tests with the required
         Reliability and AVM WAF Security baselines and the advisory Default
         and Security baselines. Files are tokenized in a temporary tree;
@@ -124,16 +124,6 @@ function Invoke-AvmBicepCheckPolicy {
     $configuration = $null
     $verified = @{}
     if ($issues.Count -eq 0) {
-        $configPath = Join-Path -Path $repositoryRoot -ChildPath 'utilities' `
-            -AdditionalChildPath 'pipelines', 'staticValidation', 'psrule'
-        if (-not [System.IO.File]::Exists((Join-Path $configPath 'ps-rule.yaml')) -or
-            -not [System.IO.Directory]::Exists((Join-Path $configPath '.ps-rule'))) {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-config' `
-                        -Message 'PSRule needs the repository utilities/pipelines/staticValidation/psrule/ps-rule.yaml and .ps-rule/ directory.'))
-        }
-    }
-    if ($issues.Count -eq 0) {
         try {
             $tool = Import-AvmBicepPolicyModule
         }
@@ -144,7 +134,7 @@ function Invoke-AvmBicepCheckPolicy {
     }
     if ($issues.Count -eq 0) {
         try {
-            $configuration = Get-AvmBicepPolicyConfiguration -RepositoryRoot $repositoryRoot
+            $configuration = Get-AvmBicepPolicyConfiguration
         }
         catch {
             & $addFailure $_ $Context.Root 'avm.bicep.psrule-config' ([AvmConfigurationException]) `

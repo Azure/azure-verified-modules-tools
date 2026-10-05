@@ -16,6 +16,7 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
     BeforeEach {
         $script:workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         Copy-Item -LiteralPath $script:fixtureRoot -Destination $script:workingRoot -Recurse
+        Remove-Item -LiteralPath (Join-Path $script:workingRoot 'utilities' 'pipelines' 'staticValidation' 'psrule') -Recurse -Force
         $script:modulePath = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'widget'
         $script:previousNamePrefix = $env:TOKEN_NAMEPREFIX
         $script:previousLocalNamePrefix = $env:localToken_namePrefix
@@ -28,8 +29,8 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
                 [pscustomobject]@{ Name = 'PSRule (fixture)'; Path = 'fixture' }
             }
             Mock Get-AvmBicepPolicyConfiguration {
-                $folder = Join-Path $RepositoryRoot 'utilities' 'pipelines' `
-                    'staticValidation' 'psrule'
+                $folder = Join-Path $ExecutionContext.SessionState.Module.ModuleBase `
+                    'Resources' 'bicep' 'psrule'
                 [pscustomobject]@{
                     OptionPath = Join-Path $folder 'ps-rule.yaml'
                     RulePath   = Join-Path $folder '.ps-rule'

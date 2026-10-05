@@ -126,7 +126,7 @@ Describe 'Bicep PSRule token replacement' {
 }
 
 Describe 'Bicep PSRule configuration boundaries' {
-    It 'refuses repository scripts in the PSRule suppression directory' {
+    It 'ignores registry utility scripts and resolves the packaged configuration' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $folder = Join-Path $root 'utilities' 'pipelines' 'staticValidation' 'psrule'
         $rules = Join-Path $folder '.ps-rule'
@@ -134,10 +134,54 @@ Describe 'Bicep PSRule configuration boundaries' {
         [System.IO.File]::WriteAllText((Join-Path $folder 'ps-rule.yaml'), 'unused')
         [System.IO.File]::WriteAllText((Join-Path $rules 'local.Rule.ps1'), 'throw')
 
+        $configuration = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            function New-PSRuleOption {
+                param($Option)
+                [pscustomobject]@{
+                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep') }
+                    Include = @{ Module = @('PSRule.Rules.Azure'); Path = '' }
+                    Rule = @{ IncludeLocal = $false }
+                    Configuration = @{ AZURE_BICEP_FILE_EXPANSION = 'true'; AZURE_PARAMETER_FILE_EXPANSION = 'false' }
+                }
+            }
+            Get-AvmBicepPolicyConfiguration
+        }
+        $configuration.OptionPath | Should -BeExactly (
+            Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'ps-rule.yaml')
+        @(Get-ChildItem -LiteralPath $configuration.RulePath -File -Force).Count | Should -Be 8
+        $configuration.OptionPath | Should -Not -BeLike "$root*"
+    }
+
+    It 'fails closed when the installed package is missing its policy assets' {
+        $package = Join-Path $TestDrive 'incomplete-package'
+        $engine = Join-Path $package 'Engines' 'Bicep'
+        $null = New-Item -ItemType Directory -Path $engine -Force
+        $resolver = Join-Path $engine 'Get-AvmBicepPolicyConfiguration.ps1'
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Engines' 'Bicep' 'Get-AvmBicepPolicyConfiguration.ps1') -Destination $resolver
         {
-            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
-                param($Root)
-                Get-AvmBicepPolicyConfiguration -RepositoryRoot $Root
+            InModuleScope 'Avm.Authoring' -Parameters @{ Resolver = $resolver; Root = $TestDrive } {
+                param($Resolver, $Root)
+                . $Resolver
+                Get-AvmBicepPolicyConfiguration
+            }
+        } | Should -Throw '*installed Avm.Authoring package is missing*'
+    }
+
+    It 'rejects executable rules inserted into an installed policy bundle' {
+        $package = Join-Path $TestDrive 'invalid-package'
+        $engine = Join-Path $package 'Engines' 'Bicep'
+        $resources = Join-Path $package 'Resources' 'bicep'
+        $null = New-Item -ItemType Directory -Path $engine, $resources -Force
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule') -Destination $resources -Recurse
+        $resolver = Join-Path $engine 'Get-AvmBicepPolicyConfiguration.ps1'
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Engines' 'Bicep' 'Get-AvmBicepPolicyConfiguration.ps1') -Destination $resolver
+        [System.IO.File]::WriteAllText((Join-Path $resources 'psrule' '.ps-rule' 'local.Rule.ps1'), 'throw')
+        {
+            InModuleScope 'Avm.Authoring' -Parameters @{ Resolver = $resolver; Root = $TestDrive } {
+                param($Resolver, $Root)
+                . $Resolver
+                Get-AvmBicepPolicyConfiguration
             }
         } | Should -Throw '*regular .Rule.yaml files*'
     }

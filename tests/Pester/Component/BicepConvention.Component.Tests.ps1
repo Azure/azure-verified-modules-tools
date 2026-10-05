@@ -1410,9 +1410,15 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.test-scope-reference'
     }
 
-    It 'fails closed when repository PSRule configuration is absent' {
-        Remove-Item -LiteralPath (Join-Path $script:workingRoot `
-                'utilities/pipelines/staticValidation/psrule/ps-rule.yaml')
+    It 'fails closed when packaged PSRule configuration is unavailable' {
+        InModuleScope Avm.Authoring {
+            Mock Import-AvmBicepPolicyModule {
+                [pscustomobject]@{ Name = 'fixture'; Path = 'fixture' }
+            }
+            Mock Get-AvmBicepPolicyConfiguration {
+                throw [AvmConfigurationException]::new('The installed package is missing its policy configuration.')
+            }
+        }
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Status | Should -Be 'fail'

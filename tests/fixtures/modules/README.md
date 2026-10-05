@@ -1,6 +1,11 @@
-# On-disk Terraform module fixtures
+# On-disk module fixtures
 
-This tree holds full, copy-faithful AVM Terraform module shells used as
+This tree holds reusable Bicep and Terraform module fixtures. Tests copy them
+into isolated temporary repositories before editing or running commands.
+The Bicep policy fixture has no registry utility tree and is compiler-only:
+its integration tests never deploy it.
+
+The Terraform shells are used as
 integration-test substrate for `avm pre-commit -Ecosystem terraform`,
 `avm pr-check -Ecosystem terraform`, and the individual engine cmdlets
 (`Invoke-AvmFormat`, `Invoke-AvmLint`, `Invoke-AvmTest`, `Invoke-AvmDocs`,
@@ -18,12 +23,13 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 
 | Fixture                              | Provider(s)                                  | Purpose                                                                                            |
 | ------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bicep-storage/` | Bicep / PSRule.Rules.Azure | Independent consuming repository with a storage module, metadata-backed telemetry, blob retention, and a module-owned defaults test. Built-package policy acceptance runs all four native baselines and rejects insecure transport. |
 | `terraform-azurerm-avm-res-mock/`    | `hashicorp/azurerm` + `azapi` + `modtm` + `random` | Mock AVM resource module with two examples (`default`, `default-ignore`) and a `tests/unit/` `tftest.hcl`. Validates the full `format → lint → test → docs` + `check policy` chain. |
 | `terraform-azure-avm-res-mock/`      | `Azure/azure` (AzAPI-only) + `modtm`         | Mock AVM resource module with **three** examples (`default`, `ignored_example`, `second_example`), all three TFLint override variants, PowerShell lifecycle hooks, dotenv input, example-local policy exceptions, an adversarial Event Hub policy violation, and **both** `tests/unit/` *and* `tests/integration/` `tftest.hcl`. Exercises override merging, policy isolation, lifecycle hooks, integration discovery, and multi-example sorting. |
 
 ## Source
 
-Both fixtures were copied from
+The Terraform fixtures were copied from
 legacy Terraform governance repository
 at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
 `main`, 2026-06-16). Upstream paths:
