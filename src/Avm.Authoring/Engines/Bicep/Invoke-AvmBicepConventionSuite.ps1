@@ -31,6 +31,7 @@ function Invoke-AvmBicepConventionSuite {
     $Convention.NativeOwnershipExpected = 0
     $Convention.NativeChildPublishExpected = -1
     $Convention.NativeVersionExpected = -1
+    $Convention.NativeApiVersionExpected = 0
     $suitePath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions', 'Conventions.Tests.ps1'
     $suitePath = [System.IO.Path]::GetFullPath($suitePath)
@@ -39,8 +40,8 @@ function Invoke-AvmBicepConventionSuite {
     $compiledCount = @($Convention.CompiledModules).Count
     $scopeCount = @($Convention.Scopes).Count
     $workflowCount = @($Convention.Workflows).Count
-    $expected = [int]($compiledCount -gt 0) + (2 * $scopeCount) + [int]($scopeCount -gt 0)
-    if ($expected -eq 0 -and $workflowCount -eq 0) {
+    $expected = (2 * $scopeCount) + [int]($scopeCount -gt 0)
+    if ($expected -eq 0 -and $workflowCount -eq 0 -and $compiledCount -eq 0) {
         return $issues.ToArray()
     }
 
@@ -49,6 +50,8 @@ function Invoke-AvmBicepConventionSuite {
         $files = @($suitePath)
         if ($compiledCount -gt 0) {
             $files += Join-Path (Split-Path $suitePath) 'Compiled.Tests.ps1'
+            $Convention.ApiVersionInputs = @($Convention.CompiledModules | ForEach-Object { Get-AvmBicepApiVersionInput -Module $_ })
+            $files += Join-Path (Split-Path $suitePath) 'ApiVersion.Tests.ps1'
         }
         if ($workflowCount -gt 0) {
             $files += Join-Path (Split-Path $suitePath) 'Workflow.Tests.ps1'
@@ -107,9 +110,11 @@ function Invoke-AvmBicepConventionSuite {
                     -Message "The convention suite reported $($summary.Failed) failed test(s) without a recorded finding."))
     }
     $expected += $Convention.NativeCompiledExpected + $Convention.NativeWorkflowExpected + $Convention.NativeOwnershipExpected
+    $expected += $Convention.NativeApiVersionExpected
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeChildPublishExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeVersionExpected) }
     if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
+        ($compiledCount -gt 0 -and $Convention.NativeApiVersionExpected -lt 1) -or
         $Convention.NativeWorkflowExpected -lt $workflowCount -or
         ($scopeCount -gt 0 -and $Convention.NativeOwnershipExpected -lt 1) -or
         ($scopeCount -gt 0 -and $Convention.NativeChildPublishExpected -lt 0) -or

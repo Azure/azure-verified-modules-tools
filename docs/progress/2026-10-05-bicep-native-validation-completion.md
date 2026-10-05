@@ -106,6 +106,11 @@ version family wrapper and checker. Fourteen native requirements cover the
 valid fixture, with explicit exemption and thirteen diagnostic/line negatives.
 Four families remain: layout, API versions, test files and publication.
 
+The [native API slice](2026-10-05-native-api-conventions.md) removes the API
+checker and family wrapper. Its six former unit cases now execute native
+Pester, with eleven additional catalog/diagnostic controls. Three families
+remain: layout, test files and publication.
+
 ## Blockers or dependencies
 
 Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's

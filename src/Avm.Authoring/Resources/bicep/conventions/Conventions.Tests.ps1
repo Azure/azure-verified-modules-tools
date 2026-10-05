@@ -8,9 +8,6 @@ param(
     [System.Collections.IDictionary] $Convention
 )
 
-$compiledCases = @(foreach ($module in @($Convention.CompiledModules)) {
-        @{ Module = $module; Label = $module.Scope.ModuleRelativePath }
-    })
 $scopeCases = @(foreach ($scope in @($Convention.Scopes)) {
         @{ Scope = $scope; Label = $scope.ModuleRelativePath }
     })
@@ -46,18 +43,6 @@ BeforeAll {
 }
 
 Describe 'Bicep conventions' {
-    if ($compiledCases.Count -gt 0) {
-        Context 'Compiled templates' {
-            It 'resource API versions' {
-                Invoke-ConventionRule -RuleName 'ApiVersion' -RuleBlock {
-                    Test-AvmBicepConventionApiVersion -Root $Convention.Root `
-                        -Modules @($Convention.CompiledModules) -ApiSpecs $Convention.ApiSpecs `
-                        -ApiSpecsUnavailableReason $Convention.ApiSpecsUnavailableReason
-                }
-            }
-        }
-    }
-
     if ($scopeCases.Count -gt 0) {
         Context 'Module layout' {
             It '<Label> layout' -ForEach $scopeCases {

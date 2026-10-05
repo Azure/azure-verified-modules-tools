@@ -159,6 +159,24 @@ Describe 'Invoke-AvmBicepConventionSuite' {
         }
     }
 
+    It 'fails closed when compiled modules run without native API requirements' {
+        InModuleScope 'Avm.Authoring' {
+            $script:convention.CompiledModules = @([pscustomobject]@{
+                    Path = Join-Path $TestDrive 'main.bicep'; Template = @{ resources = @() }
+                })
+            Mock Get-AvmBicepCompiledConventionInput { @{} }
+            Mock Invoke-AvmBicepPesterSuite {
+                $ConventionData.NativeCompiledExpected = 11
+                $ConventionData.NativeOwnershipExpected = 1
+                $ConventionData.NativeChildPublishExpected = 0
+                $ConventionData.NativeVersionExpected = 0
+                [pscustomobject]@{ Total = 15; Passed = 15; Failed = 0; Issues = @() }
+            }
+            @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
+                Should -Be @('avm.bicep.convention-suite-incomplete')
+        }
+    }
+
     It 'surfaces runner diagnostics other than ordinary test failures' {
         InModuleScope 'Avm.Authoring' {
             $script:summary = [pscustomobject]@{
