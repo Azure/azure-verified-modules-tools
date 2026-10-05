@@ -40,10 +40,12 @@ Findings:
 | Baseline | 12m14s | 5m34s | 4m49s |
 | Sharded run 1 | 9m17s | 2m10s | 5m45s |
 | Sharded run 2 | 7m55s | 1m33s | 4m24s |
-| Final gate | 7m38s | 1m52s | 3m53s |
+| Final gate (`6f88897`) | 7m38s | 1m52s | 3m53s |
+| Corrected gate | 7m33s | 1m44s | 3m43s |
 
-- Final gate: layout 5.1s, lint 1m47s; unit 2,963 passed and 9 skipped across six shards; component 1,280 passed and 1 skipped. The added unit tests cover shard count, isolation and stale-result clean-up. Component shard finish times were within 46s of each other.
+- Corrected gate: layout 8.6s, lint 1m57s; unit 2,965 passed and 9 skipped across six shards; component 1,280 passed and 1 skipped. No unit shard wrote to its isolated `AVM_HOME`.
+- Correction after `6f88897`: the runner passed `<shard>\h` to the worker as `AVM_HOME` but checked `<shard>\avm-home` for writes, so the write warning could never fire. Both now use the same path. A runner-level test, in which a shard writes to `AVM_HOME`, fails on the old code and passes on the fix; a second test confirms there is no warning for a clean shard.
 - Component times vary between runs because of machine load. The unit tier gained the most.
-- Serial fallback: `AVM_UNIT_SHARD_COUNT=1 ./build.ps1 test` passed 2,962 tests in 4m23s.
-- Hosted baseline (CI run 37307771430 at `fbb47aa`): Windows `ci-tests` 14m27s (coverage 7m36s, component 6m48s with shard durations 403/276/253/229s); Ubuntu 6m39s (coverage 3m01s, component 3m38s). Coverage stays single-process, so this slice only targets the uneven component shards there. No hosted run of the test workflow exists yet for this slice, so no hosted improvement is claimed.
+- Serial fallback at the same final test set: `AVM_UNIT_SHARD_COUNT=1 ./build.ps1 test` passed 2,965 and skipped 9 in 4m06s, matching the sharded run. Only `unit.xml` remained afterwards, so the earlier shard results were cleared. The earlier serial figure of 2,962 was measured before the stale-result test was added, and the sharded 2,963 included it. The two runner tests above account for the rest of the increase to 2,965.
+- Hosted baseline (CI run 37307771430 at `fbb47aa`): Windows `ci-tests` 14m27s (coverage 7m36s, component 6m48s with shard durations 403/276/253/229s); Ubuntu 6m39s (coverage 3m01s, component 3m38s). Coverage stays single-process, so this slice only targets the uneven component shards there. No hosted run of the test workflow exists yet for this slice or its correction, so no hosted improvement is claimed, and the `fbb47aa` results are not validation of this slice.
 - A transient PSScriptAnalyzer error ("pipeline already running" or a null reference) passed on rerun with no changes.

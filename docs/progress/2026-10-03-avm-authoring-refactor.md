@@ -59,4 +59,4 @@ transformations and publication (244s together).
 - [x] Final slice, as the user directed: reduce test run time, including safe
   parallel runs, with before and after timings for the full gate
   ([record](2026-10-05-test-run-time.md)). The full gate fell from 13m56s at
-  the branch start to 7m38s.
+  the branch start to 7m33s.

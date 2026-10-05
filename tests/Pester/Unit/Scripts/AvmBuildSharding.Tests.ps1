@@ -155,6 +155,54 @@ Describe 'Clear-AvmTierTestResult' {
     }
 }
 
+Describe 'Invoke-AvmPesterShardedTier' {
+    BeforeAll {
+        function script:Get-AvmTestResultPath {
+            param([Parameter(Mandatory)] [string] $Tier)
+            $dir = Join-Path $script:outRoot 'test-results'
+            $null = New-Item -ItemType Directory -Path $dir -Force
+            Join-Path $dir "$Tier.xml"
+        }
+        function script:Write-Build {
+            param($Color, $Text)
+            $script:buildMessages.Add([string]$Text)
+        }
+    }
+
+    BeforeEach {
+        $script:outRoot = Join-Path $TestDrive 'out'
+        $script:buildMessages = [System.Collections.Generic.List[string]]::new()
+    }
+
+    It 'warns when a unit shard writes to its isolated AVM_HOME' {
+        $probe = Join-Path $TestDrive 'Writes.Tests.ps1'
+        [IO.File]::WriteAllText($probe, @'
+Describe 'writes state' {
+    It 'writes to AVM_HOME' {
+        $null = New-Item -ItemType Directory -Path $env:AVM_HOME -Force
+        [IO.File]::WriteAllText((Join-Path $env:AVM_HOME 'state.json'), '{}')
+    }
+}
+'@)
+
+        $result = Invoke-AvmPesterShardedTier -Tier 'unit' -File @(Get-Item -LiteralPath $probe) -ShardCount 1 6>$null
+
+        $result.PassedCount | Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*unit shard 1 wrote 1 file(s) to its isolated AVM_HOME*' }).Count |
+            Should -Be 1
+    }
+
+    It 'does not warn when a unit shard leaves AVM_HOME untouched' {
+        $probe = Join-Path $TestDrive 'Clean.Tests.ps1'
+        [IO.File]::WriteAllText($probe, "Describe 'clean' { It 'passes' { 1 | Should -Be 1 } }")
+
+        $result = Invoke-AvmPesterShardedTier -Tier 'unit' -File @(Get-Item -LiteralPath $probe) -ShardCount 1 6>$null
+
+        $result.PassedCount | Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*isolated AVM_HOME*' }).Count | Should -Be 0
+    }
+}
+
 Describe 'Invoke-AvmPesterShard' {
     It 'fails a shard when a test file cannot be loaded, even if other tests pass' {
         $passing = Join-Path $TestDrive 'Passing.Tests.ps1'

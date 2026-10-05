@@ -177,6 +177,7 @@ function script:Invoke-AvmPesterShardedTier {
             $outputPath = Join-Path $resultDir ("{0}-shard{1}.xml" -f $Tier, $index)
             $logPath = Join-Path $logDir ("{0}-shard{1}.log" -f $Tier, $index)
             $shardTemp = Join-Path $tempRoot "$index"
+            $shardAvmHome = Join-Path $shardTemp 'h'
             $arguments = @(
                 '-NoProfile', '-NonInteractive', '-File', $shardScript,
                 '-OutputPath', $outputPath,
@@ -189,14 +190,14 @@ function script:Invoke-AvmPesterShardedTier {
                 $arguments += @('-ExcludeTag', ($filter.ExcludeTag -join ','))
             }
             if ($isolate) {
-                $arguments += @('-TempPath', (Join-Path $shardTemp 't'), '-AvmHome', (Join-Path $shardTemp 'h'))
+                $arguments += @('-TempPath', (Join-Path $shardTemp 't'), '-AvmHome', $shardAvmHome)
             }
             $process = Microsoft.PowerShell.Management\Start-Process -FilePath $pwshPath `
                 -ArgumentList $arguments -NoNewWindow -PassThru `
                 -RedirectStandardOutput $logPath -RedirectStandardError "$logPath.err"
             $running += [pscustomobject]@{
                 Index = $index; Process = $process; Log = $logPath; Output = $outputPath
-                AvmHome = Join-Path $shardTemp 'avm-home'
+                AvmHome = $shardAvmHome
             }
         }
 
