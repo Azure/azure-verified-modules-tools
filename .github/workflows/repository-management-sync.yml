@@ -68,14 +68,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Require approved state consolidation
-        shell: pwsh
-        env:
-          AVM_REPOSITORY_SYNC_STATE_LAYOUT: ${{ vars.AVM_REPOSITORY_SYNC_STATE_LAYOUT }}
-        run: |
-          . ./scripts/lib/TestTenant.ps1
-          Assert-AvmRepositorySyncStateLayout -Layout $env:AVM_REPOSITORY_SYNC_STATE_LAYOUT
-
       - name: Generate matrix
         uses: ./repository-management/repository-sync/actions/avm-repos
         id: matrix
@@ -210,7 +202,6 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          AVM_REPOSITORY_SYNC_STATE_LAYOUT: ${{ vars.AVM_REPOSITORY_SYNC_STATE_LAYOUT }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}
@@ -256,7 +247,7 @@ jobs:
         shell: pwsh
 
       - name: Add repository items to the AVM All Up project
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        if: ${{ always() && steps.app-token.outcome == 'success' && steps.app-token.outputs.token != '' && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
         run: |
 
           $triggerType = "${{ github.event_name }}"
@@ -293,6 +284,13 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Report skipped project synchronization
+        if: ${{ always() && (steps.app-token.outcome != 'success' || steps.app-token.outputs.token == '') && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          Write-Output 'Project synchronization skipped because GitHub App token setup did not provide a token. See the earlier setup steps for the original failure or skip.'
 
       - name: Upload project sync log JSON
         if: always() && hashFiles('project-sync.log.json') != ''

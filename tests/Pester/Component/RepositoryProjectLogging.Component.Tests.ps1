@@ -5,6 +5,66 @@ BeforeAll {
     . (Join-Path (Split-Path $script:projectDriver -Parent) 'lib' 'RetryHelpers.ps1')
 }
 
+Describe 'Repository sync project prerequisites' -Tag Component {
+    BeforeAll {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml') -Raw
+        $script:steps = @{}
+        foreach ($name in @('Install Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization')) {
+            $match = [regex]::Match($workflow, '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n.*?(?=^      - name:|\z)')
+            $match.Success | Should -BeTrue
+            $script:steps[$name] = $match.Value
+        }
+        $script:stepCode = @{}
+        foreach ($name in @('Install Avm.Authoring', 'Report skipped project synchronization')) {
+            $match = [regex]::Match($script:steps[$name], '(?ms)^        run: \|\r?\n(?<code>.*?)(?=^        [a-z]|\z)')
+            $match.Success | Should -BeTrue
+            $script:stepCode[$name] = [scriptblock]::Create(($match.Groups['code'].Value -replace '(?m)^          ', ''))
+        }
+    }
+
+    It 'preserves the original installer failure after its existing three attempts' {
+        Mock Install-PSResource { throw 'Synthetic PowerShell Gallery HTTP 403 (Forbidden)' }
+        Mock Start-Sleep {}
+        Mock Import-Module {} -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        $records = [System.Collections.Generic.List[object]]::new()
+        { & $script:stepCode['Install Avm.Authoring'] 3>&1 | ForEach-Object { $records.Add($_) } } |
+            Should -Throw '*PowerShell Gallery HTTP 403 (Forbidden)*'
+        Should -Invoke Install-PSResource -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Import-Module -Exactly 0 -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        @($records) | Should -HaveCount 2
+        foreach ($record in $records) {
+            $record | Should -BeOfType ([System.Management.Automation.WarningRecord])
+            $record.Message | Should -Match 'HTTP 403'
+        }
+        $script:steps['Install Avm.Authoring'] | Should -Not -Match 'continue-on-error'
+        $script:steps['Create GitHub App token'] | Should -Not -Match 'continue-on-error|(?m)^        if:'
+    }
+
+    It 'runs project synchronization after earlier failures only when token setup succeeded' {
+        $project = $script:steps['Add repository items to the AVM All Up project']
+        $condition = [regex]::Match($project, '(?m)^        if: (.+)$').Groups[1].Value.Trim()
+        $condition | Should -Be '${{ always() && steps.app-token.outcome == ''success'' && steps.app-token.outputs.token != '''' && (github.event_name != ''workflow_dispatch'' || inputs.sync_project_items) }}'
+        $project | Should -Match 'GH_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}'
+        $project | Should -Not -Match 'continue-on-error'
+    }
+
+    It 'reports missing token setup as a visible skip instead of a Projects permission failure' {
+        $skip = $script:steps['Report skipped project synchronization']
+        $condition = [regex]::Match($skip, '(?m)^        if: (.+)$').Groups[1].Value.Trim()
+        $condition | Should -Be '${{ always() && (steps.app-token.outcome != ''success'' || steps.app-token.outputs.token == '''') && (github.event_name != ''workflow_dispatch'' || inputs.sync_project_items) }}'
+        $skip | Should -Match 'working-directory: \$\{\{ github\.workspace \}\}'
+        Mock Invoke-GitHubCliWithRetry { throw 'No project API call is allowed without the setup token.' }
+        Mock Invoke-RepositorySyncProcess { throw 'No external process is allowed for the skip notice.' }
+        $records = @(& $script:stepCode['Report skipped project synchronization'])
+        $records | Should -HaveCount 1
+        $records[0] | Should -Match '^Project synchronization skipped.*token setup.*earlier setup steps'
+        $records[0] | Should -Not -Match 'permission|::group::|::error::|completed'
+        Should -Invoke Invoke-GitHubCliWithRetry -Exactly 0
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+    }
+}
+
 Describe 'Repository project sync folded logging' -Tag Component {
     BeforeEach {
         $script:previousActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')

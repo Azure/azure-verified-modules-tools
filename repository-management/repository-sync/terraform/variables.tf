@@ -4,17 +4,6 @@ variable "repository_creation_mode_enabled" {
   default     = false
 }
 
-variable "state_layout" {
-  type        = string
-  description = "Operator-approved cutover to unified-v1 after frozen, verified state consolidation. Not ownership evidence."
-  default     = null
-
-  validation {
-    condition     = var.repository_creation_mode_enabled || var.state_layout == "unified-v1"
-    error_message = "Normal repository sync is blocked until the operator approves unified-v1 after state consolidation."
-  }
-}
-
 variable "bami_test_settings" {
   type = object({
     tenant_id                    = string

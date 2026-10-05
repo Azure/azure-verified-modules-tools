@@ -19,7 +19,6 @@ The identity and storage settings below are GitHub **`avm` environment variables
 | Eight `TEST_BAMI_*` values | BAMI identity provisioning and validated test settings |
 | `ARM_BACKEND_CLIENT_ID`, `ARM_BACKEND_TENANT_ID`, `ARM_BACKEND_SUBSCRIPTION_ID` | TME state-only identity |
 | `ARM_BACKEND_STORAGE_ACCOUNT_NAME`, `ARM_BACKEND_STORAGE_CONTAINER_NAME` | TME state location, selected with the state identity |
-| `AVM_REPOSITORY_SYNC_STATE_LAYOUT=unified-v1` | Explicit operator approval after verified state consolidation; unset blocks normal sync |
 
 Set all five `ARM_BACKEND_*` values together. The workflow and sync command
 reject missing or partial backend configuration before repository mutations;
@@ -61,8 +60,7 @@ approval for that consequence before running manual canaries.
 The central `testTenant` default selects BAMI for all repositories discovered by
 Terraform sync, including new and otherwise unlisted repositories. The legacy
 tenant is retired; normal sync explicitly rejects that selection instead of
-accessing an old provider. Normal sync requires the explicit state-layout
-approval above and the
+accessing an old provider. Normal sync requires the
 [complete BAMI bundle](../README.md#test-tenant-selection)
 before cleanup, Terraform, or repository mutations. GitHub Actions executions
 require the trusted Tools repository and `refs/heads/main`. Repository creation
@@ -90,13 +88,20 @@ counts, and outcomes remain visible. Native Terraform human-readable output
 is retained in its group; failures close the group and surface redacted native
 diagnostics. Machine plan JSON is private, including failure and timeout paths.
 There is no separate candidate-plan summary.
+Project synchronization requires successful GitHub App token setup. If that
+prerequisite is unavailable, a visible skip notice points to the earlier setup
+failure instead of reporting an unrelated Projects-permission error.
 
 ## One-time state consolidation
 
-Deploying this source is not a state migration. Keep the layout setting unset
-until approved reconciliation covers every former BAMI state, including
-excluded repositories and incomplete prior runs. The setting is an approval
-gate, not evidence of resource ownership. Normal sync never performs migration.
+Use a coordinated cutover without a configuration setting. Before merging or
+running this source, obtain approval and freeze every writer, including queued
+runs, retries of old revisions, schedules, dispatches, and manual Terraform.
+Inventory every former BAMI state, including excluded repositories and
+incomplete prior runs. Keep the freeze through ownership transfer, verification,
+and the coordinated switch to the unified code. Normal sync never performs
+migration or checks a separate source state; passing source CI does not make an
+unconsolidated repository safe to run.
 
 Under an approved writer freeze, inventory and preserve untouched backups of
 `bami-identities/<tenantGuid>/<repoId>.tfstate` and `<repoId>.tfstate`. Move the
@@ -133,8 +138,12 @@ An interrupted cutover must inspect both current images against the recorded
 stage and publication checkpoints before completing the missing step. Never
 blindly restore an older snapshot, force a push, disable locking, or retry apply.
 Backend provenance, frozen inventory, a safe maintenance authentication context,
-the no-unintended-create/destroy/replace plan, and publication/resumption all
-require separate operator approval. Offline checks do not establish live readiness.
+the no-unintended-create/destroy/replace plan, and publication all require
+separate operator approval. Verify single ownership for every inventoried
+repository before merging or selecting the approved unified revision under the
+freeze. Then obtain separate approval for the canary apply and writer resumption.
+Do not rerun the old split writer after transfer. Offline checks do not establish
+live readiness.
 
 Before any operator-approved BAMI run, verify the bootstrap group's Owner
 assignment retains the

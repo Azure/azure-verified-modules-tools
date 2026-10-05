@@ -66,7 +66,6 @@ override_resource {
 }
 
 variables {
-  state_layout                  = "unified-v1"
   repository_sync_repository_id = "1239632211"
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_teams                  = {}

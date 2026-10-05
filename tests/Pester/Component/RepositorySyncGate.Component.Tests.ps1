@@ -8,12 +8,13 @@ BeforeAll {
     . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
 }
 
-Describe 'Repository sync unified cutover and driver' -Tag Component {
+Describe 'Repository sync unified driver' -Tag Component {
     BeforeEach {
         $script:previousEnvironment = @{}
-        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'GITHUB_EVENT_NAME')) {
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'GITHUB_EVENT_NAME', 'AVM_REPOSITORY_SYNC_STATE_LAYOUT')) {
             $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
+        [Environment]::SetEnvironmentVariable('AVM_REPOSITORY_SYNC_STATE_LAYOUT', [NullString]::Value, 'Process')
         $env:GITHUB_ACTIONS = 'true'
         $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
         $env:GITHUB_REPOSITORY_ID = '1239632211'
@@ -41,7 +42,6 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
             stateContainerName = 'tme-state'
             bamiSettings = New-AvmTestBamiSettings
             repositorySyncRepositoryId = '1239632211'
-            stateLayout = 'unified-v1'
         }
         $script:fixture = @{
             Events = [System.Collections.Generic.List[string]]::new()
@@ -108,7 +108,7 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
         Should -Invoke Start-Process -Exactly 0
     }
 
-    It 'uses one root and then prepares files with plan-only <PlanOnly> on <Event>' -ForEach @(
+    It 'uses one root without a cutover setting with plan-only <PlanOnly> on <Event>' -ForEach @(
         @{ PlanOnly = $false; Event = 'workflow_dispatch' }
         @{ PlanOnly = $true; Event = 'workflow_dispatch' }
         @{ PlanOnly = $false; Event = 'schedule' }
@@ -127,7 +127,7 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
         $variables.bami_test_settings.ContainsKey('client_id') | Should -BeFalse
         $variables.bami_test_settings.Count | Should -Be 8
         $variables.repository_sync_repository_id | Should -Be '1239632211'
-        $variables.state_layout | Should -Be 'unified-v1'
+        $variables.ContainsKey('state_layout') | Should -BeFalse
         $variables.entra_group_names | Should -Be @('avm-test-entra-readers', 'avm-test-identity-owners')
         $expected = $PlanOnly
         Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
@@ -138,19 +138,19 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
         }
     }
 
-    It 'blocks an unapproved or unknown cutover before external discovery: <Layout>' -ForEach @(
-        @{ Layout = '' }
-        @{ Layout = 'split' }
-        @{ Layout = 'UNIFIED-V1' }
+    It 'ignores a retired cutover environment value: <Value>' -ForEach @(
+        @{ Value = 'split' }
+        @{ Value = 'unified-v1' }
     ) {
-        $script:arguments.stateLayout = $Layout
-        { & $script:driver @script:arguments } | Should -Throw '*state consolidation is approved*'
-        $script:fixture.Events | Should -HaveCount 0
-        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+        $env:AVM_REPOSITORY_SYNC_STATE_LAYOUT = $Value
+        $null = & $script:driver @script:arguments
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1
+        $script:fixture.Events[-1] | Should -Be 'files'
+        $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | ConvertFrom-Json -AsHashtable
+        $variables.ContainsKey('state_layout') | Should -BeFalse
     }
 
-    It 'previews without approval, external calls, or file writes' {
-        $script:arguments.stateLayout = ''
+    It 'previews without external calls or file writes' {
         $result = & $script:driver @script:arguments -WhatIf
         $result.Status | Should -Be 'Preview'
         $script:fixture.Events | Should -HaveCount 0
@@ -220,11 +220,10 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
         $script:fixture.Events | Should -HaveCount 0
     }
 
-    It 'keeps repository creation independent of BAMI and consolidation approval' {
+    It 'keeps repository creation independent of BAMI and the shared backend' {
         $script:arguments.repositoryCreationModeEnabled = $true
-        $script:arguments.stateLayout = ''
         $script:arguments.bamiSettings = @{}
-        foreach ($name in @($script:arguments.Keys | Where-Object { $_ -like 'state*' -and $_ -ne 'stateLayout' })) {
+        foreach ($name in @($script:arguments.Keys | Where-Object { $_ -like 'state*' })) {
             $script:arguments.Remove($name)
         }
         $null = & $script:driver @script:arguments
@@ -264,6 +263,7 @@ Describe 'Repository sync unified cutover and driver' -Tag Component {
         @{ Option = 'metadataBackfill' }
         @{ Option = 'metadataUpdateSource' }
         @{ Option = 'bamiTestTenantSyncEnabled' }
+        @{ Option = 'stateLayout' }
     ) {
         $removedOption = @{ $Option = $true }
         { & $script:driver @script:arguments @removedOption } | Should -Throw "*$Option*"

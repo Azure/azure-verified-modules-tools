@@ -4,17 +4,6 @@
 . (Join-Path $PSScriptRoot 'RetryHelpers.ps1')
 . (Join-Path $PSScriptRoot 'TerraformOperations.ps1')
 
-function Assert-AvmRepositorySyncStateLayout {
-    [CmdletBinding()]
-    param([AllowNull()] [AllowEmptyString()] [string] $Layout)
-
-    if ($Layout -cne 'unified-v1') {
-        throw [System.InvalidOperationException]::new(
-            'Repository sync is blocked until state consolidation is approved. Pause all writers, inventory and consolidate every selected repository state, then explicitly set AVM_REPOSITORY_SYNC_STATE_LAYOUT=unified-v1. This setting is approval, not proof of ownership.'
-        )
-    }
-}
-
 function Resolve-AvmRepositorySyncFederationContext {
     [CmdletBinding()]
     [OutputType([pscustomobject])]

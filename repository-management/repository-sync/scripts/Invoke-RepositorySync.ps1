@@ -28,8 +28,7 @@ param(
     ),
     [switch]$forceFileUpdate,
     [hashtable]$bamiSettings = @{},
-    [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID,
-    [string]$stateLayout = $env:AVM_REPOSITORY_SYNC_STATE_LAYOUT
+    [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,10 +102,6 @@ $orgAndRepoName = "$orgName/$repoName"
 if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, ($planOnly ? 'Plan repository sync' : 'Apply repository sync'))) {
     return [pscustomobject]@{ Status = 'Preview'; Repository = $orgAndRepoName }
 }
-if (-not $repositoryCreationModeEnabled) {
-    Assert-AvmRepositorySyncStateLayout -Layout $stateLayout
-}
-
 Write-Information "Repository: $orgAndRepoName; plan only: $planOnly; force file update: $($forceFileUpdate.IsPresent)." -InformationAction Continue
 $discovery = Invoke-RepositorySyncLogGroup -Name 'GitHub repository and team discovery' -Action {
     $context = if ($repositoryCreationModeEnabled) { $null } else {
@@ -137,7 +132,6 @@ if (!$skipCleanup) {
 
 $terraformVariables = @{
     repository_creation_mode_enabled = $repositoryCreationModeEnabled.IsPresent
-    state_layout = $stateLayout
     github_repository_owner = $orgName
     github_repository_name = $repoName
     module_id = $repoId

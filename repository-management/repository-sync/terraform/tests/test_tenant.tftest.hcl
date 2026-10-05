@@ -74,7 +74,6 @@ override_resource {
 }
 
 variables {
-  state_layout                  = "unified-v1"
   entra_group_names             = ["avm-test-entra-readers", "avm-test-identity-owners"]
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_teams                  = {}
@@ -94,22 +93,6 @@ variables {
       id   = format("00000000-0000-4000-8000-%012d", number)
     }]
   }
-}
-
-run "unapproved_cutover_is_blocked" {
-  command = plan
-  variables {
-    state_layout = null
-  }
-  expect_failures = [var.state_layout]
-}
-
-run "wrong_cutover_version_is_blocked" {
-  command = plan
-  variables {
-    state_layout = "split"
-  }
-  expect_failures = [var.state_layout]
 }
 
 run "tools_repository_id_is_required" {
@@ -158,7 +141,6 @@ run "repository_creation_remains_independent" {
     repository_creation_mode_enabled = true
     repository_sync_repository_id    = null
     bami_test_settings               = null
-    state_layout                     = null
   }
   assert {
     condition     = local.test_settings.client_id == "" && length(local.test_settings.test_subscription_ids) == 0
