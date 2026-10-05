@@ -137,6 +137,9 @@ still only inspects four local before/after files and is reused by migration.
 It checks original hashes, separate lineages, one native move's serial increments, GitHub/BAMI identity
 values, default provider bindings, complete address transfer, and preservation
 of attributes, private metadata, sensitive paths, and original outputs.
+Terraform's cached `check_results` and writer-version metadata are not compared:
+native state commands may discard or reorder validation results, which the
+ordinary plan/apply recomputes. Resource contents and ownership are still checked.
 Tainted/deposed instances, namespace or physical-object ownership collisions,
 missing original ownership, and changed snapshots stop before publication.
 An absent destination, partial source, ambiguous repository alias, or incomplete

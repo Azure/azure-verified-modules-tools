@@ -79,6 +79,65 @@ Describe 'Repository migration ownership guards' -Tag Component {
     }
 }
 
+Describe 'Repository migration publication comparisons' -Tag Component {
+    BeforeEach {
+        $script:staged = (New-AvmTestMigrationStatePair).Source
+        $script:staged.check_results = @(
+            [ordered]@{ object_kind = 'var'; config_addr = 'var.repository'; status = 'pass'; objects = @() }
+            [ordered]@{ object_kind = 'check'; config_addr = 'check.repository'; status = 'pass'; objects = @() }
+        )
+        $script:published = ConvertFrom-TransferJson (ConvertTo-Json -InputObject $script:staged -Depth 100)
+        $script:published.serial++
+    }
+
+    It 'accepts a native serial advance despite <Case>' -ForEach @(
+        @{ Case = 'discarded checks' }, @{ Case = 'omitted checks' }, @{ Case = 'reordered checks' }
+        @{ Case = 'reordered properties' }, @{ Case = 'changed result' }, @{ Case = 'writer version' }
+    ) {
+        switch ($Case) {
+            'discarded checks' { $script:published.check_results = $null }
+            'omitted checks' { $null = $script:published.Remove('check_results') }
+            'reordered checks' { [array]::Reverse($script:published.check_results) }
+            'reordered properties' {
+                $script:published.check_results[0] = [ordered]@{
+                    objects = @(); status = 'pass'; config_addr = 'var.repository'; object_kind = 'var'
+                }
+            }
+            'changed result' { $script:published.check_results[0].status = 'unknown' }
+            'writer version' { $script:published.terraform_version = '1.15.8' }
+        }
+        $before = ConvertTo-Json -InputObject $script:staged -Depth 100
+        $after = ConvertTo-Json -InputObject $script:published -Depth 100
+        Test-RepositoryMigrationPublishedImage $script:published $script:staged | Should -BeTrue
+        (ConvertTo-Json -InputObject $script:staged -Depth 100) | Should -BeExactly $before
+        (ConvertTo-Json -InputObject $script:published -Depth 100) | Should -BeExactly $after
+    }
+
+    It 'still rejects changed state content with discarded checks: <Case>' -ForEach @(
+        @{ Case = 'resource missing' }, @{ Case = 'private data' }, @{ Case = 'provider' }
+        @{ Case = 'resource attributes' }, @{ Case = 'sensitive paths' }, @{ Case = 'outputs' }
+        @{ Case = 'lineage' }, @{ Case = 'stale serial' }, @{ Case = 'advanced serial' }
+        @{ Case = 'duplicate owner' }, @{ Case = 'schema version' }, @{ Case = 'unknown snapshot field' }
+    ) {
+        $script:published.check_results = $null
+        switch ($Case) {
+            'resource missing' { $script:published.resources = @($script:published.resources | Select-Object -Skip 1) }
+            'private data' { $script:published.resources[0].instances[0].private = 'Y2hhbmdlZA==' }
+            'provider' { $script:published.resources[0].provider += '.changed' }
+            'resource attributes' { $script:published.resources[0].instances[0].attributes.id += '-changed' }
+            'sensitive paths' { $script:published.resources[0].instances[0].sensitive_attributes = @() }
+            'outputs' { $script:published.outputs = @{} }
+            'lineage' { $script:published.lineage = '90000000-0000-4000-8000-000000000001' }
+            'stale serial' { $script:published.serial-- }
+            'advanced serial' { $script:published.serial++ }
+            'duplicate owner' { $script:published.resources += $script:published.resources[0] }
+            'schema version' { $script:published.version = 3 }
+            'unknown snapshot field' { $script:published['unexpected'] = 'changed' }
+        }
+        Test-RepositoryMigrationPublishedImage $script:published $script:staged | Should -BeFalse
+    }
+}
+
 Describe 'Repository migration writer checks' -Tag Component {
     BeforeEach {
         $script:previousEnvironment = @{}

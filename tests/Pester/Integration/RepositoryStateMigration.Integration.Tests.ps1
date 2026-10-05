@@ -10,6 +10,98 @@ BeforeAll {
     $script:tool = & $script:module { Resolve-AvmTool -Name terraform }
     $script:nativeTerraform = (Get-Command Invoke-RepositoryMigrationTerraform).ScriptBlock
 
+    $script:nativeIdentityDefinition = @'
+variable "client_id" {
+  default = "synthetic-client"
+  validation {
+    condition     = length(var.client_id) > 0
+    error_message = "A client is required."
+  }
+}
+variable "principal_id" {
+  default = "synthetic-principal"
+  validation {
+    condition     = length(var.principal_id) > 0
+    error_message = "A principal is required."
+  }
+}
+resource "terraform_data" "identity" {
+  input = { client_id = var.client_id, principal_id = var.principal_id }
+  lifecycle {
+    postcondition {
+      condition     = self.output.client_id == var.client_id
+      error_message = "The client must be preserved."
+    }
+  }
+}
+resource "terraform_data" "membership" {
+  for_each = toset(["readers", "owners"])
+  input = { group = each.key, principal = terraform_data.identity.output.principal_id }
+}
+check "identity" {
+  assert {
+    condition     = terraform_data.identity.output.principal_id == var.principal_id
+    error_message = "The principal must be preserved."
+  }
+}
+output "identity" {
+  value = terraform_data.identity.output
+  precondition {
+    condition     = terraform_data.identity.output.client_id == var.client_id
+    error_message = "The output must identify the client."
+  }
+}
+output "groups" { value = { for key, member in terraform_data.membership : key => member.output } }
+'@
+    $script:nativeGitHubDefinition = @'
+variable "repository" {
+  default = "synthetic-repository"
+  validation {
+    condition     = length(var.repository) > 0
+    error_message = "A repository is required."
+  }
+}
+resource "terraform_data" "repository" {
+  input = var.repository
+  lifecycle {
+    postcondition {
+      condition     = self.output == var.repository
+      error_message = "The repository must be preserved."
+    }
+  }
+}
+check "repository" {
+  assert {
+    condition     = terraform_data.repository.output == var.repository
+    error_message = "The repository must be preserved."
+  }
+}
+output "repository" {
+  value = terraform_data.repository.output
+  precondition {
+    condition     = terraform_data.repository.output == var.repository
+    error_message = "The output must identify the repository."
+  }
+}
+'@
+    $generated = Join-Path $TestDrive 'generated-checks'
+    foreach ($name in @('identity', 'github', 'source', 'destination')) {
+        $null = [IO.Directory]::CreateDirectory((Join-Path $generated $name))
+    }
+    [IO.File]::WriteAllText((Join-Path $generated 'identity' 'main.tf'), $script:nativeIdentityDefinition)
+    [IO.File]::WriteAllText((Join-Path $generated 'github' 'main.tf'), $script:nativeGitHubDefinition)
+    $script:generatedChecks = @{}
+    foreach ($side in @('source', 'destination')) {
+        $directory = Join-Path $generated $side
+        $definition = $side -ceq 'source' ? 'module "azure" { source = "../identity" }' : 'module "github" { source = "../github" }'
+        [IO.File]::WriteAllText((Join-Path $directory 'main.tf'), $definition)
+        $null = Invoke-RepositoryMigrationTerraform -Terraform $script:tool.Path -Root $directory `
+            -Arguments @('init', '-input=false', '-no-color') -PrivateOutput
+        $null = Invoke-RepositoryMigrationTerraform -Terraform $script:tool.Path -Root $directory `
+            -Arguments @('apply', '-input=false', '-auto-approve', '-no-color') -PrivateOutput
+        $script:generatedChecks[$side] = (Read-TransferImage (Join-Path $directory 'terraform.tfstate')).State.check_results
+    }
+
     function Get-TestMigrationBlobPath {
         param([string] $Name)
         foreach ($part in $Name.Split('/')) {
@@ -38,6 +130,12 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
     BeforeEach {
         $script:store = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:pair = New-AvmTestMigrationStatePair
+        foreach ($stateSide in @('Source', 'Destination')) {
+            $script:pair[$stateSide].check_results = ConvertFrom-TransferJson (
+                ConvertTo-Json -InputObject $script:generatedChecks[$stateSide] -Depth 100
+            )
+            $script:pair[$stateSide].terraform_version = $script:tool.Version
+        }
         $script:scope = Get-RepositoryMigrationScope -Backend $script:pair.Backend -Settings $script:pair.Settings `
             -RepoId 'avm-ptn-example-repo' -Repository $script:pair.GitHubRepository -RepositorySyncRepositoryId '5678'
         Write-TestMigrationState -Name $script:scope.SourceKey -State $script:pair.Source
@@ -94,8 +192,18 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
     }
 
     It 'publishes validated whole-module ownership with untouched backups and native locks' {
+        foreach ($side in @('Source', 'Destination')) {
+            foreach ($kind in @('var', 'resource', 'check', 'output')) {
+                $script:pair[$side].check_results.object_kind | Should -Contain $kind
+            }
+        }
         $transfer = New-TestMigrationTransfer
         $transfer.Position | Should -Be 'Prepared'
+        foreach ($stateSide in @('source', 'destination')) {
+            $before = $transfer.Images["$stateSide-before"].State.check_results
+            $after = $transfer.Images["$stateSide-after"].State.check_results
+            Write-Information "Terraform $($script:tool.Version) $stateSide check kinds: $($before.object_kind -join ', ') -> $($after.object_kind -join ', ')." -InformationAction Continue
+        }
         Invoke-RepositoryMigrationTransfer -Transfer $transfer -Confirm:$false | Should -Be 'Complete'
         ($script:events | Where-Object { $_ -cne 'writers' }) | Should -Be @('backup', 'push:source', 'push:destination', 'complete')
         $position = Get-RepositoryMigrationPosition $transfer
@@ -206,19 +314,41 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
     }
 
     It 'resumes a lost response after the <Side> publication without repeating it' -ForEach @(
-        @{ Side = 'source'; Position = 'SourcePublished' }
-        @{ Side = 'destination'; Position = 'DestinationPublished' }
+        @{ Side = 'source'; Position = 'SourcePublished'; CacheChange = 'result' }
+        @{ Side = 'destination'; Position = 'DestinationPublished'; CacheChange = 'order' }
     ) {
         $transfer = New-TestMigrationTransfer
         $script:interruptAfter = $Side
         { Invoke-RepositoryMigrationTransfer -Transfer $transfer -Confirm:$false } | Should -Throw "*response lost after $Side push*"
-        (Get-RepositoryMigrationPosition $transfer).Status | Should -Be $Position
+        $checkpoint = Get-RepositoryMigrationPosition $transfer
+        $checkpoint.Status | Should -Be $Position
+        $state = $checkpoint.Current[$Side].State
+        if ($CacheChange -ceq 'result') {
+            $state.check_results[0].status = 'unknown'
+        } else {
+            [array]::Reverse($state.check_results)
+        }
+        $key = $Side -ceq 'source' ? $script:scope.SourceKey : $script:scope.DestinationKey
+        Write-TestMigrationState -Name $key -State $state
         $script:interruptAfter = ''
         $recovered = New-TestMigrationTransfer
         $recovered.Position | Should -Be $Position
         Invoke-RepositoryMigrationTransfer -Transfer $recovered -Confirm:$false | Should -Be 'Complete'
         @($script:events | Where-Object { $_ -ceq 'push:source' }) | Should -HaveCount 1
         @($script:events | Where-Object { $_ -ceq 'push:destination' }) | Should -HaveCount 1
+    }
+
+    It 'rejects a stale <Side> before publication without creating a backup' -ForEach @(
+        @{ Side = 'Source' }, @{ Side = 'Destination' }
+    ) {
+        $transfer = New-TestMigrationTransfer
+        $script:pair[$Side].serial++
+        $key = $Side -ceq 'Source' ? $script:scope.SourceKey : $script:scope.DestinationKey
+        Write-TestMigrationState -Name $key -State $script:pair[$Side]
+        { Invoke-RepositoryMigrationTransfer -Transfer $transfer -Confirm:$false } | Should -Throw '*not an exact supported migration checkpoint*'
+        Should -Invoke Save-RepositoryMigrationBlob -Times 0 -Exactly
+        Should -Invoke Initialize-RepositoryMigrationBackend -Times 0 -Exactly
+        @($script:events | Where-Object { $_ -like 'push:*' }) | Should -HaveCount 0
     }
 
     It 'recovers a completion-record interruption without another state push' {
@@ -275,27 +405,19 @@ Describe 'Integration: automatic repository state migration' -Tag Integration {
         foreach ($name in @('identity', 'github', 'source', 'destination', 'unified', 'images')) {
             $null = [IO.Directory]::CreateDirectory((Join-Path $configuration $name))
         }
-        $identityDefinition = @'
-resource "terraform_data" "identity" {
-  input = { client_id = "synthetic-client", principal_id = "synthetic-principal" }
-}
-resource "terraform_data" "membership" {
-  for_each = toset(["readers", "owners"])
-  input = { group = each.key, principal = terraform_data.identity.output.principal_id }
-}
-output "identity" { value = terraform_data.identity.output }
-output "groups" { value = { for key, member in terraform_data.membership : key => member.output } }
-'@
+        $identityDefinition = $script:nativeIdentityDefinition
         [IO.File]::WriteAllText((Join-Path $configuration 'identity' 'main.tf'), $identityDefinition)
-        [IO.File]::WriteAllText((Join-Path $configuration 'github' 'main.tf'),
-            'resource "terraform_data" "repository" { input = "synthetic-repository" }')
+        [IO.File]::WriteAllText((Join-Path $configuration 'github' 'main.tf'), $script:nativeGitHubDefinition)
         $script:scope.SourceKey = 'synthetic-source.tfstate'
         $script:scope.DestinationKey = 'synthetic-destination.tfstate'
         foreach ($side in @('source', 'destination', 'unified')) {
             $key = $side -ceq 'source' ? $script:scope.SourceKey : $script:scope.DestinationKey
             $backendPath = ConvertTo-Json -InputObject (Get-TestMigrationBlobPath $key) -Compress
             $definition = "terraform {`n  backend `"local`" {`n    path = $backendPath`n  }`n}`n"
-            if ($side -cne 'source') { $definition += "module `"github`" { source = `"../github`" }`n" }
+            if ($side -cne 'source') {
+                $definition += "module `"github`" { source = `"../github`" }`n"
+                $definition += "output `"repository`" { value = module.github.repository }`n"
+            }
             if ($side -ceq 'source') {
                 $definition += "module `"azure`" { source = `"../identity`" }`n"
                 $definition += "output `"test_identity`" { value = module.azure.identity }`n"
@@ -330,6 +452,13 @@ output "groups" { value = { for key, member in terraform_data.membership : key =
         )
         $images = @{}
         foreach ($name in $paths.Keys) { $images[$name] = Read-TransferImage $paths[$name] }
+        foreach ($side in @('source', 'destination')) {
+            foreach ($kind in @('var', 'resource', 'check', 'output')) {
+                $images["$side-before"].State.check_results.object_kind | Should -Contain $kind
+            }
+            Test-TransferValueEqual (Get-TransferSnapshotMetadata $images["$side-before"].State) `
+                (Get-TransferSnapshotMetadata $images["$side-after"].State) | Should -BeTrue
+        }
         $archive = Join-Path $configuration 'backup.zip'
         [IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $configuration 'images'), $archive)
         $transfer = @{
@@ -347,13 +476,31 @@ output "groups" { value = { for key, member in terraform_data.membership : key =
         )
         $plan = Invoke-RepositoryMigrationTerraform -Terraform $script:tool.Path -Root $unified -PrivateOutput `
             -Arguments @('show', '-json', 'unified.tfplan') | ConvertFrom-Json -AsHashtable -Depth 100
+        $plan.resource_changes | Should -HaveCount 4
         @($plan.resource_changes | Where-Object { $_.change.actions -contains 'create' -or $_.change.actions -contains 'delete' }) |
             Should -HaveCount 0
+        foreach ($change in $plan.resource_changes) {
+            $change.change.actions | Should -Be @('no-op')
+        }
         $plan.output_changes.test_identity.after.client_id | Should -Be 'synthetic-client'
         $plan.output_changes.test_group_contract.after.Keys | Should -HaveCount 2
         $null = Invoke-RepositoryMigrationTerraform -Terraform $script:tool.Path -Root $unified -PrivateOutput `
             -Arguments @('apply', '-input=false', '-no-color', 'unified.tfplan')
-        (Get-RepositoryMigrationPosition $transfer).Current.destination.State.serial | Should -BeGreaterThan $publishedSerial
+        $applied = (Get-RepositoryMigrationPosition $transfer).Current.destination.State
+        $applied.serial | Should -BeGreaterThan $publishedSerial
+        @($applied.check_results | Where-Object { $_.config_addr -clike 'module.azure.*' }) | Should -HaveCount 0
+        foreach ($kind in @('var', 'resource', 'check', 'output')) {
+            $applied.check_results.object_kind | Should -Contain $kind
+        }
+        @($applied.check_results | Where-Object status -CNE 'pass') | Should -HaveCount 0
+        Test-TransferValueEqual $applied.outputs.repository $images['destination-before'].State.outputs.repository | Should -BeTrue
+        foreach ($resource in $migrated.Current.destination.State.resources) {
+            $retained = @($applied.resources | Where-Object {
+                (Get-TransferResourceKey $_) -ceq (Get-TransferResourceKey $resource)
+            })
+            $retained | Should -HaveCount 1
+            $retained[0].instances.attributes.id | Should -Be $resource.instances.attributes.id
+        }
         Invoke-RepositoryMigrationTransfer -Transfer $transfer -Confirm:$false | Should -Be 'Complete'
 
         [IO.File]::WriteAllText((Join-Path $configuration 'identity' 'main.tf'), $identityDefinition.Replace('["readers", "owners"]', '["readers"]'))
