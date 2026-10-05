@@ -45,6 +45,22 @@ BeforeAll {
         if ($AllDiagnostics) { return $run.NativeIssues }
         return @($run.NativeIssues | Where-Object { $_.Code -like 'avm.bicep.telemetry-*' })
     }
+
+    function Invoke-NativeVersionFixture {
+        param([string] $Path, [string[]] $MajorVersionAllowedModules = @())
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ Path = $Path; Allowed = $MajorVersionAllowedModules } {
+            param($Path, $Allowed)
+            $data = @{
+                VersionInputs = @((Get-AvmBicepVersionInput -Scope (Get-AvmBicepConventionScope -Path $Path)))
+                MajorVersionAllowedModules = $Allowed
+            }
+            $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'Version.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Path `
+                -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+            @{ Summary = $summary; Expected = $data.NativeVersionExpected }
+        }
+    }
 }
 
 AfterAll {
@@ -141,6 +157,49 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $run.Summary.Total | Should -Be 37
         $run.Summary.Passed | Should -Be 37 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
         @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
+    It 'executes fourteen independent native version and changelog requirements' {
+        $run = Invoke-NativeVersionFixture -Path $script:modulePath
+        $run.Expected | Should -Be 14
+        $run.Summary.Total | Should -Be 14
+        $run.Summary.Passed | Should -Be 14 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
+    It 'preserves the approved module major-version exemption in native tests' {
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'version.json') -Value '{"version":"1.0"}'
+        $run = Invoke-NativeVersionFixture -Path $script:modulePath -MajorVersionAllowedModules @('avm/res/mock/widget')
+        $run.Expected | Should -Be 13
+        $run.Summary.Passed | Should -Be 13
+        @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
+    It 'reports native version requirement <Code> at line <Line>' -ForEach @(
+        @{ Code = 'version-invalid'; File = 'version.json'; Content = '{'; Line = 1 }
+        @{ Code = 'version-format'; File = 'version.json'; Content = '[]'; Line = 1 }
+        @{ Code = 'version-format'; File = 'version.json'; Content = '{"version":1}'; Line = 1 }
+        @{ Code = 'version-format'; File = 'version.json'; Content = '{"version":"0.1.0"}'; Line = 1 }
+        @{ Code = 'version-major'; File = 'version.json'; Content = '{"version":"1.0"}'; Line = 1 }
+        @{ Code = 'changelog-empty'; File = 'CHANGELOG.md'; Content = ''; Line = 1 }
+        @{ Code = 'changelog-header'; File = 'CHANGELOG.md'; Content = '# Wrong'; Line = 1 }
+        @{ Code = 'changelog-versions-missing'; File = 'CHANGELOG.md'; Content = '# Changelog'; Line = 1 }
+        @{ Code = 'changelog-version'; File = 'CHANGELOG.md'; Content = "## 0.1`n"; Line = 1 }
+        @{ Code = 'changelog-order'; File = 'CHANGELOG.md'; Content = "## 0.1.0`n## 0.1.0`n"; Line = 2 }
+        @{ Code = 'changelog-section'; File = 'CHANGELOG.md'; Content = "## 0.1.0`n### Changes`n- change`n"; Line = 1 }
+        @{ Code = 'changelog-section-empty'; File = 'CHANGELOG.md'; Content = "## 0.1.0`n### Changes`n`n### Breaking Changes`n- None`n"; Line = 2 }
+        @{ Code = 'changelog-section-order'; File = 'CHANGELOG.md'; Content = "## 0.1.0`n### Breaking Changes`n- None`n### Changes`n- change`n"; Line = 1 }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:modulePath $File) -Value $Content
+        $run = Invoke-NativeVersionFixture -Path $script:modulePath
+        $run.Summary.Total | Should -Be $run.Expected
+        ($run.Summary.Passed + $run.Summary.Failed) | Should -Be $run.Expected
+        $issue = @($run.Summary.Issues | Where-Object Code -eq "avm.bicep.$Code")
+        $issue | Should -Not -BeNullOrEmpty
+        $issue[0].Line | Should -Be $Line
+        $issue[0].File | Should -Be (Join-Path $script:modulePath $File)
+        $issue[0].Severity | Should -Be 'error'
+        @($run.Summary.Issues | Where-Object Code -like 'avm.bicep.pester-*') | Should -HaveCount 0
     }
 
     It 'checks the complete root and child fixture without uncovered convention families' {

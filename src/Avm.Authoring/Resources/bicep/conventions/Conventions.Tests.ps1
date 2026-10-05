@@ -69,14 +69,6 @@ Describe 'Bicep conventions' {
     }
 
     if ($scopeCases.Count -gt 0) {
-        Context 'Versions' {
-            It '<Label> version' -ForEach $scopeCases {
-                Invoke-ConventionRule -RuleName 'Version' -RuleBlock {
-                    Test-AvmBicepConventionVersion -Root $Convention.Root -Scope $Scope
-                }
-            }
-        }
-
         Context 'E2e test files' {
             It '<Label> test files' -ForEach $scopeCases {
                 Invoke-ConventionRule -RuleName 'TestFile' -RuleBlock {

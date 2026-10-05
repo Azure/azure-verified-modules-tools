@@ -101,6 +101,11 @@ requirements. The authoritative consumer configuration is now
 Five families remain: layout, versions, API versions, test files and publication.
 Its Pester 5/6 focused runs and full Pester 6 gate are green.
 
+The [native version slice](2026-10-05-native-version-conventions.md) removes the
+version family wrapper and checker. Fourteen native requirements cover the
+valid fixture, with explicit exemption and thirteen diagnostic/line negatives.
+Four families remain: layout, API versions, test files and publication.
+
 ## Blockers or dependencies
 
 Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's
