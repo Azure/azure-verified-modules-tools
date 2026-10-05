@@ -341,6 +341,28 @@ tenant, controller and admin subscription match the repair handoff.
 These configuration reads are not controller-authenticated group lookup.
 No preview has been dispatched under the new approval yet.
 
+### Hosted package-import assertion
+
+The merged source at `b724ab9b64fb27337e5830dc1d9e33ac51d829b3` reached
+[hosted qualification](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37281506575).
+All six integration jobs, Windows and Ubuntu test jobs, lint and workflow
+tests passed. The macOS test job failed one package-import component assertion:
+`Get-Module` returned both the already loaded source version and the selected
+test package. The helper had imported the correct package; the test incorrectly
+required it to be the only loaded version. Coverage upload was skipped and
+test-result publication completed. The workflow is finished and was not retried.
+
+Preloading a second synthetic module version reproduces the same failure
+locally. The assertions now inspect the module behind the active exported
+command, while explicitly retaining the other loaded version. The missing
+source-manifest check and both wrong-package/escaped-definition rejection
+checks remain. All four focused component cases pass. No production code,
+package-import helper or telemetry behavior changed. The subsequent full
+`./build.ps1 pre-commit` passed layout, lint, 3,043 unit tests (nine skipped)
+and 1,308 component tests (one skipped), with zero failures. The reproduction,
+focused result and full gate are retained in `out/telemetry-package-import-*.log`.
+New-head hosted qualification must still pass before the approved preview.
+
 ## Blockers or dependencies
 
 Remote qualification still needs evidence that the configured BAMI
