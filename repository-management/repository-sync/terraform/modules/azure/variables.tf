@@ -1,6 +1,38 @@
-variable "management_group_id" {
-  type        = string
-  description = "Id of the management group to create the role assignment in."
+variable "entra_group_names" {
+  type        = set(string)
+  description = "Configured group display names to resolve in this identity's tenant."
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for name in var.entra_group_names :
+      trimspace(name) != "" && name == trimspace(name) && !can(regex("[\\x00-\\x1f\\x7f]", name))
+    ])
+    error_message = "Entra group display names must be nonempty, trimmed strings without control characters."
+  }
+}
+
+variable "expected_identity_context" {
+  type = object({
+    tenant_id            = string
+    subscription_id      = string
+    controller_client_id = string
+  })
+  description = "Expected BAMI tenant, identity subscription, and provisioning controller."
+  nullable    = false
+
+  validation {
+    condition = (
+      alltrue([
+        for id in [
+          var.expected_identity_context.tenant_id,
+          var.expected_identity_context.subscription_id,
+          var.expected_identity_context.controller_client_id
+        ] : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id)) && lower(id) != "00000000-0000-0000-0000-000000000000"
+      ])
+    )
+    error_message = "BAMI provider context requires nonempty tenant, subscription, and controller GUIDs."
+  }
 }
 
 variable "identity_resource_group_name" {

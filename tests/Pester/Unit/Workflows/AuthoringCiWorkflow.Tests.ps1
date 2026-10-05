@@ -10,9 +10,9 @@ Describe 'Authoring CI platform budgets' {
         $script:buildJob = $job.Value
     }
 
-    It 'allows 30 minutes only for the Windows test job' {
+    It 'allows 30 minutes for Windows and 25 minutes for other test jobs' {
         $script:buildJob | Should -Match ([regex]::Escape(
-                "timeout-minutes: `${{ matrix.os == 'windows-latest' && 30 || 15 }}"))
+                "timeout-minutes: `${{ matrix.os == 'windows-latest' && 30 || 25 }}"))
     }
 
     It 'keeps the complete CI gate on all three operating systems' {

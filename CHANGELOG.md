@@ -363,6 +363,9 @@ section when cutting a release.
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately
   supported published telemetry form.
+- Metadata validation no longer downloads the JSON Schema draft-07 meta-schema.
+  Root and child metadata validate offline without changing authored `$schema`
+  references or relaxing validation.
 - `avm test e2e` now destroys and retries an example when Azure rejects its
   randomly selected region with `RequestDisallowedByAzure` and the
   `aka.ms/locationineligible` explanation, which `avm test integration`

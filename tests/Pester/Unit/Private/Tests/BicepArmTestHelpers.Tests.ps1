@@ -3,7 +3,8 @@
 
 BeforeAll {
     $script:moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring'
-    Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    & (Join-Path $PSScriptRoot '..' '..' '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
     $script:subscription = '00000000-0000-0000-0000-000000000001'
     $script:groupSchema = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
 }
@@ -86,6 +87,59 @@ Describe 'Bicep ARM test token helpers' {
             { Resolve-AvmBicepTestToken -Content '{"name":"#_missing_#"}' `
                     -SourcePath 'test.json' -Tokens $tokens } |
                 Should -Throw -ExpectedMessage '*Unresolved*missing*'
+        }
+    }
+
+    It 'defers only unresolved resource placement tokens when requested: <Token>' -ForEach @(
+        @{ Token = 'resourceLocation' }
+        @{ Token = 'RESOURCELOCATION' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Token = $Token } {
+            param($Token)
+            $tokens = [Collections.Generic.Dictionary[string, string]]::new()
+            $content = '{"location":"#_' + $Token + '_#"}'
+            Resolve-AvmBicepTestToken -Content $content -SourcePath 'test.json' `
+                -Tokens $tokens -DeferResourceLocation | Should -BeExactly $content
+        }
+    }
+
+    It 'rejects unresolved resource placement without deferral: <ExplicitFalse>' -ForEach @(
+        @{ ExplicitFalse = $false }
+        @{ ExplicitFalse = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ ExplicitFalse = $ExplicitFalse } {
+            param($ExplicitFalse)
+            $options = @{}
+            if ($ExplicitFalse) { $options.DeferResourceLocation = $false }
+            $tokens = [Collections.Generic.Dictionary[string, string]]::new()
+            { Resolve-AvmBicepTestToken -Content '{"location":"#_resourceLocation_#"}' `
+                    -SourcePath 'test.json' -Tokens $tokens @options } |
+                Should -Throw -ExpectedMessage '*Unresolved*resourceLocation*'
+        }
+    }
+
+    It 'still rejects other unresolved tokens while deferring resource placement' {
+        InModuleScope Avm.Authoring {
+            $tokens = [Collections.Generic.Dictionary[string, string]]::new()
+            $failure = $null
+            try {
+                Resolve-AvmBicepTestToken `
+                    -Content '{"location":"#_resourceLocation_#","first":"#_missing_#","second":"#_missing_#"}' `
+                    -SourcePath 'test.json' -Tokens $tokens -DeferResourceLocation
+            }
+            catch { $failure = $_ }
+            $failure | Should -Not -BeNullOrEmpty
+            $failure.Exception.Message | Should -BeExactly "Unresolved Bicep test tokens in 'test.json': missing."
+        }
+    }
+
+    It 'replaces an explicitly supplied location even when deferral is enabled' {
+        InModuleScope Avm.Authoring {
+            $tokens = [Collections.Generic.Dictionary[string, string]]::new()
+            $tokens['resourceLocation'] = 'eastus'
+            Resolve-AvmBicepTestToken -Content '{"location":"#_resourceLocation_#"}' `
+                -SourcePath 'test.json' -Tokens $tokens -DeferResourceLocation |
+                Should -BeExactly '{"location":"eastus"}'
         }
     }
 }

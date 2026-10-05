@@ -27,7 +27,10 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         $null = New-Item -ItemType Directory -Path $script:terraformRoot
         $script:configPath = Join-Path $TestDrive 'repository-config.json'
         $script:config = @{
-            repositoryGroups = @(@{ name = 'default'; order = -1; repositories = @('*'); testTenant = 'bami' })
+            repositoryGroups = @(@{
+                name = 'default'; order = -1; repositories = @('*'); testTenant = 'bami'
+                entraGroups = @('avm-test-entra-readers', 'avm-test-identity-owners')
+            })
         }
         $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
         $script:arguments = @{
@@ -91,7 +94,8 @@ Describe 'Repository sync test tenant selection' -Tag Component {
 
     AfterEach {
         foreach ($environmentName in $script:previousEnvironment.Keys) {
-            [Environment]::SetEnvironmentVariable($environmentName, $script:previousEnvironment[$environmentName])
+            $value = $script:previousEnvironment[$environmentName]
+            [Environment]::SetEnvironmentVariable($environmentName, ($null -eq $value ? [NullString]::Value : $value), 'Process')
         }
     }
 
@@ -108,7 +112,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         param($Event, $Flag, $PlanOnly)
 
         $env:GITHUB_EVENT_NAME = $Event
-        if ($Flag -ceq 'absent') { [Environment]::SetEnvironmentVariable('AVM_BAMI_TEST_TENANT_SYNC_ENABLED', $null) }
+        if ($Flag -ceq 'absent') { [Environment]::SetEnvironmentVariable('AVM_BAMI_TEST_TENANT_SYNC_ENABLED', [NullString]::Value, 'Process') }
         $script:arguments.planOnly = $PlanOnly
         Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
         Mock Clear-TerraformWorkspace {}
@@ -122,6 +126,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             $Repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
             $RepositorySyncRepositoryId -ceq '1239632211' -and
             $BamiValues.Count -eq 8 -and $BamiValues.TEST_BAMI_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001' -and
+            ($EntraGroupNames -join ',') -ceq 'avm-test-entra-readers,avm-test-identity-owners' -and
             $Backend.TenantId -ceq '44444444-4444-4444-8444-444444444444'
         }
         Should -Invoke Clear-TerraformWorkspace -Exactly 1
@@ -213,7 +218,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Test-Path (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
     }
 
-    It 'continues the ordinary path for explicit legacy with PlanOnly <PlanOnly>' -TestCases @(
+    It 'rejects retired legacy execution before any cleanup or external command with PlanOnly <PlanOnly>' -TestCases @(
         @{ PlanOnly = $false }
         @{ PlanOnly = $true }
     ) {
@@ -225,17 +230,20 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         $script:arguments.bamiSettings = @{ invalid = 'ignored' }
         $env:GITHUB_REF = 'refs/heads/feature'
 
-        { & $script:driver @script:arguments } | Should -Throw '*ordinary-sync-process-boundary*'
-        Should -Invoke Start-Process -Exactly 1 -ParameterFilter { $FilePath -eq 'gh' }
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        { & $script:driver @script:arguments } | Should -Throw '*legacy test tenant is retired*'
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
-    It 'rejects a forked tools context for legacy before workspace cleanup' {
-        $script:config.repositoryGroups[0].testTenant = 'legacy'
-        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+    It 'rejects a forked tools context before workspace cleanup' {
         $env:GITHUB_REPOSITORY = 'fork/azure-verified-modules-tools'
         Mock Clear-TerraformWorkspace {}
-        { & $script:driver @script:arguments } | Should -Throw '*trusted tools repository*'
+        { & $script:driver @script:arguments } | Should -Throw '*trusted*main*'
         Should -Invoke Invoke-RepositoryGitHubApi -Exactly 0
         Should -Invoke Clear-TerraformWorkspace -Exactly 0
         Should -Invoke Start-Process -Exactly 0
@@ -243,8 +251,6 @@ Describe 'Repository sync test tenant selection' -Tag Component {
     }
 
     It 'rejects a missing tools repository ID before any identity work' {
-        $script:config.repositoryGroups[0].testTenant = 'legacy'
-        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
         $env:GITHUB_REPOSITORY_ID = ''
         $script:arguments.repositorySyncRepositoryId = ''
         Mock Clear-TerraformWorkspace {}
@@ -293,6 +299,40 @@ Describe 'Repository sync test tenant selection' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
+    It 'accumulates repository-specific names on defaults and removes only their configured selection' {
+        $script:config.repositoryGroups += @{
+            name = 'fabric'; order = 10; repositories = @('avm-ptn-example-repo')
+            entraGroups = @('avm-test-fabric-admins')
+        }
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        Mock Invoke-AvmBamiRepositoryIdentity { @{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null } }
+        Mock Clear-TerraformWorkspace {}
+        $null = & $script:driver @script:arguments
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+            ($EntraGroupNames -join ',') -ceq 'avm-test-entra-readers,avm-test-identity-owners,avm-test-fabric-admins'
+        }
+        $script:config.repositoryGroups = @($script:config.repositoryGroups[0])
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        $null = & $script:driver @script:arguments
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+            ($EntraGroupNames -join ',') -ceq 'avm-test-entra-readers,avm-test-identity-owners'
+        }
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
+    It 'rejects an invalid group-name list before cleanup, identity preparation, or repository changes' {
+        $script:config.repositoryGroups[0].entraGroups = 'not-an-array'
+        $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+        Mock Clear-TerraformWorkspace {}
+        Mock Invoke-AvmBamiRepositoryIdentity {}
+        { & $script:driver @script:arguments } | Should -Throw '*array of display-name strings*'
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+    }
+
     Context 'Full management and file preparation' {
         BeforeEach {
             $script:managementState = @{ Events = [System.Collections.Generic.List[string]]::new(); Failure = '' }
@@ -328,20 +368,15 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             }.GetNewClosure())
         }
 
-        It 'runs the standard management sequence for <Tenant> with plan=<Plan>' -TestCases @(
-            @{ Tenant = 'legacy'; Plan = $false }
-            @{ Tenant = 'legacy'; Plan = $true }
-            @{ Tenant = 'bami'; Plan = $false }
-            @{ Tenant = 'bami'; Plan = $true }
+        It 'runs the BAMI-only management sequence with plan=<Plan>' -TestCases @(
+            @{ Plan = $false }
+            @{ Plan = $true }
         ) {
-            param($Tenant, $Plan)
-            $script:config.repositoryGroups[0].testTenant = $Tenant
-            $script:config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:configPath
+            param($Plan)
             $script:arguments.planOnly = $Plan
             $null = & $script:driver @script:arguments
 
-            $expected = @('state', 'cleanup')
-            if ($Tenant -ceq 'bami') { $expected += 'identity' }
+            $expected = @('state', 'cleanup', 'identity')
             $expected += @('tree', 'protection', 'rulesets', 'codeql', 'teams', 'collaborators', 'unmanaged-teams', 'init', 'terraform', 'files')
             $script:managementState.Events | Should -Be $expected
             $writtenVariables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | ConvertFrom-Json
@@ -358,14 +393,12 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter {
                 $planOnly -eq $Plan -and $defaultBranch -ceq 'main'
             }
-            if ($Tenant -ceq 'bami') {
-                Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
-                    $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8 -and $RepositorySyncRepositoryId -ceq '1239632211'
-                }
+            Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter {
+                $PlanOnly -eq $Plan -and $BamiValues.Count -eq 8 -and $RepositorySyncRepositoryId -ceq '1239632211'
             }
-            else {
-                Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 0
-            }
+            $writtenVariables.PSObject.Properties.Name | Should -Not -Contain 'management_group_id'
+            $writtenVariables.PSObject.Properties.Name | Should -Not -Contain 'identity_resource_group_name'
+            $writtenVariables.PSObject.Properties.Name | Should -Not -Contain 'test_subscription_ids'
             Should -Invoke Start-Process -Exactly 0
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
         }

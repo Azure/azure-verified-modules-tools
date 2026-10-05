@@ -1,245 +1,181 @@
 function Invoke-AvmTestE2e {
     <#
     .SYNOPSIS
-        Run Bicep isolated deployments or Terraform example end-to-end tests.
+        Run Bicep or Terraform deployment tests with ordinary cleanup.
 
     .DESCRIPTION
-        Bicep tests are discovered under tests/e2e/**/main.test.bicep.
-        Eligible resource-group templates run in a new, uniquely named and
-        tagged disposable group per example. ARM validate and what-if must
-        succeed, and an expanded what-if must predict only declared,
-        identity-matched creations within that group before deployment.
-        Successful ARM provisioning is verified from the deployment response.
-        Case-local *.Tests.ps1 Pester
-        assertions then run in a child process with TestInputData containing
-        DeploymentOutputs (ARM properties.outputs) and ModuleTestFolderPath.
-        Cleanup after success or failure checks the group tag and subscription,
-        reconciles terminal deployment operations with the preview and current
-        resource inventory, and deletes individually proven children. The
-        group is deleted only after a fresh empty-inventory and ownership
-        check. Unknown children, changed tags, incomplete operations or
-        failed deletion retain the group and report CleanupPending IDs.
+        Bicep discovers tests/e2e/**/main.test.bicep and compiles temporary
+        ARM templates without editing source. Existing Azure PowerShell and
+        Azure CLI sign-ins must identify the same account, tenant, cloud and
+        selected subscription. Required Az modules are checked, not installed.
+        Native ARM validation and deployment support resource-group,
+        subscription, management-group and tenant scope, including nested
+        and cross-scope module deployments. Select authorized test targets:
+        resources created or updated by the test can be removed afterwards.
 
-        Subscription, management-group and tenant templates require an
-        explicit subscription and tenant; management-group templates also
-        require the ID of an existing test management group. The selected
-        Azure CLI account and management-group target are checked, but the
-        caller must select an authorized nonproduction target and identity.
-        No subscription, tenant or management group is provisioned or deleted.
-        Only unassigned policy definitions, policy-set definitions, role
-        definitions, and empty run-tagged subscription resource groups may
-        be created, along with inspectable inline same-scope deployments
-        using literal Incremental mode and only reviewed inline properties.
-        ARM 2.0 symbolic resources are inspected under the same allowlist;
-        only the exact outputs-only AVM telemetry template may be empty.
-        A subscription template that creates a group and deploys an inline
-        module into it is staged with a run-owned group tag in temporary ARM
-        JSON, never in module source, but is currently refused before Azure
-        access. Its nested group resources and cleanup still require proven
-        recovery before Create can be enabled. Other cross-scope, linked,
-        scripted, assignment, alias and unreviewed resource types are rejected.
-        A Create-only, expanded what-if prediction,
-        preflight nonexistence, run-unique name, recorded deployment operation,
-        and live resource identity must all agree before deletion. Failed
-        ownership or deletion leaves the case failed with CleanupPending IDs
-        and stops subsequent examples. Deployment history is retained.
-        This narrow subset does not replace the registry's full test lifecycle.
-        Use 'avm test integration' to validate and preview unsupported scopes
-        or resources without deploying them. Tokens and additional ARM
-        parameters are staged in temporary JSON files without editing source.
+        Successful deployments run their case-local Pester assertions, then
+        post.ps1, then native cleanup adapted from the registry workflow.
+        Assertions and hooks run in the same PowerShell process to retain
+        process-only sign-ins. Caller or workflow cancellation applies;
+        no separate-process timeout or credential transfer is used. A failed
+        assertion or hook still runs ordinary cleanup. An authored assertion
+        suite must have passing tests and no failed, skipped, filtered,
+        inconclusive or setup-failed tests. Absent suites are 'not-present'.
 
-        Bicep AssertionResults distinguish optional absent assertions
-        (Status 'not-present', deployment-only pass) from passing assertions
-        (Status 'pass'). An authored suite fails its example if it has no
-        passing tests or any failed, skipped, inconclusive, filtered, or
-        setup-failed tests. Pester is stopped after 30 minutes so cleanup
-        still runs if authored tests hang.
+        Cleanup follows recorded Create deployment operations recursively,
+        not Read references or a subscription-wide inventory. Resource-group
+        cases use a unique group and verified ownership tag. Attempt IDs and
+        required post-removal metadata are saved in an atomic local JSON file
+        before submission or removal. The state contains no credentials,
+        parameters or outputs, and survives temporary-template removal.
+        Incomplete cleanup reports pending IDs and stops subsequent cases.
+        The reaper is a fallback, not the normal cleanup mechanism.
 
-        After an ARM Create attempt, a case-local tests/e2e/<case>/post.ps1,
-        when present, runs once in a child PowerShell process after assertions
-        (including on assertion or Create failure) and before guarded cleanup.
-        It does not run during listing, integration preview, dry runs, ignored
-        cases or pre-Create failures. It runs from its case directory with
-        the current test identity's permissions, not a sandbox or privileged
-        reaper. Only nonsensitive AVM_E2E_CASE, AVM_E2E_SCOPE,
-        AVM_E2E_SUBSCRIPTION_ID, AVM_E2E_TENANT_ID,
-        AVM_E2E_MANAGEMENT_GROUP_ID, AVM_E2E_RESOURCE_GROUP_NAME,
-        AVM_E2E_DEPLOYMENT_NAME, AVM_E2E_RUN_ID and AVM_E2E_LOCATION
-        are supplied as environment variables; tokens, parameters, secrets
-        and ARM outputs are not passed as hook arguments or logged by the
-        runner. AVM_E2E_SCOPE is 'group', 'sub', 'mg' or 'tenant';
-        optional scope IDs are empty when not supplied. PostResults
-        distinguish 'not-present', 'pass' and 'fail'.
-        A nonzero exit, unsafe path or 300-second timeout fails the case but
-        never replaces or suppresses ownership-checked ordinary cleanup.
-        A hook is best effort, not post-crash recovery.
+        All runs the complete lifecycle. Deploy retains resources and state
+        for a separate Complete call after caller-owned sign-in renewal.
+        Complete requires matching direct case/module source, assertion files
+        and post hook, plus explicit subscription/tenant. It rereads outputs by
+        exact deployment ID and never submits a deployment. The source check
+        does not fingerprint every imported helper or dependency.
+        Interrupted completion must use avm test cleanup rather than replaying
+        authored scripts. Actions callers may upload state as an artifact;
+        recovery requires that the upload finished before runner loss.
 
-        Terraform walks runnable examples/ and runs init, apply,
-        idempotency plan and destroy against a real backend.
+        KeepResources runs assertions but deliberately skips post.ps1 and
+        cleanup. The saved file can later be passed to avm test cleanup,
+        which does not need the checkout and never runs assertions or hooks.
 
-        Both ecosystems require cloud credentials at runtime. No e2e run
-        belongs in the local pre-commit gate.
-
-        An example directory can opt out of the e2e run by containing a
-        '.e2eignore' marker file. Modules that ship no runnable example report
-        Status 'skipped' rather than a pass, so an absent tier can never look
-        like a green one.
-
-        Use -Example to select one or more cases. -List emits JSON names
-        without resolving tools, credentials or a subscription.
-
-        For Terraform only, an apply that fails on transient capacity, quota
-        or region-ineligible errors (including a region not accepting new
-        customers) is retried after successful destroy, up to -MaxRetry times.
-        Retries are recorded as warning-level Issues, so a recovered example
-        stays green while the flake remains visible. The idempotency check is
-        never retried. Bicep examples never automatically retry deployment.
-
-        This verb is a standalone command; it needs credentials, so it is NOT
-        part of the 'avm pre-commit' or 'avm pr-check' gauntlets.
-
-        Routed by the dispatcher: 'avm test e2e'.
+        Terraform runs init, apply, idempotency plan and destroy for runnable
+        examples/. MaxRetry controls Terraform transient apply retries.
+        No deployment tests belong in avm pr-check or the local build gate.
+        Listing does not resolve tools or credentials. An absent tier is
+        'skipped', not a pass; .e2eignore excludes a case.
 
     .PARAMETER Path
-        Working directory whose enclosing module to test. Defaults to the
-        current location.
-
+        Module directory, or an enclosing context. Defaults to the current location.
     .PARAMETER Ecosystem
-        Force the ecosystem selector. Defaults to 'auto'.
-
+        Explicit ecosystem, or auto-detection.
     .PARAMETER AllowPathFallback
-        When set, accept a PATH-resolved tool binary that self-reports the
-        lock-pinned version.
-
+        Accept a PATH tool only when it reports the lock-pinned version.
     .PARAMETER Example
-        Restrict the run to named examples. Bicep accepts a test-case folder
-        leaf or a root-relative path; Terraform accepts an examples/ folder.
-        Missing, ambiguous or ignored explicit selections are errors.
-
+        Select case names or root-relative Bicep paths. Explicit ignored,
+        absent or ambiguous selections are errors.
     .PARAMETER List
-        Emit a JSON array of runnable example paths (Bicep) or folder names
-        (Terraform), excluding .e2eignore. No Azure or tool access is needed.
-
+        Return a JSON array of runnable example names without cloud access.
     .PARAMETER MaxRetry
-        Terraform-only retry budget for transient capacity, quota or
-        region-ineligible apply failures. Defaults to 2 (up to three attempts
-        in total); 0 disables retries. Each retry requires completed teardown
-        before redeployment so the region is re-rolled against an empty state.
-        A recovered example reports its retries as warnings, not failures.
-        Bicep never retries a destructive deployment automatically.
-
+        Terraform-only transient apply retry budget, default two retries.
     .PARAMETER Recurse
-        Bicep-only: include nested module test scopes.
-
+        Bicep-only: include child-module test cases.
     .PARAMETER SubscriptionId
-        Bicep-only: explicit subscription GUID for resource-group deployment
-        or higher-scope Azure CLI account selection; ambient defaults are not used.
-
+        Bicep-only: explicit test subscription GUID. Ambient defaults are not used.
     .PARAMETER TenantId
-        Bicep-only: explicit tenant GUID required for subscription,
-        management-group and tenant deployments. The selected account must
-        match it. Tenant-root write permissions are not assumed.
-
+        Bicep-only: explicit tenant GUID required for every deployment scope.
     .PARAMETER ManagementGroupId
-        Bicep-only: existing management-group name required for management-group
-        deployments. This command never creates or deletes that group.
-
+        Bicep-only: existing target management-group name for that scope.
     .PARAMETER Location
-        Bicep-only: location for disposable groups and higher-scope deployment
-        metadata.
-
+        Bicep deployment-metadata location, fixed across regional retries.
+        Also the placement fallback for explicitly global resource types.
+    .PARAMETER ResourceLocation
+        Pin Bicep resource placement. Must agree with parameter/token locations.
     .PARAMETER ResourceGroupPrefix
-        Bicep-only: required when resource-group examples are selected. A new
-        unique disposable group is deleted after its example.
-
+        Required for resource-group Bicep cases; up to 57 safe name characters.
     .PARAMETER TokenFile
-        Bicep-only: JSON object of token names and string values, relative to
-        the module root or absolute. Scope IDs have explicit parameters.
-        Higher-scope cases receive generated avmE2eRunId, avmE2eSuffix, and
-        a default namePrefix; a custom namePrefix must produce run-unique
-        resource names, for example using #_avmE2eSuffix_#.
-
+        JSON string-valued tokens, relative to the module root or absolute.
+        Mutually exclusive with Tokens. Explicit scope parameters own scope tokens.
     .PARAMETER Tokens
-        Bicep-only: direct PowerShell hashtable instead of -TokenFile.
-
+        Bicep token dictionary instead of TokenFile. Generated avmE2eRunId and
+        avmE2eSuffix tokens provide a unique default namePrefix.
     .PARAMETER ParameterFile
-        Bicep-only: existing ARM JSON parameter file copied to temporary
-        storage and token-substituted, relative to the module root or absolute.
-
+        ARM JSON parameter file, preserving values and vault references.
+        Mutually exclusive with Parameters; source is not changed.
     .PARAMETER Parameters
-        Bicep-only: direct PowerShell hashtable instead of -ParameterFile.
+        Bicep parameter values. SecureString values remain in memory.
+        Explicit values or files take precedence over CI inputs.
+    .PARAMETER UseCiInputs
+        Opt into AVM_CI_VARIABLES and AVM_CI_SECRETS JSON, localToken_*,
+        TOKEN_NAMEPREFIX and deprecated CI_KEY_VAULT_NAME inputs. CI secrets
+        beat variables; CI_ aliases beat CI__ aliases within a source.
+        Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID,
+        VALIDATE_TENANT_ID and TEST_SUBSCRIPTION_IDS. Nothing logs in.
+    .PARAMETER TestSubscriptionIds
+        Optional Bicep JSON array of id/name subscription objects. Cases are
+        balanced over a stable seeded ordering, independent of JSON ordering.
+    .PARAMETER SubscriptionSelectionSeed
+        Shared nonnegative seed for deterministic subscription ordering.
+    .PARAMETER SubscriptionJobIndex
+        Nonnegative initial case index for round-robin subscription selection.
+    .PARAMETER Phase
+        Bicep All (default), Deploy, or Complete for caller-owned sign-in renewal.
+    .PARAMETER CleanupStatePath
+        Optional new state file for one selected case. Complete requires an
+        existing file and the explicitly matching subscription and tenant.
+    .PARAMETER KeepResources
+        Bicep-only: run assertions but retain resources, skipping post and cleanup.
+    .PARAMETER DeploymentRetryLimit
+        Bicep total submission attempts, one to three. Only confirmed failure
+        or exact preflight rejection can retry; unknown outcomes never resubmit.
+    .PARAMETER ValidationRetryLimit
+        Bicep total regional validation attempts, one to three. Only wholly
+        regional failures relocate; explicit pins, global resources and
+        resource-group cases do not relocate. Deployment stays in the validated region.
+    .PARAMETER SkipModuleVersionCheck
+        Skip the advisory module-version check.
 
     .OUTPUTS
-        pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
-        Status, FilesProcessed, Issues. Bicep also reports RunsTotal,
-        RunsPassed, RunsFailed, RunsSkipped, AssertionResults (per deployed
-        example), PostResults (per ARM Create attempt, absent hook reported
-        as 'not-present'), CleanupPending and WhatIfChanges.
-
-    .EXAMPLE
-        avm test e2e
-
-    .EXAMPLE
-        avm test e2e -MaxRetry 0
-
-    .EXAMPLE
-        avm test e2e --example example-a
+        Engine result with Status, Issues and run counts. Bicep also returns
+        Phase, AssertionResults, PostResults, CleanupPending, CleanupDeferred
+        and CleanupStatePaths. Deployment outputs and parameters are not returned.
 
     .EXAMPLE
         avm test e2e --list
-
     .EXAMPLE
-        Invoke-AvmTestE2e -Path C:\repos\terraform-azurerm-avm-res-foo
-
+        avm test e2e --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --resource-group-prefix avm-e2e
     .EXAMPLE
-        avm test e2e --ecosystem bicep --list
-
+        avm test e2e --example defaults --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --phase Deploy --cleanup-state-path cleanup.json
     .EXAMPLE
-        avm test e2e --subscription-id 00000000-0000-0000-0000-000000000001 --location westus --resource-group-prefix avm-e2e --token-file test-tokens.json
-
+        avm test e2e --phase Complete --cleanup-state-path cleanup.json --subscription-id $testSubscriptionId --tenant-id $testTenantId
     .EXAMPLE
-        Invoke-AvmTestE2e -Path C:\repos\bicep-module -Example defaults -SubscriptionId $testSubscriptionId -TenantId $testTenantId -ManagementGroupId $testManagementGroupId -Location westus
+        avm test e2e --max-retry 0 --ecosystem terraform
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Position = 0)]
         [string] $Path = $PWD.Path,
-
         [ValidateSet('auto', 'bicep', 'terraform')]
         [string] $Ecosystem = 'auto',
-
         [switch] $AllowPathFallback,
-
         [AllowEmptyCollection()]
         [string[]] $Example = @(),
-
         [switch] $List,
-
         [ValidateRange(0, 10)]
         [int] $MaxRetry = 2,
-
         [switch] $Recurse,
-
         [string] $SubscriptionId,
-
         [string] $TenantId,
-
         [string] $ManagementGroupId,
-
         [string] $Location,
-
+        [string] $ResourceLocation,
         [string] $ResourceGroupPrefix,
-
         [string] $TokenFile,
-
         [Alias('AdditionalTokens')]
         [System.Collections.IDictionary] $Tokens = @{},
-
         [string] $ParameterFile,
-
         [System.Collections.IDictionary] $Parameters = @{},
-
+        [switch] $UseCiInputs,
+        [string] $TestSubscriptionIds,
+        [ValidateRange(0, [int]::MaxValue)]
+        [int] $SubscriptionSelectionSeed = 0,
+        [ValidateRange(0, [int]::MaxValue)]
+        [int] $SubscriptionJobIndex = 0,
+        [ValidateSet('All', 'Deploy', 'Complete')]
+        [string] $Phase = 'All',
+        [string] $CleanupStatePath,
+        [switch] $KeepResources,
+        [ValidateRange(1, 3)]
+        [int] $DeploymentRetryLimit = 3,
+        [ValidateRange(1, 3)]
+        [int] $ValidationRetryLimit = 3,
         [switch] $SkipModuleVersionCheck
     )
 
@@ -254,61 +190,44 @@ function Invoke-AvmTestE2e {
         $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
             -SkipModuleVersionCheck:$SkipModuleVersionCheck
     }
-
+    $bicepOptions = @(
+        'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'Location',
+        'ResourceLocation', 'ResourceGroupPrefix', 'TokenFile', 'Tokens', 'ParameterFile', 'Parameters',
+        'UseCiInputs', 'TestSubscriptionIds', 'SubscriptionSelectionSeed', 'SubscriptionJobIndex',
+        'Phase', 'CleanupStatePath', 'KeepResources', 'DeploymentRetryLimit', 'ValidationRetryLimit'
+    )
     switch ($context.Ecosystem) {
         'bicep' {
             if ($PSBoundParameters.ContainsKey('MaxRetry')) {
-                throw [AvmConfigurationException]::new(
-                    '-MaxRetry is only supported for Terraform e2e tests.')
+                throw [AvmConfigurationException]::new('-MaxRetry is only supported for Terraform e2e tests.')
             }
-            $bicepInput = @{
-                Context             = $context
-                AllowPathFallback   = $AllowPathFallback
-                Example             = $Example
-                List                = $List
-                Recurse             = $Recurse
-                SubscriptionId      = $SubscriptionId
-                TenantId            = $TenantId
-                ManagementGroupId   = $ManagementGroupId
-                Location            = $Location
-                ResourceGroupPrefix = $ResourceGroupPrefix
-                TokenFile           = $TokenFile
-                Tokens              = $Tokens
-                ParameterFile       = $ParameterFile
-                Parameters          = $Parameters
+            $inputOptions = @{ Context = $context; AllowPathFallback = $AllowPathFallback; Example = $Example; List = $List }
+            foreach ($name in $bicepOptions) {
+                if ($PSBoundParameters.ContainsKey($name)) { $inputOptions[$name] = $PSBoundParameters[$name] }
             }
             if ($List) {
-                Invoke-AvmBicepTestE2e @bicepInput
+                Invoke-AvmBicepTestE2e @inputOptions
             }
-            elseif ($PSCmdlet.ShouldProcess(
-                    "$($context.Root) in subscription $SubscriptionId",
-                    'Deploy Bicep tests and remove verified owned resources')) {
-                Invoke-AvmBicepTestE2e @bicepInput -Confirm:$false -WhatIf:$false
+            elseif ($PSCmdlet.ShouldProcess($context.Root, "Run Bicep e2e phase $Phase in explicit test targets")) {
+                Invoke-AvmBicepTestE2e @inputOptions -Confirm:$false -WhatIf:$false
             }
             else {
-                Invoke-AvmBicepTestE2e @bicepInput -WhatIf
+                Invoke-AvmBicepTestE2e @inputOptions -WhatIf
             }
         }
         'terraform' {
-            if ($Recurse -or $PSBoundParameters.ContainsKey('SubscriptionId') -or
-                $PSBoundParameters.ContainsKey('TenantId') -or
-                $PSBoundParameters.ContainsKey('ManagementGroupId') -or
-                $PSBoundParameters.ContainsKey('Location') -or
-                $PSBoundParameters.ContainsKey('ResourceGroupPrefix') -or
-                $PSBoundParameters.ContainsKey('TokenFile') -or
-                $PSBoundParameters.ContainsKey('Tokens') -or
-                $PSBoundParameters.ContainsKey('ParameterFile') -or
-                $PSBoundParameters.ContainsKey('Parameters') -or
-                $PSBoundParameters.ContainsKey('WhatIf') -or
-                $PSBoundParameters.ContainsKey('Confirm')) {
-                throw [AvmConfigurationException]::new(
-                    'Bicep scope, token, parameter and ShouldProcess options are not supported for Terraform e2e tests.')
+            foreach ($name in $bicepOptions + @('WhatIf', 'Confirm')) {
+                if ($name -eq 'Recurse' -and -not $Recurse) { continue }
+                if ($PSBoundParameters.ContainsKey($name)) {
+                    throw [AvmConfigurationException]::new(
+                        'Bicep scope, input, phase, cleanup and ShouldProcess options are not supported for Terraform e2e tests.')
+                }
             }
-            Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback -Example $Example -List:$List -MaxRetry $MaxRetry
+            Invoke-AvmTerraformTestE2e -Context $context -AllowPathFallback:$AllowPathFallback `
+                -Example $Example -List:$List -MaxRetry $MaxRetry
         }
         default {
-            throw [AvmContextException]::new(
-                "Cannot run e2e tests: unknown ecosystem '$($context.Ecosystem)'.")
+            throw [AvmContextException]::new("Cannot run e2e tests: unknown ecosystem '$($context.Ecosystem)'.")
         }
     }
 }

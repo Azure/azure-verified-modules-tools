@@ -123,18 +123,20 @@ Describe "Repository management migration layout" {
             (Get-Content -LiteralPath (Join-Path $script:repoRoot ".github/workflows/repository-management-sync-repository.yml") -Raw)
         ) -join "`n"
         $environmentVariables = @(
-            "ARM_CLIENT_ID"
-            "ARM_SUBSCRIPTION_ID"
-            "ARM_TENANT_ID"
+            "TEST_BAMI_TENANT_ID"
+            "TEST_BAMI_CONTROLLER_CLIENT_ID"
+            "TEST_BAMI_ADMIN_SUBSCRIPTION_ID"
+            "TEST_BAMI_SUBSCRIPTION_IDS"
+            "TEST_BAMI_MANAGEMENT_GROUP_ID"
+            "TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME"
+            "TEST_BAMI_BICEP_CLIENT_ID"
+            "TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID"
             "ARM_BACKEND_CLIENT_ID"
             "ARM_BACKEND_SUBSCRIPTION_ID"
             "ARM_BACKEND_TENANT_ID"
             "ARM_BACKEND_STORAGE_ACCOUNT_NAME"
             "ARM_BACKEND_STORAGE_CONTAINER_NAME"
             "AVM_APP_CLIENT_ID"
-            "IDENTITY_RESOURCE_GROUP_NAME"
-            "MANAGEMENT_GROUP_ID"
-            "TEST_SUBSCRIPTION_IDS"
         )
 
         foreach ($variable in $environmentVariables) {
@@ -151,6 +153,10 @@ Describe "Repository management migration layout" {
                 Sort-Object -Unique
         )
         $secretReferences | Should -Be @("AVM_APP_PRIVATE_KEY")
+        $workflow | Should -Not -Match (
+            '\$\{\{\s*(?:vars|secrets)\.(?:ARM_(?:CLIENT|SUBSCRIPTION|TENANT)_ID|' +
+            'IDENTITY_RESOURCE_GROUP_NAME|MANAGEMENT_GROUP_ID|TEST_SUBSCRIPTION_IDS)\s*\}\}'
+        )
         $workflow | Should -Not -Match "TARGET_SUBSCRIPTION_ID"
     }
 

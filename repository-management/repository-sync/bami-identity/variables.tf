@@ -13,14 +13,14 @@ variable "controller_client_id" {
   description = "BAMI controller used only to provision dedicated test identities."
 }
 
-variable "management_group_id" {
-  type        = string
-  description = "BAMI management group for module test permissions."
-}
-
 variable "identity_resource_group_name" {
   type        = string
   description = "Existing BAMI resource group for repository identities."
+}
+
+variable "entra_group_names" {
+  type        = set(string)
+  description = "Group display names resolved from the repository's BAMI configuration."
 }
 
 variable "github_repository_owner" {

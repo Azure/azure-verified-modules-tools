@@ -73,3 +73,23 @@ function Resolve-AvmGroupTestTenant {
     }
     return $tenant
 }
+
+function ConvertTo-AvmEntraGroupNames {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)] [AllowEmptyCollection()] [object] $Names)
+
+    if ($Names -isnot [System.Collections.IList]) {
+        throw [System.ArgumentException]::new('Entra group names must be an array of display-name strings.')
+    }
+    $result = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($name in $Names) {
+        if ($name -isnot [string] -or [string]::IsNullOrWhiteSpace($name) -or
+            $name -cne $name.Trim() -or $name.Length -gt 256 -or $name -match '[\x00-\x1f\x7f]') {
+            throw [System.ArgumentException]::new('Entra group names must be nonempty, trimmed display-name strings without control characters.')
+        }
+        if ($seen.Add($name)) { $result.Add($name) }
+    }
+    return ,$result.ToArray()
+}

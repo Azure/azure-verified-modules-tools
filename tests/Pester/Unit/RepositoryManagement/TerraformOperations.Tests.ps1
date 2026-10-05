@@ -157,21 +157,38 @@ Describe 'State identity wiring' {
         $source | Should -Match '(?s)Invoke-TerraformPlanAndApply\s+`.*?-stateSubscriptionId \$stateSubscriptionId'
     }
 
-    It 'keeps provider environment while logging the CLI into the state identity' {
+    It 'separates BAMI provider inputs from the state-only CLI login' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync-repository.yml'
         )) -Raw
         $dispatcher = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
+        $stateLogin = [regex]::Match(
+            $workflow,
+            '(?ms)^      - name: Azure login for state \(OIDC\)\r?\n.*?(?=^      - name:)'
+        ).Value
+        $syncStep = [regex]::Match(
+            $workflow,
+            '(?ms)^      - name: Run sync for .*?(?=^      - name:)'
+        ).Value
+        $stateLogin | Should -Not -BeNullOrEmpty
+        $syncStep | Should -Not -BeNullOrEmpty
         $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
         foreach ($name in 'TENANT', 'SUBSCRIPTION', 'CLIENT') {
-            $workflow | Should -Match ('ARM_' + $name + '_ID: \$\{\{ vars\.ARM_' + $name + '_ID \}\}')
+            $workflow | Should -Not -Match ('(?m)^\s*ARM_' + $name + '_ID:\s*')
             $workflow | Should -Match ('ARM_BACKEND_' + $name + '_ID: \$\{\{ vars\.ARM_BACKEND_' + $name + '_ID \}\}')
         }
-        $workflow | Should -Match 'client-id: \$\{\{ steps\.state-backend\.outputs\.client-id \}\}'
-        $workflow | Should -Match 'tenant-id: \$\{\{ steps\.state-backend\.outputs\.tenant-id \}\}'
-        $workflow | Should -Match 'subscription-id: \$\{\{ steps\.state-backend\.outputs\.subscription-id \}\}'
+        foreach ($name in @('TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID')) {
+            $syncStep | Should -Match ($name + ': \$\{\{ vars\.' + $name + ' \}\}')
+            $syncStep | Should -Match ($name + '\s*=\s*\$env:' + $name + '\b')
+        }
+        $syncStep | Should -Match '-bamiSettings \$bamiSettings'
+        $syncStep | Should -Not -Match '-(?:managementGroupId|testSubscriptionIds|identityResourceGroupName)\b'
+        $stateLogin | Should -Match 'client-id: \$\{\{ steps\.state-backend\.outputs\.client-id \}\}'
+        $stateLogin | Should -Match 'tenant-id: \$\{\{ steps\.state-backend\.outputs\.tenant-id \}\}'
+        $stateLogin | Should -Match 'subscription-id: \$\{\{ steps\.state-backend\.outputs\.subscription-id \}\}'
+        $stateLogin | Should -Not -Match 'TEST_BAMI_|vars\.|secrets\.'
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'
@@ -186,6 +203,42 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
         $dispatcher | Should -Match 'cancel-in-progress: false'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
+    }
+
+    It 'pins both provider roots to BAMI values without state-identity fallback' {
+        $providerRoots = @(
+            @{
+                Path = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'bami-identity' 'terraform.tf'
+                Tenant = 'var.tenant_id'
+                Subscription = 'var.subscription_id'
+                Client = 'var.controller_client_id'
+            }
+            @{
+                Path = Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'terraform' 'terraform.tf'
+                Tenant = 'var.bami_test_settings == null ? null : var.bami_test_settings.tenant_id'
+                Subscription = 'var.bami_test_settings == null ? null : var.bami_test_settings.admin_subscription_id'
+                Client = 'var.bami_test_settings == null ? null : var.bami_test_settings.controller_client_id'
+            }
+        )
+        foreach ($root in $providerRoots) {
+            $configuration = Get-Content -LiteralPath $root.Path -Raw
+            foreach ($name in @('azapi', 'azuread')) {
+                $provider = [regex]::Match(
+                    $configuration,
+                    '(?ms)^provider "' + $name + '" \{.*?^\}'
+                ).Value
+                $provider | Should -Not -BeNullOrEmpty
+                $provider | Should -Match ('(?m)^\s*tenant_id\s*=\s*' + [regex]::Escape($root.Tenant) + '\s*$')
+                $provider | Should -Match ('(?m)^\s*client_id\s*=\s*' + [regex]::Escape($root.Client) + '\s*$')
+                if ($name -eq 'azapi') {
+                    $provider | Should -Match ('(?m)^\s*subscription_id\s*=\s*' + [regex]::Escape($root.Subscription) + '\s*$')
+                }
+                $provider | Should -Match '(?m)^\s*use_oidc\s*=\s*true\s*$'
+                $provider | Should -Match '(?m)^\s*use_cli\s*=\s*false\s*$'
+                $provider | Should -Match '(?m)^\s*use_msi\s*=\s*false\s*$'
+                $provider | Should -Not -Match 'ARM_BACKEND_|state-backend|var\.state_'
+            }
+        }
     }
 
     It 'removes the runtime resource-group parameter from both script surfaces' {

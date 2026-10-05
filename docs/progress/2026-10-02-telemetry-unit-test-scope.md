@@ -1,8 +1,8 @@
 # Telemetry migration for explicit unit-test targets
 
-**Status**: blocked
+**Status**: in-progress
 **Started**: 2026-10-02
-**Updated**: 2026-10-03
+**Updated**: 2026-10-05
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -10,9 +10,11 @@
 Preserve existing unit-test targets and assertions during central telemetry
 migration. Establish which local delegated runs can be migrated safely
 without weakening the safeguards for unknown dependencies or real providers.
-Implementation, all-platform CI and local ALZ qualification are complete.
-The plan-only workflow preview reached the selected ALZ repository but
+The original implementation passed all-platform CI and local ALZ qualification.
+Its plan-only workflow preview reached the selected ALZ repository but
 stopped at a BAMI test-tenant group lookup before telemetry migration.
+The merged prerequisite repairs are now integrated and locally qualified;
+hosted requalification and the newly approved preview remain outstanding.
 
 ## Checklist
 
@@ -29,6 +31,8 @@ stopped at a BAMI test-tenant group lookup before telemetry migration.
 - [x] Preserve all eight ALZ unit plans through the complete local pre-commit chain.
 - [x] Verify second-pass transformation stability without retained changes.
 - [x] Attempt the ALZ plan-only preview and classify its pre-migration failure.
+- [x] Integrate the merged repository-sync prerequisite fixes and qualify locally.
+- [ ] Pass hosted qualification on the combined source.
 - [ ] Complete the narrow ALZ networking preview after its identity prerequisites pass.
 
 ## Evidence
@@ -273,12 +277,75 @@ whether the group is absent or inaccessible to the configured controller.
 No group, permission, tenant selection, state or workflow guard was changed,
 and the failed preview was not retried.
 
+## Resumed qualification
+
+On October 5, the operator reported that group membership should now be
+corrected and explicitly approved resuming ALZ-only qualification. The scope
+is to bring the merged prerequisite fixes from main into this feature branch,
+revalidate the combined source, and run one ALZ networking plan-only preview
+after checking workflow safeguards and existing runs. No apply, access
+change, publication, protected approval or merge to main is authorized.
+The membership report is not yet controller-authenticated lookup evidence.
+
+The group-name consumer migration in
+[#218](https://github.com/Azure/azure-verified-modules-tools/pull/218)
+and refreshed Terraform data evidence fix in
+[#222](https://github.com/Azure/azure-verified-modules-tools/pull/222)
+are now on main. The October 3 preview used the older source, so its retired
+group-name failure remains historical evidence rather than a claim about
+the repaired source.
+
+Main `a55f79c63e45fd0f141ffb2cd43eea5cad3522f0` is integrated without
+discarding the feature branch's separate prepare, validate and publish jobs.
+The reusable execution workflow now passes only BAMI provider settings and
+the independent backend configuration. Retired provider variables and removed
+script arguments are no longer forwarded. Both trusted-main apply restrictions
+and manual branch plan-only support remain intact. The candidate guard still
+stops on any managed identity change; this preview cannot apply a prerequisite.
+Refreshed prior-state evidence and configured group membership checks are retained.
+Main's Bicep and offline metadata-validation changes are also preserved.
+
+The CI timeout merge retains 30 minutes for Windows and main's 25-minute
+budget elsewhere. The first local gate found two tests still expecting the
+pre-merge timeout definitions. Their expectations now explicitly check the
+combined expression rather than relaxing the workflow contract.
+
+Local requalification:
+
+- Focused repository-sync checks passed 74 unit and 113 component tests.
+- Both CI timeout contracts and the other selected workflow checks passed:
+  seven tests, no failures or skips.
+- The final `./build.ps1 pre-commit` passed layout, lint, 3,043 unit tests
+  (nine skipped) and 1,308 component tests (one skipped), with zero failures.
+  Lint recovered through its existing transient analyzer retries.
+- The native telemetry, test-migration and saved-plan evidence selection
+  initially passed 37 of 39 cases. Two no-cloud fixtures could not construct
+  an AzAPI credential after all authentication sources were disabled.
+  Both passed when rerun with deliberately invalid synthetic provider settings,
+  while CLI, managed identity and OIDC authentication remained disabled.
+  All 39 distinct cases are covered, without skips, real Azure credentials
+  or cloud state. No production code or test assertion was changed for this.
+- `./build.ps1 test-tenant-terraform` passed all 31 provider-mocked cases:
+  13 root, four candidate and 14 Azure-module cases. Backend initialization
+  was disabled. The disposable retired-state fixture produced exactly seven
+  forget actions and no refresh, read or destruction; the actual mocked
+  candidate plan passed the configured membership and federation guard.
+
+Logs are retained under `out/telemetry-prerequisite-*.log`. The telemetry
+engine, MaPoTF profiles and tool pins are unchanged by this integration.
+The active, unarchived ALZ main still matches the previously qualified
+`670c45d48b0c7c6a244cddac8715269b0fc06185`, including its eight authored
+mocked plans. Its relevant example hook only changes staged tfvars locally.
+All eight required BAMI environment settings are populated; the configured
+tenant, controller and admin subscription match the repair handoff.
+These configuration reads are not controller-authenticated group lookup.
+No preview has been dispatched under the new approval yet.
+
 ## Blockers or dependencies
 
-The remaining remote qualification blocker is the BAMI controller's lookup
-of the required Entra readers group. An authorized operator must verify the
-configured tenant/controller and group visibility, then repair any missing
-prerequisite before another preview. Do not bypass the identity guard,
+Remote qualification still needs evidence that the configured BAMI
+controller can resolve the required groups using the repaired source.
+The approved preview may verify this without changing access. Do not bypass the identity guard,
 invent a replacement group, grant permissions or switch to the legacy tenant
 to make telemetry qualification pass.
 Investigation used existing workflow logs and local source only. Archived repositories remain excluded.
