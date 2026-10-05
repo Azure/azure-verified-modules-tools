@@ -111,6 +111,11 @@ checker and family wrapper. Its six former unit cases now execute native
 Pester, with eleven additional catalog/diagnostic controls. Three families
 remain: layout, test files and publication.
 
+The [native test-source slice](2026-10-05-native-test-source-conventions.md)
+replaces the test-file checker and reuses the compiler's collected source
+inventory. Its native-only control runs 27 requirements; Pester 5/6 and the
+full gate are green. Layout and publication are the remaining family wrappers.
+
 ## Blockers or dependencies
 
 Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's

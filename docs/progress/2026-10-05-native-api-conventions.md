@@ -17,7 +17,7 @@ severity. Catalog download remains batched preparation.
 - [x] Remove the ordinary API checker and migrate its six regression cases.
 - [x] Native positive counts, malformed/ambiguous catalog and advisory controls.
 - [x] Pester 5/6 qualification and full local gate.
-- [ ] Preserve qualified work locally under the publication authorization hold.
+- [x] Preserve qualified work locally under the publication authorization hold (`3f45d6c`).
 
 ## Requirement map
 

@@ -17,7 +17,7 @@ exemptions, diagnostic codes and source lines.
 - [x] Remove the ordinary version checker and wire strict discovery accounting.
 - [x] Native positive execution and negative requirement mapping.
 - [x] Pester 5/6 focused checks and full local gate.
-- [ ] Preserve the qualified commit locally while publication remains unauthorized.
+- [x] Preserve the qualified commit locally while publication remains unauthorized (`de1e6a9`).
 
 ## Requirement map
 

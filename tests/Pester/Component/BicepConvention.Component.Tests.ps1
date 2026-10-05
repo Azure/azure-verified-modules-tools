@@ -202,6 +202,56 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         @($run.Summary.Issues | Where-Object Code -like 'avm.bicep.pester-*') | Should -HaveCount 0
     }
 
+    It 'runs twenty-seven independent native requirements for the three test sources' {
+        $run = InModuleScope 'Avm.Authoring' -Parameters @{
+            Path = $script:modulePath; Root = $script:workingRoot
+        } {
+            param($Path, $Root)
+            $scope = Get-AvmBicepConventionScope -Path $Path
+            $compiled = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+            $template = [System.IO.File]::ReadAllText((Join-Path $Root 'compiled-e2e.json')) | ConvertFrom-Json -AsHashtable
+            $sources = @(Get-ChildItem -LiteralPath (Join-Path $Path 'tests') -Recurse -File -Filter 'main.test.bicep')
+            foreach ($source in $sources) { $compiled[$source.FullName] = $template }
+            $data = @{
+                ServiceShortIndex = @{}
+                TestSourceInputs = @($sources | ForEach-Object {
+                        Get-AvmBicepTestSourceInput -SourceFile ([pscustomobject]@{ Path = $_.FullName; Scope = $scope }) `
+                            -CompiledTests $compiled
+                    })
+            }
+            $suite = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions' 'TestSource.Tests.ps1'
+            $summary = Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Path `
+                -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+            @{ Summary = $summary; Expected = $data.NativeTestSourceExpected }
+        }
+        $run.Expected | Should -Be 27
+        $run.Summary.Total | Should -Be 27
+        $run.Summary.Passed | Should -Be 27 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
+    It 'rejects a test source without <Declaration>' -ForEach @(
+        @{ Declaration = 'metadata name'; Pattern = "(?m)^metadata name[^\r\n]*"; Code = 'avm.bicep.test-metadata-name' }
+        @{ Declaration = 'serviceShort'; Pattern = "(?m)^param serviceShort[^\r\n]*"; Code = 'avm.bicep.test-service-short' }
+    ) {
+        $path = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+        $source = [System.IO.File]::ReadAllText($path)
+        [System.IO.File]::WriteAllText($path, [regex]::Replace($source, $Pattern, ''))
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $issue = @($result.Issues | Where-Object Code -eq $Code)
+        $issue | Should -HaveCount 1
+        $issue[0].File | Should -Be 'tests/e2e/defaults/main.test.bicep'
+    }
+
+    It 'reports malformed UTF-8 test source instead of hiding a preparation failure' {
+        $path = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+        [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.test-source-read'
+    }
+
     It 'checks the complete root and child fixture without uncovered convention families' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 

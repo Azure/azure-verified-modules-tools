@@ -13,19 +13,21 @@ AfterAll {
 Describe 'Invoke-AvmBicepConventionSuite' {
     BeforeEach {
         InModuleScope 'Avm.Authoring' {
-            # Three remaining family checks and one minimum native ownership check.
+            # Two remaining family checks and one minimum native ownership check.
             $script:convention = @{
                 Root            = $TestDrive
                 RepositoryRoot  = $TestDrive
                 Scopes          = @([pscustomobject]@{ Path = $TestDrive; IsTopLevel = $true })
                 CompiledModules = @()
                 Workflows       = @()
+                TestSources     = @()
             }
-            $script:summary = [pscustomobject]@{ Total = 4; Passed = 4; Failed = 0; Issues = @() }
+            $script:summary = [pscustomobject]@{ Total = 3; Passed = 3; Failed = 0; Issues = @() }
             Mock Invoke-AvmBicepPesterSuite {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeChildPublishExpected = 0
                 $ConventionData.NativeVersionExpected = 0
+                $ConventionData.NativeTestSourceExpected = 0
                 $script:summary
             }
         }
@@ -45,6 +47,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeChildPublishExpected = 0
                 $ConventionData.NativeVersionExpected = 0
+                $ConventionData.NativeTestSourceExpected = 0
                 $ConventionData.Findings.Add([pscustomobject]@{ Code = 'avm.bicep.sample'; Severity = 'warning' })
                 $script:summary
             }
@@ -63,8 +66,9 @@ Describe 'Invoke-AvmBicepConventionSuite' {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeChildPublishExpected = 0
                 $ConventionData.NativeVersionExpected = 0
+                $ConventionData.NativeTestSourceExpected = 0
                 $ConventionData.Crashes.Add([pscustomobject]@{ Rule = 'Layout'; Message = 'boom' })
-                [pscustomobject]@{ Total = 4; Passed = 3; Failed = 1; Issues = @() }
+                [pscustomobject]@{ Total = 3; Passed = 2; Failed = 1; Issues = @() }
             }
             $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
             $issues.Code | Should -Be @('avm.bicep.convention-rule-failed')
@@ -75,7 +79,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
 
     It 'never lets a failed test without a finding pass' {
         InModuleScope 'Avm.Authoring' {
-            $script:summary = [pscustomobject]@{ Total = 4; Passed = 3; Failed = 1; Issues = @() }
+            $script:summary = [pscustomobject]@{ Total = 3; Passed = 2; Failed = 1; Issues = @() }
             $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
             $issues.Code | Should -Be @('avm.bicep.convention-rule-failed')
         }
@@ -83,10 +87,10 @@ Describe 'Invoke-AvmBicepConventionSuite' {
 
     It 'reports a run with fewer checks than expected as incomplete' {
         InModuleScope 'Avm.Authoring' {
-            $script:summary = [pscustomobject]@{ Total = 3; Passed = 3; Failed = 0; Issues = @() }
+            $script:summary = [pscustomobject]@{ Total = 2; Passed = 2; Failed = 0; Issues = @() }
             $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
             $issues.Code | Should -Be @('avm.bicep.convention-suite-incomplete')
-            $issues[0].Message | Should -Match '3 of 4'
+            $issues[0].Message | Should -Match '2 of 3'
         }
     }
 
@@ -100,7 +104,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
         } {
             param($Failures, $HasUnmappedFailure)
             $script:summary = [pscustomobject]@{
-                Total = 4; Passed = 4 - $Failures; Failed = $Failures
+                Total = 3; Passed = 3 - $Failures; Failed = $Failures
                 Issues = @(@{
                         NativeConvention = $true; Code = 'avm.bicep.parameter-untyped-object'
                         Severity = 'warning'; File = Join-Path $TestDrive 'main.bicep'
@@ -117,7 +121,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
 
     It 'reports skipped checks as incomplete even when the total matches' {
         InModuleScope 'Avm.Authoring' {
-            $script:summary = [pscustomobject]@{ Total = 4; Passed = 3; Failed = 0; Issues = @() }
+            $script:summary = [pscustomobject]@{ Total = 3; Passed = 2; Failed = 0; Issues = @() }
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
                 Should -Be @('avm.bicep.convention-suite-incomplete')
         }
@@ -128,7 +132,8 @@ Describe 'Invoke-AvmBicepConventionSuite' {
             Mock Invoke-AvmBicepPesterSuite {
                 $ConventionData.NativeChildPublishExpected = 0
                 $ConventionData.NativeVersionExpected = 0
-                [pscustomobject]@{ Total = 3; Passed = 3; Failed = 0; Issues = @() }
+                $ConventionData.NativeTestSourceExpected = 0
+                [pscustomobject]@{ Total = 2; Passed = 2; Failed = 0; Issues = @() }
             }
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
                 Should -Be @('avm.bicep.convention-suite-incomplete')
@@ -140,6 +145,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
             Mock Invoke-AvmBicepPesterSuite {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeVersionExpected = 0
+                $ConventionData.NativeTestSourceExpected = 0
                 $script:summary
             }
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
@@ -152,6 +158,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
             Mock Invoke-AvmBicepPesterSuite {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeChildPublishExpected = 0
+                $ConventionData.NativeTestSourceExpected = 0
                 $script:summary
             }
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
@@ -170,7 +177,21 @@ Describe 'Invoke-AvmBicepConventionSuite' {
                 $ConventionData.NativeOwnershipExpected = 1
                 $ConventionData.NativeChildPublishExpected = 0
                 $ConventionData.NativeVersionExpected = 0
-                [pscustomobject]@{ Total = 15; Passed = 15; Failed = 0; Issues = @() }
+                $ConventionData.NativeTestSourceExpected = 0
+                [pscustomobject]@{ Total = 14; Passed = 14; Failed = 0; Issues = @() }
+            }
+            @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
+                Should -Be @('avm.bicep.convention-suite-incomplete')
+        }
+    }
+
+    It 'fails closed when test-source discovery never registers even with no test files' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-AvmBicepPesterSuite {
+                $ConventionData.NativeOwnershipExpected = 1
+                $ConventionData.NativeChildPublishExpected = 0
+                $ConventionData.NativeVersionExpected = 0
+                $script:summary
             }
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention).Code |
                 Should -Be @('avm.bicep.convention-suite-incomplete')
@@ -180,7 +201,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
     It 'surfaces runner diagnostics other than ordinary test failures' {
         InModuleScope 'Avm.Authoring' {
             $script:summary = [pscustomobject]@{
-                Total = 4; Passed = 4; Failed = 0
+                Total = 3; Passed = 3; Failed = 0
                 Issues = @(
                     [pscustomobject]@{ Code = 'avm.bicep.pester-failed'; Message = 'ignored' },
                     [pscustomobject]@{ Code = 'avm.bicep.pester-container-failed'; Message = 'discovery failed' }

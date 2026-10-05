@@ -202,6 +202,7 @@ function Invoke-AvmBicepCheckConvention {
         ApiSpecsUnavailableReason = $apiSpecsUnavailableReason
         ServiceShortIndex         = $serviceShortIndex
         CompiledTests             = $compiledTests
+        TestSources               = @($sources | Where-Object IsTest)
         Workflows                 = $workflows
         Publication               = $publication
     }
