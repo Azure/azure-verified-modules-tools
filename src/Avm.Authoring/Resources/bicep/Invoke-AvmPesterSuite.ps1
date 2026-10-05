@@ -92,13 +92,29 @@ foreach ($test in @($result.Tests)) {
     $nativeCode = @($test.Tag | Where-Object { $_ -like 'avm.bicep.*' }) | Select-Object -First 1
     if ($inputData.Mode -ceq 'Convention' -and $nativeCode) {
         $target = $null
+        $targetLine = 0
+        $targetRoot = $null
         if ($test.Data -is [System.Collections.IDictionary] -and $test.Data.Contains('IssuePath')) {
             $target = $test.Data['IssuePath']
         }
+        if ($test.Data -is [System.Collections.IDictionary] -and $test.Data.Contains('IssueLine')) {
+            $targetLine = [int]$test.Data['IssueLine']
+        }
+        if ($test.Data -is [System.Collections.IDictionary] -and $test.Data.Contains('IssueRoot')) {
+            $targetRoot = $test.Data['IssueRoot']
+        }
         $block = $test.Block
-        while (-not $target -and $null -ne $block) {
-            if ($block.Data -is [System.Collections.IDictionary] -and $block.Data.Contains('IssuePath')) {
-                $target = $block.Data['IssuePath']
+        while ($null -ne $block) {
+            if ($block.Data -is [System.Collections.IDictionary]) {
+                if (-not $target -and $block.Data.Contains('IssuePath')) {
+                    $target = $block.Data['IssuePath']
+                }
+                if ($targetLine -le 0 -and $block.Data.Contains('IssueLine')) {
+                    $targetLine = [int]$block.Data['IssueLine']
+                }
+                if (-not $targetRoot -and $block.Data.Contains('IssueRoot')) {
+                    $targetRoot = $block.Data['IssueRoot']
+                }
             }
             $block = $block.Parent
         }
@@ -108,9 +124,10 @@ foreach ($test in @($result.Tests)) {
         $severity = if ($assertionFailure -and $test.Tag -contains 'severity:warning') { 'warning' } else { 'error' }
         $issues.Add([pscustomobject]@{
                 File             = if ($target) { [string]$target } else { [string]$inputData.Convention.Root }
-                Line = 1; Column = 1; Severity = $severity; Code = [string]$nativeCode
+                Line = [Math]::Max(1, $targetLine); Column = 1; Severity = $severity; Code = [string]$nativeCode
                 Message          = "$($test.ExpandedPath): $detail"
                 NativeConvention = $true
+                IssueRoot        = $targetRoot
             })
         continue
     }

@@ -88,6 +88,12 @@ warning leakage, build package acceptance inputs and preserve failed-setup
 diagnostics. Eight other convention families, default unit compliance,
 child-publish configuration portability and final acceptance remain outstanding.
 
+The [workflow/ownership slice](2026-10-05-native-workflow-ownership.md) removes
+two more checker families. Its native-only positive control runs 37 independent
+requirements; full gate is green with Pester 6 and focused compatibility with
+Pester 5. Six families remain: layout, versions, API versions, test files,
+publication history and child publishing.
+
 ## Blockers or dependencies
 
 The user approved shared ordinary schema/parsing/value primitives for internal
@@ -105,3 +111,10 @@ Existing registry entry points remain untouched until
 a separately approved compatible release and cutover. A concise companion
 technical-doc update should describe the package-owned validation boundary
 in Azure-Verified-Modules-Docs after implementation is qualified.
+
+The separate workflow migration owners agreed on the future manifest marker
+`PrivateData.AvmCapabilities.BicepPackagedCompliance = 1`. Do not advertise it
+until the default `Invoke-AvmTestUnit -Recurse -IncludeCompliance` route and
+acceptance prove native conventions, compiled checks, README drift,
+metadata/source validation and module-authored unit tests. It excludes PSRule and
+e2e. Intermediate packages must continue failing the migration's capability gate.

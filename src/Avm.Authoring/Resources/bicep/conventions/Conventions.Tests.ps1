@@ -14,9 +14,6 @@ $compiledCases = @(foreach ($module in @($Convention.CompiledModules)) {
 $scopeCases = @(foreach ($scope in @($Convention.Scopes)) {
         @{ Scope = $scope; Label = $scope.ModuleRelativePath }
     })
-$workflowCases = @(foreach ($workflow in @($Convention.Workflows)) {
-        @{ Scope = $workflow.Scope; WorkflowInput = $workflow.Input; Label = $workflow.Scope.ModuleRelativePath }
-    })
 
 BeforeAll {
     foreach ($rule in @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'rules') -Filter '*.ps1' -File)) {
@@ -71,16 +68,6 @@ Describe 'Bicep conventions' {
         }
     }
 
-    if ($workflowCases.Count -gt 0) {
-        Context 'Workflows' {
-            It '<Label> workflow' -ForEach $workflowCases {
-                Invoke-ConventionRule -RuleName 'Workflow' -RuleBlock {
-                    Test-AvmBicepConventionWorkflow -Scope $Scope -WorkflowInput $WorkflowInput
-                }
-            }
-        }
-    }
-
     if ($scopeCases.Count -gt 0) {
         Context 'Versions' {
             It '<Label> version' -ForEach $scopeCases {
@@ -101,12 +88,6 @@ Describe 'Bicep conventions' {
         }
 
         Context 'Repository' {
-            It 'CODEOWNERS' {
-                Invoke-ConventionRule -RuleName 'Codeowner' -RuleBlock {
-                    Test-AvmBicepConventionCodeowner -RepositoryRoot $Convention.RepositoryRoot
-                }
-            }
-
             It 'child module publishing' {
                 Invoke-ConventionRule -RuleName 'ChildPublish' -RuleBlock {
                     Test-AvmBicepConventionChildPublish -RepositoryRoot $Convention.RepositoryRoot `

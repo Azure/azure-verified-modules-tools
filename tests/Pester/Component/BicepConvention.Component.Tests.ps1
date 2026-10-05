@@ -119,11 +119,35 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
+    It 'executes independent native workflow and ownership requirements' {
+        $run = InModuleScope 'Avm.Authoring' -Parameters @{
+            Path = $script:modulePath; Root = $script:workingRoot
+        } {
+            param($Path, $Root)
+            $scope = Get-AvmBicepConventionScope -Path $Path
+            $data = @{
+                Root = $Root; RepositoryRoot = $Root
+                Workflows      = @(@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope })
+                CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Root
+            }
+            $directory = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions'
+            $summary = Invoke-AvmBicepPesterSuite -Files @(
+                (Join-Path $directory 'Workflow.Tests.ps1'), (Join-Path $directory 'Ownership.Tests.ps1')
+            ) -WorkingDirectory $Root -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
+            @{ Summary = $summary; Workflow = $data.NativeWorkflowExpected; Ownership = $data.NativeOwnershipExpected }
+        }
+        $run.Workflow | Should -Be 20
+        $run.Ownership | Should -Be 17
+        $run.Summary.Total | Should -Be 37
+        $run.Summary.Passed | Should -Be 37 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        @($run.Summary.Issues) | Should -HaveCount 0
+    }
+
     It 'checks the complete root and child fixture without uncovered convention families' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Engine | Should -Be 'bicep'
-        $result.Status | Should -Be 'pass'
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.ScopesChecked | Should -Be 2
         $result.CompiledFiles | Should -Be 5
         $result.CompilerSource | Should -Be 'fixture'

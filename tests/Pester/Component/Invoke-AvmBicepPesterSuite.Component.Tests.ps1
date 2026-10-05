@@ -15,7 +15,7 @@ Describe 'native diagnostics' -ForEach @(@{ IssuePath = (Join-Path $Convention.R
     It 'reports an advisory' -Tag 'avm.bicep.sample-warning', 'severity:warning' {
         $false | Should -BeTrue
     }
-    It 'reports a metadata assertion' -Tag 'avm.bicep.sample-metadata', 'file:metadata.json' {
+    It 'reports a metadata assertion' -ForEach @(@{ IssueLine = 17; IssueRoot = $Convention.Root }) -Tag 'avm.bicep.sample-metadata', 'file:metadata.json' {
         'actual' | Should -BeExactly 'expected'
     }
     It 'reports a runtime failure' -Tag 'avm.bicep.sample-runtime', 'severity:warning' {
@@ -38,6 +38,8 @@ Describe 'native diagnostics' -ForEach @(@{ IssuePath = (Join-Path $Convention.R
             $issue.Severity | Should -Be $(if ($issue.Code -eq 'avm.bicep.sample-warning') { 'warning' } else { 'error' })
             $issue.File | Should -Be (Join-Path $TestDrive $(if ($issue.Code -eq 'avm.bicep.sample-metadata') { 'metadata.json' } else { 'main.bicep' }))
             $issue.Message | Should -Match 'native diagnostics'
+            $issue.Line | Should -Be $(if ($issue.Code -eq 'avm.bicep.sample-metadata') { 17 } else { 1 })
+            if ($issue.Code -eq 'avm.bicep.sample-metadata') { $issue.IssueRoot | Should -Be ([string]$TestDrive) }
         }
     }
 }
