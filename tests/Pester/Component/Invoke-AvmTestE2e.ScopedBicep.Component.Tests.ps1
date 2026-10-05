@@ -256,4 +256,70 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
         $script:fixture.Calls | Should -Not -Contain 'validate'
     }
+
+    Context 'Repository-root feature declarations' {
+        BeforeEach {
+            $script:registry = Join-Path $TestDrive ('registry-' + [guid]::NewGuid().ToString('N'))
+            $moduleRoot = Join-Path $script:registry 'avm' 'res' 'compute' 'virtual-machine'
+            $null = New-Item -ItemType Directory -Path (Split-Path $moduleRoot -Parent) -Force
+            Move-Item -LiteralPath $script:fixture.Root -Destination $moduleRoot
+            $script:fixture.Root = $moduleRoot
+            $script:fixture.Directory = Join-Path $moduleRoot 'tests' 'e2e' 'defaults'
+            $script:options.Path = $moduleRoot
+            $script:manifest = Join-Path $script:registry '.required-features.json'
+        }
+
+        It 'registers only the root entry in the <Selection> subscription and requested tenant' -ForEach @(
+            @{ Selection = 'explicit' }
+            @{ Selection = 'pool-selected' }
+        ) {
+            Set-Content -LiteralPath $script:manifest -Value (@{
+                    'avm/res/compute/virtual-machine' = @('Microsoft.Compute/EncryptionAtHost')
+                    'avm/res/network/route-table' = @('Microsoft.Network/AllowRouteTable')
+                } | ConvertTo-Json)
+            $subscription = '00000000-0000-0000-0000-000000000003'
+            $tenant = '00000000-0000-0000-0000-000000000004'
+            $script:options.TenantId = $tenant
+            if ($Selection -eq 'explicit') { $script:options.SubscriptionId = $subscription }
+            else {
+                $null = $script:options.Remove('SubscriptionId')
+                $script:options.TestSubscriptionIds = '[{"id":"' + $subscription + '","name":"selected fixture subscription"}]'
+            }
+            Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring {
+                [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} }
+            }
+            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+                $script:fixture.Calls.Add("register:${SubscriptionId}:$($script:fixture.CurrentTenant):$($Feature.FullName -join ',')")
+                $SubscriptionId | Should -BeExactly $script:fixture.CurrentSubscription
+                [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+            }
+            $result = Invoke-AvmTestE2e @script:options
+            $result.Status | Should -Be 'pass'
+            $registration = "register:${subscription}:${tenant}:Microsoft.Compute/EncryptionAtHost"
+            @($script:fixture.Calls | Where-Object { $_ -like 'register:*' }) | Should -Be @($registration)
+            $script:fixture.Calls.IndexOf($registration) | Should -BeLessThan $script:fixture.Calls.IndexOf('validate')
+            $script:fixture.NativeInputs[0].SubscriptionId | Should -BeExactly $subscription
+            $script:fixture.CurrentSubscription | Should -BeExactly '00000000-0000-0000-0000-000000000099'
+            $script:fixture.CurrentTenant | Should -BeExactly '00000000-0000-0000-0000-000000000002'
+        }
+
+        It 'rejects <Case> before compilation or Azure setup' -ForEach @(
+            @{ Case = 'malformed root JSON'; Json = '{'; Local = $false; Message = '*JSON object*' }
+            @{ Case = 'an array at the repository root'; Json = '["Microsoft.Compute/EncryptionAtHost"]'; Local = $false; Message = '*JSON object*' }
+            @{ Case = 'an invalid unselected entry'; Json = '{"avm/res/compute/virtual-machine":[],"avm/res/network/route-table":["bad"]}'; Local = $false; Message = '*avm/res/network/route-table*' }
+            @{ Case = 'competing root and module manifests'; Json = '{"avm/res/compute/virtual-machine":[]}'; Local = $true; Message = '*remove the module-root manifest*' }
+        ) {
+            Set-Content -LiteralPath $script:manifest -Value $Json
+            if ($Local) {
+                Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+            }
+            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+            { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage $Message
+            Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Assert-AvmBicepAzureDependency -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Invoke-AvmBicepAzureContext -ModuleName Avm.Authoring -Exactly 0
+            $script:fixture.Calls.Count | Should -Be 0
+            Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
+        }
+    }
 }
