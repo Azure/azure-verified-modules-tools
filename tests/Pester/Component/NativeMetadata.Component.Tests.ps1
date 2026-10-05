@@ -13,6 +13,25 @@ AfterAll {
 }
 
 Describe 'Component: native shared metadata assertions' -Tag Component {
+    It 'disables dependency name checks without suppressing validation warnings globally' {
+        InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:metadataFixture } {
+            param($Fixture)
+            Mock Import-Module {
+                if (-not $DisableNameChecking) { Write-Warning 'Pester dependency name-check warning.' }
+            } -ParameterFilter { $Name -eq 'Pester' }
+            $inputData = Get-AvmMetadataValidationInput -Json (Get-Content -LiteralPath $Fixture -Raw) `
+                -Ecosystem bicep -ModuleType resource
+            $warnings = @()
+            $result = Invoke-AvmMetadataValidation -Validations @($inputData) -WarningVariable warnings
+            $result.Tests | Should -HaveCount 6
+            $result.Issues | Should -HaveCount 0
+            @($warnings) | Should -HaveCount 0
+            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+                $Name -eq 'Pester' -and $DisableNameChecking -and $ErrorAction -eq 'Stop'
+            }
+        }
+    }
+
     It 'runs the same six independent requirements for both ecosystems in one suite' {
         InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:metadataFixture } {
             param($Fixture)

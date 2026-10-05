@@ -9,7 +9,7 @@ function Invoke-AvmMetadataValidation {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+    Import-Module -Name Pester -MinimumVersion 5.5.0 -DisableNameChecking -ErrorAction Stop
     $suite = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'metadata', 'Metadata.Tests.ps1'
     $configuration = New-PesterConfiguration

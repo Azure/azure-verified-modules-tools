@@ -677,10 +677,10 @@ task 'test-workflows' {
 }
 
 task build layout, {
-    if (Test-Path -LiteralPath $script:outRoot) {
-        Remove-Item -LiteralPath $script:outRoot -Recurse -Force -ProgressAction SilentlyContinue
-    }
     $stage = Join-Path $script:outRoot 'Avm.Authoring'
+    if (Test-Path -LiteralPath $stage) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ProgressAction SilentlyContinue
+    }
     $null = New-Item -ItemType Directory -Path $stage -Force
 
     # Copy everything except scratch and test scaffolding into the staged tree.
@@ -779,7 +779,7 @@ task component {
 # `pre-commit` or `ci` so routine builds never touch the network. Wire this into
 # a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
 # indirectly -- the tests themselves Skip when offline rather than fail.
-task integration {
+task integration build, {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 
     $integrationPath = Join-Path $script:testsRoot 'Integration'

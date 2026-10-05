@@ -3,6 +3,7 @@
 
 Describe 'Integration: packaged Bicep policy' -Tag Integration {
     BeforeAll {
+        $script:savedEnvironment = @{}
         $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $manifest = Join-Path $repoRoot 'out' 'Avm.Authoring' 'Avm.Authoring.psd1'
         if (-not (Test-Path -LiteralPath $manifest)) {
@@ -13,7 +14,6 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         Copy-Item -LiteralPath (Split-Path $manifest) -Destination $script:package -Recurse
         Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
         $script:fixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage'
-        $script:savedEnvironment = @{}
         foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'VALIDATE_TENANT_ID', 'TOKEN_NAMEPREFIX')) {
             $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }

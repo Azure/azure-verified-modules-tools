@@ -15,7 +15,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-Import-Module Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+Import-Module Pester -MinimumVersion 5.5.0 -DisableNameChecking -ErrorAction Stop
 if ($PSCmdlet.ParameterSetName -eq 'File') {
     $inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
         ConvertFrom-Json -AsHashtable -ErrorAction Stop
@@ -102,7 +102,7 @@ foreach ($test in @($result.Tests)) {
 foreach ($failed in @($result.FailedContainers) + @($result.FailedBlocks)) {
     $errorRecord = @($failed.ErrorRecord) | Select-Object -First 1
     $detail = if ($null -ne $errorRecord) { $errorRecord.Exception.Message } else { 'Pester suite setup failed.' }
-    $file = if ($failed.Item -is [string]) { $failed.Item } else { '' }
+    $file = if ($failed.PSObject.Properties['Item'] -and $failed.Item -is [string]) { $failed.Item } else { '' }
     $issues.Add([pscustomobject][ordered]@{
             File     = [string]$file
             Line     = 0
