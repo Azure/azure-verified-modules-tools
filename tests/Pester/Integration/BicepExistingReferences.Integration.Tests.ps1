@@ -4,6 +4,7 @@
 Describe 'Integration: Bicep existing-resource references' -Tag Integration -Skip:($env:AVM_OFFLINE -eq '1') {
     BeforeAll {
         $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
+        $script:fixtureRoot = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-existing-references'
         Import-Module (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     }
 
@@ -12,53 +13,8 @@ Describe 'Integration: Bicep existing-resource references' -Tag Integration -Ski
     }
 
     It 'compiles existing Graph and Key Vault references and documents no deployed resources' {
-        # Registry modules now forward an existing Graph service principal's id
-        # instead of taking its object ID as a parameter. The compiled template
-        # is symbolic (languageVersion 2.0) and its resources are a dictionary.
         $root = Join-Path $TestDrive 'graph-existing'
-        $null = New-Item -ItemType Directory -Path $root -Force
-        $utf8 = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'), @'
-{
-  "extensions": {
-    "microsoftGraphV1": "br:mcr.microsoft.com/bicep/extensions/microsoftgraph/v1.0:1.0.0"
-  }
-}
-'@, $utf8)
-        [System.IO.File]::WriteAllText((Join-Path $root 'main.bicep'), @'
-targetScope = 'subscription'
-
-extension microsoftGraphV1
-
-param vaultName string
-param vaultResourceGroupName string
-
-resource backupManagementService 'Microsoft.Graph/servicePrincipals@v1.0' existing = {
-  appId: '262044b1-e2ce-469f-a196-69ab7ada62d3'
-}
-
-resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
-  scope: resourceGroup(vaultResourceGroupName)
-  name: vaultName
-}
-
-module forward './dependency.bicep' = {
-  name: 'existing-reference-consumer'
-  params: {
-    principalId: backupManagementService.id
-    vaultId: vault.id
-  }
-}
-'@, $utf8)
-        [System.IO.File]::WriteAllText((Join-Path $root 'dependency.bicep'), @'
-targetScope = 'subscription'
-
-param principalId string
-param vaultId string
-
-output observedPrincipalId string = principalId
-output observedVaultId string = vaultId
-'@, $utf8)
+        Copy-Item -LiteralPath $script:fixtureRoot -Destination $root -Recurse
 
         $compiled = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
             param($Root)

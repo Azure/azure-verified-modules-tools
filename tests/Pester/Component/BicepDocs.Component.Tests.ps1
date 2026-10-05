@@ -3,7 +3,7 @@
 
 BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring')
-    $script:fixtureRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' 'fixtures' 'bicep-docs')
+    $script:fixtureRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' 'fixtures' 'modules' 'bicep-docs')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
 
     function New-BicepDocsFixture {

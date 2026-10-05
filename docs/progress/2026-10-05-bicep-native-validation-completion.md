@@ -72,10 +72,15 @@ Build and test commands use `.\build.ps1`; broad integration setup is excluded.
 
 ## Blockers or dependencies
 
-The metadata boundary decision is with the user through the coordinator:
-internal initialization/prompt/discovery guards have callers that must not
-recursively invoke the public Pester command. No exception is implemented.
-Independent convention and fixture work can continue.
+The user approved shared ordinary schema/parsing/value primitives for internal
+construction, prompts, initialization, and discovery. Explicit metadata
+validation, including InputObject, must share one packaged native Pester
+assertion set across Bicep and Terraform. Bicep source-wiring tests are separate.
+No duplicated ecosystem-specific metadata implementation is permitted.
+
+The [fixture curation slice](2026-10-05-bicep-module-fixtures.md) moved the
+documentation module tree and extracted the existing-reference compiler
+fixture. Native compliance package acceptance remains outstanding.
 
 The [package-owned PSRule slice](2026-10-05-bicep-packaged-psrule.md) is qualified.
 Existing registry entry points remain untouched until

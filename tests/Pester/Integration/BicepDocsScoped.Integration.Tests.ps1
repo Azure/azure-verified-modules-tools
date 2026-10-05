@@ -5,7 +5,7 @@ Describe 'Integration: Bicep docs scoped examples' -Tag Integration -Skip:($env:
     BeforeAll {
         $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $script:moduleRoot = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
-        $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-docs'
+        $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' 'bicep-docs'
         Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
     }
 
