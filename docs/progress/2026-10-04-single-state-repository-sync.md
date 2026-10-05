@@ -1,6 +1,6 @@
 # Single-state repository sync
 
-**Status**: complete
+**Status**: in-progress
 **Started**: 2026-10-04
 **Updated**: 2026-10-05
 **Branch**: `jaredfholgate-single-state-repository-sync`
@@ -41,6 +41,9 @@ change before resumption.
 - [x] Avoid secondary project-permission errors when token setup never ran.
 - [x] Rerun affected validation and the full development gate.
 - [x] Prepare the follow-up commit and corrected same-draft procedure.
+- [x] Reproduce and remove the hosted integration test's global Terraform dependency.
+- [x] Validate and prepare the coupled test correction.
+- [ ] Verify actual hosted results at the corrected head.
 
 ## Validation
 
@@ -74,6 +77,27 @@ sync then used an empty token and reported a misleading permissions error.
 Keep the installer failure intact and explicitly skip project work without its
 token prerequisite. The cutover inventory must include repositories that failed
 before sync, not assume the latest run reached every repository.
+
+The local gate does not cover the hosted integration tier. At
+`96f4e9aadf892561e01e60cabf0447ffaa82b013`, all six integration matrix jobs in
+[Authoring CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37280529521)
+failed only the four state-transfer cases during container setup. The new test used
+`Get-Command terraform` even though integration jobs resolve native tools from
+the AVM cache rather than a global PATH entry. Logs from both fixtures on Linux,
+Windows, and macOS confirm the same cause. Unit/component, lint, workflow, and
+Config checks passed. This is a source regression, not an external installer or
+provider failure; hosted verification of its correction is still pending.
+Removing global Terraform directories from only the reproduction process's PATH
+reproduced the same four-case setup failure locally. The suite now resolves the
+lock-pinned executable through `Resolve-AvmTool`, matching the other integration
+tests without changing CI setup, pins, runtime behavior, or test selection.
+The identical missing-PATH reproduction then passed all four cases with zero
+skips using cached Terraform 1.15.8; the native binary's version was verified.
+This adds the managed version to the earlier Terraform 1.16.4 proof.
+The repeated full `.\build.ps1 pre-commit` passed layout, lint, 2,897 unit
+and 1,292 component tests after this correction, with the same nine unit
+and one component skips. No installer, workflow, pin, or runtime changes
+were needed.
 
 ## Blockers or dependencies
 

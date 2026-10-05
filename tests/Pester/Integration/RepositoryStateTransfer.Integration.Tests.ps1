@@ -3,7 +3,7 @@ BeforeAll {
     $script:inspector = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Test-RepositoryStateTransfer.ps1'
     . (Join-Path $script:root 'tests' 'fixtures' 'RepositoryState.ps1')
     $script:module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -PassThru
-    $script:terraform = (Get-Command terraform -CommandType Application -ErrorAction Stop).Source
+    $script:terraform = & $script:module { (Resolve-AvmTool -Name terraform).Path }
     $script:localEnvironment = @{
         GH_TOKEN = $null; GITHUB_TOKEN = $null; TF_IN_AUTOMATION = 'true'; TF_INPUT = 'false'
         TF_WORKSPACE = 'default'; TF_LOG = $null; TF_LOG_PATH = $null
