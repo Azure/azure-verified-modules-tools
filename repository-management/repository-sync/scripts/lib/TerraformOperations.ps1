@@ -93,6 +93,7 @@ function Invoke-TerraformInit {
     param(
         [string]$terraformModulePath,
         [bool]$repositoryCreationModeEnabled,
+        [bool]$planOnly,
         [string]$repoId,
         [string]$orgAndRepoName,
         [string]$stateStorageAccountName,
@@ -118,6 +119,7 @@ terraform {
                 }
             ) `
             -workingDirectory $terraformModulePath `
+            -disableStateLockRecovery:$planOnly `
             -printOutput
     } else {
         $state = Resolve-RepositorySyncStateConfiguration -Backend @{
@@ -154,6 +156,7 @@ terraform {
             -stateContainerName $state.ContainerName `
             -stateBlobName "$($repoId).tfstate" `
             -stateSubscriptionId $state.SubscriptionId `
+            -disableStateLockRecovery:$planOnly `
             -printOutput
     }
 
@@ -194,6 +197,7 @@ function Invoke-TerraformPlanAndApply {
         -stateContainerName $stateContainerName `
         -stateBlobName "$($repoId).tfstate" `
         -stateSubscriptionId $stateSubscriptionId `
+        -disableStateLockRecovery:$planOnly `
         -printOutput
 
     if (!(Test-CommandResultsSucceeded -results $result)) {

@@ -13,8 +13,9 @@ without weakening the safeguards for unknown dependencies or real providers.
 The original implementation passed all-platform CI and local ALZ qualification.
 Its plan-only workflow preview reached the selected ALZ repository but
 stopped at a BAMI test-tenant group lookup before telemetry migration.
-The merged prerequisite repairs are now integrated and locally qualified;
-hosted requalification and the newly approved preview remain outstanding.
+The merged prerequisite repairs passed local and hosted qualification.
+Final safety inspection identified automatic state-lock recovery in plan-only
+execution; its approved repair and the single ALZ preview remain outstanding.
 
 ## Checklist
 
@@ -32,7 +33,8 @@ hosted requalification and the newly approved preview remain outstanding.
 - [x] Verify second-pass transformation stability without retained changes.
 - [x] Attempt the ALZ plan-only preview and classify its pre-migration failure.
 - [x] Integrate the merged repository-sync prerequisite fixes and qualify locally.
-- [ ] Pass hosted qualification on the combined source.
+- [x] Pass hosted qualification on the combined source.
+- [ ] Make plan-only state-lock handling non-mutating and qualify the repair.
 - [ ] Complete the narrow ALZ networking preview after its identity prerequisites pass.
 
 ## Evidence
@@ -362,6 +364,36 @@ package-import helper or telemetry behavior changed. The subsequent full
 and 1,308 component tests (one skipped), with zero failures. The reproduction,
 focused result and full gate are retained in `out/telemetry-package-import-*.log`.
 New-head hosted qualification must still pass before the approved preview.
+
+### Plan-only state-lock handling
+
+The repair at `c7e22cd12e4118e47c480f23e73d8d4f098dc182` passed its entire
+[hosted qualification](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37284621815):
+all thirteen jobs and all nineteen current-head checks succeeded.
+The target source and BAMI configuration still matched the qualified inputs.
+
+Final safety inspection found that common repository Terraform initialization
+and planning still enabled automatic state-lock recovery in plan-only mode.
+Unlike the BAMI candidate helper, that path could run `terraform force-unlock`
+or break the storage lease after a lock error. No preview was dispatched.
+The operator explicitly approved repairing plan-only runs to leave those
+locks untouched and fail clearly, then requalifying before the single preview.
+Non-plan execution must retain its existing recovery behavior.
+
+The preview flag now reaches both initialization paths and the ordinary
+repository plan. Those calls disable the retry helper's state-lock recovery
+actions, leaving the original error visible. Non-plan recovery and ordinary
+provider-download retries are unchanged. Four mocked acquisition/release
+failures reproduced the unwanted recovery before the change; all now fail
+without an unlock or lease-break call. Focused qualification passed 27 unit
+and 55 component tests, including actual driver propagation of both modes.
+The full local gate passed layout, lint, 3,055 unit tests (nine skipped) and
+1,308 component tests (one skipped), with zero failures. Its first attempt
+hit a Windows access-denied error while moving an unchanged clone fixture.
+All fifteen clone cases then passed in isolation, followed by the complete
+gate, without changes to that source or its tests. Evidence is retained in
+`out/telemetry-plan-only-lock-*.log`. New-head hosted qualification remains
+required before the preview.
 
 ## Blockers or dependencies
 

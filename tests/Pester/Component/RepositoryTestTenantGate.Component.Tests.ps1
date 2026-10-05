@@ -382,7 +382,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             $writtenVariables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | ConvertFrom-Json
             $writtenVariables.repository_sync_repository_id | Should -BeExactly '1239632211'
             Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter {
-                $stateTenantId -eq '44444444-4444-4444-8444-444444444444' -and
+                $planOnly -eq $Plan -and $stateTenantId -eq '44444444-4444-4444-8444-444444444444' -and
                 $stateSubscriptionId -eq '55555555-5555-4555-8555-555555555555' -and
                 $stateClientId -eq '66666666-6666-4666-8666-666666666666' -and
                 $stateStorageAccountName -eq 'tmestorage' -and $stateContainerName -eq 'tme-state'
@@ -414,6 +414,7 @@ Describe 'Repository sync test tenant selection' -Tag Component {
             $script:managementState.Events | Should -Contain 'terraform'
             $script:managementState.Events | Should -Contain 'files'
             Should -Invoke Invoke-AvmBamiRepositoryIdentity -Exactly 1 -ParameterFilter { $PlanOnly }
+            Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter { $planOnly }
             Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly }
             Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter { $planOnly }
         }

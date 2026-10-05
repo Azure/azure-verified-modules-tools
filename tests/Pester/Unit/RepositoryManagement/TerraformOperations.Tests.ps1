@@ -11,6 +11,29 @@ BeforeAll {
 }
 
 Describe 'Invoke-TerraformInit' {
+    It 'selects lock recovery for local=<LocalBackend> and planOnly=<PlanOnly>' -TestCases @(
+        @{ LocalBackend = $true; PlanOnly = $true }
+        @{ LocalBackend = $true; PlanOnly = $false }
+        @{ LocalBackend = $false; PlanOnly = $true }
+        @{ LocalBackend = $false; PlanOnly = $false }
+    ) {
+        param($LocalBackend, $PlanOnly)
+
+        Mock Invoke-TerraformWithRetry { [pscustomobject]@{ success = $true } }
+        $null = Invoke-TerraformInit -terraformModulePath $TestDrive `
+            -repositoryCreationModeEnabled $LocalBackend -planOnly $PlanOnly `
+            -repoId 'example' -orgAndRepoName 'Azure/example' `
+            -stateStorageAccountName 'storage' -stateContainerName 'state' `
+            -stateTenantId '44444444-4444-4444-8444-444444444444' `
+            -stateSubscriptionId '55555555-5555-4555-8555-555555555555' `
+            -stateClientId '66666666-6666-4666-8666-666666666666' -issueLog @()
+
+        Should -Invoke Invoke-TerraformWithRetry -Exactly 1 -ParameterFilter {
+            $commands[0].Arguments[0] -eq 'init' -and
+            [bool]$disableStateLockRecovery -eq $PlanOnly
+        }
+    }
+
     It 'uses upgrade for the local backend' {
         Mock Invoke-TerraformWithRetry {
             [pscustomobject]@{ success = $true }
@@ -115,6 +138,37 @@ Describe 'Invoke-TerraformInit' {
                 -stateTenantId '44444444-4444-4444-8444-444444444444' -issueLog @()
         } | Should -Throw '*all five*'
         Should -Invoke Invoke-TerraformWithRetry -Exactly 0
+    }
+}
+
+Describe 'Invoke-TerraformPlanAndApply lock recovery' {
+    BeforeAll {
+        function terraform {
+            if ($args.Count -ne 4 -or $args[0] -notlike '-chdir=*' -or
+                $args[1] -cne 'show' -or $args[2] -cne '-json') {
+                throw 'The fixture permits only reading the saved plan.'
+            }
+            '{"errored":false,"resource_changes":[{"address":"github_repository.this","type":"github_repository","change":{"actions":["no-op"]}}]}'
+        }
+    }
+
+    It 'preserves plan/apply behavior with planOnly=<PlanOnly>' -TestCases @(
+        @{ PlanOnly = $true }
+        @{ PlanOnly = $false }
+    ) {
+        param($PlanOnly)
+
+        Mock Invoke-TerraformWithRetry { [pscustomobject]@{ success = $true } }
+        $null = Invoke-TerraformPlanAndApply -terraformModulePath $TestDrive `
+            -repoId 'example' -orgAndRepoName 'Azure/example' -planOnly $PlanOnly -issueLog @()
+
+        Should -Invoke Invoke-TerraformWithRetry -Exactly 1 -ParameterFilter {
+            $commands[0].Arguments[0] -eq 'plan' -and
+            [bool]$disableStateLockRecovery -eq $PlanOnly
+        }
+        Should -Invoke Invoke-TerraformWithRetry -Exactly ([int](-not $PlanOnly)) -ParameterFilter {
+            $commands[0].Arguments[0] -eq 'apply' -and -not $disableStateLockRecovery
+        }
     }
 }
 

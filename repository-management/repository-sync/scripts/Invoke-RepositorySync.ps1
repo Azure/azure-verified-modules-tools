@@ -256,6 +256,7 @@ $preTerraformIssueCount = $issueLog.Count
 $issueLog = Invoke-TerraformInit `
     -terraformModulePath $terraformModulePath `
     -repositoryCreationModeEnabled $repositoryCreationModeEnabled.IsPresent `
+    -planOnly $planOnly `
     -repoId $repoId `
     -orgAndRepoName $orgAndRepoName `
     -stateStorageAccountName $stateStorageAccountName `

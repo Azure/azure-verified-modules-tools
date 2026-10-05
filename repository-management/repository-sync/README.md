@@ -154,6 +154,11 @@ module-owned PowerShell hooks and Terraform unit-test apply blocks, so
 plan-only prevents repository publication and governance apply, **not** every
 possible Azure-side test action.
 
+Plan-only initialization and planning never force-unlock state or break storage
+leases. A state-lock failure stops the preview without repairing the lock;
+resolve it separately through an approved operation. Apply-enabled sync retains
+its existing lock recovery.
+
 ## BAMI group access and migration
 
 Flat `repositoryGroups[].entraGroups` arrays contain arbitrary Entra group display

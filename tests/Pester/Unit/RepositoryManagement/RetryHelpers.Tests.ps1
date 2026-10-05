@@ -67,14 +67,16 @@ BeforeAll {
     function Invoke-TerraformUnderTest {
         param(
             [Parameter(Mandatory)]
-            [array]$Responses
+            [array]$Responses,
+            [string]$Operation = "init",
+            [switch]$DisableStateLockRecovery
         )
 
         $global:retryHelpersAttempts = 0
         $global:retryHelpersResponses = @($Responses)
 
         Invoke-TerraformWithRetry `
-            -commands @(@{ Arguments = @("init") }) `
+            -commands @(@{ Arguments = @($Operation) }) `
             -workingDirectory "./terraform" `
             -outputLog (Join-Path $TestDrive "output.log") `
             -errorLog (Join-Path $TestDrive "error.log") `
@@ -82,7 +84,8 @@ BeforeAll {
             -retryDelayIncremental 0 `
             -stateStorageAccountName "sa" `
             -stateContainerName "tfstate" `
-            -stateBlobName "repo.tfstate"
+            -stateBlobName "repo.tfstate" `
+            -disableStateLockRecovery:$DisableStateLockRecovery
     }
 }
 
@@ -191,6 +194,58 @@ Describe "Invoke-TerraformWithRetry transient failures" {
 
         $result.success | Should -BeFalse
         $global:retryHelpersAttempts | Should -Be 1
+    }
+}
+
+Describe "Invoke-TerraformWithRetry plan-only locks" {
+    BeforeEach {
+        Mock Clear-TerraformStateLock { $true }
+        Mock Clear-TerraformStateBlobLease { throw "State blob leases must not be touched." }
+    }
+
+    It "fails <Operation> without recovering a lock while <LockAction>" -TestCases @(
+        @{ Operation = "init"; LockAction = "acquiring" }
+        @{ Operation = "init"; LockAction = "releasing" }
+        @{ Operation = "plan"; LockAction = "acquiring" }
+        @{ Operation = "plan"; LockAction = "releasing" }
+    ) {
+        param($Operation, $LockAction)
+
+        $diagnostic = "Error $LockAction the state lock"
+        $result = Invoke-TerraformUnderTest -Operation $Operation -DisableStateLockRecovery -Responses @(
+            @{ ExitCode = 1; Output = ""; Error = @($diagnostic, "ID: 11111111-1111-4111-8111-111111111111") }
+            @{ ExitCode = 0; Output = ""; Error = "" }
+        )
+
+        $result.success | Should -BeFalse
+        $result.exitCode | Should -Be 1
+        $result.error | Should -Match ([regex]::Escape($diagnostic))
+        $global:retryHelpersAttempts | Should -Be 1
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Clear-TerraformStateBlobLease -Exactly 0
+    }
+
+    It "retains lock recovery when it is not disabled" {
+        $result = Invoke-TerraformUnderTest -Operation "plan" -Responses @(
+            @{ ExitCode = 1; Output = ""; Error = "Error acquiring the state lock" }
+            @{ ExitCode = 0; Output = ""; Error = "" }
+        )
+
+        $result.success | Should -BeTrue
+        $global:retryHelpersAttempts | Should -Be 2
+        Should -Invoke Clear-TerraformStateLock -Exactly 1
+    }
+
+    It "still retries provider downloads when lock recovery is disabled" {
+        $result = Invoke-TerraformUnderTest -DisableStateLockRecovery -Responses @(
+            @{ ExitCode = 1; Output = ""; Error = (New-ProviderInstallFailure) }
+            @{ ExitCode = 0; Output = ""; Error = "" }
+        )
+
+        $result.success | Should -BeTrue
+        $global:retryHelpersAttempts | Should -Be 2
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Clear-TerraformStateBlobLease -Exactly 0
     }
 }
 

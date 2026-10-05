@@ -61,6 +61,7 @@ function Invoke-TerraformWithRetry {
         [string]$stateContainerName,
         [string]$stateBlobName,
         [string]$stateSubscriptionId,
+        [switch]$disableStateLockRecovery,
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutputParsedFromJson
@@ -70,36 +71,36 @@ function Invoke-TerraformWithRetry {
         $command.Arguments = @("-chdir=$workingDirectory") + $command.Arguments
     }
 
-    # The repository sync is the only writer of each repo's state and runs on a
-    # 4 hourly schedule, so any lock we hit is left over from a cancelled or
-    # crashed run rather than a concurrent one. Break it and retry.
     # State is passed through Context rather than a closure: GetNewClosure()
     # rebinds the script block to a dynamic module, which cannot resolve the
     # helper functions this file dot-sources into the caller's script scope.
-    $recoveryActions = @(
-        @{
-            Name        = "terraform state lock"
-            Pattern     = @("Error acquiring the state lock", "Error releasing the state lock")
-            MaxAttempts = 3
-            Context     = @{
-                workingDirectory   = $workingDirectory
-                storageAccountName = $stateStorageAccountName
-                containerName      = $stateContainerName
-                blobName           = $stateBlobName
-                subscriptionId     = $stateSubscriptionId
+    $recoveryActions = @()
+    if (!$disableStateLockRecovery) {
+        $recoveryActions = @(
+            @{
+                Name        = "terraform state lock"
+                Pattern     = @("Error acquiring the state lock", "Error releasing the state lock")
+                MaxAttempts = 3
+                Context     = @{
+                    workingDirectory   = $workingDirectory
+                    storageAccountName = $stateStorageAccountName
+                    containerName      = $stateContainerName
+                    blobName           = $stateBlobName
+                    subscriptionId     = $stateSubscriptionId
+                }
+                Action      = {
+                    param([string[]]$errorOutput, [hashtable]$context)
+                    Clear-TerraformStateLock `
+                        -errorOutput $errorOutput `
+                        -workingDirectory $context.workingDirectory `
+                        -storageAccountName $context.storageAccountName `
+                        -containerName $context.containerName `
+                        -blobName $context.blobName `
+                        -subscriptionId $context.subscriptionId
+                }
             }
-            Action      = {
-                param([string[]]$errorOutput, [hashtable]$context)
-                Clear-TerraformStateLock `
-                    -errorOutput $errorOutput `
-                    -workingDirectory $context.workingDirectory `
-                    -storageAccountName $context.storageAccountName `
-                    -containerName $context.containerName `
-                    -blobName $context.blobName `
-                    -subscriptionId $context.subscriptionId
-            }
-        }
-    )
+        )
+    }
 
     return Invoke-CommandWithRetry `
         -parentCommand "terraform" `
