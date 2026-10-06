@@ -48,3 +48,27 @@ The [checkout-free publication slice](2026-10-06-checkout-free-publication-data.
 subsequently removes this prerequisite and tests real publication preparation.
 No validation scripts or common defaults are read from the registry.
 No release, cloud action, authentication change or push was performed.
+
+## Hosted lint correction, 2026-10-06
+
+After the user-authorized publication and preserved main merge `ed7497a`,
+hosted lint reported `PSReviewUnusedParameter` for `Recurse`. The parameter
+was used only inside a `Where-Object` script block. The unchanged local
+`.\build.ps1 lint` recovered from three analyzer-engine retries and reported
+no findings; the hosted warning is nevertheless addressed without suppression.
+Scope discovery now reads `Recurse` directly in the function body and applies
+the same child filter only when recursion is disabled. Public recursion and
+root/child selection remain unchanged. Native component controls assert
+22 recursive versus 18 root-only layout requirements.
+
+Lint and all eight focused native compliance cases passed. The initial full
+pre-commit gate passed with 1,618 component cases and one skip. Publication
+paused for the user-requested Terraform review, preserving the three dirty files.
+The user then explicitly approved publishing only this lint correction.
+
+Fast-forwarded to the subsequent main merge `e6d8a14` without conflicts or
+discarding edits. The prescribed post-merge `.\build.ps1 pre-commit` passed:
+five tasks, zero errors or warnings, 1,383 component passes and one skip,
+in 9m24s. The lower component inventory follows the merged repository-state
+migration cleanup, not this correction. No Terraform review fixes are included.
+Current-head hosted lint remains to be verified after publication.

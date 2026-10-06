@@ -162,6 +162,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         @{ Variant = 'readme'; ExpectedCode = 'avm.bicep.docs-stale' }
         @{ Variant = 'telemetry'; ExpectedCode = 'avm.bicep.telemetry-prefix' }
         @{ Variant = 'filtered'; ExpectedCode = '' }
+        @{ Variant = 'filtered-root'; ExpectedCode = '' }
         @{ Variant = 'empty-filter'; ExpectedCode = '' }
         @{ Variant = 'warning'; ExpectedCode = '' }
     ) {
@@ -215,12 +216,16 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 }
             }
             $selection = @{}
-            if ($Variant -eq 'filtered') { $selection.TestName = '*Bicep module layout*' }
+            if ($Variant -in @('filtered', 'filtered-root')) { $selection.TestName = '*Bicep module layout*' }
             if ($Variant -eq 'empty-filter') { $selection.TestName = 'does-not-exist*' }
-            $result = Invoke-AvmTestUnit -Path $Path -Recurse -IncludeCompliance @selection
+            $result = Invoke-AvmTestUnit -Path $Path -Recurse:($Variant -ne 'filtered-root') -IncludeCompliance @selection
             $result.ComplianceFile | Should -BeLike '*Resources*bicep*Compliance.Tests.ps1'
             if ($Variant -eq 'filtered') {
                 $result.RunsTotal | Should -Be 22
+                $result.RunsFiltered | Should -BeGreaterThan 0
+            }
+            elseif ($Variant -eq 'filtered-root') {
+                $result.RunsTotal | Should -Be 18
                 $result.RunsFiltered | Should -BeGreaterThan 0
             }
             elseif ($Variant -eq 'empty-filter') {

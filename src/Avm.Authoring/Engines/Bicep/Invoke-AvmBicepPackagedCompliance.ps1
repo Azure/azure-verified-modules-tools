@@ -18,8 +18,10 @@ function Invoke-AvmBicepPackagedCompliance {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    $scopes = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories |
-            Where-Object { $Recurse -or -not $_.ChildModule -or $_.Path -ceq $Context.Root })
+    $scopes = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)
+    if (-not $Recurse) {
+        $scopes = @($scopes | Where-Object { -not $_.ChildModule -or $_.Path -ceq $Context.Root })
+    }
     $metadata = Test-AvmMetadataModules -Context $Context -SelectedScope $scopes -PreparationOnly
     $prepared = Invoke-AvmBicepCheckConvention -Context $Context -SelectedScope $scopes `
         -AllowPathFallback:$AllowPathFallback -PreparationOnly
