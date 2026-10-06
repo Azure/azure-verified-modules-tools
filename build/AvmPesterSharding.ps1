@@ -1,5 +1,22 @@
 #Requires -Version 7.4
 
+function script:Get-AvmIntegrationTestFile {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [ValidateSet('All', 'Bicep', 'Terraform')] [string] $Group = 'All'
+    )
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
+            Where-Object {
+                $bicep = $_.Name.StartsWith('Bicep', [StringComparison]::OrdinalIgnoreCase)
+                $Group -eq 'All' -or ($Group -eq 'Bicep' -and $bicep) -or ($Group -eq 'Terraform' -and -not $bicep)
+            } | Sort-Object -Property FullName)
+    if ($files.Count -eq 0) {
+        throw "No integration test files found for group '$Group' in '$Path'."
+    }
+    $files.FullName
+}
+
 function script:Resolve-AvmPowerShellPath {
     if ($PSHOME) {
         $fileName = if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' }

@@ -18,6 +18,8 @@ name: 'Authoring: CI'
 #                    tier uses. It needs real network (tool + provider downloads)
 #                    and Azure OIDC, so it is slower than the build gate and runs
 #                    as its own 3 OS x 2 fixture job matrix here.
+#   * bicep-integration -- compiler/native-policy cases once per OS, independent
+#                    of Terraform fixtures and without Azure authentication.
 #
 # A single `report` job aggregates every test tier into one test-results
 # report. Lint is a separate check and has no test artifact.
@@ -225,11 +227,11 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludeBicepPolicy -Confirm:$false
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
 
       - name: Run integration task
         shell: pwsh
-        run: ./build.ps1 integration
+        run: ./build.ps1 integration -IntegrationGroup Terraform
 
       - name: Upload test results
         # Upload the NUnit result XML even when the integration task fails, so
@@ -243,9 +245,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  bicep-integration:
+    name: Bicep integration (${{ matrix.os }})
+    if: github.event_name != 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludeBicepPolicy -Confirm:$false
+
+      - name: Run Bicep integration tests
+        shell: pwsh
+        run: |
+          $env:AVM_HOME = Join-Path $env:RUNNER_TEMP 'avm-bicep-home'
+          ./build.ps1 integration -IntegrationGroup Bicep
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-bicep-integration-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
   report:
     name: Publish test results
-    needs: [build, workflows, integration]
+    needs: [build, workflows, integration, bicep-integration]
     # Run even when a build, workflow, or integration leg fails (so red tests
     # still get reported), but not when the run was cancelled. Aggregates every
     # leg into one report. Runs outside the `avm` environment with no id-token --

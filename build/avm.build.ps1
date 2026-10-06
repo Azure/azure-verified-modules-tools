@@ -43,7 +43,10 @@
 param(
     [string] $Configuration = 'Debug',
 
-    [string[]] $TestName = @()
+    [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Bicep', 'Terraform')]
+    [string] $IntegrationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -789,7 +792,7 @@ task integration build, {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $integrationPath
+    $config.Run.Path                = @(Get-AvmIntegrationTestFile -Path $integrationPath -Group $IntegrationGroup)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'

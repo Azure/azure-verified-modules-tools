@@ -1,6 +1,6 @@
 # Bicep native validation completion
 
-**Status**: in-progress
+**Status**: blocked
 **Started**: 2026-10-05
 **Updated**: 2026-10-06
 **Branch**: `jaredfholgate-avm-authoring-refactor`
@@ -29,8 +29,9 @@ The checkout was clean. No replacement branch or review was created.
 - [x] Wire metadata, convention, unit compliance, and composition entry points.
 - [x] Add reusable Bicep whole-module fixtures and independent-package acceptance.
 - [x] Record positive and negative evidence for every migrated requirement.
-- [ ] Run the ordinary local gate, commit, and push the correctness slice.
-- [ ] Measure and improve CI only after correctness and fixture qualification.
+- [x] Run the ordinary local gate and commit qualified correctness slices.
+- [ ] Publish the held commits and obtain current-head hosted evidence.
+- [x] Measure and improve CI only after correctness and fixture qualification.
 
 ## Requirement map
 
@@ -179,6 +180,18 @@ The full Pester 6 gate, focused Pester 5 checks and five real compiler-only docs
 integration cases pass. The default unit compliance route is the next change.
 
 ## Blockers or dependencies
+
+All authorized local implementation is qualified. Final defaults and stale-ref
+corrections are in `de61ab7`; independent acceptance no longer writes a caller
+Scriban template or documentation override. The
+[CI runtime review](2026-10-06-ci-integration-deduplication.md) preserves all
+OS/coverage/fixture cases and removes only duplicate Bicep executions.
+Its measured aggregate Windows Bicep time is 575.10 -> 300.14 seconds for the
+same 18 distinct cases; no whole-workflow speedup is claimed.
+Final serial/sharded unit cases reconcile (3,028 pass, nine skip), the full
+local gate is green, and Windows local coverage is 73.8% against the 70% floor.
+No job remains running. Publishing and current-head hosted qualification are
+the only remaining delivery blockers; release/registry cutover is not authorized.
 
 Publishing `d3fac2a` and later qualified commits is blocked by the OAuth App's
 missing workflow scope. The coordinator confirmed that no authentication
