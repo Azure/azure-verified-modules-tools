@@ -14,6 +14,9 @@ Describe 'Repository state transfer local inspection' -Tag Component {
         $script:afterSource.resources = @()
         $script:afterSource.serial++
         $script:afterDestination.serial++
+        $script:afterSource.check_results = @(@{
+            object_kind = 'var'; config_addr = 'var.repository'; status = 'unknown'; objects = @()
+        })
         foreach ($resource in ($script:beforeSource | ConvertTo-Json -Depth 100 | ConvertFrom-Json -AsHashtable).resources) {
             $resource.module = 'module.bami[0]'
             $script:afterDestination.resources += $resource
@@ -56,6 +59,75 @@ Describe 'Repository state transfer local inspection' -Tag Component {
         $result.Status | Should -Match 'cutover.*not approved'
     }
 
+    It 'preserves existing root resources, nested modules and provider aliases without policing their format' {
+        $retained = @(New-AvmTestRetainedRepositoryResources)
+        $script:beforeDestination.resources += $retained
+        $after = ConvertFrom-Json (ConvertTo-Json -InputObject $retained -Depth 100) -AsHashtable
+        foreach ($resource in $after) {
+            foreach ($instance in $resource.instances) { $instance.identity_schema_version = 0 }
+        }
+        $script:afterDestination.resources += $after
+
+        (Invoke-StateInspectionFixture).ResourceBlocks | Should -Be 8
+    }
+
+    It 'still rejects changes to retained destination state: <Case>' -ForEach @(
+        @{ Case = 'provider' }, @{ Case = 'private data' }, @{ Case = 'attributes' }
+        @{ Case = 'dependency' }, @{ Case = 'address' }, @{ Case = 'missing resource' }
+    ) {
+        $retained = @(New-AvmTestRetainedRepositoryResources)
+        $script:beforeDestination.resources += $retained
+        $after = ConvertFrom-Json (ConvertTo-Json -InputObject $retained -Depth 100) -AsHashtable
+        foreach ($resource in $after) {
+            foreach ($instance in $resource.instances) { $instance.identity_schema_version = 0 }
+        }
+        switch ($Case) {
+            'provider' { $after[1].provider += '.changed' }
+            'private data' { $after[0].instances[0].private = 'Y2hhbmdlZA==' }
+            'attributes' { $after[0].instances[0].attributes.input.value = 'changed' }
+            'dependency' { $after[0].instances[0].dependencies = @('module.github.github_repository.other') }
+            'address' { $after[0].module = 'module.other' }
+            'missing resource' { $after = @($after[1]) }
+        }
+        $script:afterDestination.resources += $after
+
+        { Invoke-StateInspectionFixture } | Should -Throw
+    }
+
+    It 'rejects an existing BAMI namespace before a new transfer: <Namespace>' -ForEach @(
+        @{ Namespace = 'module.bami' }, @{ Namespace = 'module.bami[1]' }
+        @{ Namespace = 'module.bami[0].module.nested' }
+    ) {
+        $retained = @(New-AvmTestRetainedRepositoryResources)[0]
+        $retained.module = $Namespace
+        $script:beforeDestination.resources += $retained
+
+        { Invoke-StateInspectionFixture } | Should -Throw '*namespace*'
+    }
+
+    It 'ignores recomputable snapshot bookkeeping: <Case>' -ForEach @(
+        @{ Case = 'omitted checks' }, @{ Case = 'added checks' }, @{ Case = 'cleared checks' }
+        @{ Case = 'reordered checks' }, @{ Case = 'changed results' }
+        @{ Case = 'writer version' }, @{ Case = 'omitted writer version' }
+    ) {
+        $checks = @(
+            @{ object_kind = 'var'; config_addr = 'var.repository'; status = 'pass'; objects = @(@{ object_addr = 'var.repository'; status = 'pass' }) }
+            @{ object_kind = 'check'; config_addr = 'check.repository'; status = 'pass'; objects = @(@{ object_addr = 'check.repository'; status = 'pass' }) }
+        )
+        $script:beforeSource.check_results = $checks
+        $script:afterSource.check_results = ConvertFrom-Json (ConvertTo-Json -InputObject $checks -Depth 10) -AsHashtable
+        switch ($Case) {
+            'omitted checks' { $null = $script:afterSource.Remove('check_results') }
+            'added checks' { $null = $script:beforeSource.Remove('check_results') }
+            'cleared checks' { $script:afterSource.check_results = $null }
+            'reordered checks' { [array]::Reverse($script:afterSource.check_results) }
+            'changed results' { $script:afterSource.check_results[0].status = 'unknown' }
+            'writer version' { $script:afterSource.terraform_version = '1.15.8' }
+            'omitted writer version' { $null = $script:beforeSource.Remove('terraform_version') }
+        }
+        (Invoke-StateInspectionFixture).ResourceBlocks | Should -Be 6
+    }
+
     It 'rejects wrong frozen identity values: <Field>' -ForEach @(
         @{ Field = 'tenant_id' }, @{ Field = 'client_id' }, @{ Field = 'principal_id' }
     ) {
@@ -75,7 +147,8 @@ Describe 'Repository state transfer local inspection' -Tag Component {
         @{ Case = 'private data' }, @{ Case = 'sensitive paths' }, @{ Case = 'live attributes' }
         @{ Case = 'provider' }, @{ Case = 'lineage' }, @{ Case = 'serial' }, @{ Case = 'missing permission' }
         @{ Case = 'source still owned' }, @{ Case = 'source output lost' }, @{ Case = 'destination output lost' }
-        @{ Case = 'extra state address' }, @{ Case = 'duplicate state address' }
+        @{ Case = 'extra state address' }, @{ Case = 'duplicate state address' }, @{ Case = 'schema version' }
+        @{ Case = 'unknown snapshot field lost' }
     ) {
         switch ($Case) {
             'private data' { $script:afterDestination.resources[2].instances[0].private = 'bG9zdA==' }
@@ -90,6 +163,8 @@ Describe 'Repository state transfer local inspection' -Tag Component {
             'destination output lost' { $script:afterDestination.outputs = @{} }
             'extra state address' { $script:afterDestination.resources[2].module = 'module.extra' }
             'duplicate state address' { $script:afterDestination.resources[3] = $script:afterDestination.resources[2] }
+            'schema version' { $script:afterSource.version = 3 }
+            'unknown snapshot field lost' { $script:beforeSource['preserved_extension'] = @{ value = 'must-not-disappear' } }
         }
         { Invoke-StateInspectionFixture } | Should -Throw
     }
@@ -132,6 +207,19 @@ Describe 'Repository state transfer local inspection' -Tag Component {
             $duplicate.module = 'module.azure[0]'
             $script:beforeDestination.resources += $duplicate
         }
+        { Invoke-StateInspectionFixture } | Should -Throw '*same managed object*'
+    }
+
+    It 'rejects a scoped object already owned through <Type>' -ForEach @(
+        @{ Index = 2; Type = 'msgraph_resource'; Provider = 'microsoft/msgraph' }
+        @{ Index = 3; Type = 'azurerm_role_assignment'; Provider = 'hashicorp/azurerm' }
+    ) {
+        $duplicate = $script:beforeSource.resources[$Index] | ConvertTo-Json -Depth 100 | ConvertFrom-Json -AsHashtable
+        $duplicate.module = 'module.retained'
+        $duplicate.type = $Type
+        $duplicate.provider = 'provider["registry.terraform.io/' + $Provider + '"].retained'
+        $script:beforeDestination.resources += $duplicate
+
         { Invoke-StateInspectionFixture } | Should -Throw '*same managed object*'
     }
 }

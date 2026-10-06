@@ -1,6 +1,7 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $script:inspector = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Test-RepositoryStateTransfer.ps1'
+    . (Join-Path (Split-Path $script:inspector) 'lib' 'StateMigration.ps1')
     . (Join-Path $script:root 'tests' 'fixtures' 'RepositoryState.ps1')
     $script:module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -PassThru
     $script:terraform = & $script:module { (Resolve-AvmTool -Name terraform).Path }
@@ -50,8 +51,15 @@ BeforeAll {
         $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive $directory)
     }
     @'
+variable "client_id" {
+  default = "synthetic-repository-client"
+  validation {
+    condition     = length(var.client_id) > 0
+    error_message = "A client is required."
+  }
+}
 resource "terraform_data" "identity" {
-  input = { client_id = "synthetic-repository-client", principal_id = "synthetic-repository-principal" }
+  input = { client_id = var.client_id, principal_id = "synthetic-repository-principal" }
   lifecycle {
     postcondition {
       condition     = self.output.client_id == "synthetic-repository-client"
@@ -63,7 +71,19 @@ resource "terraform_data" "membership" {
   for_each = toset(["readers", "owners"])
   input = { group = each.key, principal = terraform_data.identity.output.principal_id }
 }
-output "identity" { value = terraform_data.identity.output }
+check "identity" {
+  assert {
+    condition     = terraform_data.identity.output.client_id == var.client_id
+    error_message = "The client must be preserved."
+  }
+}
+output "identity" {
+  value = terraform_data.identity.output
+  precondition {
+    condition     = terraform_data.identity.output.client_id == var.client_id
+    error_message = "The output must identify the client."
+  }
+}
 output "groups" { value = { for key, member in terraform_data.membership : key => member.output } }
 '@ | Set-Content -LiteralPath (Join-Path $TestDrive 'identity' 'main.tf') -Encoding utf8NoBOM
     @'
@@ -166,8 +186,11 @@ Describe 'Integration: local repository state consolidation' -Tag Integration {
         $afterDestination.lineage | Should -Be $beforeDestination.lineage
         $afterSource.serial | Should -Be ($beforeSource.serial + 1)
         $afterDestination.serial | Should -Be ($beforeDestination.serial + 1)
-        Test-StateFixtureEqual $afterSource.check_results $beforeSource.check_results | Should -BeTrue
-        Test-StateFixtureEqual $afterDestination.check_results $beforeDestination.check_results | Should -BeTrue
+        foreach ($kind in @('var', 'resource', 'check', 'output')) {
+            $beforeSource.check_results.object_kind | Should -Contain $kind
+        }
+        Test-TransferValueEqual (Get-TransferSnapshotMetadata $afterSource) (Get-TransferSnapshotMetadata $beforeSource) | Should -BeTrue
+        Test-TransferValueEqual (Get-TransferSnapshotMetadata $afterDestination) (Get-TransferSnapshotMetadata $beforeDestination) | Should -BeTrue
         Test-StateFixtureEqual $afterSource.outputs $beforeSource.outputs | Should -BeTrue
         Test-StateFixtureEqual $afterDestination.outputs $beforeDestination.outputs | Should -BeTrue
         $afterDestination.outputs.Contains('test_identity') | Should -BeFalse
@@ -244,8 +267,7 @@ terraform {
         $sourceState = $sourceResult.StdOut | ConvertFrom-Json -AsHashtable -Depth 100
         $expectedSource = Read-LocalStateFixture $script:source
         $sourceState.serial | Should -Be ($expectedSource.serial + 1)
-        $expectedSource.serial++
-        Test-StateFixtureEqual $sourceState $expectedSource | Should -BeTrue
+        Test-RepositoryMigrationPublishedImage $sourceState $expectedSource | Should -BeTrue
         $sourceState.resources | Should -HaveCount 0
         $destinationResult = Invoke-LocalStateTerraform -Directory $backends.destination -Arguments @('state', 'pull')
         Test-StateFixtureEqual ($destinationResult.StdOut | ConvertFrom-Json -AsHashtable -Depth 100) `
@@ -259,8 +281,7 @@ terraform {
         $null = Invoke-LocalStateTerraform -Directory $backends.destination -Arguments @('state', 'push', $script:destination)
         $completed = Invoke-LocalStateTerraform -Directory $backends.destination -Arguments @('state', 'pull')
         $expectedDestination = Read-LocalStateFixture $script:destination
-        $expectedDestination.serial++
-        Test-StateFixtureEqual ($completed.StdOut | ConvertFrom-Json -AsHashtable -Depth 100) $expectedDestination | Should -BeTrue
+        Test-RepositoryMigrationPublishedImage ($completed.StdOut | ConvertFrom-Json -AsHashtable -Depth 100) $expectedDestination | Should -BeTrue
         $sourceResult = Invoke-LocalStateTerraform -Directory $backends.source -Arguments @('state', 'pull')
         ($sourceResult.StdOut | ConvertFrom-Json -AsHashtable -Depth 100).resources | Should -HaveCount 0
     }

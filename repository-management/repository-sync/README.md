@@ -110,13 +110,16 @@ archived repository still receives its required state transfer. A repository
 whose earlier run failed before sync is checked too; absence of a former source
 is not replaced with an invented state.
 
-Known historical template/non-module keys are audited as old flat repository
-roots, not made migration targets or silently ignored. Their recorded GitHub
-identity and label/ruleset ownership are checked without requiring an excluded
-repository to still exist. The exact mixed-case OpenShift key is retained
+Historical template/non-module keys and flat module roots without a former
+BAMI source are audited, not made migration targets or silently ignored.
+Recorded repository and retired-tenant ownership are checked; optional teams,
+labels and rulesets need not exist. Unchanged ordinary states do not require
+a live GitHub lookup, so renamed or unavailable repositories remain untouched.
+Transfers and existing BAMI owners still require independent GitHub identity.
+The exact mixed-case OpenShift key is retained
 only when its old flat root proves consistent non-BAMI ownership, matches the
-canonical state's immutable repository identity, and shares no managed
-objects with another state. It is not renamed, merged, or deleted. Unknown
+canonical state's immutable repository identity, and has a distinct lineage.
+It is not renamed, merged, or deleted. Unknown
 keys or unproven historical ownership still stop publication, with an escaped
 key and backend scope in the diagnostic.
 
@@ -124,7 +127,11 @@ The script defaults to preview. The workflow explicitly passes its existing
 `plan_only` value; no additional activation or approval input is introduced.
 
 The job verifies backend identity, private container access, GitHub IDs, BAMI
-scope, four federation subjects, default providers, and unique ownership.
+scope, four federation subjects, and default BAMI providers. Every moved or
+existing BAMI object must have unique ownership across the complete inventory.
+Fully scoped ARM and membership IDs are compared across provider resource types.
+Pre-existing overlaps between nonmoving ordinary objects are reported and
+preserved, not reconciled by this transfer.
 It prepares every transfer before publication, using native
 `terraform state mv -state=... -state-out=...` on local copies to move the whole
 source `module.azure` into ordinary `module.bami[0]`. Obsolete membership and
@@ -135,9 +142,14 @@ old-tenant forget-only retirement.
 [`Test-RepositoryStateTransfer.ps1`](scripts/Test-RepositoryStateTransfer.ps1)
 still only inspects four local before/after files and is reused by migration.
 It checks original hashes, separate lineages, one native move's serial increments, GitHub/BAMI identity
-values, default provider bindings, complete address transfer, and preservation
+values, source provider bindings, complete address transfer, and preservation
 of attributes, private metadata, sensitive paths, and original outputs.
-Tainted/deposed instances, namespace or physical-object ownership collisions,
+Other destination resources, including root/nested modules and aliased providers,
+are compared unchanged rather than restricted to a namespace/type whitelist.
+Terraform's cached `check_results` and writer-version metadata are not compared:
+native state commands may discard or reorder validation results, which the
+ordinary plan/apply recomputes. Resource contents and ownership are still checked.
+Tainted/deposed instances, BAMI namespace or physical-object ownership collisions,
 missing original ownership, and changed snapshots stop before publication.
 An absent destination, partial source, ambiguous repository alias, or incomplete
 recovery record requires operator review; the workflow does not guess a repair.

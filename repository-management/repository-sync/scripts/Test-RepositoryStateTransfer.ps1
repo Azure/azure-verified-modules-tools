@@ -91,19 +91,18 @@ foreach ($entry in @(@{ Image = $source; Source = $true }, @{ Image = $destinati
     foreach ($resource in $entry.Image.State['resources']) {
         $module = [string]$resource['module']
         if (($entry.Source -and $module -cne 'module.azure') -or
-            (-not $entry.Source -and $module -cnotin @('module.github', 'module.azure[0]'))) {
+            (-not $entry.Source -and $module -cmatch '^module\.bami(?:$|\.|\[)')) {
             throw 'Unexpected, split, or partially consolidated namespace; stop before publication.'
         }
-        $provider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
-        elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
-        elseif ($module -ceq 'module.github' -and $resource['type'] -cmatch '^github_') { 'provider["registry.terraform.io/integrations/github"]' }
-        else { throw 'Unexpected resource type requires operator review.' }
-        if ($resource['provider'] -cne $provider) { throw 'Unexpected provider binding requires operator review.' }
+        if ($entry.Source) {
+            $provider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
+            elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
+            else { throw 'Unexpected source resource type requires operator review.' }
+            if ($resource['provider'] -cne $provider) { throw 'Unexpected source provider binding requires operator review.' }
+        }
         if ($resource['mode'] -ceq 'managed') {
             foreach ($instance in $resource['instances']) {
-                $id = [string]$instance['attributes']['id']
-                if ($resource['type'] -cmatch '^(azapi|azuread)_') { $id = $id.ToLowerInvariant() }
-                if (-not $ownedIds.Add("$provider|$($resource['type'])|$id")) {
+                if (-not $ownedIds.Add((Get-TransferManagedObjectKey -Resource $resource -Instance $instance))) {
                     throw 'Multiple addresses own the same managed object; resolve the legacy ownership collision separately.'
                 }
             }
@@ -152,10 +151,8 @@ foreach ($pair in @(@{ Before = $source; After = $drained }, @{ Before = $destin
         $pair.After.State['serial'] -ne $pair.Before.State['serial'] + 1) {
         throw 'Lineage or serial does not match exactly one native state move.'
     }
-    Assert-TransferValueEqual @($pair.After.State.Keys | Sort-Object) @($pair.Before.State.Keys | Sort-Object) 'Snapshot fields'
-    foreach ($key in $pair.Before.State.Keys | Where-Object { $_ -cnotin @('resources', 'serial', 'terraform_version') }) {
-        Assert-TransferValueEqual $pair.After.State[$key] $pair.Before.State[$key] "Snapshot field $key"
-    }
+    Assert-TransferValueEqual (Get-TransferSnapshotMetadata $pair.After.State) `
+        (Get-TransferSnapshotMetadata $pair.Before.State) 'Snapshot metadata'
 }
 [pscustomobject]@{
     Status = 'Local transfer images verified; backend provenance and cutover are not approved'
