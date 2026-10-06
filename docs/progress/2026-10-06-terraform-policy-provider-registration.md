@@ -1,6 +1,6 @@
 # Terraform policy provider-registration prevention
 
-**Status**: in-progress
+**Status**: blocked
 **Started**: 2026-10-06
 **Updated**: 2026-10-06
 **Branch**: `jaredfholgate-terraform-runtime-regression-fixes`
@@ -21,9 +21,9 @@ approved plan-only canary runs. This source session ran no Azure operations.
 The safeguards do not make arbitrary authored hooks or data sources read-only.
 Source implementation, the full local gate and the parent-owned canary matrix
 are complete. The matrix is not all green: existing module findings, accepted
-missing inputs and authored exclusions remain explicit below. Hosted CI failures
-and pending Secure Future Initiative (SFI) sign-off still block overall
-publication qualification.
+missing inputs and authored exclusions remain explicit below. Hosted CI passed
+after the test-only corrections below. Pending Secure Future Initiative (SFI)
+sign-off still blocks overall publication qualification.
 
 ## Checklist
 
@@ -39,7 +39,7 @@ publication qualification.
 - [x] Identify the two hosted test-harness defects on the exact frozen candidate.
 - [x] Repair concurrent trace writes and cross-platform Git file-URI construction.
 - [x] Repeat focused controls and run native checks plus the full local gate.
-- [ ] Qualify every current-head hosted CI leg without changing runtime files.
+- [x] Qualify the test-only correction across every hosted CI leg without changing runtime files.
 
 ## Validation
 
@@ -142,7 +142,8 @@ guarantee. No canary jobs remain running.
 
 ### Hosted test-harness correction
 
-Hosted run 37519851922 used the exact `a7a4bf88` runtime. Concurrent stub
+[Hosted run 37519851922](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37519851922)
+used the exact `a7a4bf88` runtime. Concurrent stub
 `Add-Content` calls corrupted or lost JSON trace records in Windows/Ubuntu
 component jobs, even though both workers emitted their safeguard messages.
 The fixture now takes an exclusive file handle only while appending each
@@ -171,16 +172,23 @@ Evidence is retained in `hosted-harness-targeted`,
 404-file rehash and source comparison to `a7a4bf88` passed, and the draft
 description hash is unchanged.
 
+Test-only commit `3a2075b8504a51cac317c7a01707d5df5a6c6f1c` passed
+[hosted CI run 37534650901](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37534650901):
+all 16 jobs succeeded, including the three OS test jobs, six Terraform
+integration jobs and three Bicep integration jobs. Downloaded NUnit artifacts
+confirm that all three concurrent controls ran and passed on Windows, Ubuntu
+and macOS, and both native provider controls ran and passed in each of the six
+Terraform jobs. The completed run metadata and case-level evidence are retained
+in the session's `hosted-harness-ci-*` artifacts. No existing assertions,
+platforms or test cases were removed or skipped to obtain this result.
+
 ## Blockers or dependencies
 
 Continue [#229](https://github.com/Azure/azure-verified-modules-tools/pull/229);
-keep its current draft description unchanged for this handoff. Hosted
-[CI run 37519851922](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37519851922):
-Windows/Ubuntu test jobs and four Linux/macOS Terraform integration jobs failed;
-lint and Bicep integration passed. The parent verified the run SHA and the two
-test-harness defects above. Current-head hosted qualification is still required
-after local verification and publication of the test-only correction. The
-completed local canary matrix does not supersede those hosted failures.
+keep its current draft description unchanged for this handoff. The hosted
+test-harness failures are resolved and qualified above. This documentation-only
+qualification handoff leaves the tested runtime, frozen package and inventory
+unchanged.
 
 DevOps-pool policy retains the user-selected missing
 `azure_devops_organization_name` and `azure_devops_personal_access_token`
