@@ -1,35 +1,36 @@
 function Import-AvmBicepPolicyModule {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
-    param()
+    param([string] $ModuleRoot)
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $required = @('PSRule', 'PSRule.Rules.Azure' | ForEach-Object {
-            [pscustomobject]@{ Name = $_; Version = Get-AvmPowerShellModulePin -Name $_ }
+            [pscustomobject]@{ Name = $_; Version = Get-AvmPowerShellModulePin -Name $_ -ModuleRoot $ModuleRoot }
         })
+    $loaded = @{}
     foreach ($module in $required) {
-        $installed = @(Get-Module -ListAvailable -Name $module.Name |
-                Where-Object { $_.Version -eq $module.Version })
-        if ($installed.Count -eq 0) {
-            throw [AvmConfigurationException]::new(
-                ("Bicep policy requires {0} {1}. Install-PSResource -Name {0} -Version {1} -Scope CurrentUser; the module is not installed automatically." -f $module.Name, $module.Version))
-        }
         try {
-            Import-Module -Name $module.Name -RequiredVersion $module.Version -ErrorAction Stop
+            $loaded[$module.Name] = Import-AvmPowerShellModule -Name $module.Name -ModuleRoot $ModuleRoot -Global
         }
         catch {
             throw [AvmConfigurationException]::new(
-                ("Bicep policy could not load {0} {1}. Reinstall that exact version with Install-PSResource." -f $module.Name, $module.Version))
+                ("Bicep policy could not load {0} {1}: {2}" -f $module.Name, $module.Version, $_.Exception.Message))
         }
     }
-    $engine = Get-Module -Name PSRule | Where-Object { $_.Version -eq $required[0].Version } |
-        Select-Object -First 1
-    if ($null -eq $engine) {
-        throw [AvmConfigurationException]::new('Bicep policy could not verify the loaded PSRule engine.')
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    foreach ($name in $loaded.Keys) {
+        $visible = @(Get-Module -Name $name)
+        if ($visible.Count -eq 0 -or @($visible | Where-Object {
+                    $_.Version -ne $loaded[$name].Version -or
+                    -not [string]::Equals($_.ModuleBase, $loaded[$name].ModuleBase, $comparison)
+                }).Count -gt 0) {
+            throw [AvmConfigurationException]::new(
+                "Bicep policy requires only the selected '$name' module at '$($loaded[$name].ModuleBase)'. Retry in a fresh PowerShell session.")
+        }
     }
     return [pscustomobject]@{
         Name = ($required | ForEach-Object { '{0}/{1}' -f $_.Name, $_.Version }) -join ' + '
-        Path = $engine.Path
+        Path = $loaded.PSRule.Path
     }
 }

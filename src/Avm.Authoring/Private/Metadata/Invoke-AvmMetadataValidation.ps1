@@ -4,22 +4,25 @@ function Invoke-AvmMetadataValidation {
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
-        [object[]] $Validations
+        [object[]] $Validations,
+
+        [string] $ModuleRoot
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    Import-Module -Name Pester -MinimumVersion 5.5.0 -DisableNameChecking -ErrorAction Stop
+    $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
+    Import-Module -Name (Join-Path $pester.ModuleBase 'Pester.psd1') -DisableNameChecking -ErrorAction Stop
     $suite = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'metadata', 'Metadata.Tests.ps1'
-    $configuration = New-PesterConfiguration
-    $configuration.Run.Container = @(New-PesterContainer -Path $suite -Data @{ Validations = $Validations })
+    $configuration = & $pester.ExportedCommands['New-PesterConfiguration']
+    $configuration.Run.Container = @(& $pester.ExportedCommands['New-PesterContainer'] -Path $suite -Data @{ Validations = $Validations })
     $configuration.Run.PassThru = $true
     $configuration.Run.Exit = $false
     $configuration.Run.Throw = $false
     $configuration.Output.Verbosity = 'None'
     $configuration.Output.CIFormat = 'None'
-    $result = Invoke-Pester -Configuration $configuration
+    $result = & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
     $issues = [System.Collections.Generic.List[object]]::new()
     foreach ($test in @($result.Tests | Where-Object { $_.Result -eq 'Failed' })) {
         $code = @($test.Tag | Where-Object { $_ -like 'AVM_METADATA_*' }) | Select-Object -First 1

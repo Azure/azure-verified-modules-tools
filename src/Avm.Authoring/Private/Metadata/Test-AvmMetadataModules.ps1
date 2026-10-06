@@ -63,7 +63,7 @@ function Test-AvmMetadataModules {
         return [pscustomobject]@{ Validations = $validations.ToArray(); Issues = $issues.ToArray() }
     }
     if ($validations.Count -gt 0) {
-        $result = Invoke-AvmMetadataValidation -Validations $validations.ToArray()
+        $result = Invoke-AvmMetadataValidation -Validations $validations.ToArray() -ModuleRoot $Context.Root
         foreach ($issue in $result.Issues) {
             if ([System.IO.Path]::IsPathRooted($issue.File)) {
                 $issue.File = [System.IO.Path]::GetRelativePath($Context.Root, $issue.File).Replace('\', '/')

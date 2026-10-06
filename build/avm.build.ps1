@@ -87,6 +87,16 @@ function script:Assert-Module {
     Import-Module @importArgs
 }
 
+function script:Import-AvmBuildPester {
+    $module = Import-Module -Name $script:manifestPath -PassThru -ErrorAction Stop
+    try {
+        $null = & $module { Import-AvmPowerShellModule -Name Pester -Global }
+    }
+    finally {
+        Remove-Module -ModuleInfo $module -Force
+    }
+}
+
 function script:Invoke-AvmPester {
     param(
         [Parameter(Mandatory)] [object] $Configuration
@@ -278,6 +288,7 @@ task layout {
 }
 
 task lint {
+    script:Import-AvmBuildPester
     script:Assert-Module -Name 'PSScriptAnalyzer'
 
     $params = @{
@@ -322,7 +333,7 @@ task lint {
 }
 
 task 'test-repository-management' {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
     $config = New-PesterConfiguration
     $config.Run.Path = Join-Path $script:testsRoot 'Unit' 'RepositoryManagement'
     $config.Run.PassThru = $true
@@ -546,7 +557,7 @@ task 'test-tenant-terraform' {
 }
 
 task test {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $unitPath = Join-Path $script:testsRoot 'Unit'
     if (-not (Test-Path -LiteralPath $unitPath)) {
@@ -584,7 +595,7 @@ task test {
 }
 
 task coverage {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $unitPath = Join-Path $script:testsRoot 'Unit'
     if (-not (Test-Path -LiteralPath $unitPath)) {
@@ -656,7 +667,7 @@ task coverage {
 }
 
 task 'test-workflows' {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     if (-not (Test-Path -LiteralPath $script:workflowUnitTestsRoot)) {
         Write-Build Yellow "  no workflow unit tests found at $script:workflowUnitTestsRoot"
@@ -723,7 +734,7 @@ task clean {
 # tier only). This task runs them in isolation, with no coverage instrumentation
 # -- the coverage floor is a Unit-tier contract.
 task component {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $componentPath = Join-Path $script:testsRoot 'Component'
     if (-not (Test-Path -LiteralPath $componentPath)) {
@@ -783,7 +794,7 @@ task component {
 # a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
 # indirectly -- the tests themselves Skip when offline rather than fail.
 task integration build, {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $integrationPath = Join-Path $script:testsRoot 'Integration'
     if (-not (Test-Path -LiteralPath $integrationPath)) {

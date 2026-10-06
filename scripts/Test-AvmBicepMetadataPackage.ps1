@@ -67,7 +67,7 @@ function Join-AvmPackageSmokePath {
 $registryRoot = (Resolve-Path -LiteralPath $RegistryPath).ProviderPath
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $yamlPin = [version]((Get-Content -LiteralPath (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc') -Raw |
-        ConvertFrom-Json -AsHashtable)['powerShellModules']['powershell-yaml'])
+        ConvertFrom-Json -AsHashtable)['powerShellModules']['powershell-yaml']['version'])
 $sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
 Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0) -Message 'Unable to read the tools source commit.'
 $sourceStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all -- src/Avm.Authoring)

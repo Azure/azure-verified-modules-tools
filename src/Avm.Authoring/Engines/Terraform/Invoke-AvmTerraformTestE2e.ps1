@@ -144,7 +144,7 @@ function Invoke-AvmTerraformTestE2e {
 
     $selected = @(Select-AvmTerraformE2eExample -Example $allExamples -Selector $Example)
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $exampleDirs = @($selected)
 

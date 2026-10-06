@@ -112,6 +112,7 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
                 $input.HasMetadata | Should -BeTrue
                 [System.IO.Directory]::Exists($input.Root) | Should -BeFalse
             }
+            Should -Invoke Get-AvmBicepPolicyBaseline -Exactly 4
             Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 8
         }
     }

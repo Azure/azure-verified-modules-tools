@@ -32,6 +32,10 @@ function Invoke-AvmDoctor {
     .PARAMETER PinsPath
         Override the bundled Resources/avm.pins.jsonc. Intended for tests.
 
+    .PARAMETER Path
+        Module root whose tool-version-overrides.json applies. Bicep monorepos
+        use their recognized repository root. Defaults to the current directory.
+
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check that otherwise stops the command when a
         newer Avm.Authoring version is available. Writes a warning once.
@@ -56,6 +60,8 @@ function Invoke-AvmDoctor {
 
         [string] $PinsPath,
 
+        [string] $Path = $PWD.Path,
+
         # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
         [Parameter(DontShow)]
@@ -70,6 +76,23 @@ function Invoke-AvmDoctor {
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $checks = New-Object System.Collections.Generic.List[pscustomobject]
+    $lock = if ($PinsPath) {
+        Read-AvmPins -Path $PinsPath -ModuleRoot $Path -AllowFileUrls:$AllowFileUrls
+    }
+    else {
+        Read-AvmPins -ModuleRoot $Path
+    }
+    $tools = @(Get-AvmToolDefinition -Pins $lock)
+    foreach ($tool in $tools) {
+        Write-AvmToolVersionOverride -Tool $tool
+        if ($tool.ContainsKey('versionOverride')) {
+            $checks.Add([pscustomobject]@{
+                    Name = "Version override ($($tool.name))"; Status = 'Warning'
+                    Detail   = "Packaged $($tool.versionOverride.PackagedVersion) -> selected $($tool.version); $($tool.versionOverride.Path)"
+                    Required = 'Pinned checksum verification is disabled for this tool.'
+                })
+        }
+    }
 
     # PowerShell version
     $psVer = $PSVersionTable.PSVersion
@@ -137,15 +160,9 @@ function Invoke-AvmDoctor {
     }
 
     if ($Install) {
-        $lock = if ($PinsPath) {
-            Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
-        }
-        else {
-            Read-AvmPins
-        }
         $platform = Get-AvmToolPlatform
 
-        foreach ($t in @($lock.tools)) {
+        foreach ($t in (Get-AvmToolDefinition -Pins $lock -IncludeDependencies)) {
             $checkName = "Install tool ($($t.name) $($t.version))"
             $required = "Installed for $platform"
 
@@ -191,7 +208,7 @@ function Invoke-AvmDoctor {
         }
     }
 
-    $failed = @($checks | Where-Object { $_.Status -notin @('OK', 'Skip') })
+    $failed = @($checks | Where-Object { $_.Status -notin @('OK', 'Skip', 'Warning') })
     $result = [pscustomobject][ordered]@{
         Status = if ($failed.Count -eq 0) { 'OK' } else { 'Fail' }
         Failed = $failed.Count

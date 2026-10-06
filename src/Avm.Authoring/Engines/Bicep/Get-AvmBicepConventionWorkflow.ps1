@@ -3,22 +3,18 @@ function Get-AvmBicepConventionWorkflow {
     [OutputType([System.Collections.IDictionary])]
     param(
         [Parameter(Mandatory)]
-        [string] $Path
+        [string] $Path,
+
+        [string] $ModuleRoot
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $version = Get-AvmPowerShellModulePin -Name 'powershell-yaml'
-    $installed = @(Get-Module -ListAvailable -Name 'powershell-yaml' |
-            Where-Object { $_.Version -eq $version })
-    if ($installed.Count -eq 0) {
-        throw [AvmConfigurationException]::new(
-            "Bicep workflow checks require powershell-yaml $version. Install-PSResource -Name powershell-yaml -Version $version -Scope CurrentUser; no workflow was inspected.")
-    }
+    $version = Get-AvmPowerShellModulePin -Name 'powershell-yaml' -ModuleRoot $ModuleRoot
 
     try {
-        $parser = Import-Module -Name 'powershell-yaml' -RequiredVersion $version -PassThru -ErrorAction Stop
+        $parser = Import-AvmPowerShellModule -Name 'powershell-yaml' -ModuleRoot $ModuleRoot
         $command = $parser.ExportedCommands['ConvertFrom-Yaml']
         if ($null -eq $command) {
             throw [AvmConfigurationException]::new("powershell-yaml $version does not export ConvertFrom-Yaml.")

@@ -93,7 +93,7 @@ function Test-AvmModuleMetadata {
             $validation = Get-AvmMetadataValidationInput -Json $json -Path $Path -CheckSource:$CheckSource `
                 -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule `
                 -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
-            $result = Invoke-AvmMetadataValidation -Validations @($validation)
+            $result = Invoke-AvmMetadataValidation -Validations @($validation) -ModuleRoot $Path
             $metadata = $validation.Metadata
             foreach ($issue in $result.Issues) {
                 if ([System.IO.Path]::IsPathRooted($issue.File)) {

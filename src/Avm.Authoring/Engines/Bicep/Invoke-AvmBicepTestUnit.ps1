@@ -117,7 +117,7 @@ function Invoke-AvmBicepTestUnit {
 
     $envVars = @{ GITHUB_ACTIONS = $null; GITHUB_STEP_SUMMARY = $null }
     if ($null -ne $suite -and $files.Count -gt 0) {
-        $bicep = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+        $bicep = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         $envVars['PATH'] = [System.IO.Path]::GetDirectoryName($bicep.Path) + [System.IO.Path]::PathSeparator + $env:PATH
     }
 
@@ -127,7 +127,7 @@ function Invoke-AvmBicepTestUnit {
     }
     if ($files.Count -gt 0) {
         $summary = Invoke-AvmBicepPesterSuite -Files $files.ToArray() `
-            -ModulePaths $modulePaths -RepositoryRoot $repoRoot `
+            -ModulePaths $modulePaths -RepositoryRoot $repoRoot -ModuleRoot $Context.Root `
             -Tag $Tag -TestName $TestName -WorkingDirectory $repoRoot -EnvVars $envVars
     }
 

@@ -125,7 +125,10 @@ function Merge-AvmTflintConfig {
     )
 
     $merged = [System.IO.File]::ReadAllText($BasePath)
-    foreach ($overrideBlock in (Get-AvmTflintOverrideBlock -Path $OverridePath)) {
+    $retiredPattern = '(?ms)^[ \t]*rule[ \t]+"required_output_rmfr7"[ \t]*\{(?<body>[^{}]*)\}'
+    $baseHasRetiredRule = [regex]::IsMatch($merged, $retiredPattern)
+    $overrideBlocks = @(Get-AvmTflintOverrideBlock -Path $OverridePath)
+    foreach ($overrideBlock in $overrideBlocks) {
         $typePattern = [regex]::Escape($overrideBlock.Type)
         $labelPattern = [regex]::Escape($overrideBlock.Label)
         $blockPattern = "(?ms)^[ \t]*$typePattern[ \t]+`"$labelPattern`"[ \t]*\{(?<body>[^{}]*)\}"
@@ -161,6 +164,27 @@ function Merge-AvmTflintConfig {
         $replacementBlock = $baseMatch.Value.Substring(0, $baseMatch.Groups['body'].Index - $baseMatch.Index) +
         $body + '}'
         $merged = $merged.Remove($baseMatch.Index, $baseMatch.Length).Insert($baseMatch.Index, $replacementBlock)
+    }
+
+    $retired = @($overrideBlocks | Where-Object { $_.Type -ceq 'rule' -and $_.Label -ceq 'required_output_rmfr7' })
+    if (-not $baseHasRetiredRule -and $retired.Count -eq 1 -and $retired[0].Attributes.Count -eq 1) {
+        $attribute = $retired[0].Attributes[0]
+        $disabled = $attribute.Name -ceq 'enabled' -and $attribute.Value.StartsWith('false', [System.StringComparison]::Ordinal) -and
+        (Test-AvmHclTrivia -Text $attribute.Value.Substring(5))
+        $plugins = [regex]::Matches($merged, '(?ms)^[ \t]*plugin[ \t]+"avm"[ \t]*\{(?<body>[^{}]*)\}')
+        if ($disabled -and $plugins.Count -eq 1) {
+            $body = $plugins[0].Groups['body'].Value
+            $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
+            $body -cmatch '(?m)^\s*version\s*=\s*"1\.0\.0"\s*$' -and
+            $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
+            $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
+            if ($currentPlugin) {
+                $merged = [regex]::Replace($merged, $retiredPattern, '')
+                Write-AvmLog (
+                    "tflint: omitted obsolete disabled rule 'required_output_rmfr7' from '$OverridePath'; AVM ruleset 1.0.0 no longer provides it. Remove that override."
+                ) -Level Warning | Out-Null
+            }
+        }
     }
 
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write merged TFLint config')) {

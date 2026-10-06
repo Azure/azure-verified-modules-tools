@@ -184,7 +184,7 @@ function Invoke-AvmPreCommit {
 
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
-    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
+    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -ModuleRoot $context.Root -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(

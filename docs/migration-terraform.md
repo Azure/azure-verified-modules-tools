@@ -75,8 +75,12 @@ git clone https://github.com/Azure/azure-verified-modules-tools.git
 Import-Module ./azure-verified-modules-tools/src/Avm.Authoring/Avm.Authoring.psd1
 ```
 
-No Go toolchain is required for any wired engine; the module downloads
-prebuilt release binaries by their pinned SHA256.
+No Go toolchain is required for any wired engine. Binary tools and runtime
+PowerShell packages, including Pester, use the same configured prerequisite
+resolver and cache. Exact installed PowerShell versions can be reused; missing
+packages are acquired without changing user/system module installations.
+See [managed prerequisites and version overrides](../README.md#managed-prerequisites)
+for the optional `.avm/tool-version-overrides.json` file and its checksum warning.
 
 ---
 
@@ -319,8 +323,9 @@ The composition cmdlets and the exact order of engines they call:
   - **Bicep**: `metadata` → `format` → `lint` → `validate` → `docs`
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 
-Both chains stop immediately on missing or invalid root or child metadata,
-after resolving managed tools but before changing module files. Create the
+Both chains resolve every applicable binary and PowerShell prerequisite before
+metadata/step 1, retaining the default module-upgrade guard. They stop on missing
+or invalid root or child metadata before changing module files. Create the
 missing files with `avm metadata initialize` before running either chain.
 
 Unit tests remain a separate CI job. Unit, integration, and end-to-end test
@@ -405,8 +410,8 @@ exactly this status today.
 
 The pinned tool versions live in
 `src/Avm.Authoring/Resources/avm.pins.jsonc`. Today: `terraform`,
-`tflint`, `terraform-docs`, `conftest` (and `bicep` for the unrelated
-Bicep engine).
+`tflint`, `terraform-docs`, `conftest`, `mapotf` and `Pester` for Terraform,
+plus the Bicep compiler and Bicep-specific PowerShell dependencies.
 
 ---
 
@@ -438,6 +443,12 @@ per-scope override. Scope paths are validated and converted to unique hash-named
 staged configs, preventing traversal and sibling collisions. AVM allows only
 this one direct child layer; `avm check convention` rejects nested directories
 that contain Terraform `.tf` source.
+
+The retired `required_output_rmfr7` rule is omitted from the temporary merged
+config only when its sole, unambiguous override is `enabled = false` and the
+official AVM 1.0.0 plugin remains enabled. Authored files are unchanged. Enabled,
+unknown, ambiguous or differently configured rules still reach TFLint and fail
+normally; this compatibility handling does not disable an active rule.
 
 ---
 

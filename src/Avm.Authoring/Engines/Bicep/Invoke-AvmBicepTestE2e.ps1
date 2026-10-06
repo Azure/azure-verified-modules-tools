@@ -135,7 +135,7 @@ function Invoke-AvmBicepTestE2e {
                 -AzPath $az.Source -KeepResources:$KeepResources -Confirm:$false)
     }
     else {
-        $bicep = Resolve-AvmTool -Name bicep -AllowPathFallback:$AllowPathFallback
+        $bicep = Resolve-AvmTool -Name bicep -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         $result.BicepTool = "bicep/$($bicep.Version)"
         $runDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-bicep-e2e-{0}' -f [guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop

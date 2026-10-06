@@ -268,8 +268,8 @@ function Invoke-AvmTerraformCheckPolicy {
             "Invoke-AvmTerraformCheckPolicy requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $conftest = Resolve-AvmTool -Name 'conftest' -AllowPathFallback:$AllowPathFallback
-    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $conftest = Resolve-AvmTool -Name 'conftest' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
+    $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $aprlAsset = Resolve-AvmPolicyBundle -Name 'avm-policy-aprl'
     $avmsecAsset = Resolve-AvmPolicyBundle -Name 'avm-policy-avmsec'
 

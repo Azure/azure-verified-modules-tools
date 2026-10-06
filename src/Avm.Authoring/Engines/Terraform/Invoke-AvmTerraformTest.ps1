@@ -51,7 +51,7 @@ function Invoke-AvmTerraformTest {
             "Invoke-AvmTerraformTest requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $scope = Get-AvmTerraformValidationScope -Root $Context.Root
     $issues = [System.Collections.Generic.List[object]]::new()

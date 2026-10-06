@@ -201,6 +201,73 @@ rule "x" {
             }
         } | Should -Throw '*unsupported HCL*'
     }
+
+    It 'omits only the retired disabled output rule from the staged current config' -ForEach @(
+        @{ Value = 'false' }
+        @{ Value = 'false # retired override' }
+        @{ Value = 'false /* retired override */' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, @"
+rule "required_output_rmfr7" {
+  enabled = $Value
+}
+rule "avm_interface_managed_identities" {
+  enabled = false
+}
+"@)
+        $before = Get-FileHash -LiteralPath $base, $script:overridePath
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like "*obsolete disabled rule 'required_output_rmfr7'*"
+            }
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7'
+        $merged | Should -Match '(?s)rule "avm_interface_managed_identities"\s*\{\s*enabled = false'
+        $merged | Should -Match 'signature = "attestation"'
+        (Get-FileHash -LiteralPath $base, $script:overridePath).Hash | Should -Be $before.Hash
+    }
+
+    It 'retains unsupported or ambiguous retired-rule declarations: <Label>' -ForEach @(
+        @{ Label = 'enabled'; Body = 'enabled = true' }
+        @{ Label = 'expression'; Body = 'enabled = false || true' }
+        @{ Label = 'quoted false'; Body = 'enabled = "false"' }
+        @{ Label = 'additional attributes'; Body = "enabled = false`n  severity = `"error`"" }
+        @{ Label = 'duplicate enabled'; Body = "enabled = true`n  enabled = false" }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, "rule `"required_output_rmfr7`" {`n  $Body`n}`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
+
+    It 'does not discard disabled rules for a different or overridden plugin' -ForEach @(
+        @{ Label = 'different version'; Plugin = 'version = "0.17.0"' }
+        @{ Label = 'different source'; Plugin = 'source = "example.invalid/custom"' }
+        @{ Label = 'disabled plugin'; Plugin = 'enabled = false' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, @"
+rule "required_output_rmfr7" {
+  enabled = false
+}
+plugin "avm" {
+  $Plugin
+}
+"@)
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
 }
 
 Describe 'New-AvmTflintConfigSet' {

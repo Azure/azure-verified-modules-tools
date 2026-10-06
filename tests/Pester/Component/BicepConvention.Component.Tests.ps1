@@ -7,6 +7,9 @@ BeforeAll {
     $script:fixtureRoot = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-convention'
     . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $script:moduleRoot 'Avm.Authoring.psd1')
+    InModuleScope Avm.Authoring {
+        $script:runtimeResolver = (Get-Command Resolve-AvmTool).ScriptBlock
+    }
 
     function Invoke-CompiledTelemetryFixture {
         param($Template, $Scope, [string]$SourcePath, [string]$Root, [switch]$AllDiagnostics)
@@ -104,6 +107,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'bicep'; Version = 'fixture'; Path = 'mock-bicep'; Source = 'fixture' }
             }
+            Mock Resolve-AvmTool {
+                & $script:runtimeResolver @PesterBoundParameters
+            } -ParameterFilter { $Name -in @('Pester', 'powershell-yaml') }
             Mock Invoke-AvmProcess {
                 $source = $ArgumentList[2]
                 $compiled = if ($source -match '[\\/]modules[\\/].*[\\/]main\.bicep$') {
@@ -542,18 +548,15 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
 
     It 'fails with a named diagnostic when the exact YAML parser is unavailable' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-Module {
-                & (Get-Command -Name Get-Module -CommandType Cmdlet) @PesterBoundParameters
-            }
-            Mock Get-Module { @() } -ParameterFilter {
-                $ListAvailable -and $Name -eq 'powershell-yaml'
-            }
+            Mock Resolve-AvmTool {
+                throw [AvmToolException]::new('Run: avm tool install powershell-yaml', 'AVM1014')
+            } -ParameterFilter { $Name -ceq 'powershell-yaml' }
         }
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $parserIssue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-parse')
         $parserIssue.Count | Should -Be 1
-        $parserIssue[0].Message | Should -Match 'Install-PSResource'
+        $parserIssue[0].Message | Should -Match 'avm tool install powershell-yaml'
         $result.Status | Should -Be 'fail'
     }
 

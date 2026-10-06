@@ -46,7 +46,7 @@ function Invoke-AvmBicepLint {
             "Invoke-AvmBicepLint requires a bicep context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $discovered = Get-ChildItem -Path $Context.Root -Recurse -File -Filter '*.bicep' -ErrorAction Stop |
         Where-Object { $_.FullName -notmatch '[\\/]\.[^\\/]+[\\/]' } |

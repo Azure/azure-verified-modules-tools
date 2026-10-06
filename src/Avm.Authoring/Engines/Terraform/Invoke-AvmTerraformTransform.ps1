@@ -321,7 +321,7 @@ function Invoke-AvmTerraformTransform {
             "Invoke-AvmTerraformTransform requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
         common  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
         module  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
@@ -371,7 +371,7 @@ function Invoke-AvmTerraformTransform {
         # to mapotf's terraform grandchild. A missing terraform throws
         # AvmToolException, which the chain surfaces as 'skipped' just like a
         # missing mapotf binary.
-        $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+        $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         Write-AvmLog ("transform: resolved terraform dependency at {0}" -f $terraform.Path) -Level Verbose | Out-Null
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `

@@ -137,7 +137,7 @@ function Invoke-AvmBicepCheckConvention {
     $compiledCount = 0
     if ($sources.Count -gt 0) {
         try {
-            $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+            $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         }
         catch [AvmToolException] {
             $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `

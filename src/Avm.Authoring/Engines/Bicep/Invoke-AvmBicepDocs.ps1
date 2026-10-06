@@ -56,7 +56,7 @@ function Invoke-AvmBicepDocs {
         throw [System.ArgumentException]::new('README validation preparation requires -CheckDrift.')
     }
 
-    $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $scopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else {
             Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories -IncludeReadmeOnly
         })

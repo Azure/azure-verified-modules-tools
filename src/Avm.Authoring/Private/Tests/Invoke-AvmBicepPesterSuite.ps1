@@ -8,6 +8,8 @@ function Invoke-AvmBicepPesterSuite {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
+        [string] $ModuleRoot,
+
         [ValidateSet('Unit', 'E2e', 'Convention')]
         [string] $Mode = 'Unit',
 
@@ -34,6 +36,8 @@ function Invoke-AvmBicepPesterSuite {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    if (-not $ModuleRoot) { $ModuleRoot = $WorkingDirectory }
+    $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
 
     $runnerPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1'
@@ -46,6 +50,8 @@ function Invoke-AvmBicepPesterSuite {
         TestName       = $TestName
         TestInputData  = $TestInputData
         Convention     = $ConventionData
+        PesterPath     = Join-Path $pester.ModuleBase 'Pester.psd1'
+        PesterVersion  = $pester.Version.ToString()
     }
     if ($Mode -eq 'Convention' -and -not $InProcess) {
         throw [System.ArgumentException]::new('Convention suites must run in process.')

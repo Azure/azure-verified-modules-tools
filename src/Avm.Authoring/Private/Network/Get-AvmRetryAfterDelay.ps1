@@ -20,8 +20,8 @@ function Get-AvmRetryAfterDelay {
         if ($null -eq $response -or $response.Value -isnot [System.Net.Http.HttpResponseMessage]) { continue }
         $header = $response.Value.Headers.RetryAfter
         if ($null -eq $header) { continue }
-        if ($null -ne $header.Delta) { return [math]::Max(0, $header.Delta.Value.TotalSeconds) }
-        if ($null -ne $header.Date) { return [math]::Max(0, ($header.Date.Value - $Now).TotalSeconds) }
+        if ($null -ne $header.Delta) { return [math]::Max(0, $header.Delta.TotalSeconds) }
+        if ($null -ne $header.Date) { return [math]::Max(0, ($header.Date - $Now).TotalSeconds) }
     }
     return $null
 }

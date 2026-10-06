@@ -16,9 +16,9 @@ The stance has three pillars:
 
 - **Secure by design.** Every new public verb, network call, subprocess invocation, file write, and credential touch is threat-modelled at PR time (what data is handled, which identities are touched, which dependencies are added, what the blast radius is on compromise). New code that fails the threat-model pass is rejected — patches do not happen post-merge.
 - **Secure by default.** Defaults never compromise the user. TLS 1.2 minimum (section 16). `GITHUB_TOKEN: contents: read` unless a write scope is justified job-by-job (section 17). No `-SkipCertificateCheck` (section 16). No plain-text secrets in parameter form (section 17). No `Invoke-Expression`, no `cmd /c`, no `bash -c` on user input (section 9). No PATH-resolved tool execution unless the caller explicitly opts in with `-AllowPathFallback` (section 10).
-- **Secure operations.** Every external dependency is pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Tool binaries are pinned by SHA256 in `Resources/avm.pins.jsonc` and verified on every download (section 10). PowerShell module dependencies are floor-pinned in the workflow with the release pipeline as the upgrade gate (section 20). Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
+- **Secure operations.** Default managed downloads are pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Binary and runtime PowerShell packages are pinned by SHA256 in `Resources/avm.pins.jsonc` and verified on download (section 10). Build-time PowerShell dependencies retain their workflow constraints and release gate (section 20). The explicit repository version-override exception in section 10 requires SFI sign-off before merge/release. Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
 
-A successful supply-chain attack against any of these dependencies must, by construction, require either a SHA collision (impractical) or a deliberate maintainer-side PR that re-publishes a known-good SHA — never a silent tag-repoint or a transparent version drift.
+Default managed downloads must resist silent tag-repointing and version drift through pinned hashes. Explicit version overrides deliberately waive that fixed-hash guarantee only for the named tools; they must not change default verification, TLS, source-host restrictions, or offline controls.
 
 ---
 
@@ -320,6 +320,7 @@ only ever reads it:
 <repo>/
   .avm/
     config.json                  # per-repo pinned-asset / policy overrides
+    tool-version-overrides.json  # known-tool version overrides (read-only)
     managed-files.json           # per-repo managed-files sync-source override
     managed-files-version.json   # managed-files release pin (CLI-managed)
     context.psd1                 # per-repo context override
@@ -893,34 +894,82 @@ Schema enforced by `Test-AvmPins`:
             }
         }
     )
+    powerShellModules = @{
+        Pester = @{ version = '5.7.1'; sha256 = '...' }
+    }
 }
 ```
 
 - All URLs are `https://`. A non-`https://` URL fails the schema check.
 - The `{os}` placeholder resolves to `windows`, `linux`, or `darwin`. The `{arch}` placeholder resolves to `amd64` or `arm64`.
 - The `entrypoint` value is always lowercase. On Windows the resolver appends `.exe` only when computing the final path.
+- `powerShellModules` contains exact stable versions, Gallery package SHA256s,
+  and optional `dependencies` naming other pinned modules. The shared resolver
+  downloads their official Gallery ZIPs and uses `<Name>.psd1` as the entrypoint.
+  Pester must be at least 5.5.0. Required module dependencies must match the
+  configured names, versions and resolved paths before use.
+- Both composite commands resolve and import-check all applicable prerequisites
+  before metadata/step 1, after the module-upgrade and context/clean-tree guards.
+  Standalone metadata, Bicep Pester, YAML and PSRule entrypoints share the same
+  mechanism. Build prerequisites supply that same Pester pin, and all test
+  runners, including isolated shards, import it through the shared resolver.
+  Reject a different already-loaded module version with fresh-session guidance
+  before composite step 1.
+
+### Repository tool versions
+
+`.avm/tool-version-overrides.json` is an optional, flat JSON object mapping exact
+known tool/module names to version strings. It cannot add tools, URLs, hashes,
+entrypoints or dependency definitions. Reject malformed files, duplicate or
+case-colliding names, ranges, invalid versions and linked files/directories.
+Terraform and standalone modules use their authoritative root. A recognized
+Bicep monorepo uses only its root file, including module-targeted commands;
+nested module files are ignored. Resolve this context before staging or
+parallel work, and never cache effective pins across repositories.
+
+Only explicitly named entries bypass pinned checksum verification, including
+same-version overrides. Untouched dependencies retain packaged versions and
+hashes. Use the trusted packaged download template, normal platform rules,
+TLS, mirror and offline controls. Emit a tools warning with the source file,
+packaged/selected version and disabled-verification notice before use, including
+cache hits. Tool and doctor results retain this provenance.
+
+This user-directed checksum exception requires recorded SFI sign-off before
+merge/release. Repository file changes select executable dependencies and must
+be reviewed before running privileged commands.
 
 ### Cache layout
 
 ```text
 <Data>/tools/<tool>/<version>/
-    <entrypoint>[.exe]      # the binary
+    <entrypoint>[.exe]        # binary or PowerShell module manifest
     .verified                # zero-byte marker — present iff SHA matched and unpack succeeded
-    .meta.json               # { url, sha256, installedAt, source, archive }
+    .meta.json               # source, version, platform, hash and verification state
 ```
 
 - Atomic install: extract to `<Data>/tools/<tool>/.staging/<short-uuid>/`, verify SHA, then `Move-Item` (rename) to `<Data>/tools/<tool>/<version>/`. On rename failure (someone else got there first), discard the staging dir and use whoever won the race.
 - Cross-process lock: file lock on `<Data>/tools/<tool>/.lock` while installing; lock held via `[System.IO.File]::Open(..., FileMode.OpenOrCreate, FileAccess.Write, FileShare.None)`.
-- The `.verified` marker is the only thing the resolver looks at to decide a cached install is good. Missing marker = re-install.
-- `avm tool install --force` deletes `<Data>/tools/<tool>/<version>/` and re-installs.
+- Binary cache hits require the entrypoint and `.verified` marker. PowerShell
+  packages also require matching cache metadata and the configured package hash.
+- Overrides use `<Data>/tools/<tool>/.overrides/<version>/`, `.unverified` and
+  matching unverified metadata. Never accept or overwrite a verified default
+  entry with an override, or accept a loaded override as an installed default.
+  Switching away from a loaded unverified PowerShell package requires a fresh
+  process, avoiding reuse of its already loaded code.
+- `avm tool install --force` stages the replacement before removing the old
+  entry under the installation lock. Failed downloads leave the old entry intact.
 
 ### Lookup order on every invocation
 
-1. **Cache** — `<Data>/tools/<tool>/<version>/<entrypoint>[.exe]` exists and `.verified` marker present → use it.
-2. **PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
-3. **Auto-install (default)** — a cache miss transparently installs the locked version from the lock file, into the cache, verifying its SHA-256 (same atomic, locked, `.verified`-marked path as `avm tool install`). A concise progress message is emitted the first time so a first run is not a mysterious pause. This is on by default both locally and in CI — the consumer never needs to run a separate install step. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable it for locked-down / air-gapped environments; a cache miss then fails fast with an actionable `avm tool install <tool>` message instead of downloading. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply to the download (see below).
+1. **Cache** — use a complete verified entry, or the separate unverified entry for an explicit repository override.
+1. **Installed PowerShell module** — accept the exact selected version discoverable on `PSModulePath`, outside managed caches, with a matching manifest. Do not select arbitrary already loaded modules or change user/system module installations.
+1. **Binary PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
+1. **Auto-install (default)** — a cache miss installs the selected version through the same atomic, locked downloader as `avm tool install`, verifying its SHA256 unless explicitly overridden. A concise progress message is emitted on first use. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable implicit installation; a miss fails with `avm tool install <tool>` guidance. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply. Explicit module installation also acquires its pinned dependencies in dependency order.
 
-`avm tool list` mirrors this exact order: it reports `installed` for a cache hit, `not-installed` when a cache miss would auto-install, `auto-install-disabled` when a cache miss would hard-fail under `AVM_NO_AUTO_INSTALL`, and `installed-on-path` / `outdated-on-path` only when invoked with `-AllowPathFallback`. It never claims a tool is usable via PATH that the engines would actually ignore.
+`avm tool list` mirrors this order: `installed` for a cache hit,
+`installed-on-module-path` for an exact installed module, `not-installed` when
+a miss would auto-install, `auto-install-disabled` when it would fail, and
+`installed-on-path` / `outdated-on-path` only with `-AllowPathFallback`.
 
 ### Offline mode
 
@@ -1124,7 +1173,7 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Tool binary supply chain
 
-- Every binary downloaded by `Resolve-AvmTool` is SHA256-verified against `Resources/avm.pins.jsonc` (section 10). A mismatch throws `AvmToolException` with both the expected and the actual hash. The lock file is the only sanctioned source of truth.
+- Default binary and PowerShell package downloads are SHA256-verified against `Resources/avm.pins.jsonc` (section 10). A mismatch throws `AvmToolException` with both hashes. Only the explicit repository version-override exception may bypass the pinned hash for named tools, using a separate unverified cache and visible warning.
 - `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
 - The repo bundles no precompiled binaries. Everything is fetched at first use and cached under the user's standard cache root (section 7).
 

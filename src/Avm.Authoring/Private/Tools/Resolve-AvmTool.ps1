@@ -1,7 +1,7 @@
 function Resolve-AvmTool {
     <#
     .SYNOPSIS
-        Resolve the on-disk path to a managed tool's entrypoint binary.
+        Resolve the on-disk path to a managed binary or PowerShell module.
 
     .DESCRIPTION
         Engine code calls this helper to obtain a usable path to bicep,
@@ -23,10 +23,13 @@ function Resolve-AvmTool {
         `avm tool install <name>`.
 
     .PARAMETER Name
-        The tool name as it appears in avm.pins.jsonc (lowercase).
+        The exact tool or PowerShell module name from avm.pins.jsonc.
 
     .PARAMETER PinsPath
         Override the bundled lock file. For tests.
+
+    .PARAMETER ModuleRoot
+        Repository context for .avm/tool-version-overrides.json.
 
     .PARAMETER AllowPathFallback
         When set, accept a PATH-resolved binary that self-reports the
@@ -52,6 +55,8 @@ function Resolve-AvmTool {
 
         [string] $PinsPath,
 
+        [string] $ModuleRoot,
+
         [switch] $AllowPathFallback,
 
         [switch] $NoAutoInstall,
@@ -64,17 +69,19 @@ function Resolve-AvmTool {
     $ErrorActionPreference = 'Stop'
 
     $lock = if ($PinsPath) {
-        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
+        Read-AvmPins -Path $PinsPath -ModuleRoot $ModuleRoot -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmPins
+        Read-AvmPins -ModuleRoot $ModuleRoot
     }
 
-    $tool = $lock.tools | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    $tool = Get-AvmToolDefinition -Pins $lock | Where-Object { $_.name -ceq $Name } | Select-Object -First 1
     if (-not $tool) {
         throw [System.ArgumentException]::new(
             "Unknown tool '$Name' (not in avm.pins).")
     }
+    Write-AvmToolVersionOverride -Tool $tool
+    $versionOverride = if ($tool.ContainsKey('versionOverride')) { [pscustomobject]$tool.versionOverride } else { $null }
 
     $platform = Get-AvmToolPlatform
     Write-AvmLog ("tool: resolving {0}/{1} for {2}" -f $tool.name, $tool.version, $platform) -Level Verbose | Out-Null
@@ -85,34 +92,47 @@ function Resolve-AvmTool {
             'AVM1012')
     }
 
-    $toolsRoot = Get-AvmFolder -Kind Tools
-    $versionDir = Join-Path (Join-Path $toolsRoot $tool.name) $tool.version
-    $entrypointName = if ($IsWindows) { "$($tool.entrypoint).exe" } else { $tool.entrypoint }
-    $entrypoint = Join-Path $versionDir $entrypointName
-    $verified = Join-Path $versionDir '.verified'
+    $cache = Get-AvmToolCacheEntry -Tool $tool -Platform $platform
+    $entrypoint = $cache.Path
+    $isModule = $tool.ContainsKey('kind') -and $tool.kind -ceq 'powershell-module'
+    $kind = if ($isModule) { 'powershell-module' } else { 'binary' }
 
-    if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint)) {
+    if ($cache.Cached) {
         Write-AvmLog ("tool: cache hit for {0} at {1}" -f $tool.name, $entrypoint) -Level Verbose | Out-Null
         return [pscustomobject][ordered]@{
-            Name     = $tool.name
-            Version  = $tool.version
-            Platform = $platform
-            Source   = 'cache'
-            Path     = $entrypoint
+            Name            = $tool.name
+            Version         = $tool.version
+            Platform        = $platform
+            Source          = 'cache'
+            Path            = $entrypoint
+            Kind            = $kind
+            VersionOverride = $versionOverride
         }
     }
 
-    if ($AllowPathFallback) {
+    if ($isModule) {
+        $installedModule = Find-AvmPowerShellModule -Name $tool.name -Version $tool.version
+        if ($installedModule) {
+            return [pscustomobject]@{
+                Name = $tool.name; Version = $tool.version; Platform = $platform
+                Source = 'module-path'; Path = Join-Path $installedModule.ModuleBase "$Name.psd1"; Kind = $kind
+                VersionOverride = $versionOverride
+            }
+        }
+    }
+    elseif ($AllowPathFallback) {
         Write-AvmLog ("tool: checking PATH fallback for {0}" -f $tool.name) -Level Verbose | Out-Null
         $hit = Find-AvmToolOnPath -Entrypoint $tool.entrypoint -ExpectedVersion $tool.version
         if ($hit -and $hit.Matches) {
             Write-AvmLog ("tool: using PATH fallback for {0} at {1}" -f $tool.name, $hit.Path) -Level Verbose | Out-Null
             return [pscustomobject][ordered]@{
-                Name     = $tool.name
-                Version  = $tool.version
-                Platform = $platform
-                Source   = 'path'
-                Path     = $hit.Path
+                Name            = $tool.name
+                Version         = $tool.version
+                Platform        = $platform
+                Source          = 'path'
+                Path            = $hit.Path
+                Kind            = $kind
+                VersionOverride = $versionOverride
             }
         }
     }
@@ -128,7 +148,7 @@ function Resolve-AvmTool {
     $installed = Install-AvmToolFromPins -Tool $tool -Platform $platform
     Write-AvmLog ("tool: install action for {0} = {1}" -f $tool.name, $installed.Action) -Level Verbose | Out-Null
 
-    if (-not ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint))) {
+    if (-not (Get-AvmToolCacheEntry -Tool $tool -Platform $platform).Cached) {
         throw [AvmToolException]::new(
             ("Tool '{0}' (version {1}) could not be installed automatically. Run: avm tool install {0}" -f $tool.name, $tool.version),
             'AVM1014')
@@ -137,10 +157,12 @@ function Resolve-AvmTool {
     $source = if ($installed -and $installed.Action -eq 'installed') { 'installed' } else { 'cache' }
     Write-AvmLog ("Installed {0} {1} at {2}" -f $tool.name, $tool.version, $entrypoint) -Level Install | Out-Null
     return [pscustomobject][ordered]@{
-        Name     = $tool.name
-        Version  = $tool.version
-        Platform = $platform
-        Source   = $source
-        Path     = $entrypoint
+        Name            = $tool.name
+        Version         = $tool.version
+        Platform        = $platform
+        Source          = $source
+        Path            = $entrypoint
+        Kind            = $kind
+        VersionOverride = $versionOverride
     }
 }
