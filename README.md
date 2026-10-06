@@ -34,6 +34,38 @@ registry READMEs pass an independent raw-byte comparison, apart from eight
 historically missing JSON-example comment lines in the checked-in Key Vault
 README. The existing registry generator and CI stay in place.
 
+## Managed prerequisites
+
+`avm pre-commit` and `avm pr-check` resolve their applicable tools before the
+first step, including Pester for metadata validation. Standalone commands use
+the same resolver. Missing binary and PowerShell packages are downloaded into
+the AVM cache at their configured versions, with checksum verification; no
+user or system PowerShell module installation is needed. `AVM_OFFLINE=1` and
+`AVM_NO_AUTO_INSTALL=1` remain effective. Use `avm tool list` to inspect
+availability or `avm tool install Pester` to populate a prerequisite explicitly.
+
+An optional repository-root `.avm/tool-version-overrides.json` selects versions
+of known tools without replacing their download definitions:
+
+```json
+{
+  "terraform": "1.16.5",
+  "Pester": "5.7.1"
+}
+```
+
+Names are case-sensitive. For Bicep monorepos, only the recognized repository
+root file applies to every module; nested module files are ignored. Selected
+overrides emit a warning with the file and packaged/selected versions, even
+when the versions match.
+
+**Overrides disable pinned checksum verification for the named tools.** They
+use a separate unverified cache and never replace verified default entries.
+Untouched tools and dependencies remain pinned. Review this file as an
+executable-toolchain change before running commands with privileged access.
+After loading an overridden PowerShell module, use a fresh PowerShell session
+when returning to the default version.
+
 ## Verify the signature
 
 Every `.ps1`, `.psm1` and `.psd1` in a released build is Authenticode-signed by Microsoft. To check what you installed:

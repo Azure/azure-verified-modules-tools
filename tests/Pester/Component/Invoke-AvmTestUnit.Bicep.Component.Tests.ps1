@@ -5,6 +5,9 @@ BeforeAll {
     $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     $manifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
     . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') -SourceManifest $manifest
+    InModuleScope Avm.Authoring {
+        $script:runtimeResolver = (Get-Command Resolve-AvmTool).ScriptBlock
+    }
 
     $script:root = Join-Path $TestDrive 'bicep unit module'
     $unit = Join-Path $script:root 'tests' 'unit'
@@ -30,6 +33,15 @@ AfterAll {
 }
 
 Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Resolve-AvmTool { & $script:runtimeResolver @PesterBoundParameters }
+            Mock Resolve-AvmTool {
+                & $script:runtimeResolver @PesterBoundParameters
+            } -ParameterFilter { $Name -ceq 'Pester' }
+        }
+    }
+
     It 'executes selected tests in a child process and reports excluded tests separately' {
         $result = Invoke-AvmTestUnit -Path $script:root -Tag 'fast'
 

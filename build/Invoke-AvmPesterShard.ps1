@@ -41,8 +41,6 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-Import-Module -Name 'Pester' -MinimumVersion '5.5.0' -Force -ErrorAction Stop
-
 if ($TempPath) {
     $null = [System.IO.Directory]::CreateDirectory($TempPath)
     $env:TEMP = $TempPath
@@ -52,6 +50,15 @@ if ($TempPath) {
 if ($AvmHome) {
     $null = [System.IO.Directory]::CreateDirectory($AvmHome)
     $env:AVM_HOME = $AvmHome
+}
+
+$manifest = Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+$module = Import-Module -Name $manifest -PassThru -ErrorAction Stop
+try {
+    $null = & $module { Import-AvmPowerShellModule -Name Pester -Global }
+}
+finally {
+    Remove-Module -ModuleInfo $module -Force
 }
 
 if ($Path.Count -eq 1 -and $Path[0].Contains([System.IO.Path]::PathSeparator)) {

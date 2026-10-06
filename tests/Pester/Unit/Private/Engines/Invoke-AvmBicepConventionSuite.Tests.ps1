@@ -177,7 +177,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
             Mock Invoke-AvmBicepPesterSuite { throw [AvmProcessException]::new('Pester missing') }
             $issues = @(Invoke-AvmBicepConventionSuite -Convention $script:convention)
             $issues.Code | Should -Be @('avm.bicep.convention-suite-unavailable')
-            $issues[0].Message | Should -Match 'Install-PSResource -Name Pester'
+            $issues[0].Message | Should -Match 'avm tool install Pester'
         }
     }
 }

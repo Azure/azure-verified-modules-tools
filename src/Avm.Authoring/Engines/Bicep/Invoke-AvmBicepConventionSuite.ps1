@@ -117,10 +117,10 @@ function Invoke-AvmBicepConventionSuite {
             -Mode Convention -ConventionData $Convention -Tag $Tag -TestName $TestName -EnvVars @{} -InProcess
         $Convention.ValidationSummary = $summary
     }
-    catch [AvmProcessException] {
+    catch [AvmProcessException], [AvmToolException] {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-suite-unavailable' `
-                    -Message "The convention Pester suite could not run; Pester 5.5.0 or later is required (Install-PSResource -Name Pester): $($_.Exception.Message)"))
+                    -Message "The convention Pester suite could not run. Restore its configured prerequisite with avm tool install Pester: $($_.Exception.Message)"))
         return $issues.ToArray()
     }
 

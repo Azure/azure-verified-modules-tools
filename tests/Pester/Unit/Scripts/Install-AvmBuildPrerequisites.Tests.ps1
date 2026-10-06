@@ -39,6 +39,12 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
 
         Should -Invoke Install-PSResource -Times 5 -Exactly
         Should -Invoke Install-PSResource -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'Pester' -and $Version -eq '5.7.1'
+        }
+        Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter {
+            $Name -eq 'Pester' -and $Version -eq '[5.5.0,)'
+        }
+        Should -Invoke Install-PSResource -Times 1 -Exactly -ParameterFilter {
             $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12'
         }
         Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter {
@@ -58,7 +64,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
 
         Should -Invoke Install-PSResource -Times 2 -Exactly
         Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter { $Name -eq 'powershell-yaml' }
-        Should -Invoke Get-InstalledPSResource -Times 1 -Exactly
+        Should -Invoke Get-InstalledPSResource -Times 2 -Exactly
     }
 
     It 'does not retry a deterministic package failure' {

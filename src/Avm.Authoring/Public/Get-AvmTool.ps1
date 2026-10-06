@@ -31,10 +31,14 @@ function Get-AvmTool {
             avm tool which <name>   -> Get-AvmTool -Name <name>
 
     .PARAMETER Name
-        One or more tool names (lowercase). Case-sensitive against the lock.
+        One or more exact tool or PowerShell module names from the lock.
 
     .PARAMETER PinsPath
         Override the bundled Resources/avm.pins.jsonc. Intended for tests.
+
+    .PARAMETER Path
+        Module root whose .avm/tool-version-overrides.json applies. Bicep
+        monorepos use their recognized repository root. Defaults to the current directory.
 
     .PARAMETER AllowPathFallback
         Also probe PATH, mirroring the engines' -AllowPathFallback opt-in. Off
@@ -53,6 +57,8 @@ function Get-AvmTool {
 
         [string] $PinsPath,
 
+        [string] $Path = $PWD.Path,
+
         [switch] $AllowPathFallback,
 
         # Test-only escape hatch (see Test-AvmPins). Hidden from help
@@ -69,14 +75,13 @@ function Get-AvmTool {
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $lock = if ($PinsPath) {
-        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
+        Read-AvmPins -Path $PinsPath -ModuleRoot $Path -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmPins
+        Read-AvmPins -ModuleRoot $Path
     }
-    $tools = @($lock.tools)
+    $tools = @(Get-AvmToolDefinition -Pins $lock)
     $platform = Get-AvmToolPlatform
-    $toolsRoot = Get-AvmFolder -Kind Tools
 
     if ($Name) {
         $requested = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -94,21 +99,28 @@ function Get-AvmTool {
     }
 
     foreach ($t in $tools) {
-        $versionDir = Join-Path (Join-Path $toolsRoot $t.name) $t.version
-        $entrypointName = if ($IsWindows) { "$($t.entrypoint).exe" } else { $t.entrypoint }
-        $entrypoint = Join-Path $versionDir $entrypointName
-        $verified = Join-Path $versionDir '.verified'
-        $cached = (Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypoint)
+        Write-AvmToolVersionOverride -Tool $t
+        $cache = Get-AvmToolCacheEntry -Tool $t -Platform $platform
+        $isModule = $t.ContainsKey('kind') -and $t.kind -ceq 'powershell-module'
 
         $status = $null
         $path = $null
         $source = $null
         $detectedVersion = $null
 
-        if ($cached) {
+        if ($cache.Cached) {
             $status = 'installed'
-            $path = $entrypoint
+            $path = $cache.Path
             $source = 'cache'
+        }
+        elseif ($isModule) {
+            $installed = Find-AvmPowerShellModule -Name $t.name -Version $t.version
+            if ($installed) {
+                $status = 'installed-on-module-path'
+                $path = Join-Path $installed.ModuleBase "$($t.name).psd1"
+                $source = 'module-path'
+                $detectedVersion = $installed.Version.ToString()
+            }
         }
         elseif ($AllowPathFallback) {
             $hit = Find-AvmToolOnPath -Entrypoint $t.entrypoint -ExpectedVersion $t.version
@@ -141,6 +153,8 @@ function Get-AvmTool {
             Path            = $path
             Source          = $source
             DetectedVersion = $detectedVersion
+            Kind            = if ($isModule) { 'powershell-module' } else { 'binary' }
+            VersionOverride = if ($t.ContainsKey('versionOverride')) { [pscustomobject]$t.versionOverride } else { $null }
         }
     }
 }

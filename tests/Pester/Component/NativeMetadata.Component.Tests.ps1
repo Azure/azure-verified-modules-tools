@@ -4,6 +4,9 @@
 BeforeAll {
     $repoRoot = Join-Path $PSScriptRoot '..' '..' '..'
     Import-Module (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    InModuleScope Avm.Authoring {
+        $script:metadataPester = Import-AvmPowerShellModule -Name Pester
+    }
     $script:metadataFixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage' `
         'avm' 'res' 'storage' 'storage-account' 'metadata.json'
 }
@@ -17,8 +20,11 @@ Describe 'Component: native shared metadata assertions' -Tag Component {
         InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:metadataFixture } {
             param($Fixture)
             Mock Import-Module {
-                if (-not $DisableNameChecking) { Write-Warning 'Pester dependency name-check warning.' }
-            } -ParameterFilter { $Name -eq 'Pester' }
+                if ($Name -like '*Pester.psd1' -and -not $DisableNameChecking) {
+                    Write-Warning 'Pester dependency name-check warning.'
+                }
+                & (Get-Command Import-Module -CommandType Cmdlet) @PesterBoundParameters
+            }
             $inputData = Get-AvmMetadataValidationInput -Json (Get-Content -LiteralPath $Fixture -Raw) `
                 -Ecosystem bicep -ModuleType resource
             $warnings = @()
@@ -26,8 +32,8 @@ Describe 'Component: native shared metadata assertions' -Tag Component {
             $result.Tests | Should -HaveCount 6
             $result.Issues | Should -HaveCount 0
             @($warnings) | Should -HaveCount 0
-            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
-                $Name -eq 'Pester' -and $DisableNameChecking -and $ErrorAction -eq 'Stop'
+            Should -Invoke Import-Module -Times 2 -Exactly -ParameterFilter {
+                $Name -like '*Pester.psd1' -and $DisableNameChecking -and $ErrorAction -eq 'Stop'
             }
         }
     }
@@ -141,10 +147,19 @@ Describe 'Component: native shared metadata assertions' -Tag Component {
             Fixture = $script:metadataFixture; Passed = $Passed; Total = $Total; Containers = $Containers; Blocks = $Blocks
         } {
             param($Fixture, $Passed, $Total, $Containers, $Blocks)
-            Mock Invoke-Pester {
+            $script:frameworkResult =
                 [pscustomobject]@{
                     Tests = @(); TotalCount = $Total; PassedCount = $Passed; FailedCount = 0
                     FailedContainersCount = $Containers; FailedBlocksCount = $Blocks
+                }
+            Mock Import-AvmPowerShellModule {
+                [pscustomobject]@{
+                    ModuleBase = $script:metadataPester.ModuleBase
+                    ExportedCommands = @{
+                        'New-PesterConfiguration' = $script:metadataPester.ExportedCommands['New-PesterConfiguration']
+                        'New-PesterContainer' = $script:metadataPester.ExportedCommands['New-PesterContainer']
+                        'Invoke-Pester' = { param($Configuration) $script:frameworkResult }
+                    }
                 }
             }
             $inputData = Get-AvmMetadataValidationInput -Json (Get-Content -LiteralPath $Fixture -Raw) `

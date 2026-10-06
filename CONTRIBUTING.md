@@ -16,19 +16,21 @@ The build, test, and lint scaffolding is live. The two things you most likely wa
 | [PowerShell 7](https://aka.ms/powershell)       | 7.4 (LTS)   | Everything                                          |
 | [Git](https://git-scm.com/downloads)            | 2.40        | Cloning, branching                                  |
 | [Microsoft.PowerShell.PSResourceGet](https://learn.microsoft.com/powershell/utility-modules/psresourceget/overview) | 1.0.0 | Publishing (`Publish-PSResource`)                  |
-| [Pester](https://pester.dev)                    | 5.5         | Running tests (`./build.ps1 test`)                  |
+| [Pester](https://pester.dev)                    | Managed pin | Running tests (`./build.ps1 test`)                  |
 | [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting (`./build.ps1 lint`)                        |
 | [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks                         |
 | [GitHub CLI](https://cli.github.com/)           | 2.40        | Optional — opening PRs from the terminal            |
 
-Install everything the module needs (one-time, user scope):
+After cloning the repository, install the build prerequisites (user scope):
 
 ```pwsh
 Install-PSResource Microsoft.PowerShell.PSResourceGet -Scope CurrentUser
-Install-PSResource Pester                              -Scope CurrentUser
-Install-PSResource PSScriptAnalyzer                    -Scope CurrentUser
-Install-PSResource InvokeBuild                         -Scope CurrentUser
+.\scripts\Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -IncludeBicepPolicy
 ```
+
+Build and runtime commands resolve Pester from `avm.pins.jsonc` through the same
+cache-backed prerequisite mechanism, even when a newer version is installed.
+Start a fresh PowerShell session if a different Pester version is already loaded.
 
 PS 7.4 is required on **Windows**, **Linux**, and **macOS**. PS 5.1 is explicitly unsupported.
 

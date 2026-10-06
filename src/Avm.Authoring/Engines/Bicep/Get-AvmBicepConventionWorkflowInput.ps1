@@ -54,7 +54,7 @@ function Get-AvmBicepConventionWorkflowInput {
     }
 
     try {
-        $result.Workflow = Get-AvmBicepConventionWorkflow -Path $path
+        $result.Workflow = Get-AvmBicepConventionWorkflow -Path $path -ModuleRoot $root
     }
     catch [AvmConfigurationException] {
         $result.Issues = @(New-AvmBicepConventionIssue -Root $root -Path $path `

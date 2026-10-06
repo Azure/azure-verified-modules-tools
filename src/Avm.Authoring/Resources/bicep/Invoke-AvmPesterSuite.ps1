@@ -15,10 +15,17 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-Import-Module Pester -MinimumVersion 5.5.0 -DisableNameChecking -ErrorAction Stop
 if ($PSCmdlet.ParameterSetName -eq 'File') {
     $inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
         ConvertFrom-Json -AsHashtable -ErrorAction Stop
+}
+if (-not $inputData.Contains('PesterPath') -or -not $inputData.Contains('PesterVersion') -or
+    -not [System.IO.Path]::IsPathFullyQualified([string]$inputData.PesterPath)) {
+    throw [System.ArgumentException]::new('Bicep Pester input requires a resolved PesterPath and PesterVersion.')
+}
+$pester = Import-Module -Name $inputData.PesterPath -PassThru -DisableNameChecking -ErrorAction Stop
+if ($pester.Name -cne 'Pester' -or $pester.Version -ne [version]$inputData.PesterVersion) {
+    throw [System.IO.InvalidDataException]::new('The Bicep runner did not load the resolved Pester version.')
 }
 
 $containerData = switch ($inputData.Mode) {
@@ -62,9 +69,9 @@ $containerData = switch ($inputData.Mode) {
         throw [System.ArgumentException]::new("Unsupported Bicep Pester mode '$($inputData.Mode)'.")
     }
 }
-$configuration = New-PesterConfiguration
+$configuration = & $pester.ExportedCommands['New-PesterConfiguration']
 $configuration.Run.Container = @(
-    New-PesterContainer -Path ([string[]]$inputData.Files) -Data $containerData
+    & $pester.ExportedCommands['New-PesterContainer'] -Path ([string[]]$inputData.Files) -Data $containerData
 )
 $configuration.Run.PassThru = $true
 $configuration.Run.Exit = $false
@@ -77,7 +84,7 @@ if ($inputData.TestName.Count -gt 0) {
     $configuration.Filter.FullName = [string[]]$inputData.TestName
 }
 
-$result = Invoke-Pester -Configuration $configuration
+$result = & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
 $issues = [System.Collections.Generic.List[object]]::new()
 
 foreach ($test in @($result.Tests)) {

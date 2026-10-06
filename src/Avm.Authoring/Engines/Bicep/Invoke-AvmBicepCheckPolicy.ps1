@@ -12,8 +12,8 @@ function Invoke-AvmBicepCheckPolicy {
         baselines, or uninspectable results fail the check.
 
         The PSRule and PSRule.Rules.Azure versions pinned in avm.pins.jsonc are
-        optional, exact-version dependencies loaded only for Bicep policy checks. Install them with
-        Install-PSResource before running this command. Tokens are read from
+        exact-version dependencies resolved through the shared tool cache.
+        Missing modules are acquired before evaluation. Tokens are read from
         TEST_SUBSCRIPTION_IDS (first entry) or VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* environment variables.
@@ -125,7 +125,7 @@ function Invoke-AvmBicepCheckPolicy {
     $verified = @{}
     if ($issues.Count -eq 0) {
         try {
-            $tool = Import-AvmBicepPolicyModule
+            $tool = Import-AvmBicepPolicyModule -ModuleRoot $Context.Root
         }
         catch {
             & $addFailure $_ $Context.Root 'avm.bicep.psrule-module' ([AvmConfigurationException]) `
@@ -161,7 +161,7 @@ function Invoke-AvmBicepCheckPolicy {
     }
     if ($issues.Count -eq 0) {
         try {
-            $compiler = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+            $compiler = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         }
         catch {
             $knownCompilerFailure = [type[]]@([AvmToolException], [AvmConfigurationException])

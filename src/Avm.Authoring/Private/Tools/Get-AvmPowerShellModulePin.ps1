@@ -3,29 +3,27 @@ function Get-AvmPowerShellModulePin {
     .SYNOPSIS
         Return the exact pinned version of an on-demand PowerShell module.
     .DESCRIPTION
-        Reads the powerShellModules section of Resources/avm.pins.jsonc once per
-        session. Throws when the module has no pin.
+        Reads the effective powerShellModules pin for the selected module root.
+        Throws when the module has no pin.
     #>
     [CmdletBinding()]
     [OutputType([version])]
     param(
         [Parameter(Mandatory)]
-        [string] $Name
+        [string] $Name,
+
+        [string] $ModuleRoot
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if (-not (Get-Variable -Name AvmPowerShellModulePins -Scope Script -ErrorAction Ignore) -or
-        $null -eq $script:AvmPowerShellModulePins) {
-        $pins = Read-AvmPins
-        if (-not $pins.ContainsKey('powerShellModules')) {
-            throw [System.Data.DataException]::new("avm.pins: missing 'powerShellModules'.")
-        }
-        $script:AvmPowerShellModulePins = $pins['powerShellModules']
+    $pins = Read-AvmPins -ModuleRoot $ModuleRoot
+    if (-not $pins.ContainsKey('powerShellModules')) {
+        throw [System.Data.DataException]::new("avm.pins: missing 'powerShellModules'.")
     }
-    if (-not $script:AvmPowerShellModulePins.ContainsKey($Name)) {
+    if (-not $pins.powerShellModules.ContainsKey($Name)) {
         throw [System.Data.DataException]::new("avm.pins: no powerShellModules pin for '$Name'.")
     }
-    return [version]$script:AvmPowerShellModulePins[$Name]
+    return [version]$pins.powerShellModules[$Name].version
 }

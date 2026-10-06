@@ -200,6 +200,91 @@ Describe 'Shared network retry' {
         }
     }
 
+    Context 'Invoke-AvmHttp thrown Retry-After responses' {
+        BeforeEach {
+            $script:httpEnvironment = @{}
+            foreach ($name in @('AVM_OFFLINE', 'AVM_MIRROR')) {
+                $script:httpEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+            }
+        }
+
+        AfterEach {
+            foreach ($name in $script:httpEnvironment.Keys) {
+                $value = if ($null -eq $script:httpEnvironment[$name]) { [NullString]::Value } else { $script:httpEnvironment[$name] }
+                [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+            }
+        }
+
+        It 'retries a thrown 429 with a populated <HeaderKind> header and verifies the download' -ForEach @(
+            @{ HeaderKind = 'Delta' }
+            @{ HeaderKind = 'Date' }
+        ) {
+            InModuleScope 'Avm.Authoring' -Parameters @{ HeaderKind = $HeaderKind; Destination = (Join-Path $TestDrive "$HeaderKind.bin") } {
+                param($HeaderKind, $Destination)
+                $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::TooManyRequests)
+                $response.Headers.RetryAfter = if ($HeaderKind -eq 'Delta') {
+                    [System.Net.Http.Headers.RetryConditionHeaderValue]::new([timespan]::FromSeconds(45))
+                }
+                else {
+                    [System.Net.Http.Headers.RetryConditionHeaderValue]::new([DateTimeOffset]::UtcNow.AddSeconds(45))
+                }
+                $failure = [Microsoft.PowerShell.Commands.HttpResponseException]::new('rate limited', $response)
+                $state = @{ Calls = 0 }
+                Mock Invoke-WebRequest {
+                    param($OutFile)
+                    $state.Calls++
+                    if ($state.Calls -eq 1) { throw $failure }
+                    [System.IO.File]::WriteAllText($OutFile, 'downloaded', [System.Text.UTF8Encoding]::new($false))
+                }
+                $sha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData(
+                        [System.Text.Encoding]::UTF8.GetBytes('downloaded'))).ToLowerInvariant()
+                try {
+                    Invoke-AvmHttp -Url 'https://example.invalid/tool' -Destination $Destination -ExpectedSha256 $sha |
+                        Should -Be $Destination
+                    Get-Content -LiteralPath $Destination -Raw | Should -Be 'downloaded'
+                    Should -Invoke Invoke-WebRequest -Exactly 2
+                    Should -Invoke Wait-AvmRetryDelay -Exactly 1 -ParameterFilter { $Seconds -ge 35 -and $Seconds -le 46 }
+                }
+                finally { $response.Dispose() }
+            }
+        }
+
+        It 'preserves the thrown HTTP error for <HeaderKind> <Scenario>' -ForEach @(
+            @{ HeaderKind = 'Delta'; Scenario = 'above the cap'; Seconds = 3600; Attempts = 1 }
+            @{ HeaderKind = 'Date'; Scenario = 'above the cap'; Seconds = 3600; Attempts = 1 }
+            @{ HeaderKind = 'Delta'; Scenario = 'after exhaustion'; Seconds = 1; Attempts = 2 }
+            @{ HeaderKind = 'Date'; Scenario = 'after exhaustion'; Seconds = 1; Attempts = 2 }
+        ) {
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                HeaderKind = $HeaderKind; Seconds = $Seconds; Attempts = $Attempts
+                Destination = (Join-Path $TestDrive 'failed-download.bin')
+            } {
+                param($HeaderKind, $Seconds, $Attempts, $Destination)
+                $env:AVM_NETWORK_RETRY_MAX_ATTEMPTS = '2'
+                $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::TooManyRequests)
+                $response.Headers.RetryAfter = if ($HeaderKind -eq 'Delta') {
+                    [System.Net.Http.Headers.RetryConditionHeaderValue]::new([timespan]::FromSeconds($Seconds))
+                }
+                else {
+                    [System.Net.Http.Headers.RetryConditionHeaderValue]::new([DateTimeOffset]::UtcNow.AddSeconds($Seconds))
+                }
+                $failure = [Microsoft.PowerShell.Commands.HttpResponseException]::new('original rate limit', $response)
+                Mock Invoke-WebRequest { throw $failure }
+                $caught = $null
+                try {
+                    try { Invoke-AvmHttp -Url 'https://example.invalid/tool' -Destination $Destination -ExpectedSha256 ('a' * 64) }
+                    catch { $caught = $_.Exception }
+                    $caught | Should -Be $failure
+                    Should -Invoke Invoke-WebRequest -Exactly $Attempts
+                    Should -Invoke Wait-AvmRetryDelay -Exactly ($Attempts - 1)
+                    $Destination | Should -Not -Exist
+                }
+                finally { $response.Dispose() }
+            }
+        }
+    }
+
     Context 'Opted-in callers' {
         It 'retries GitHub GET requests but never mutations' {
             InModuleScope 'Avm.Authoring' {

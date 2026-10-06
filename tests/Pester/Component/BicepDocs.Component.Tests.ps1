@@ -5,6 +5,9 @@ BeforeAll {
     $script:moduleRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring')
     $script:fixtureRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' 'fixtures' 'modules' 'bicep-docs')
     Import-Module (Join-Path $script:moduleRoot 'Avm.Authoring.psd1') -Force
+    InModuleScope Avm.Authoring {
+        $script:runtimeResolver = (Get-Command Resolve-AvmTool).ScriptBlock
+    }
 
     function New-BicepDocsFixture {
         param([Parameter(Mandatory)][string] $Name)
@@ -138,6 +141,15 @@ AfterAll {
 }
 
 Describe 'Component: Bicep docs source rendering' -Tag Component {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Resolve-AvmTool { & $script:runtimeResolver @PesterBoundParameters }
+            Mock Resolve-AvmTool {
+                & $script:runtimeResolver @PesterBoundParameters
+            } -ParameterFilter { $Name -ceq 'Pester' }
+        }
+    }
+
     It 'renders root and child once, writes only changed README bytes, and checks drift without writing' {
         $fixture = New-BicepDocsFixture -Name 'fresh'
         InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {

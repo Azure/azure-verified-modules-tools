@@ -23,6 +23,7 @@ function Read-AvmPins {
     [OutputType([hashtable])]
     param(
         [string] $Path,
+        [string] $ModuleRoot,
         [switch] $AllowFileUrls
     )
 
@@ -50,5 +51,6 @@ function Read-AvmPins {
     }
 
     Test-AvmPins -Pins $pins -AllowFileUrls:$AllowFileUrls | Out-Null
+    if ($ModuleRoot) { $pins = Merge-AvmToolVersionOverride -Pins $pins -ModuleRoot $ModuleRoot }
     return $pins
 }
