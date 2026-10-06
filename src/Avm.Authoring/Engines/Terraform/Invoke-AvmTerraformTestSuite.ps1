@@ -184,7 +184,8 @@ function Invoke-AvmTerraformTestSuite {
                 -EnvVars $envVars `
                 -StreamOutput `
                 -Label ('terraform init {0}' -f $targetDir) `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -RetryNetworkFailure
 
             if ($initResult.ExitCode -ne 0) {
                 $message = Add-AvmProcessFailureDetail `

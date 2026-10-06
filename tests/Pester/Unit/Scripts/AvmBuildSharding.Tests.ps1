@@ -72,17 +72,17 @@ Describe 'New-AvmPesterShardPlan' {
     }
 }
 
-Describe 'Get-AvmComponentShardCount' {
+Describe 'Get-AvmPesterShardCount' {
     BeforeEach {
-        $script:previousShardCount = $env:AVM_COMPONENT_SHARD_COUNT
+        $script:previousShardCount = @{
+            unit      = $env:AVM_UNIT_SHARD_COUNT
+            component = $env:AVM_COMPONENT_SHARD_COUNT
+        }
     }
 
     AfterEach {
-        if ($null -eq $script:previousShardCount) {
-            Remove-Item Env:AVM_COMPONENT_SHARD_COUNT -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:AVM_COMPONENT_SHARD_COUNT = $script:previousShardCount
+        foreach ($tier in $script:previousShardCount.Keys) {
+            [Environment]::SetEnvironmentVariable("AVM_$($tier.ToUpperInvariant())_SHARD_COUNT", $script:previousShardCount[$tier])
         }
     }
 
@@ -116,18 +116,131 @@ Describe 'Get-AvmComponentShardCount' {
         }
     }
 
-    It 'uses a positive default capped at six' {
-        Remove-Item Env:AVM_COMPONENT_SHARD_COUNT -ErrorAction SilentlyContinue
+    It 'uses a positive default capped at six for <_>' -ForEach @('unit', 'component') {
+        Remove-Item "Env:AVM_$($_.ToUpperInvariant())_SHARD_COUNT" -ErrorAction SilentlyContinue
 
-        $count = Get-AvmComponentShardCount
+        $count = Get-AvmPesterShardCount -Tier $_
 
         $count | Should -BeGreaterOrEqual 1
         $count | Should -BeLessOrEqual 6
     }
 
-    It 'honours AVM_COMPONENT_SHARD_COUNT' {
+    It 'honours the tier-specific shard count variable' {
         $env:AVM_COMPONENT_SHARD_COUNT = '3'
+        $env:AVM_UNIT_SHARD_COUNT = '1'
 
-        Get-AvmComponentShardCount | Should -Be 3
+        Get-AvmPesterShardCount -Tier 'component' | Should -Be 3
+        Get-AvmPesterShardCount -Tier 'unit' | Should -Be 1
+    }
+
+    It 'rejects a shard count below one' {
+        $env:AVM_UNIT_SHARD_COUNT = '0'
+
+        { Get-AvmPesterShardCount -Tier 'unit' } | Should -Throw '*AVM_UNIT_SHARD_COUNT*'
+    }
+}
+Describe 'Clear-AvmTierTestResult' {
+    It 'removes single-process and shard results for the tier only' {
+        $script:outRoot = Join-Path $TestDrive 'out'
+        $dir = Join-Path $script:outRoot 'test-results'
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        foreach ($name in 'unit.xml', 'unit-shard1.xml', 'unit-shard2.xml', 'workflow-unit.xml', 'component-shard1.xml') {
+            [IO.File]::WriteAllText((Join-Path $dir $name), '<x/>')
+        }
+
+        Clear-AvmTierTestResult -Tier 'unit'
+
+        @(Get-ChildItem -LiteralPath $dir -File | ForEach-Object Name | Sort-Object) |
+            Should -Be @('component-shard1.xml', 'workflow-unit.xml')
+    }
+}
+
+Describe 'Invoke-AvmPesterShardedTier' {
+    BeforeAll {
+        function script:Get-AvmTestResultPath {
+            param([Parameter(Mandatory)] [string] $Tier)
+            $dir = Join-Path $script:outRoot 'test-results'
+            $null = New-Item -ItemType Directory -Path $dir -Force
+            Join-Path $dir "$Tier.xml"
+        }
+        function script:Write-Build {
+            param($Color, $Text)
+            $script:buildMessages.Add([string]$Text)
+        }
+    }
+
+    BeforeEach {
+        $script:outRoot = Join-Path $TestDrive 'out'
+        $script:buildMessages = [System.Collections.Generic.List[string]]::new()
+    }
+
+    It 'warns when a unit shard writes to its isolated AVM_HOME' {
+        $probe = Join-Path $TestDrive 'Writes.Tests.ps1'
+        [IO.File]::WriteAllText($probe, @'
+Describe 'writes state' {
+    It 'writes to AVM_HOME' {
+        $null = New-Item -ItemType Directory -Path $env:AVM_HOME -Force
+        [IO.File]::WriteAllText((Join-Path $env:AVM_HOME 'state.json'), '{}')
+    }
+}
+'@)
+
+        $result = Invoke-AvmPesterShardedTier -Tier 'unit' -File @(Get-Item -LiteralPath $probe) -ShardCount 1 6>$null
+
+        $result.PassedCount | Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*unit shard 1 wrote 1 file(s) to its isolated AVM_HOME*' }).Count |
+            Should -Be 1
+    }
+
+    It 'does not warn when a unit shard leaves AVM_HOME untouched' {
+        $probe = Join-Path $TestDrive 'Clean.Tests.ps1'
+        [IO.File]::WriteAllText($probe, "Describe 'clean' { It 'passes' { 1 | Should -Be 1 } }")
+
+        $result = Invoke-AvmPesterShardedTier -Tier 'unit' -File @(Get-Item -LiteralPath $probe) -ShardCount 1 6>$null
+
+        $result.PassedCount | Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*isolated AVM_HOME*' }).Count | Should -Be 0
+    }
+}
+
+Describe 'Invoke-AvmPesterShard' {
+    It 'fails a shard when a test file cannot be loaded, even if other tests pass' {
+        $passing = Join-Path $TestDrive 'Passing.Tests.ps1'
+        $broken = Join-Path $TestDrive 'Broken.Tests.ps1'
+        [IO.File]::WriteAllText($passing, "Describe 'ok' { It 'passes' { 1 | Should -Be 1 } }")
+        [IO.File]::WriteAllText($broken, 'Describe ''broken'' { It ''never runs'' { "value:$Name:" } }')
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'shard.xml'
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard `
+            -Path ($passing + [IO.Path]::PathSeparator + $broken) -OutputPath $output 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+    }
+
+    It 'applies excluded tags and isolates temp and AVM_HOME per shard' {
+        $probe = Join-Path $TestDrive 'Probe.Tests.ps1'
+        $record = Join-Path $TestDrive 'probe.txt'
+        [IO.File]::WriteAllText($probe, @"
+Describe 'probe' {
+    It 'runs untagged' {
+        [IO.File]::WriteAllLines('$record', @([IO.Path]::GetTempPath(), `$env:AVM_HOME))
+    }
+    It 'is excluded' -Tag 'Component' { throw 'should not run' }
+    It 'is also excluded' -Tag 'Integration' { throw 'should not run' }
+}
+"@)
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'isolated.xml'
+        $temp = Join-Path $TestDrive 'shard-tmp'
+        $avmHome = Join-Path $TestDrive 'shard-home'
+
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard -Path $probe -OutputPath $output `
+            -ExcludeTag 'Integration,Component' -TempPath $temp -AvmHome $avmHome 2>&1
+
+        $LASTEXITCODE | Should -Be 0
+        ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+        $seen = [IO.File]::ReadAllLines($record)
+        $seen[0].TrimEnd([IO.Path]::DirectorySeparatorChar) | Should -Be $temp
+        $seen[1] | Should -Be $avmHome
     }
 }

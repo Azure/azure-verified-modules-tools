@@ -327,12 +327,19 @@ only ever reads it:
 ```
 
 Module roots may separately contain `.required-features.json`, a hand-authored
-JSON array of `"Namespace/FeatureName"` strings. `avm register-features`
+JSON array of `"Namespace/FeatureName"` strings. Bicep registry modules
+(`.../avm/res|ptn|utl/...`) instead use the repository-root
+`.required-features.json`, an object keyed by exact module paths such as
+`avm/res/compute/virtual-machine`; the whole object is validated and a
+module-root manifest is rejected. `avm register-features`
 reads this file only; an absent or empty array does nothing. The command
 requires an explicit subscription GUID, validates every entry before calling
 Azure CLI, verifies that the CLI is selected to that subscription, and never
 unregisters a feature. The protected Terraform integration and e2e jobs run it
-only when the manifest is nonempty.
+only when the manifest is nonempty. Bicep `avm test e2e` reads the manifest
+before confirmation and registers the features once per selected subscription
+after the identity check and before validation; a registration failure fails
+the case without deploying.
 
 Rules:
 
@@ -501,7 +508,11 @@ in `microsoft/github-operations` unless the repository is listed there or an
 open request exists, and clone the repository into an empty folder. The first
 commit is built in a temporary clone from the portal's seed files,
 metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
-and `avm pre-commit` output; no other local content is published. Interrupted
+and `avm pre-commit` output. The scaffold is an AzAPI virtual network that takes
+`parent_id` and exposes the AzAPI `resource_types`, `retry`, `timeouts` and
+`ignore_body_changes` interfaces; its default example picks a recommended
+region through `Azure/avm-utl-regions/azurerm` and names resources through
+`Azure/avm-utl-naming/azure`. No other local content is published. Interrupted
 or non-interactive runs stop with instructions and resume on the next run.
 Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child
@@ -647,9 +658,11 @@ were added directly to the module repository rather than through Bicep Sync.
 and child READMEs through the pinned `bicep docs generate --stdout` command.
 Module-root runs include tests in that root's `tests/e2e` for its own and
 nested READMEs, but do not search above the selected root. The
-nearest `bicepconfig.json` must set `documentation.template.file` to a
-relative, tracked copy of the packaged `avm-readme-v1.scriban`; a different
-template or hash fails before writing. Generated content comes from the
+packaged `avm-readme-v1.scriban` is used by default through the compiler's
+`--template-file` option, without creating caller config or template files.
+An explicit `documentation.template.file` in the nearest `bicepconfig.json`
+must reference a relative canonical copy; a different template or hash fails
+before writing. Generated content comes from the
 native model, Bicep test sources, and compiled `main.json` (or a local build
 when it is absent), never from the existing README body.
 
@@ -754,7 +767,15 @@ must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
 `baseTime` stay fixed. Record every attempt before submission, verify the
 native response's exact deployment ID, and retry only confirmed failure or
-exact preflight rejection. Unknown or cancelled outcomes never resubmit.
+exact preflight rejection. A submission timeout watches the same deployment
+for up to an hour (stopping after three consecutive read timeouts); a
+recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
+never resubmit. A confirmed deployment failure whose operation errors are all regional
+may also relocate an eligible case: strict cleanup must first confirm every
+deployment is terminal and fully discovered, remove its resources (no retained
+or soft-deleted names) and delete its deployment records. Otherwise relocation
+stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
+forward, so relocation never exceeds the validation or deployment budgets.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
@@ -905,6 +926,7 @@ Schema enforced by `Test-AvmPins`:
 
 - `AVM_OFFLINE=1` → resolver refuses any HTTP traffic. Cache hit succeeds; cache miss fails fast with a clear message naming the missing tool.
 - `AVM_MIRROR=https://internal.example.com/avm-mirror` → every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. With the example above, `https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip` is fetched from `https://internal.example.com/avm-mirror/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip`. The mirror itself MUST be `https://`; an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy cannot silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
+- `AVM_NETWORK_RETRY_MAX_ATTEMPTS=<1-10>` → overrides the attempt limit for every retried network read (default 4 from `Resources/network.json`). `1` disables retry. Advisory lookups such as the module update check never exceed their smaller budget.
 
 ---
 
@@ -1071,7 +1093,7 @@ Assume the user runs multiple `avm` invocations in parallel against different re
 - All `Invoke-WebRequest` / `Invoke-RestMethod` calls go through `Invoke-AvmHttp` in `Private/` which:
   - Sets a `User-Agent: Avm.Authoring/<version> (<os>/<arch>)` header.
   - Times out after 60 seconds by default (overridable).
-  - Retries on 5xx and connection errors with exponential backoff (3 attempts, 1 s / 4 s / 16 s).
+  - Retries transient failures (HTTP 408, 429 and 5xx, timeouts and connection resets) through `Invoke-AvmRetry`, using capped exponential backoff with jitter and honouring `Retry-After`. Limits live in `src/Avm.Authoring/Resources/network.json`; `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) overrides the attempt count.
   - Verifies the certificate chain (no `-SkipCertificateCheck` — ever).
 - Download SHA256 verification is non-negotiable; mismatch throws `AvmToolException` with both expected and actual hashes in the message.
 

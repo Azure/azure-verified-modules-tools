@@ -11,6 +11,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' }
         } -ParameterFilter { $ListAvailable }
         Mock Import-Module
+        Mock Get-InstalledPSResource
         Mock Install-PSResource
         Mock Start-Sleep
         Mock Write-Warning
@@ -41,11 +42,23 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12'
         }
         Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter {
-            $Seconds -eq 1
+            $Milliseconds -ge 500 -and $Milliseconds -le 1000
         }
         Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
             $Message -match 'attempt 1 of 3'
         }
+    }
+
+    It 'skips an exact pin that is already installed but still resolves version ranges' {
+        Mock Get-InstalledPSResource {
+            [pscustomobject]@{ Name = 'powershell-yaml'; Version = '0.4.12' }
+        } -ParameterFilter { $Name -eq 'powershell-yaml' -and $Version -eq '0.4.12' }
+
+        & $script:scriptPath -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times 2 -Exactly
+        Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter { $Name -eq 'powershell-yaml' }
+        Should -Invoke Get-InstalledPSResource -Times 1 -Exactly
     }
 
     It 'does not retry a deterministic package failure' {
@@ -61,6 +74,35 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         } | Should -Throw '*Package version is invalid*'
 
         Should -Invoke Install-PSResource -Times 1 -Exactly
+    }
+
+    It 'installs exact policy pins only when requested' -TestCases @(
+        @{ IncludePolicy = $true; PolicyInstallCount = 2 }
+        @{ IncludePolicy = $false; PolicyInstallCount = 0 }
+    ) {
+        param($IncludePolicy, $PolicyInstallCount)
+        & $script:scriptPath -IncludeBicepPolicy:$IncludePolicy -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times $PolicyInstallCount -Exactly -ParameterFilter {
+            ($Name -eq 'PSRule' -and $Version -eq '2.9.0') -or
+            ($Name -eq 'PSRule.Rules.Azure' -and $Version -eq '1.47.0')
+        }
+        Should -Invoke Install-PSResource -Times (3 + $PolicyInstallCount) -Exactly
+    }
+
+    It 'reuses installed policy pins without Gallery requests' {
+        Mock Get-InstalledPSResource {
+            [pscustomobject]@{ Name = $Name; Version = $Version }
+        } -ParameterFilter {
+            ($Name -eq 'PSRule' -and $Version -eq '2.9.0') -or
+            ($Name -eq 'PSRule.Rules.Azure' -and $Version -eq '1.47.0')
+        }
+        & $script:scriptPath -IncludeBicepPolicy -Confirm:$false
+
+        Should -Invoke Install-PSResource -Times 3 -Exactly
+        Should -Invoke Install-PSResource -Times 0 -Exactly -ParameterFilter {
+            $Name -in @('PSRule', 'PSRule.Rules.Azure')
+        }
     }
 
     It 'throws after the configured number of transient attempts' {

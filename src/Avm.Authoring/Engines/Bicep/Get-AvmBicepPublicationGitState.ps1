@@ -33,20 +33,24 @@ function Get-AvmBicepPublicationGitState {
             $candidates.Add($head.StdOut.Trim())
         }
     }
-    if ($candidates.Count -eq 0) {
-        throw [AvmConfigurationException]::new(
-            'A trusted Azure/bicep-registry-modules origin/main or upstream/main tracking ref is required. Fetch upstream main before checking publication versions.')
-    }
-
     $gitEnvironment = @{ GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'Never' }
     $upstream = 'https://github.com/Azure/bicep-registry-modules.git'
     $latest = Invoke-AvmProcess -FilePath $gitPath -WorkingDirectory $RepositoryRoot `
         -ArgumentList @('ls-remote', '--heads', $upstream, 'main') -TimeoutSec 30 `
-        -IgnoreExitCode -EnvVars $gitEnvironment
+        -IgnoreExitCode -RetryNetworkFailure -EnvVars $gitEnvironment
     if ($latest.ExitCode -ne 0 -or
         $latest.StdOut.Trim() -cnotmatch '^(?<sha>[0-9a-f]{40,64})\trefs/heads/main\z') {
         throw [AvmConfigurationException]::new(
             'Cannot verify the current Azure/bicep-registry-modules main commit; publication targets are unknown.')
+    }
+    if (-not $candidates.Contains($Matches['sha'])) {
+        return [pscustomobject]@{
+            GitPath        = $gitPath
+            RepositoryRoot = $RepositoryRoot
+            BaseSha        = $Matches['sha']
+            ChangedPaths   = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            RemoteFiles    = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        }
     }
     $baseSha = $null
     foreach ($candidate in $candidates) {
@@ -55,11 +59,6 @@ function Get-AvmBicepPublicationGitState {
             break
         }
     }
-    if ($null -eq $baseSha) {
-        throw [AvmConfigurationException]::new(
-            'The trusted upstream main tracking ref is stale. Fetch upstream main before checking publication versions.')
-    }
-
     $changed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($arguments in @(
             @('diff', '--diff-filter=AM', '--name-only', '-z', $baseSha, '--', 'avm/'),

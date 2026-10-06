@@ -10,6 +10,8 @@
       layout      - Verify on-disk casing and manifest shape.
       lint        - Run PSScriptAnalyzer with repo settings.
       test        - Run Pester unit tests (excludes Component and Integration).
+                    By default this tier shards across up to 6 pwsh child
+                    processes. Set AVM_UNIT_SHARD_COUNT to override.
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
       test-workflows - Run workflow-definition unit tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
@@ -41,7 +43,10 @@
 param(
     [string] $Configuration = 'Debug',
 
-    [string[]] $TestName = @()
+    [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Bicep', 'Terraform')]
+    [string] $IntegrationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -104,6 +109,10 @@ function script:Invoke-AvmPester {
         $env:GITHUB_ACTIONS = ''
         $env:GITHUB_STEP_SUMMARY = ''
         $result = Invoke-Pester -Configuration $Configuration
+        if ($result.FailedContainersCount -gt 0) {
+            $paths = @($result.Containers | Where-Object Result -eq 'Failed' | ForEach-Object { $_.Item })
+            throw "$($result.FailedContainersCount) Pester test file(s) failed to load or run: $($paths -join ', ')"
+        }
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
         }
@@ -555,7 +564,20 @@ task test {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'unit'
     $config.Filter.ExcludeTag       = @('Integration', 'Component')
 
-    $result = script:Invoke-AvmPester -Configuration $config
+    $shardCount = script:Get-AvmPesterShardCount -Tier 'unit'
+    if ($script:testNameFilter.Count -gt 0 -or $shardCount -eq 1) {
+        script:Clear-AvmTierTestResult -Tier 'unit'
+        $result = script:Invoke-AvmPester -Configuration $config
+    }
+    else {
+        $unitFiles = @(Get-ChildItem -LiteralPath $unitPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
+        $result = @(
+            script:Invoke-AvmPesterShardedTier -Tier 'unit' -File $unitFiles -ShardCount $shardCount
+        )[-1]
+        if ($result.TotalCount -eq 0) {
+            throw "No unit tests ran from $unitPath."
+        }
+    }
     if ($result.FailedCount -gt 0) {
         throw "$($result.FailedCount) Pester test(s) failed."
     }
@@ -587,6 +609,7 @@ task coverage {
     $config.TestResult.Enabled                 = $true
     $config.TestResult.OutputFormat            = 'NUnitXml'
     $config.TestResult.OutputPath              = script:Get-AvmTestResultPath -Tier 'unit'
+    script:Clear-AvmTierTestResult -Tier 'unit'
     $config.CodeCoverage.Enabled               = $true
     $config.CodeCoverage.Path                  = @(
         (Join-Path $script:moduleRoot 'Public'),
@@ -657,10 +680,10 @@ task 'test-workflows' {
 }
 
 task build layout, {
-    if (Test-Path -LiteralPath $script:outRoot) {
-        Remove-Item -LiteralPath $script:outRoot -Recurse -Force -ProgressAction SilentlyContinue
-    }
     $stage = Join-Path $script:outRoot 'Avm.Authoring'
+    if (Test-Path -LiteralPath $stage) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ProgressAction SilentlyContinue
+    }
     $null = New-Item -ItemType Directory -Path $stage -Force
 
     # Copy everything except scratch and test scaffolding into the staged tree.
@@ -724,7 +747,7 @@ task component {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
     $config.Filter.Tag              = @('Component')
 
-    $shardCount = script:Get-AvmComponentShardCount
+    $shardCount = script:Get-AvmPesterShardCount -Tier 'component'
     if ($script:testNameFilter.Count -gt 0 -or $shardCount -eq 1) {
         if ($script:testNameFilter.Count -gt 0) {
             Write-Build Gray '  component : using single-process runner because -TestName is active'
@@ -732,6 +755,7 @@ task component {
         else {
             Write-Build Gray '  component : using single-process runner because AVM_COMPONENT_SHARD_COUNT is 1'
         }
+        script:Clear-AvmTierTestResult -Tier 'component'
         $result = script:Invoke-AvmPester -Configuration $config
     }
     else {
@@ -758,7 +782,7 @@ task component {
 # `pre-commit` or `ci` so routine builds never touch the network. Wire this into
 # a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
 # indirectly -- the tests themselves Skip when offline rather than fail.
-task integration {
+task integration build, {
     script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
 
     $integrationPath = Join-Path $script:testsRoot 'Integration'
@@ -768,7 +792,7 @@ task integration {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $integrationPath
+    $config.Run.Path                = @(Get-AvmIntegrationTestFile -Path $integrationPath -Group $IntegrationGroup)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'

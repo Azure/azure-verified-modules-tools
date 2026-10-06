@@ -10,6 +10,8 @@ function Invoke-AvmGit {
         Use the GitHub CLI as the only credential helper for github.com.
     .PARAMETER IgnoreExitCode
         Return a non-zero exit code instead of throwing.
+    .PARAMETER RetryNetworkFailure
+        Retry transient network failures. Use only for repeatable operations such as clone, fetch and ls-remote.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -22,7 +24,9 @@ function Invoke-AvmGit {
 
         [switch] $UseGitHubCredential,
 
-        [switch] $IgnoreExitCode
+        [switch] $IgnoreExitCode,
+
+        [switch] $RetryNetworkFailure
     )
 
     Set-StrictMode -Version 3.0
@@ -40,7 +44,7 @@ function Invoke-AvmGit {
     }
     $arguments.AddRange($ArgumentList)
     return Invoke-AvmProcess -FilePath $git -ArgumentList $arguments.ToArray() `
-        -WorkingDirectory $WorkingDirectory -IgnoreExitCode:$IgnoreExitCode `
+        -WorkingDirectory $WorkingDirectory -IgnoreExitCode:$IgnoreExitCode -RetryNetworkFailure:$RetryNetworkFailure `
         -Label ('git ' + ($ArgumentList -join ' ')) `
         -EnvVars @{ GIT_TERMINAL_PROMPT = '0'; GH_HOST = 'github.com'; GH_PROMPT_DISABLED = '1' }
 }

@@ -632,6 +632,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
                 -IgnoreExitCode `
+                -RetryNetworkFailure `
                 -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {

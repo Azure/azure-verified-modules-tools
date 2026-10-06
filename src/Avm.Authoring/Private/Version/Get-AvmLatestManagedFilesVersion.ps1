@@ -35,7 +35,8 @@ function Get-AvmLatestManagedFilesVersion {
             -FilePath $GitPath `
             -ArgumentList @('ls-remote', '--tags', "https://github.com/$Repo.git") `
             -TimeoutSec 30 `
-            -IgnoreExitCode
+            -IgnoreExitCode `
+            -RetryNetworkFailure
     }
     catch {
         throw [AvmManagedFilesLookupException]::new(

@@ -9,6 +9,10 @@ function Get-AvmVersion {
         architecture. Warns when a newer module version is available without
         preventing version reporting.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery lookup that warns when a newer Avm.Authoring
+        version is available. Writes a warning once.
+
     .EXAMPLE
         PS> Get-AvmVersion
     #>

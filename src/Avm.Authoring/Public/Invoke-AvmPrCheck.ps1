@@ -7,7 +7,7 @@ function Invoke-AvmPrCheck {
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
-        Get-AvmModuleContext, then invokes the full Phase 1 verb chain in
+        Get-AvmModuleContext, then invokes the verb chain above in
         sequence against that same module root. Each step's structured
         result is captured. The overall Status is 'pass' only when every
         executed step reports Status='pass' (or didn't throw, for verbs
@@ -85,6 +85,10 @@ function Invoke-AvmPrCheck {
         Maximum number of independent Terraform transform targets, lint scopes,
         or policy examples to process at once. Defaults to four.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -126,7 +130,7 @@ function Invoke-AvmPrCheck {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pr-check: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Assert-AvmGitWorkingTreeClean -Path $context.Root
     $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback

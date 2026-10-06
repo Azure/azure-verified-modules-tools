@@ -4,10 +4,10 @@
 repeatable Bicep chain formats, lints, validates, compiles `main.bicep` into
 `main.json`, and renders documentation without deploying or publishing.
 
-`avm docs` uses the pinned Bicep CLI and a versioned Scriban template selected
-by the nearest `bicepconfig.json` through `documentation.template.file`. The
-path must be relative to that config and point to an exact copy of the
-packaged template in `Resources/bicep/`. Source files and compiled JSON
+`avm docs` uses the pinned Bicep CLI and packaged versioned Scriban template.
+An explicit `documentation.template.file` in the nearest `bicepconfig.json`
+must remain relative to that config and point to an exact canonical copy.
+No caller config or template is required or created. Source files and compiled JSON
 supply generated content; authored Notes live in an adjacent
 `README.notes.md` body-only sidecar. Run `avm docs export-notes` once to
 extract existing Notes without overwriting an existing sidecar. Use

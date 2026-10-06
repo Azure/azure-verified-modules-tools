@@ -25,6 +25,10 @@ function Install-AvmTool {
 
     .PARAMETER PinsPath
         Override the bundled Resources/avm.pins.jsonc. Intended for tests.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

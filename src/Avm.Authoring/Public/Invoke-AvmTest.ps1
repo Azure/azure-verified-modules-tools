@@ -12,10 +12,9 @@ function Invoke-AvmTest {
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
 
-        This verb covers the cheap build-validation pass and runs no
-        tests: it reports FilesProcessed (Bicep sources or direct Terraform
-        example configuration files) and
-        carries no run counts. The real test tiers are the separate
+        This verb covers the cheap build-validation pass and runs no tests:
+        it reports FilesProcessed (Bicep sources or direct Terraform example
+        configuration files) and carries no run counts. The real test tiers are the separate
         'avm test unit', 'avm test integration' and 'avm test e2e'
         verbs, which report test run counts (Bicep Pester or Terraform tests).
         In the gauntlets this verb is the step named 'validate' for that reason.
@@ -41,6 +40,10 @@ function Invoke-AvmTest {
         Terraform-only: skip each example's 'terraform init -backend=false
         -upgrade' step and use its existing initialization. Module coverage is
         not assessed with this switch and reports a warning. Ignored for Bicep.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
@@ -73,7 +76,7 @@ function Invoke-AvmTest {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
     switch ($context.Ecosystem) {
         'bicep' {

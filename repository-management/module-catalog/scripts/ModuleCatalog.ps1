@@ -846,6 +846,33 @@ function New-AvmCatalogBundle {
     }
 }
 
+# Antivirus and indexing services on Windows can briefly lock newly written
+# files, which makes a directory move fail with access denied. Retry only while
+# the staging directory is intact and the destination is still absent.
+function Move-AvmCatalogStagingDirectory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Destination,
+        [ValidateRange(1, 20)][int] $MaxAttempts = 5
+    )
+
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            [System.IO.Directory]::Move($Source, $Destination)
+            return
+        }
+        catch [System.UnauthorizedAccessException], [System.IO.IOException] {
+            if ($attempt -ge $MaxAttempts -or
+                [System.IO.Directory]::Exists($Destination) -or
+                -not [System.IO.Directory]::Exists($Source)) {
+                throw
+            }
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+    }
+}
+
 function Write-AvmCatalogBundle {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -883,7 +910,7 @@ function Write-AvmCatalogBundle {
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
             [System.IO.File]::WriteAllText($path, $Bundle.Files[$relative], [System.Text.UTF8Encoding]::new($false))
         }
-        [System.IO.Directory]::Move($staging, $destination)
+        Move-AvmCatalogStagingDirectory -Source $staging -Destination $destination
     }
     finally {
         if ([System.IO.Directory]::Exists($staging)) {

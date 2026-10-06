@@ -37,7 +37,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
 | `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
-| `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; registry compliance is an explicit opt-in. |
+| `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; `-IncludeCompliance` adds packaged native conventions, metadata and README checks. |
 | `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
 | `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Native deployment, assertions, post hooks and operation-based cleanup at all four ARM scopes. |
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Renders Bicep READMEs through the pinned CLI and a repository-selected Scriban template. |
@@ -51,7 +51,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
 | `Private/Docs/`                                   | Bicep template, Notes, source-example, and compiled-resource documentation helpers. |
 | `Private/Dispatch/`                               | Verb registry + `.avm/.disable` sentinel.                                          |
-| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations, spec section 14).  |
+| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations).                  |
 | `Private/Folders/Get-AvmFolder.ps1`               | Cross-OS resolver for Config/Cache/Data/State/Tools/Logs/Temp folders.             |
 | `Private/Layout/Test-AvmModuleLayout.ps1`         | Module-shape validator used by `./build.ps1 layout` and the publish gate.          |
 | `Private/Process/Invoke-AvmProcess.ps1`           | Subprocess primitive: argv-verbatim, stdout/stderr capture, exit/timeout policy.   |
@@ -308,7 +308,10 @@ stops the run:
    access is kept.
 1. Publish the first commit to `main` from a temporary clone: the portal's
    seed files, `metadata.json`, the minimal scaffold from
-   `Resources/Scaffolds/Terraform`, and the current managed files, telemetry,
+   `Resources/Scaffolds/Terraform` (an AzAPI virtual network that takes
+   `parent_id`, with the AzAPI `resource_types`, `retry`, `timeouts` and
+   `ignore_body_changes` inputs, and a default example that uses the regions
+   and naming utility modules), and the current managed files, telemetry,
    and README added by `avm pre-commit`. Nothing else from your folder is
    published, and a `main` that already holds module files is never
    overwritten. When `main` already has `metadata.json`, the run checks that
@@ -399,7 +402,7 @@ avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved 
 avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
-avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; bicep walker pending)
+avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)
 avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> sync -> check convention -> transform -> format -> docs
 avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 

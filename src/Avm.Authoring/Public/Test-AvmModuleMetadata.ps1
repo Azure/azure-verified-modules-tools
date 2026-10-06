@@ -1,12 +1,14 @@
 function Test-AvmModuleMetadata {
     <#
     .SYNOPSIS
-        Validate existing or supplied module metadata against the packaged schema.
+        Validate existing or supplied module metadata with packaged Pester tests.
     .DESCRIPTION
         Checks strict JSON, the root or reduced child shape, canonical type,
         ownership, and ecosystem-specific telemetry requirements. Never writes
-        files or downloads schemas. Missing or invalid metadata returns fail.
-        InputObject validates supplied values without reading metadata.json.
+        module files or downloads schemas. Missing or invalid metadata returns fail.
+        Both ecosystems use the same native assertion suite and shared schemas.
+        Requires Pester 5.5 or later. InputObject validates supplied values without
+        reading metadata.json.
     .PARAMETER Path
         Directory containing metadata.json.
     .PARAMETER Ecosystem
@@ -88,55 +90,23 @@ function Test-AvmModuleMetadata {
     }
     if ($null -ne $json) {
         try {
-            $result = Test-AvmMetadataContent -Json $json `
+            $validation = Get-AvmMetadataValidationInput -Json $json -Path $Path -CheckSource:$CheckSource `
                 -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule `
                 -TelemetryRequired (Test-AvmMetadataTelemetryRequired -Path $Path -Ecosystem $Ecosystem -ModuleType $ModuleType -ChildModule:$ChildModule)
-            $metadata = $result.Metadata
+            $result = Invoke-AvmMetadataValidation -Validations @($validation)
+            $metadata = $validation.Metadata
             foreach ($issue in $result.Issues) {
+                if ([System.IO.Path]::IsPathRooted($issue.File)) {
+                    $issue.File = [System.IO.Path]::GetRelativePath([System.IO.Path]::GetFullPath($Path), $issue.File).Replace('\', '/')
+                }
+                elseif ($issue.File -ne 'metadata.json') {
+                    $issue.File = [System.IO.Path]::GetFileName($issue.File)
+                }
                 $issues.Add($issue)
             }
         }
         catch [System.ArgumentException] {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_JSON' -Message $_.Exception.Message))
-        }
-    }
-
-    if ($issues.Count -eq 0 -and $CheckSource -and $Ecosystem -eq 'bicep') {
-        $sourceItems = @(
-            if (Test-Path -LiteralPath $Path -PathType Container) {
-                Get-ChildItem -LiteralPath $Path -Force
-            }
-        )
-        $sourceFiles = @($sourceItems | Where-Object { $_.Name -ieq 'main.bicep' })
-        if ($sourceFiles.Count -gt 0 -and
-            ($sourceFiles.Count -ne 1 -or $sourceFiles[0].PSIsContainer -or
-            $sourceFiles[0].Name -cne 'main.bicep' -or
-            ($sourceFiles[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
-            $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                        -Message 'main.bicep must be a regular file with exact casing.'))
-        }
-        elseif ($sourceFiles.Count -eq 0) {
-            $sourceMarkers = @($sourceItems | Where-Object { $_.Name -ieq 'version.json' -or $_.Name -ieq 'main.json' })
-            if ($sourceMarkers.Count -gt 0) {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                            -Message 'main.bicep is required when version.json or main.json exists.'))
-            }
-        }
-        else {
-            try {
-                $source = Get-Content -LiteralPath $sourceFiles[0].FullName -Raw
-                $null = Get-AvmBicepMetadataLiteral -Source $source
-                $code = Get-AvmBicepCommentFreeSource -Source $source
-                if ($metadata.canonicalType -cne 'helper' -and -not $metadata.Contains('telemetryIdPrefix') -and
-                    [regex]::IsMatch($code, "(?m)^[\t ]*resource[\t ]+avmTelemetry[\t ]+'Microsoft\.Resources/deployments@")) {
-                    $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_TELEMETRY' `
-                                -Message 'This Bicep module emits telemetry and requires telemetryIdPrefix.'))
-                }
-            }
-            catch [System.ArgumentException] {
-                $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SOURCE' -File 'main.bicep' `
-                            -Message $_.Exception.Message))
-            }
         }
     }
 

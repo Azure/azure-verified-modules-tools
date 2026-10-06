@@ -7,7 +7,7 @@ function Read-AvmPins {
         Defaults to the module-bundled manifest at Resources/avm.pins.jsonc,
         the single source of truth for every externally-sourced version this
         module depends on: managed tool binaries, the conftest policy library,
-        and the TFLint plugin versions.
+        the TFLint plugin versions and on-demand PowerShell module versions.
 
         The manifest is JSONC. ConvertFrom-Json accepts // line comments,
         /* block */ comments, and trailing commas natively, so the schema stays

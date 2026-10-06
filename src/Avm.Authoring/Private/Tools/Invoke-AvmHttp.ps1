@@ -75,18 +75,8 @@ function Invoke-AvmHttp {
         Copy-Item -LiteralPath $localSource -Destination $partial -Force
     }
     else {
-        # TLS 1.2+ pin. Tls13 may not be defined on older .NET targets, so
-        # combine defensively.
-        $tls12 = [System.Net.SecurityProtocolType]::Tls12
-        $protocols = $tls12
-        $tls13Member = [System.Net.SecurityProtocolType].GetField('Tls13')
-        if ($null -ne $tls13Member) {
-            $protocols = $tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-        }
-        [System.Net.ServicePointManager]::SecurityProtocol = $protocols
-
         Write-AvmLog ("http: downloading {0} to {1}; timeout={2}s" -f $effectiveUrl, $partial, $TimeoutSec) -Level Verbose | Out-Null
-        Invoke-WebRequest -Uri $effectiveUrl -OutFile $partial -TimeoutSec $TimeoutSec -UseBasicParsing | Out-Null
+        Invoke-AvmWebRequest -Uri $effectiveUrl -OutFile $partial -TimeoutSec $TimeoutSec -Label "Download of $effectiveUrl" | Out-Null
     }
 
     $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -154,6 +154,7 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
+./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
@@ -163,6 +164,7 @@ Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
 - `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- Integration defaults to all files. `-IntegrationGroup Bicep` selects `Bicep*.Tests.ps1`; `Terraform` selects the remaining shared/Terraform files. CI runs Bicep once per OS and retains both Terraform fixture legs per OS.
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 

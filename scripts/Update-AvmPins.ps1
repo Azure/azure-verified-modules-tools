@@ -148,6 +148,8 @@ function script:Read-PinsFile {
 # Platform map shared by every tool entry. Keys are the canonical platform
 # tags used everywhere in the codebase.
 # ----------------------------------------------------------------------
+. (Join-Path -Path $PSScriptRoot -ChildPath 'Import-AvmNetworkRetry.ps1')
+
 $script:platforms = @(
     'windows-amd64'
     'windows-arm64'
@@ -160,7 +162,7 @@ $script:platforms = @(
 function script:Invoke-HttpGet {
     param([Parameter(Mandatory)] [string] $Url)
     Write-Host "  GET $Url" -ForegroundColor DarkGray
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing
+    $response = Invoke-AvmRetry -RetryActivity "GET $Url" -RetryAction { Invoke-WebRequest -Uri $Url -UseBasicParsing }
     $content = $response.Content
     if ($content -is [byte[]]) {
         # Some servers (e.g. GitHub release assets) omit a charset header,
@@ -176,7 +178,7 @@ function script:Save-Url {
         [Parameter(Mandatory)] [string] $Destination
     )
     Write-Host "  GET $Url" -ForegroundColor DarkGray
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    Invoke-AvmRetry -RetryActivity "GET $Url" -RetryAction { Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing }
 }
 
 function script:Get-FileHashHex {
@@ -503,7 +505,7 @@ function script:Get-PolicyLibraryPin {
     $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-policy-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.tar.gz')
     try {
         Write-Host "  GET $url" -ForegroundColor DarkGray
-        Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing -MaximumRedirection 5
+        Invoke-AvmRetry -RetryActivity "GET $url" -RetryAction { Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing -MaximumRedirection 5 }
         $sha = (Get-FileHash -LiteralPath $tempFile -Algorithm SHA256).Hash.ToLowerInvariant()
         Write-Host "  sha256 = $sha" -ForegroundColor DarkGray
         return [ordered]@{ ref = $Ref; sha256 = $sha }

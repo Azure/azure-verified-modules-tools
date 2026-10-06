@@ -5,7 +5,9 @@ function Register-AvmFeature {
 
     .DESCRIPTION
         Reads the optional .required-features.json string array at the exact
-        module root and validates every entry before accessing Azure. Requires
+        module root, or for a Bicep registry module the repository-root object
+        entry keyed by its exact avm/... module path, and validates every entry
+        before accessing Azure. Requires
         an explicit subscription GUID and an Azure CLI session selected to
         that same subscription. Already Registered features are left alone.
         Missing features are registered, polled until Registered, and their
@@ -14,7 +16,7 @@ function Register-AvmFeature {
         Feature registrations persist; this command never unregisters them.
 
     .PARAMETER Path
-        Module root containing the optional .required-features.json file.
+        Module root. Bicep registry modules read the repository-root manifest.
 
     .PARAMETER SubscriptionId
         GUID of the selected test subscription. Must also match any effective
@@ -25,6 +27,10 @@ function Register-AvmFeature {
 
     .PARAMETER PollIntervalSeconds
         Seconds between status checks. Defaults to 10.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject with Status, SubscriptionId, FeaturesTotal,
@@ -61,8 +67,8 @@ function Register-AvmFeature {
     process {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-        $context = Get-AvmModuleContext -Path $Path
-        $features = @(Read-AvmRequiredFeature -Root $context.Root)
+        $context = Get-AvmModuleContextInternal -Path $Path
+        $features = @(Get-AvmContextRequiredFeature -Context $context)
         $subscription = [guid]::Empty
         if (-not [guid]::TryParseExact($SubscriptionId, 'D', [ref]$subscription) -or
             $subscription -eq [guid]::Empty) {
@@ -107,57 +113,11 @@ function Register-AvmFeature {
                 'AVM1070')
         }
 
-        $registered = [System.Collections.Generic.List[string]]::new()
-        $existing = [System.Collections.Generic.List[string]]::new()
-        foreach ($feature in $features) {
-            $state = Get-AvmAzureRegistrationState -Kind Feature -Cli $cli -Root $context.Root `
-                -SubscriptionId $subscriptionId -Namespace $feature.Namespace -Name $feature.Name
-            if ($state -ceq 'Registered') {
-                $existing.Add($feature.FullName)
-                Write-AvmLog "Azure feature $($feature.FullName) is already Registered." -Level Info
-                continue
-            }
-            if ($state -cin @('NotRegistered', 'Unregistered')) {
-                $arguments = @(
-                    'feature', 'register', '--namespace', $feature.Namespace, '--name', $feature.Name,
-                    '--subscription', $subscriptionId, '--output', 'none', '--only-show-errors'
-                )
-                $null = Invoke-AvmAzureCli -Cli $cli -Root $context.Root -ArgumentList $arguments `
-                    -Operation "register feature $($feature.FullName) in subscription $subscriptionId" `
-                    -PermissionHint 'The test identity needs Microsoft.Features/* at subscription scope. '
-            }
-            elseif ($state -cne 'Registering') {
-                if ($state -ceq 'Pending') {
-                    throw [AvmException]::new(
-                        "Feature $($feature.FullName) is Pending in subscription $subscriptionId. Request access from the Azure service or open a support ticket before rerunning tests.",
-                        'AVM1070')
-                }
-                throw [AvmException]::new(
-                    "Feature $($feature.FullName) has unexpected registration state '$state' in subscription $subscriptionId.",
-                    'AVM1070')
-            }
-
-            Wait-AvmAzureRegistration -Kind Feature -Cli $cli -Root $context.Root `
-                -SubscriptionId $subscriptionId -Namespace $feature.Namespace -Name $feature.Name `
-                -MaximumPolls $MaximumPolls -PollIntervalSeconds $PollIntervalSeconds
-
-            $providerArguments = @(
-                'provider', 'register', '--namespace', $feature.Namespace,
-                '--subscription', $subscriptionId, '--output', 'none', '--only-show-errors'
-            )
-            $null = Invoke-AvmAzureCli -Cli $cli -Root $context.Root -ArgumentList $providerArguments `
-                -Operation "refresh provider $($feature.Namespace) in subscription $subscriptionId" `
-                -PermissionHint 'The test identity needs the resource provider /register/action permission at subscription scope. '
-            Wait-AvmAzureRegistration -Kind Provider -Cli $cli -Root $context.Root `
-                -SubscriptionId $subscriptionId -Namespace $feature.Namespace `
-                -MaximumPolls $MaximumPolls -PollIntervalSeconds $PollIntervalSeconds
-            $registered.Add($feature.FullName)
-            Write-AvmLog "Azure feature $($feature.FullName) and provider $($feature.Namespace) are Registered." -Level Info
-        }
-
+        $outcome = Invoke-AvmFeatureRegistration -Cli $cli -Root $context.Root -SubscriptionId $subscriptionId `
+            -Feature $features -MaximumPolls $MaximumPolls -PollIntervalSeconds $PollIntervalSeconds
         $result.Status = 'pass'
-        $result.RegisteredFeatures = $registered.ToArray()
-        $result.AlreadyRegisteredFeatures = $existing.ToArray()
+        $result.RegisteredFeatures = $outcome.RegisteredFeatures
+        $result.AlreadyRegisteredFeatures = $outcome.AlreadyRegisteredFeatures
         $result.Reason = ''
         return $result
     }

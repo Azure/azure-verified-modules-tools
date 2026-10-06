@@ -8,7 +8,7 @@ function Invoke-AvmBicepPesterSuite {
         [Parameter(Mandatory)]
         [string] $WorkingDirectory,
 
-        [ValidateSet('Unit', 'E2e')]
+        [ValidateSet('Unit', 'E2e', 'Convention')]
         [string] $Mode = 'Unit',
 
         [string[]] $ModulePaths = @(),
@@ -22,6 +22,8 @@ function Invoke-AvmBicepPesterSuite {
         [string[]] $TestName = @(),
 
         [System.Collections.IDictionary] $TestInputData,
+
+        [System.Collections.IDictionary] $ConventionData,
 
         [hashtable] $EnvVars = @{ GITHUB_ACTIONS = $null; GITHUB_STEP_SUMMARY = $null },
 
@@ -43,6 +45,10 @@ function Invoke-AvmBicepPesterSuite {
         Tag            = $Tag
         TestName       = $TestName
         TestInputData  = $TestInputData
+        Convention     = $ConventionData
+    }
+    if ($Mode -eq 'Convention' -and -not $InProcess) {
+        throw [System.ArgumentException]::new('Convention suites must run in process.')
     }
     $runDirectory = $null
     $inputPath = $null
@@ -104,12 +110,17 @@ function Invoke-AvmBicepPesterSuite {
             }
         }
         foreach ($issue in @($summary.Issues)) {
+            $nativeConvention = $Mode -ceq 'Convention' -and
+            $issue -is [System.Collections.IDictionary] -and
+            $issue.Contains('NativeConvention') -and $issue['NativeConvention'] -is [bool] -and
+            $issue['NativeConvention'] -and [string]$issue['Code'] -cmatch '^(?:avm\.bicep\.[a-zA-Z0-9.-]+|AVM_METADATA_[A-Z_]+)$' -and
+            $issue['Severity'] -cin @('error', 'warning')
             if ($issue -isnot [System.Collections.IDictionary] -or
                 -not $issue.Contains('File') -or -not $issue.Contains('Line') -or
                 -not $issue.Contains('Code') -or -not $issue.Contains('Message') -or
                 ($issue['Line'] -isnot [int] -and $issue['Line'] -isnot [long]) -or
-                -not ([string]$issue['Code']).StartsWith(
-                    'avm.bicep.pester-', [System.StringComparison]::Ordinal)) {
+                (-not $nativeConvention -and -not ([string]$issue['Code']).StartsWith(
+                    'avm.bicep.pester-', [System.StringComparison]::Ordinal))) {
                 throw [AvmProcessException]::new('Bicep Pester runner returned an invalid test diagnostic.')
             }
         }
