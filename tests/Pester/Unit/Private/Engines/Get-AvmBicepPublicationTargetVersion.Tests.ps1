@@ -81,23 +81,28 @@ Describe 'Bicep publication Git provenance' -Tag 'Unit' {
         $state.BaseSha | Should -Be ('b' * 40)
     }
 
-    It 'fails when a repository remote is not the exact upstream identity' {
+    It 'uses pinned public module data when no trusted local checkout exists' {
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
             param($R)
             $script:upstreamUrl = 'https://github.com/Other/bicep-registry-modules.git'
             Mock Invoke-AvmProcess {
                 [pscustomobject]@{
-                    ExitCode = if ($ArgumentList[0] -eq 'remote' -and
-                        $ArgumentList[2] -eq 'upstream') { 0 } else { 2 }
+                    ExitCode = if ($ArgumentList[0] -eq 'ls-remote' -or
+                        ($ArgumentList[0] -eq 'remote' -and $ArgumentList[2] -eq 'upstream')) { 0 } else { 2 }
                     StdOut = if ($ArgumentList[0] -eq 'remote' -and
                         $ArgumentList[2] -eq 'upstream') { $script:upstreamUrl } else { '' }
                     StdErr = ''
                 }
             }
-            { Get-AvmBicepPublicationGitState -RepositoryRoot $R } |
-                Should -Throw '*trusted Azure/bicep-registry-modules*'
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = "$('a' * 40)`trefs/heads/main"; StdErr = '' }
+            } -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
+            $state = Get-AvmBicepPublicationGitState -RepositoryRoot $R
+            $state.BaseSha | Should -BeExactly ('a' * 40)
+            $state.RemoteFiles.Count | Should -Be 0
+            $state.ChangedPaths.Count | Should -Be 0
             Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
-                $ArgumentList[0] -eq 'ls-remote'
+                $ArgumentList[0] -in @('clone', 'fetch', 'checkout', 'show', 'ls-tree', 'diff')
             }
         }
     }
@@ -118,6 +123,7 @@ Describe 'Get-AvmBicepPublicationTargetVersion' -Tag 'Unit' {
                     'show' { $script:oldVersion }
                     'ls-remote' { $script:releaseTags }
                 }
+
                 [pscustomobject]@{ ExitCode = 0; StdOut = [string]$output; StdErr = '' }
             }
         }
@@ -211,6 +217,94 @@ Describe 'Get-AvmBicepPublicationTargetVersion' -Tag 'Unit' {
             }
             { Get-AvmBicepPublicationTargetVersion -Scope $scope -Version '0.1' -GitState $state } |
                 Should -Throw '*release tags*unknown*'
+        }
+    }
+}
+
+Describe 'Bicep checkout-free publication data' -Tag 'Unit' {
+    BeforeEach {
+        InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
+            param($Root)
+            $script:snapshotRoot = Join-Path $Root ([guid]::NewGuid().ToString('N'))
+            $script:snapshotScope = [pscustomobject]@{
+                ModuleRelativePath = 'avm/res/mock/widget'
+                Path = Join-Path $script:snapshotRoot 'avm/res/mock/widget'
+            }
+            $null = New-Item -ItemType Directory -Path $script:snapshotScope.Path -Force
+            [IO.File]::WriteAllText((Join-Path $script:snapshotScope.Path 'version.json'), '{"version":"0.1"}')
+            [IO.File]::WriteAllText((Join-Path $script:snapshotScope.Path 'main.json'), '{}')
+            $script:snapshotState = [pscustomobject]@{
+                GitPath = 'mock-git'; RepositoryRoot = $script:snapshotRoot; BaseSha = 'a' * 40
+                ChangedPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                RemoteFiles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+            }
+            $script:snapshotStatus = 200
+            $script:snapshotVersion = '{"version":"0.1"}'
+            $script:snapshotMain = '{}'
+            $script:snapshotRedirect = $false
+            Mock Invoke-AvmWebRequest {
+                [pscustomobject]@{
+                    StatusCode = $script:snapshotStatus
+                    Content = if ($Uri.EndsWith('/version.json')) { $script:snapshotVersion } else { $script:snapshotMain }
+                    BaseResponse = [pscustomobject]@{
+                        RequestMessage = [pscustomobject]@{
+                            RequestUri = [uri]$(if ($script:snapshotRedirect) { 'https://example.invalid/file' } else { $Uri })
+                        }
+                    }
+                }
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = "$('b' * 40)`trefs/tags/avm/res/mock/widget/0.1.4"; StdErr = '' }
+            }
+        }
+    }
+
+    It 'compares selected module data and caches pinned files: <Changed>' -ForEach @(
+        @{ Changed = $false }, @{ Changed = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Changed = $Changed } {
+            param($Changed)
+            if ($Changed) { $script:snapshotMain = '{"previous":true}' }
+            $result = Get-AvmBicepPublicationTargetVersion -Scope $script:snapshotScope -Version '0.1' -GitState $script:snapshotState
+            $result.TargetVersion | Should -BeExactly '0.1.5'
+            $result.ShouldPublish | Should -Be $Changed
+            $result.PreviousVersion | Should -BeExactly '0.1'
+            Should -Invoke Invoke-AvmWebRequest -Exactly 2 -ParameterFilter {
+                $Uri.StartsWith("https://raw.githubusercontent.com/Azure/bicep-registry-modules/$('a' * 40)/avm/res/mock/widget/")
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
+        }
+    }
+
+    It 'includes changed descendant publication files when checking a parent' {
+        InModuleScope Avm.Authoring {
+            $child = Join-Path $script:snapshotScope.Path 'child'
+            $null = New-Item -ItemType Directory -Path $child
+            [IO.File]::WriteAllText((Join-Path $child 'main.json'), '{"new":true}')
+            $result = Get-AvmBicepPublicationTargetVersion -Scope $script:snapshotScope -Version '0.1' -GitState $script:snapshotState
+            $result.ShouldPublish | Should -BeTrue
+            $script:snapshotState.ChangedPaths.Contains('avm/res/mock/widget/child/main.json') | Should -BeTrue
+        }
+    }
+
+    It 'rejects untrustworthy upstream module data: <Violation>' -ForEach @(
+        @{ Violation = 'unavailable'; Message = '*HTTP 503*' }
+        @{ Violation = 'unattributed'; Message = '*pinned endpoint*' }
+        @{ Violation = 'false absence'; Message = '*HTTP 404*' }
+        @{ Violation = 'downgrade'; Message = '*must increase*' }
+        @{ Violation = 'invalid JSON'; Message = '*parse*version.json*' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Violation = $Violation; Message = $Message } {
+            param($Violation, $Message)
+            switch ($Violation) {
+                'unavailable' { $script:snapshotStatus = 503 }
+                'unattributed' { $script:snapshotRedirect = $true }
+                'false absence' { $script:snapshotStatus = 404; $script:snapshotVersion = '<html>Proxy failure</html>' }
+                'downgrade' { $script:snapshotVersion = '{"version":"0.2"}' }
+                'invalid JSON' { $script:snapshotVersion = 'broken' }
+            }
+            { Get-AvmBicepPublicationTargetVersion -Scope $script:snapshotScope -Version '0.1' -GitState $script:snapshotState } |
+                Should -Throw $Message
         }
     }
 }

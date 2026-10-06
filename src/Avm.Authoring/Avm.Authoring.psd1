@@ -44,7 +44,10 @@
     VariablesToExport    = @()
     AliasesToExport      = @('avm')
     PrivateData          = @{
-        PSData = @{
+        AvmCapabilities = @{
+            BicepPackagedCompliance = 1
+        }
+        PSData          = @{
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')
             LicenseUri   = 'https://github.com/Azure/azure-verified-modules-tools/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Azure/azure-verified-modules-tools'

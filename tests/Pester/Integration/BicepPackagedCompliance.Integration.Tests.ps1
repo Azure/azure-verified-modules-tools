@@ -35,11 +35,27 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
             $tool = Resolve-AvmTool -Name bicep
             $compiled = Get-AvmBicepCompiledJson -SourcePath (Join-Path $Path 'main.bicep') -ToolPath $tool.Path
             [System.IO.File]::WriteAllText((Join-Path $Path 'main.json'), $compiled, [System.Text.UTF8Encoding]::new($false))
-            Mock Get-AvmBicepPublicationGitState {
-                [pscustomobject]@{ GitPath = 'unused'; BaseSha = 'fixture'; ChangedPaths = @() }
+            $script:realPublicationProcess = (Get-Command Invoke-AvmProcess).ScriptBlock
+            Mock Invoke-AvmProcess { & $script:realPublicationProcess @PesterBoundParameters }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = "$('a' * 40)`trefs/heads/main"; StdErr = '' }
+            } -ParameterFilter {
+                $ArgumentList[0] -eq 'ls-remote' -and $ArgumentList[1] -eq '--heads' -and
+                $ArgumentList[2] -eq 'https://github.com/Azure/bicep-registry-modules.git'
             }
-            Mock Get-AvmBicepPublicationTargetVersion {
-                [pscustomobject]@{ TargetVersion = '0.1.0'; PreviousVersion = $null; VersionChanged = $true; ShouldPublish = $true }
+            Mock Invoke-AvmWebRequest {
+                throw "Unexpected publication endpoint: $Uri"
+            }
+            Mock Invoke-AvmWebRequest {
+                [pscustomobject]@{
+                    StatusCode = 404
+                    Content = '404: Not Found'
+                    BaseResponse = [pscustomobject]@{
+                        RequestMessage = [pscustomobject]@{ RequestUri = [uri]$Uri }
+                    }
+                }
+            } -ParameterFilter {
+                $Uri -like "https://raw.githubusercontent.com/Azure/bicep-registry-modules/$('a' * 40)/avm/res/storage/storage-account/*.json"
             }
             Mock Get-AvmBicepMcrTagList {
                 [pscustomobject]@{ Tags = [System.Collections.Generic.HashSet[string]]::new([string[]]@('0.1.0')) }
@@ -62,15 +78,22 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
         Test-Path -LiteralPath (Join-Path $script:consumer 'utilities') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $script:consumer '.git') | Should -BeFalse
         (Get-Module Avm.Authoring).ModuleBase | Should -BeExactly $script:package
+        (Get-Module Avm.Authoring).PrivateData.AvmCapabilities.BicepPackagedCompliance | Should -Be 1
         $result = Invoke-AvmTestUnit -Path $script:modulePath -Recurse -IncludeCompliance
         $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.ComplianceFile | Should -BeExactly (Join-Path $script:package 'Resources' 'bicep' 'Compliance.Tests.ps1')
         $result.UnitFiles | Should -Be 1
         $result.FilesProcessed | Should -Be 2
-        $result.RunsTotal | Should -BeGreaterThan 60
+        $result.RunsTotal | Should -Be 187
         $result.RunsPassed | Should -Be $result.RunsTotal -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.RunsFailed | Should -Be 0
         $result.Issues | Should -HaveCount 0
+        InModuleScope Avm.Authoring {
+            Should -Invoke Invoke-AvmWebRequest -Exactly 2
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
+                $ArgumentList[0] -in @('clone', 'fetch', 'checkout', 'show', 'ls-tree', 'diff')
+            }
+        }
     }
 
     It 'reports useful packaged diagnostics for <Violation>' -ForEach @(

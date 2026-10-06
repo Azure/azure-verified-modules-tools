@@ -2,7 +2,7 @@
 
 **Status**: in-progress
 **Started**: 2026-10-05
-**Updated**: 2026-10-05
+**Updated**: 2026-10-06
 **Branch**: `jaredfholgate-avm-authoring-refactor`
 
 ## Outcome
@@ -21,14 +21,14 @@ The checkout was clean. No replacement branch or review was created.
 
 - [x] Verify same-branch ownership and preserve the newer remote commits.
 - [x] Read progress protocol, active records, agent contract, and relevant standards.
-- [ ] Compare pinned registry assertions with packaged native requirements.
+- [x] Compare pinned registry assertions with packaged native requirements.
 - [x] Replace convention family wrappers with independent native assertions.
 - [x] Move explicit shared JSON and Bicep source-literal checks into native Pester.
 - [x] Migrate compiled telemetry/metadata agreement with the convention assertions.
 - [x] Package common PSRule defaults and remove policy's required registry utility reads.
-- [ ] Wire metadata, convention, unit compliance, and composition entry points.
-- [ ] Add reusable Bicep whole-module fixtures and independent-package acceptance.
-- [ ] Record positive and negative evidence for every migrated requirement.
+- [x] Wire metadata, convention, unit compliance, and composition entry points.
+- [x] Add reusable Bicep whole-module fixtures and independent-package acceptance.
+- [x] Record positive and negative evidence for every migrated requirement.
 - [ ] Run the ordinary local gate, commit, and push the correctness slice.
 - [ ] Measure and improve CI only after correctness and fixture qualification.
 
@@ -41,11 +41,61 @@ from family names or an aggregate passing command.
 
 | Existing requirement source | Packaged destination | Evidence |
 | --- | --- | --- |
-| `compliance/module.tests.ps1` compiled template, parameters/UDTs, telemetry and outputs | `Resources/bicep/conventions/Compiled.Tests.ps1` | Native requirement map and positive/negative controls in the compiled slice; eight other families remain |
+| `compliance/module.tests.ps1` compiled template, parameters/UDTs, telemetry and outputs | `Resources/bicep/conventions/Compiled.Tests.ps1` | [Compiled map](2026-10-05-native-compiled-conventions.md): positive root/child and native compiler controls; individual naming, schema, typing, forwarding and output negatives |
 | Shared metadata schema and source-literal validation | `Resources/metadata/Metadata.Tests.ps1`, shared across Bicep and Terraform | Paired native/internal constraints, file/InputObject routing, batched composition, five copied-package acceptance cases |
 | `compliance/metadata.tests.ps1` compiled telemetry-prefix agreement | `Resources/bicep/conventions/Compiled.Tests.ps1` | Direct/one-alias agreement, source readers, versioned children, drift failures and five real compiler/scaffold cases |
 | `psrule/ps-rule.yaml` and eight `.ps-rule/*.Rule.yaml` assets | `Resources/bicep/psrule/` | Real built-package baseline execution and insecure-transport rejection; 17 unit and 21 component controls |
-| Module-authored unit/e2e tests and module configuration | Remain consumer-owned | Pending entry-point audit |
+| Layout, required tests, casing and exclusions (73-375) | `Layout.Tests.ps1` | [Final-family map](2026-10-05-final-native-convention-families.md): 22 native positives and missing/casing/link/UTF-8/exclusion negatives |
+| Workflow paths, inputs, defaults, trigger and initializer (380-611) | `Workflow.Tests.ps1` | [Workflow map](2026-10-05-native-workflow-ownership.md): 20 native positives and malformed/missing/overbroad workflow negatives |
+| CODEOWNERS defaults and override order (2056-2084) | `Ownership.Tests.ps1` | Same map: 17 native positives and owner, duplicate, broad-pattern and ordering negatives |
+| Child publication permission | `ChildPublish.Tests.ps1` | [Child map](2026-10-05-native-child-publishing.md): portable `.avm` allowlist, missing/malformed/duplicate/unapproved child negatives |
+| Versions and changelog structure | `Version.Tests.ps1` | [Version map](2026-10-05-native-version-conventions.md): 14 native positives and 13 located format/exemption negatives |
+| Published history and ancestor updates (1666-2055) | `Publication.Tests.ps1` | Final-family map: four native positives plus unknown release, absent target, unreadable changelog and ancestor negatives |
+| Test-source naming, descriptions and compiled `testDeployment` (2127-2295) | `TestSource.Tests.ps1` | [Test-source map](2026-10-05-native-test-source-conventions.md): 27 native positives and source/compiled violations |
+| Resource API catalog and recency (2296-2475) | `ApiVersion.Tests.ps1` | [API map](2026-10-05-native-api-conventions.md): six migrated cases plus eleven catalog/diagnostic controls |
+| Generated README presence, drift and grouping comments | `Readme.Tests.ps1` | [README map](2026-10-05-native-readme-compliance.md): real rendering, absent/empty/stale README and advisory controls |
+| Module-authored unit/e2e tests and module configuration | Remain consumer-owned | Default compliance aggregates a real isolated authored unit test; e2e runner retains module-owned assertions and package-owned orchestration |
+
+## Final ownership and entry-point audit
+
+`Test-AvmModuleMetadata` uses `Invoke-AvmMetadataSuite` for both ecosystems.
+`Test-AvmMetadataModules` batches the same native metadata requirements in
+pre-commit and pr-check. Internal construction/parsing guards share the schema
+without starting a test framework, as approved by the user.
+`Invoke-AvmCheckConvention` uses the native convention suite; `Invoke-AvmDocs
+-CheckDrift` uses native README assertions. Pr-check composes these native
+entry points and genuine packaged PSRule evaluation. Pre-commit retains its
+format/compiler/transform/document-generation semantics, with native metadata.
+Default `Invoke-AvmTestUnit -Recurse -IncludeCompliance` prepares inputs once and
+combines the native suites in one run; explicit authored overrides remain
+explicit. Native execution counters, skipped/failed containers and missing
+diagnostics cannot silently pass.
+
+Source reads/calls and packaged configuration were inspected beyond Test-*
+names, including README rendering, compiled JSON, scopes, policy configuration,
+unit/e2e assertions and publication history. No mandatory utility path remains.
+Registry names retained in workflow/changelog expectations are module conventions,
+not runtime script loads. Publication history reads only module main/version data
+and release tags; the independent path requires no registry checkout. Compiler,
+JSON/YAML parsing, deployment ownership/run-ID predicates and test orchestration
+remain implementation code, not competing shared assertion engines.
+
+`bicep-storage`, `bicep-docs` and `bicep-existing-references` are authoritative
+whole-module fixtures alongside Terraform. Their command/framework coverage
+includes metadata/telemetry, UDT/parameters/outputs/docs, local children/helpers,
+scopes, Graph/Key Vault existing references, authored tests and policy.
+Focused malformed snapshots remain separate. The final copied-package route
+passes exactly 187 native/authored cases and four diagnostic mutations;
+real PSRule runs eight baselines across two examples and rejects insecure storage.
+Publication/API/MCR data is simulated explicitly, never represented as live
+upstream verification.
+
+Companion registry cleanup remains a separately approved cutover: keep existing
+compliance module/metadata entry points and PSRule files until a compatible
+release advertises `BicepPackagedCompliance = 1`; then replace shared-validation
+calls with package commands, retaining module source/assertions/configuration
+and moving child-publication configuration to `.avm`. No registry files were
+deleted, no release published and no workflow cutover performed.
 
 ## Validation
 

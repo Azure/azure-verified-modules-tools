@@ -1,6 +1,6 @@
 # Default packaged Bicep compliance
 
-**Status**: in-progress
+**Status**: blocked
 **Started**: 2026-10-05
 **Updated**: 2026-10-06
 **Branch**: `jaredfholgate-avm-authoring-refactor`
@@ -20,7 +20,7 @@ and filters, and qualify a utility-free consuming repository.
 - [x] Component and built-package acceptance with positive/negative evidence.
 - [x] Pester 5/6 qualification and full local gate.
 - [x] Commit locally; retain the publication hold.
-- [ ] Remove the remaining publication-history tracking-ref prerequisite.
+- [x] Remove the remaining publication-history tracking-ref prerequisite.
 
 ## Validation and remaining boundary
 
@@ -44,5 +44,7 @@ Git-state/target preparation and external API/MCR catalogs are simulated.
 The final dependency audit identified that real publication preparation still
 requires a trusted registry tracking ref. This must be removed before claiming
 complete independent-consumer acceptance or setting the capability marker.
+The [checkout-free publication slice](2026-10-06-checkout-free-publication-data.md)
+subsequently removes this prerequisite and tests real publication preparation.
 No validation scripts or common defaults are read from the registry.
 No release, cloud action, authentication change or push was performed.
