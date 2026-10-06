@@ -13,15 +13,42 @@ if ($args.Count -eq 0) {
     exit 64
 }
 
+function Write-StubTerraformTrace {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Record
+    )
+
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $Record -Compress) + "`n")
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    $stream = $null
+    while ($null -eq $stream) {
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        }
+        catch [System.IO.IOException] {
+            if ($timer.Elapsed.TotalSeconds -ge 10) {
+                throw [System.IO.IOException]::new("Could not append the fixture trace '$Path' within ten seconds.", $_.Exception)
+            }
+            Start-Sleep -Milliseconds 10
+        }
+    }
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 if ($env:AVM_STUB_TERRAFORM_TRACE) {
-    [ordered]@{
+    Write-StubTerraformTrace -Path $env:AVM_STUB_TERRAFORM_TRACE -Record ([ordered]@{
         Command = $args[0]
         Directory = (Get-Location).Path
         DataDirectory = $env:TF_DATA_DIR
         SkipRegistration = $env:ARM_SKIP_PROVIDER_REGISTRATION
         RegistrationMode = $env:ARM_RESOURCE_PROVIDER_REGISTRATIONS
-    } | ConvertTo-Json -Compress |
-        Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+    })
 }
 
 switch ($args[0]) {
@@ -97,11 +124,10 @@ switch ($args[0]) {
             $regions = @($env:AVM_STUB_TERRAFORM_TEST_REGIONS | ConvertFrom-Json)
             $region = $regions[($attempt - 1) % $regions.Count]
             Set-Content -LiteralPath $resourcePath -Value $region -Encoding utf8NoBOM
-            [ordered]@{
+            Write-StubTerraformTrace -Path $env:AVM_STUB_TERRAFORM_TRACE -Record ([ordered]@{
                 Command = 'test-region'; Directory = (Get-Location).Path
                 Region = $region; Attempt = $attempt; Filter = $env:TF_CLI_ARGS_test
-            } | ConvertTo-Json -Compress |
-                Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+            })
 
             $failed = $region -eq 'restricted-test-region'
             $assertion = $env:AVM_STUB_TERRAFORM_TEST_MODE -eq 'assertion'
@@ -140,11 +166,10 @@ switch ($args[0]) {
             else {
                 Remove-Item -LiteralPath $resourcePath
             }
-            [ordered]@{
+            Write-StubTerraformTrace -Path $env:AVM_STUB_TERRAFORM_TRACE -Record ([ordered]@{
                 Command = 'test-cleanup'; Directory = (Get-Location).Path
                 Region = $region; ExitCode = if ($cleanupFailure) { 1 } else { 0 }
-            } | ConvertTo-Json -Compress |
-                Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+            })
             @{
                 type = 'test_file'; test_file = @{ path = $testPath; progress = 'complete'; status = $status }
             } | ConvertTo-Json -Compress
@@ -181,9 +206,9 @@ switch ($args[0]) {
                 Set-Content -LiteralPath $statePath -Value $regions[($attempt - 1) % $regions.Count] -Encoding utf8NoBOM
             }
             $region = (Get-Content -LiteralPath $statePath -Raw).Trim()
-            [ordered]@{ Command = 'apply-region'; Directory = (Get-Location).Path; Region = $region } |
-                ConvertTo-Json -Compress |
-                Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
+            Write-StubTerraformTrace -Path $env:AVM_STUB_TERRAFORM_TRACE -Record ([ordered]@{
+                Command = 'apply-region'; Directory = (Get-Location).Path; Region = $region
+            })
             if ($region -eq 'restricted-test-region') {
                 $message = @(
                     'Error: creating Virtual Network (Subscription: "00000000-0000-0000-0000-000000000000"'

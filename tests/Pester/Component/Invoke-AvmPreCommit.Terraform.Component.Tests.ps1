@@ -448,6 +448,28 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 
+    It 'records every Terraform trace from concurrent fixture processes' {
+        $launcher = (Get-Command terraform -CommandType Application | Select-Object -First 1).Source
+        $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
+        $trace = Join-Path $TestDrive 'concurrent-terraform-trace.jsonl'
+        $env:AVM_STUB_TERRAFORM_TRACE = $trace
+        try {
+            $exitCodes = @(1..24 | ForEach-Object -Parallel {
+                    $ErrorActionPreference = 'Stop'
+                    & $using:launcher fmt
+                    $LASTEXITCODE
+                } -ThrottleLimit 8)
+            $exitCodes | Should -HaveCount 24
+            @($exitCodes | Where-Object { $_ -ne 0 }) | Should -HaveCount 0
+            $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
+            $calls | Should -HaveCount 24
+            @($calls | Where-Object Command -ne 'fmt') | Should -HaveCount 0
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_STUB_TERRAFORM_TRACE', $(if ($null -eq $savedTrace) { [NullString]::Value } else { $savedTrace }), 'Process')
+        }
+    }
+
     It 'enforces isolated registration safeguards before each <Command> policy plan' -ForEach @(
         @{ Command = 'standalone' }, @{ Command = 'composite' }
     ) {

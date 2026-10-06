@@ -23,7 +23,7 @@ Describe 'Integration: Terraform policy provider registration safeguards' -Tag '
         $case = Join-Path $TestDrive $Mode
         $source = Join-Path $case 'source'
         $local = Join-Path $source 'local'
-        $remote = Join-Path $case 'remote'
+        $remote = Join-Path $case 'remote repository'
         $stage = Join-Path $case 'stage'
         $working = Join-Path $stage 'module'
         $null = New-Item -ItemType Directory -Path $local, $remote -Force
@@ -62,7 +62,13 @@ resource "azurerm_resource_group" "example" {
         & git -C $remote -c user.name='AVM Tests' -c user.email='tests@example.invalid' add -A
         & git -C $remote -c user.name='AVM Tests' -c user.email='tests@example.invalid' commit --quiet -m fixture
         $LASTEXITCODE | Should -Be 0
-        $remoteUri = ([uri]$remote).AbsoluteUri
+        $remoteUri = [System.UriBuilder]::new([System.Uri]::UriSchemeFile, '')
+        $remoteUri.Path = [System.IO.Path]::GetFullPath($remote)
+        $remoteUri.Uri.IsAbsoluteUri | Should -BeTrue
+        $remoteUri.Uri.IsFile | Should -BeTrue
+        $remoteUri.Uri.AbsoluteUri | Should -Not -BeNullOrEmpty
+        $remoteUri.Uri.LocalPath | Should -Be ([System.IO.Path]::GetFullPath($remote))
+        $remoteSource = 'git::' + $remoteUri.Uri.AbsoluteUri
         $main = $provider + @"
 
 provider "azure" {
@@ -96,7 +102,7 @@ module "local" {
   providers = { azapi = azapi }
 }
 module "downloaded" {
-  source = "git::$remoteUri"
+  source = "$remoteSource"
 }
 "@
         Set-Content -LiteralPath (Join-Path $source 'main.tf') -Value $main.ReplaceLineEndings("`n") -Encoding utf8NoBOM
