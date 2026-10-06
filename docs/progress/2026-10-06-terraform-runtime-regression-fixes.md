@@ -39,7 +39,7 @@ No matching regression branch or review existed at the initial check.
 - [x] Rotate Terraform to 1.16.5 with official platform checksums.
 - [x] Cover clean packaged runtime, pins, offline/install failures and ordering.
 - [x] Run focused build routes and the prescribed full local gate.
-- [ ] Build the candidate, commit/push, and hand its SHA and package to the parent.
+- [x] Build the candidate, commit/push, and hand its SHA and package to the parent.
 - [ ] Record the parent's full canary matrix and finalize the new review.
 
 ## Validation
@@ -65,11 +65,17 @@ integration, and the final full gate. The loaded-version guard gives
 fresh-session guidance before work begins. All tests use `.\build.ps1`;
 broad integration is excluded.
 
+Qualified source candidate `d1f5e463962c762da6c64e620e4b351faaa1d7a9` is
+committed and pushed. Its frozen package and SHA-256 inventory of all 403 files
+were handed to the parent. Draft
+[#229](https://github.com/Azure/azure-verified-modules-tools/pull/229) awaits
+the full canary evidence.
+
 ## Blockers or dependencies
 
 Source qualification is complete. Final qualification depends on the parent's
-complete Terraform canary matrix; publish the frozen source candidate for that
-comparison and record the full matrix before closing this slice.
+complete Terraform canary matrix against the frozen candidate; record the full
+matrix before closing this slice.
 The user authorized the parent to use existing credentials against the BAMI
 test tenant for plan/policy checks only, not apply/destroy, deployment, provider
 registration or access changes. DevOps-pool examples also need organization/PAT
