@@ -158,6 +158,17 @@ references to an available, reviewed tools commit and set the package version
 only through the authorized rollout. Do not substitute a branch name or a
 placeholder release.
 
+The registry root `bicepconfig.json` already sets
+`documentation.template.file` to `docs/templates/avm-readme-v1.scriban` and
+`documentation.template.includeRoot` to `docs/templates`. That existing
+override prevents selection of the planned package default; it is not a new
+caller-template requirement or workflow input. Defer removal of only the
+`documentation.template` object until a compatible package release and the
+remaining legacy-template consumers are qualified, then coordinate it with
+the authorized registry cutover. Keep `documentation.examples` and compiler
+settings unchanged. Retain legacy Scriban files while existing consumers need them.
+This tools migration does not change registry configuration or template bytes.
+
 **Bulk-merge warning:** all 213 ordinary module callers include their own
 workflow file in main-only push paths. Merging their migration can start
 deployment-capable validation for every affected module. Feature-branch
@@ -204,6 +215,7 @@ boundaries; they do not dispatch workflows.
 | `RequiredSubscriptionFeaturesWorkflow` | Native e2e/root-map acceptance is owned by the separate refactor and remains a release prerequisite; this branch proves no extra registration stage and explicit selected identity forwarding |
 | Release and setup safeguards | `BicepWorkflowRelease.Component.Tests.ps1` and `BicepWorkflowInstallation.Tests.ps1`: exact versions/capability, bounded reads, state reconciliation, version/tag conflicts and preview isolation |
 | Child-publication approvals | Registry-owned `.avm/child-module-publish-allowed-list.json` preserves the existing contract and approvals; workflow contracts retain complete caller checkouts, and the qualified native package owns validation |
+| Existing README template override | Registry root `bicepconfig.json` selects its legacy Scriban template; removing only `documentation.template` to select the package default depends on compatible-release and remaining-consumer qualification, not these workflow tests. Examples and compiler settings remain unchanged |
 
 Do not remove the last two `TestSubscriptionWorkflow.Tests.ps1` cases:
 they cover registry `platform.deployment.history.cleanup.yml`, not migrated

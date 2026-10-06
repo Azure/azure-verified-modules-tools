@@ -2,7 +2,7 @@
 
 **Status**: blocked
 **Started**: 2026-10-05
-**Updated**: 2026-10-05
+**Updated**: 2026-10-06
 **Branch**: `jaredfholgate-bicep-workflow-templates`
 
 ## Outcome
@@ -53,6 +53,10 @@ Source/mock validation so far:
   controlled-lock regressions and the complete gate pass.
 - The existing analyzer retry handled transient `NullReferenceException`
   failures. No analyzer implementation was changed.
+- The 2026-10-06 documentation-only follow-up verified the root
+  `bicepconfig.json` template override against the registry inventory commit.
+  No workflow, package, configuration or Scriban bytes changed; the source
+  gate results above remain the implementation evidence.
 
 No broad integration command was run. Release operations and Azure entry
 points in workflow support tests are mocked.
@@ -132,9 +136,23 @@ requires a qualified release of that finished implementation and resolved
 immutable tools references; this slice must not invent a version or provide
 a registry-utilities fallback. The agreed manifest marker is integer
 `PrivateData.AvmCapabilities.BicepPackagedCompliance = 1`. Static setup already
-rejects missing/unsupported values. The native owner will add the marker only
-with its complete default route and acceptance cases. This branch does not
-set the marker; a compiled-check asset alone is not sufficient.
+rejects missing/unsupported values. On 2026-10-06 the native owner
+reported that local refactor commit `92f939e` includes that marker after
+independent-package acceptance. This is not a published release or cutover
+authorization. This branch does not set the marker; a compiled-check asset
+alone is not sufficient.
+
+The registry root `bicepconfig.json` still sets `documentation.template.file`
+to `docs/templates/avm-readme-v1.scriban` and
+`documentation.template.includeRoot` to `docs/templates`, as verified at the
+registry inventory commit. This existing override prevents selection of the
+planned package default. The registry owner defers removal of only
+`documentation.template` until compatible-release and remaining-consumer
+qualification permits the authorized cutover. `documentation.examples` and
+compiler settings stay unchanged; legacy Scriban files remain for existing
+consumers. This is a release/configuration dependency, not a new caller
+template requirement or workflow input. No config or template bytes were
+changed in this tools follow-up.
 
 The separate tools review is held by the coordinator: existing review-triggered
 CI includes protected-environment Azure sign-in and Windows Defender exclusion
