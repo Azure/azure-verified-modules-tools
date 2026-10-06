@@ -385,6 +385,51 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         Join-Path $script:fixtureRoot 'examples' 'foo' 'hook-output.txt' | Should -Not -Exist
     }
 
+    It 'runs fork pr-check and unit tests without Azure credentials or policy plans' {
+        $trace = Join-Path $TestDrive 'fork-checks-terraform.jsonl'
+        $saved = @{}
+        $variables = @(
+            'ARM_CLIENT_ID', 'ARM_CLIENT_SECRET', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID',
+            'ARM_OIDC_TOKEN', 'ARM_OIDC_REQUEST_TOKEN', 'ARM_OIDC_REQUEST_URL',
+            'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL',
+            'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID',
+            'ARM_USE_OIDC', 'AVM_STUB_TERRAFORM_TRACE'
+        )
+        foreach ($name in $variables) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        try {
+            foreach ($name in $variables) {
+                [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+            }
+            $env:ARM_USE_OIDC = 'false'
+            $env:AVM_STUB_TERRAFORM_TRACE = $trace
+
+            $result = avm pr-check -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback -ExcludeSteps @('check policy') --passthru
+            $unit = avm test unit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback --passthru
+
+            $result.Status | Should -Be 'pass'
+            $result.Steps | Should -HaveCount 9
+            $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
+            $skipped | Should -HaveCount 1
+            $skipped[0].Step | Should -Be 'check policy'
+            $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
+            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
+            $unit.Status | Should -Be 'pass'
+            $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
+            foreach ($command in @('fmt', 'init', 'validate', 'test')) {
+                $calls.Command | Should -Contain $command
+            }
+            @($calls | Where-Object Command -in @('plan', 'show', 'apply', 'destroy')) | Should -HaveCount 0
+        }
+        finally {
+            foreach ($name in $variables) {
+                [Environment]::SetEnvironmentVariable(
+                    $name, $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }), 'Process')
+            }
+        }
+    }
+
     It 'pr-check rejects a shell hook with PowerShell migration guidance' {
         $shellHook = Join-Path $script:fixtureRoot 'examples' 'foo' 'tflint-pre.sh'
         Set-Content -LiteralPath $shellHook -Value '#!/bin/sh' -Encoding utf8NoBOM

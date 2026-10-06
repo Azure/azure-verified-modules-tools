@@ -328,6 +328,20 @@ metadata/step 1, retaining the default module-upgrade guard. They stop on missin
 or invalid root or child metadata before changing module files. Create the
 missing files with `avm metadata initialize` before running either chain.
 
+`avm pr-check -ExcludeSteps` accepts an array of step names from the chain above,
+for either ecosystem:
+
+```pwsh
+avm pr-check -ExcludeSteps @('check policy', 'docs')
+```
+
+Names are case-insensitive; unknown or empty names are errors. An empty array
+keeps the full chain. Excluded steps are reported as `skipped` with an explicit
+reason, and prerequisites needed only by those steps are not resolved. Shared
+tools remain required. Explicitly excluding `metadata` skips that step but does
+not bypass the version or clean-worktree guards. Excluding every step returns
+overall `Status='skipped'`, never `pass`. Without exclusions, behavior is unchanged.
+
 Unit tests remain a separate CI job. Unit, integration, and end-to-end test
 commands report `Status='skipped'`, not `pass`, when no matching tests are
 discovered, so optional test tiers never produce a vacuous green result.
@@ -335,6 +349,27 @@ discovered, so optional test tiers never produce a vacuous green result.
 A step that raises `AvmNotSupportedException` is reported as
 `Status='skipped'`; an `AvmConfigurationException` is a hard failure. Pass
 `-StopOnFail` to abort on the first hard failure.
+
+### Fork pull requests
+
+The reusable `terraform-module.yml` workflow runs two independent fork jobs:
+`pr-check -ExcludeSteps 'check policy'` and `test unit`. All other pr-check
+steps run, including metadata, drift checks, lint, conventions, validation, and
+docs. The policy step and its Conftest prerequisite are omitted because policy
+evaluation needs Azure credentials.
+
+Fork jobs do not use GitHub environments, subscription selection, OIDC write
+permission, or secret/variable preparation. They override inherited secret and
+variable payloads with empty objects and disable OIDC. GitHub's automatically
+provided read-only token remains available; no configured secrets are required.
+Unit fixtures and any repository-authored hooks must work without Azure
+credentials. Normal branch jobs keep their existing environments, credentials,
+full pr-check, and integration/end-to-end tests.
+
+The selected `avm-authoring-version` must contain `-ExcludeSteps`. The fork
+pr-check job fails with upgrade guidance for an older release rather than
+silently weakening checks or running policy. Publish a compatible Avm.Authoring
+release before adopting this workflow revision.
 
 ### Automatic provider registration during policy checks
 
