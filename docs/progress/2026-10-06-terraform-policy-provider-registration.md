@@ -16,10 +16,14 @@ E2E and explicit feature-registration behavior unchanged.
 The user authorized this tooling correction after canary inspection found that
 AzureRM's modern registration setting does not protect AzAPI, while the shared
 legacy environment flag conflicts with modern AzureRM settings. The parent
-stopped live plans and owns all authenticated reruns. This slice runs no Azure
-operations and makes no universal read-only claim about authored hooks or data.
-Source implementation and the full local gate are complete. The remaining
-dependency is the parent-owned authenticated canary matrix, not a source failure.
+paused live plans until the safety package was qualified, then performed the
+approved plan-only canary runs. This source session ran no Azure operations.
+The safeguards do not make arbitrary authored hooks or data sources read-only.
+Source implementation, the full local gate and the parent-owned canary matrix
+are complete. The matrix is not all green: existing module findings, accepted
+missing inputs and authored exclusions remain explicit below. Hosted CI failures
+and pending Secure Future Initiative (SFI) sign-off still block overall
+publication qualification.
 
 ## Checklist
 
@@ -30,7 +34,9 @@ dependency is the parent-owned authenticated canary matrix, not a source failure
 - [x] Cover aliases, overrides, environment conflicts, ordering and cleanup.
 - [x] Run credential-free native checks and the full local gate.
 - [x] Build the qualified package and preserve the complete case inventory.
-- [ ] Record the parent's approved canary qualification.
+- [x] Commit/push the source and hand the frozen package inventory to the parent.
+- [x] Record the parent's completed approved canary qualification.
+- [ ] Resolve hosted CI failures after the parent supplies concrete findings.
 
 ## Validation
 
@@ -76,16 +82,75 @@ execution and extra CLI-argument injection are rejected rather than run without
 a provable safeguard. Terraform 1.16.5 appends query provider blocks after
 ordinary overrides, so treating them as normal `.tf` files would be unsafe.
 
+### Completed parent-owned canary qualification
+
+The final `protected-final-matrix.json` and
+`protected-final-qualification.json` artifacts under
+`terraform-canary-fixes-20261006` record local canary qualification for
+`a7a4bf88cd5c1659ebebbdbed00679c455ee5c5f`. The final package rehash matches all
+404 inventory entries; the frozen inventory SHA-256 remains
+`3afc6d6bd7b28d07ca1659df7cfa991c56a0f896b60b26fb00a05dd1c92821e0`.
+The doc-only handoff does not change that runtime candidate or its inventory.
+
+All **26 commands** ran against the ten canaries and three utility controls:
+**13/13 `pre-commit` passes** and **6/13 `pr-check` passes**, comprising four
+canaries plus Naming and IP-addresses. Seven canaries and all three utilities
+pass policy. No authored files changed. Every default run verified Terraform
+1.16.5 and Pester 5.7.1 with clean PowerShell module visibility and all
+prerequisites ready before step 1. The caller left both provider-registration
+flags unset, so protection came from the qualified package rather than a
+harness or module-source override.
+
+| Case | Module | `pr-check` | Policy | Remaining finding |
+| --- | --- | --- | --- | --- |
+| canary-01 | Example repository | pass | pass | None |
+| canary-02 | DevOps pool | error | error | User-accepted missing organization/PAT inputs |
+| canary-03 | Virtual Network | pass | pass | All 15 examples passed policy |
+| canary-04 | Cosmos DB account | pass | pass | None |
+| canary-05 | Managed Environment | pass | pass | None |
+| canary-06 | MongoDB cluster | fail | pass | Existing replacement-reference/private-endpoint lint findings |
+| canary-07 | Disk | fail | pass | Existing private-endpoint interface lint finding |
+| canary-08 | MySQL Flexible Server | fail | pass | Existing customer-managed-key/private-endpoint interface and comment-style lint findings |
+| canary-09 | CDN profile | error | error | Established CDN retirement prohibition and three baseline lint warnings |
+| canary-10 | AVS private cloud | fail | skipped | Existing tags/style/unused-provider lint findings; all six examples retain `.e2eignore` |
+| control-01 | Naming | pass | pass | None |
+| control-02 | IP-addresses | pass | pass | None |
+| control-03 | Regions | fail | pass | Original-source unused AzAPI requirement in `modules/cached-data/terraform.tf:5` |
+
+Actual standalone lint with unchanged `ed7497a` tooling reproduces every
+non-notice finding for MongoDB, Disk, MySQL and AVS. The final MongoDB comparison
+matches all five findings; MySQL matches all three and AVS all 16. Evidence
+includes `mongodb-lint-baseline-reconciliation.json`,
+`mysql-lint-baseline-reconciliation.json` and
+`avs-lint-baseline-reconciliation.json`. Regions' native original-source
+comparison reproduces its unused-provider warning. These are module-source
+findings, not regressions introduced by this candidate; no checks were weakened
+or module files edited to conceal them. No new tooling regression was identified
+within this local matrix, which does not establish overall publication readiness.
+
+A separate fresh-process Naming probe with Terraform 1.15.8 and Pester 6.2.0
+passes both composite commands without Azure authentication. Both default
+module-upgrade guards still reject with AVM1050 / exit 10.
+
+The parent's post-run and delayed activity-log queries for
+2026-10-06 19:38:55-20:47:28 UTC both returned zero events; the final query was
+at 20:52:48 UTC. This is time-bounded observation, not an absolute side-effect
+guarantee. No canary jobs remain running.
+
 ## Blockers or dependencies
 
 Continue [#229](https://github.com/Azure/azure-verified-modules-tools/pull/229);
-no new review, merge or release. Parent owns the complete canary matrix and
-approved plan-only BAMI credentials. DevOps-pool policy remains blocked by the
-user-selected missing organization/PAT inputs; do not acquire or invent them.
-The version-override checksum exception still needs SFI sign-off before merge.
-CDN retains its independently reproduced provider-deprecation blocker. Regions
-now passes legacy rule parsing but has an unchanged
-`terraform_unused_required_providers` warning for AzAPI in
-`modules/cached-data/terraform.tf:5`; the parent reproduced it on the original
-module snapshot with native TFLint. Naming and IP-addresses standalone lint pass.
-Do not weaken checks or alter module sources to conceal these matrix results.
+keep its current draft description unchanged for this handoff. The parent
+reports failures in hosted
+[CI run 37519851922](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37519851922):
+Windows/Ubuntu test jobs and four Linux/macOS Terraform integration jobs failed;
+lint and Bicep integration passed. The parent is verifying the run SHA and exact
+failure logs. Hold runtime changes until concrete findings arrive. The completed
+local matrix does not supersede these hosted failures.
+
+DevOps-pool policy retains the user-selected missing
+`azure_devops_organization_name` and `azure_devops_personal_access_token`
+blocker; do not acquire credentials or invent values. Preserve the other
+baseline findings and the AVS policy skips above. The version-override checksum
+exception still requires SFI review/sign-off before merge/release; no sign-off
+is recorded. No merge or release is authorized.
