@@ -18,6 +18,8 @@ if ($env:AVM_STUB_TERRAFORM_TRACE) {
         Command = $args[0]
         Directory = (Get-Location).Path
         DataDirectory = $env:TF_DATA_DIR
+        SkipRegistration = $env:ARM_SKIP_PROVIDER_REGISTRATION
+        RegistrationMode = $env:ARM_RESOURCE_PROVIDER_REGISTRATIONS
     } | ConvertTo-Json -Compress |
         Add-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -Encoding utf8NoBOM
 }
@@ -62,6 +64,20 @@ switch ($args[0]) {
         Write-Output $payload
         if (($payload | ConvertFrom-Json).valid) { exit 0 }
         exit 1
+    }
+    'providers' {
+        if (($args -join ' ') -ne 'providers schema -json') {
+            Write-Error 'stub terraform: expected providers schema -json'
+            exit 64
+        }
+        $fixture = Join-Path (Get-Location).Path '.avm-stub-provider-schemas.json'
+        if (Test-Path -LiteralPath $fixture -PathType Leaf) {
+            Get-Content -LiteralPath $fixture -Raw
+        }
+        else {
+            Write-Output '{"format_version":"1.0","provider_schemas":{}}'
+        }
+        exit 0
     }
     'test' {
         if ($env:AVM_STUB_TERRAFORM_TEST_REGIONS) {
@@ -183,6 +199,22 @@ switch ($args[0]) {
         exit 0
     }
     'plan' {
+        if ($env:AVM_STUB_REQUIRE_POLICY_SAFETY -eq '1') {
+            if ($env:ARM_SKIP_PROVIDER_REGISTRATION -ne 'true' -or $env:ARM_RESOURCE_PROVIDER_REGISTRATIONS -ne 'legacy') {
+                Write-Error 'stub terraform: implicit provider registration was not disabled'
+                exit 65
+            }
+            $guards = @(Get-ChildItem -LiteralPath (Get-Location).Path -Filter '*_override.tf.json' |
+                    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json -AsHashtable })
+            $guard = $guards | Where-Object { $_.provider.Contains('azapi') -and $_.provider.Contains('azure') } | Select-Object -Last 1
+            if (-not $guard -or $guard.provider.azapi[0].skip_provider_registration -ne $true -or
+                $guard.provider.azure[0].resource_provider_registrations -ne 'none' -or
+                $guard.provider.azure[0].skip_provider_registration -ne $false -or
+                $guard.provider.azure[0].resource_providers_to_register.Count -ne 0) {
+                Write-Error 'stub terraform: explicit provider registration was not disabled before plan'
+                exit 65
+            }
+        }
         $outArg = @($args | Where-Object { $_ -like '-out=*' } | Select-Object -First 1)
         if ($outArg.Count -gt 0) {
             $planName = $outArg[0].Substring('-out='.Length)

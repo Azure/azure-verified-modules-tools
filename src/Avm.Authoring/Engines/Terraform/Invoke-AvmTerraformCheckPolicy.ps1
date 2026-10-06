@@ -24,31 +24,31 @@ function Invoke-AvmTerraformPolicyExample {
             -Label ("policy {0} pre.ps1" -f $Example.Name)
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $Example.StagedPath '.env')
+        $terraformEnv = Get-AvmTerraformPolicyEnvironment -StageRoot $Example.StageRoot -Environment $envVars
 
         $terraformLock = Lock-AvmTerraformPluginCache `
             -WorkingDirectory $Example.StagedPath `
-            -EnvVars $envVars
+            -EnvVars $terraformEnv
         try {
-            $null = Invoke-AvmTerraformInit `
+            Initialize-AvmTerraformPolicyStage `
                 -TerraformPath $Options.TerraformPath `
+                -ConftestPath $Options.ConftestPath `
                 -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
-                -Label ("terraform init ({0})" -f $Example.Name) `
-                -NoColor `
-                -SkipPluginCacheLock
+                -StageRoot $Example.StageRoot `
+                -EnvVars $terraformEnv
 
             $null = Invoke-AvmProcess `
                 -FilePath $Options.TerraformPath `
                 -ArgumentList @('plan', '-out=tfplan', '-input=false', '-no-color') `
                 -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
+                -EnvVars $terraformEnv `
                 -Label ("terraform plan ({0})" -f $Example.Name)
 
             $showResult = Invoke-AvmProcess `
                 -FilePath $Options.TerraformPath `
                 -ArgumentList @('show', '-json', 'tfplan') `
                 -WorkingDirectory $Example.StagedPath `
-                -EnvVars $envVars `
+                -EnvVars $terraformEnv `
                 -Label ("terraform show ({0})" -f $Example.Name)
         }
         finally {
@@ -331,8 +331,6 @@ function Invoke-AvmTerraformCheckPolicy {
     $effectiveThrottle = if ($streamOutput) { 1 } else { $ThrottleLimit }
 
     try {
-        Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
-
         $defaultExceptions = Join-Path `
             -Path $stageRoot `
             -ChildPath 'policy' `
@@ -348,7 +346,10 @@ function Invoke-AvmTerraformCheckPolicy {
         for ($exampleIndex = 0; $exampleIndex -lt $activeExamples.Count; $exampleIndex++) {
             $sourceExample = $activeExamples[$exampleIndex]
             $relativeExample = [System.IO.Path]::GetRelativePath($Context.Root, $sourceExample)
-            $stagedExample = Join-Path $stageRoot $relativeExample
+            $caseRoot = Join-Path $stageRoot ([string]$exampleIndex)
+            $moduleStage = Join-Path $caseRoot 'module'
+            Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $moduleStage
+            $stagedExample = Join-Path $moduleStage $relativeExample
             $exampleName = Split-Path -Path $sourceExample -Leaf
             Write-AvmLog `
                 -Level Info `
@@ -358,6 +359,7 @@ function Invoke-AvmTerraformCheckPolicy {
                     Name         = $exampleName
                     RelativePath = $relativeExample
                     StagedPath   = $stagedExample
+                    StageRoot    = $caseRoot
                 })
         }
 

@@ -41,8 +41,10 @@ BeforeAll {
     $script:originalPath = $env:PATH
     $script:originalAvmHome = $env:AVM_HOME
     $script:originalManagedFilesLocalPath = $env:AVM_MANAGED_FILES_LOCAL_PATH
+    $script:originalNoAutoInstall = $env:AVM_NO_AUTO_INSTALL
     $env:PATH = $script:launcherDir + [IO.Path]::PathSeparator + $env:PATH
     $env:AVM_HOME = Join-Path $TestDrive 'avm-home'
+    $env:AVM_NO_AUTO_INSTALL = '1'
 
     # Point the managed-files sync engine at an empty local source so the
     # sync step is a deterministic
@@ -153,6 +155,7 @@ BeforeAll {
 }
 
 AfterAll {
+    [Environment]::SetEnvironmentVariable('AVM_NO_AUTO_INSTALL', $(if ($null -eq $script:originalNoAutoInstall) { [NullString]::Value } else { $script:originalNoAutoInstall }), 'Process')
     if ($null -ne $script:originalPath) { $env:PATH = $script:originalPath }
     if ($null -eq $script:originalAvmHome) {
         Remove-Item Env:\AVM_HOME -ErrorAction SilentlyContinue
@@ -188,6 +191,16 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
+    It 'uses the configured conftest launcher instead of installing a real policy runner' {
+        $pins = InModuleScope Avm.Authoring { Read-AvmPins }
+        $expected = @($pins.tools | Where-Object name -eq 'conftest')[0].version
+        $conftest = Get-Command conftest -CommandType Application | Select-Object -First 1
+        $conftest.Source | Should -BeLike "$($script:launcherDir)*"
+        $actual = & $conftest.Source --version
+        $LASTEXITCODE | Should -Be 0
+        $actual | Should -Be "Version: $expected"
+    }
+
     It 'uses the released AVM ruleset config and omits empty replacement triggers' {
         $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
         $configDir = InModuleScope 'Avm.Authoring' { Resolve-AvmTflintConfigDir }
@@ -433,6 +446,97 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['ToolPath'].Value | Should -Not -BeNullOrEmpty
         $result.PSObject.Properties['Evaluated'].Value | Should -Be 260
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+    }
+
+    It 'enforces isolated registration safeguards before each <Command> policy plan' -ForEach @(
+        @{ Command = 'standalone' }, @{ Command = 'composite' }
+    ) {
+        $fixture = Join-Path $TestDrive "policy-safety-$Command"
+        Copy-Item -LiteralPath $script:fixtureRoot -Destination $fixture -Recurse -Force
+        $example = Join-Path $fixture 'examples' 'foo'
+        $providerConfig = @{
+            terraform = @{ required_providers = @{ azure = @{ source = 'hashicorp/azurerm' }; azapi = @{ source = 'Azure/azapi' } } }
+            provider = @{
+                azure = @{ features = @{}; resource_provider_registrations = 'all'; resource_providers_to_register = @('Microsoft.Test') }
+                azapi = @{ skip_provider_registration = $false }
+            }
+        }
+        $schema = @{
+            provider_schemas = @{
+                'registry.terraform.io/hashicorp/azurerm' = @{
+                    provider = @{ block = @{ attributes = @{
+                                skip_provider_registration = @{ type = 'bool'; optional = $true }
+                                resource_provider_registrations = @{ type = 'string'; optional = $true }
+                                resource_providers_to_register = @{ type = @('list', 'string'); optional = $true }
+                            } } }
+                }
+                'registry.terraform.io/azure/azapi' = @{
+                    provider = @{ block = @{ attributes = @{ skip_provider_registration = @{ type = 'bool'; optional = $true } } } }
+                }
+            }
+        }
+        $providerConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example 'providers.tf.json') -Encoding utf8NoBOM
+        $schema | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example '.avm-stub-provider-schemas.json') -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $example '.env') -Value "ARM_SKIP_PROVIDER_REGISTRATION=false`nARM_RESOURCE_PROVIDER_REGISTRATIONS=all" -Encoding utf8NoBOM
+        Copy-Item -LiteralPath $example -Destination (Join-Path $fixture 'examples' 'second') -Recurse -Force
+        & git -C $fixture add -A
+        & git -C $fixture commit --quiet -m 'Add provider safety fixtures'
+        $LASTEXITCODE | Should -Be 0
+        $before = @(Get-ChildItem -LiteralPath $fixture -File -Recurse | Get-FileHash | Select-Object Path, Hash)
+        $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
+        $savedSafety = $env:AVM_STUB_REQUIRE_POLICY_SAFETY
+        $trace = Join-Path $TestDrive "policy-safety-$Command.jsonl"
+        $env:AVM_STUB_TERRAFORM_TRACE = $trace
+        $env:AVM_STUB_REQUIRE_POLICY_SAFETY = '1'
+        try {
+            $result = if ($Command -eq 'standalone') {
+                Invoke-AvmCheckPolicy -Path $fixture -Ecosystem terraform -AllowPathFallback -ThrottleLimit 2
+            }
+            else {
+                Invoke-AvmPrCheck -Path $fixture -Ecosystem terraform -AllowPathFallback -ThrottleLimit 2
+            }
+            $result.Status | Should -Be 'pass'
+            $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
+            $policyCalls = @($calls | Where-Object DataDirectory -like '*policy-stage*')
+            $plans = @($policyCalls | Where-Object Command -eq 'plan')
+            $plans | Should -HaveCount 2
+            @($plans.DataDirectory | Select-Object -Unique) | Should -HaveCount 2
+            foreach ($plan in $plans) {
+                $plan.SkipRegistration | Should -Be 'true'
+                $plan.RegistrationMode | Should -Be 'legacy'
+                @($policyCalls | Where-Object DataDirectory -eq $plan.DataDirectory).Command |
+                    Should -Be @('init', 'providers', 'validate', 'plan', 'show')
+                Test-Path -LiteralPath $plan.DataDirectory | Should -BeFalse
+                Test-Path -LiteralPath $plan.Directory | Should -BeFalse
+            }
+            $after = @(Get-ChildItem -LiteralPath $fixture -File -Recurse | Get-FileHash | Select-Object Path, Hash)
+            Compare-Object $before $after -Property Path, Hash | Should -BeNullOrEmpty
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_STUB_TERRAFORM_TRACE', $(if ($null -eq $savedTrace) { [NullString]::Value } else { $savedTrace }), 'Process')
+            [Environment]::SetEnvironmentVariable('AVM_STUB_REQUIRE_POLICY_SAFETY', $(if ($null -eq $savedSafety) { [NullString]::Value } else { $savedSafety }), 'Process')
+        }
+    }
+
+    It 'rejects unsupported provider schemas without a plan and removes the failed stage' {
+        $fixture = Join-Path $TestDrive 'policy-invalid-schema'
+        Copy-Item -LiteralPath $script:fixtureRoot -Destination $fixture -Recurse -Force
+        Set-Content -LiteralPath (Join-Path $fixture 'examples' 'foo' '.avm-stub-provider-schemas.json') -Value '{}' -Encoding utf8NoBOM
+        $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
+        $trace = Join-Path $TestDrive 'policy-invalid-schema.jsonl'
+        $env:AVM_STUB_TERRAFORM_TRACE = $trace
+        try {
+            { Invoke-AvmCheckPolicy -Path $fixture -Ecosystem terraform -AllowPathFallback } | Should -Throw '*provider_schemas*'
+            $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
+            @($calls | Where-Object Command -eq 'plan') | Should -HaveCount 0
+            foreach ($call in @($calls | Where-Object DataDirectory -like '*policy-stage*')) {
+                Test-Path -LiteralPath $call.Directory | Should -BeFalse
+                Test-Path -LiteralPath $call.DataDirectory | Should -BeFalse
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_STUB_TERRAFORM_TRACE', $(if ($null -eq $savedTrace) { [NullString]::Value } else { $savedTrace }), 'Process')
+        }
     }
 
     It 'F59: Invoke-AvmCheckPolicy fails and surfaces a real plan-JSON violation' {

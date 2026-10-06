@@ -336,6 +336,30 @@ A step that raises `AvmNotSupportedException` is reported as
 `Status='skipped'`; an `AvmConfigurationException` is a hard failure. Pass
 `-StopOnFail` to abort on the first hard failure.
 
+### Automatic provider registration during policy checks
+
+`avm check policy` and the policy step of `avm pr-check` disable automatic
+resource-provider registration for the official AzureRM and AzAPI providers.
+Each example runs in its own copied module tree with a private Terraform data
+directory. After initialization, the tools inspect the installed provider schemas
+and add final override files only in that staging tree, including local and
+downloaded child modules. AzureRM's explicit registration lists are cleared;
+authentication, tenant/subscription settings, features, aliases and inherited
+provider configurations are retained. Child-process environment defaults also
+protect implicit providers and replace contradictory registration flags.
+
+Planning stops if parsing, module isolation, the provider schema or native
+validation prevents enforcement. Policy examples must be backend-free; backend
+and cloud blocks are rejected before initialization. Unset `TF_CLI_ARGS` and
+command-specific `TF_CLI_ARGS_*` for init, providers, validate, plan and show;
+use `.tfvars` or `TF_VAR_*` for inputs instead. Query and state-migration files
+are not supported in policy configurations because their provider settings do
+not follow normal Terraform override precedence.
+
+These safeguards do not change deployment or E2E behavior and do not make
+arbitrary authored hooks or data sources read-only. Policy plans still require
+the appropriate authorization and example inputs.
+
 ---
 
 ## 4. Pinned-asset config
