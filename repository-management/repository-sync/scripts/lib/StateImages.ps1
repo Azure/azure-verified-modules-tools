@@ -100,3 +100,13 @@ function Get-TransferResourceKey {
     param([System.Collections.IDictionary] $Resource)
     return "$($Resource['module'])|$($Resource['mode'])|$($Resource['type'])|$($Resource['name'])"
 }
+
+function Get-TransferManagedObjectKey {
+    param([System.Collections.IDictionary] $Resource, [System.Collections.IDictionary] $Instance)
+
+    $id = [string]$Instance['attributes']['id']
+    if ($id.StartsWith('/', [StringComparison]::Ordinal) -or $id -imatch '\A[0-9a-f-]{36}/member/[0-9a-f-]{36}\z') {
+        return "scoped|$($id.ToLowerInvariant())"
+    }
+    return "$($Resource['type'])|$id"
+}

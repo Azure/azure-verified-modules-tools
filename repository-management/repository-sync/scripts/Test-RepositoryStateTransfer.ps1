@@ -91,19 +91,18 @@ foreach ($entry in @(@{ Image = $source; Source = $true }, @{ Image = $destinati
     foreach ($resource in $entry.Image.State['resources']) {
         $module = [string]$resource['module']
         if (($entry.Source -and $module -cne 'module.azure') -or
-            (-not $entry.Source -and $module -cnotin @('module.github', 'module.azure[0]'))) {
+            (-not $entry.Source -and $module -cmatch '^module\.bami(?:$|\.|\[)')) {
             throw 'Unexpected, split, or partially consolidated namespace; stop before publication.'
         }
-        $provider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
-        elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
-        elseif ($module -ceq 'module.github' -and $resource['type'] -cmatch '^github_') { 'provider["registry.terraform.io/integrations/github"]' }
-        else { throw 'Unexpected resource type requires operator review.' }
-        if ($resource['provider'] -cne $provider) { throw 'Unexpected provider binding requires operator review.' }
+        if ($entry.Source) {
+            $provider = if ($resource['type'] -cmatch '^azapi_') { 'provider["registry.terraform.io/azure/azapi"]' }
+            elseif ($resource['type'] -cmatch '^azuread_') { 'provider["registry.terraform.io/hashicorp/azuread"]' }
+            else { throw 'Unexpected source resource type requires operator review.' }
+            if ($resource['provider'] -cne $provider) { throw 'Unexpected source provider binding requires operator review.' }
+        }
         if ($resource['mode'] -ceq 'managed') {
             foreach ($instance in $resource['instances']) {
-                $id = [string]$instance['attributes']['id']
-                if ($resource['type'] -cmatch '^(azapi|azuread)_') { $id = $id.ToLowerInvariant() }
-                if (-not $ownedIds.Add("$provider|$($resource['type'])|$id")) {
+                if (-not $ownedIds.Add((Get-TransferManagedObjectKey -Resource $resource -Instance $instance))) {
                     throw 'Multiple addresses own the same managed object; resolve the legacy ownership collision separately.'
                 }
             }
