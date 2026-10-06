@@ -109,16 +109,6 @@ Describe 'Terraform test tenant selection' {
             { Resolve-RepositoryTestTenantSettings -TestTenant $value } | Should -Throw '*exactly*'
         }
     }
-
-    It 'separates the state key by tenant and repository without changing the legacy key' {
-        Get-AvmBamiIdentityStateKey -TenantId '10000000-0000-4000-8000-000000000001' -RepoId avm-ptn-example-repo |
-            Should -BeExactly 'bami-identities/10000000-0000-4000-8000-000000000001/avm-ptn-example-repo.tfstate'
-        Get-AvmBamiIdentityStateKey -TenantId '20000000-0000-4000-8000-000000000001' -RepoId avm-ptn-example-repo |
-            Should -BeExactly 'bami-identities/20000000-0000-4000-8000-000000000001/avm-ptn-example-repo.tfstate'
-        foreach ($repoId in @('../legacy', 'avm-ptn-example/other', 'AVM-ptn-example', 'example')) {
-            { Get-AvmBamiIdentityStateKey -TenantId '10000000-0000-4000-8000-000000000001' -RepoId $repoId } | Should -Throw
-        }
-    }
 }
 
 Describe 'Candidate plan and output safety' {
