@@ -138,17 +138,17 @@
     },
     {
       "name": "terraform",
-      "version": "1.15.8",
+      "version": "1.16.5",
       "urlTemplate": "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_{os}_{arch}.zip",
       "archive": "zip",
       "entrypoint": "terraform",
       "sha256": {
-        "windows-amd64": "2ff41d2129afb1982733c132c61a8d6ef038f879f3aeede7fc28b8b8b24acf02",
-        "windows-arm64": "ffd9399a37ee8123263d84ec5c00d09d7704f9997cb345d7c9cac56c3fc1348e",
-        "linux-amd64": "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d",
-        "linux-arm64": "8891e9dcedc9e3b8950bc6af9d4d8af1f4cfade3062f53b9dc403a89f6ce8c9c",
-        "darwin-amd64": "e2e812e783771159bf758fd4e55d6dc9bb08f63e2af2c63d212721807a02c5dc",
-        "darwin-arm64": "f210110c5698b94d803a7a63cdb0251b5455c150841478808e2bbb343f95ed68"
+        "windows-amd64": "01700102b7291f95c0ab61394b55bfd5f57a12ac65632c2c1958691c8cf438ef",
+        "windows-arm64": "f5978cc73678af764c0799cd4960f93a600d89daa23f833c6f3070f2e758c490",
+        "linux-amd64": "2bc2fcfff033265c9e02ca0351f01794eb122f62a9b2a49a3294b9e49eaab5e4",
+        "linux-arm64": "61a50b00485ee4810cf20581ef080fc54d34d666e175c58d9a10501c65c1ccde",
+        "darwin-amd64": "9809158e481cf2d3a8433e59179f397b8edb5172397711bd98f6bb32edcaf53b",
+        "darwin-arm64": "ecdef65e24193d627f27c39baeda31295f08c938d8a3d4764f442fb916d4b7dc"
       }
     },
     {
