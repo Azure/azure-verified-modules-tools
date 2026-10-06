@@ -47,22 +47,6 @@ function Resolve-RepositoryTestTenantSettings {
     return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = 'Ready'; Settings = $settings }
 }
 
-function Get-AvmBamiIdentityStateKey {
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)] [string] $TenantId,
-        [Parameter(Mandatory)] [string] $RepoId
-    )
-
-    $id = [guid]::Empty
-    if (-not [guid]::TryParseExact($TenantId, 'D', [ref] $id) -or $id -eq [guid]::Empty -or
-        $RepoId -cnotmatch '^avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*$') {
-        throw [System.ArgumentException]::new('Candidate state requires a tenant GUID and a canonical AVM repository ID.')
-    }
-    return "bami-identities/$($id.ToString())/$RepoId.tfstate"
-}
-
 function Get-AvmTerraformPlannedResource {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [System.Collections.IDictionary] $Module)
