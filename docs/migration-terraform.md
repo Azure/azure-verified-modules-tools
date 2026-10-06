@@ -444,11 +444,15 @@ staged configs, preventing traversal and sibling collisions. AVM allows only
 this one direct child layer; `avm check convention` rejects nested directories
 that contain Terraform `.tf` source.
 
-The retired `required_output_rmfr7` rule is omitted from the temporary merged
-config only when its sole, unambiguous override is `enabled = false` and the
-official AVM 1.0.0 plugin remains enabled. Authored files are unchanged. Enabled,
-unknown, ambiguous or differently configured rules still reach TFLint and fail
-normally; this compatibility handling does not disable an active rule.
+With the official AVM 1.0.0 plugin enabled, a sole, unambiguous `enabled = false`
+override for `required_output_rmfr7` is migrated to
+`avm_output_resource_id_required`, preserving the author's exemption. The
+disabled `terraform_output_separate` rule is omitted because it was removed
+without a replacement. Both actions warn and leave authored files unchanged.
+Rename the former override and remove the latter from maintained sources.
+Enabled legacy rules, unknown names, conflicting aliases, extra attributes and
+different plugin versions still reach TFLint and fail normally. Current rule
+attributes and later per-scope overrides retain their usual precedence.
 
 ---
 

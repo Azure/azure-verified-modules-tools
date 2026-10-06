@@ -40,6 +40,8 @@ No matching regression branch or review existed at the initial check.
 - [x] Cover clean packaged runtime, pins, offline/install failures and ordering.
 - [x] Run focused build routes and the prescribed full local gate.
 - [x] Build the candidate, commit/push, and hand its SHA and package to the parent.
+- [x] Preserve equivalent disabled-rule intent for all three utility controls.
+- [x] Qualify the replacement package after the canary-driven fix.
 - [ ] Record the parent's full canary matrix and finalize the new review.
 
 ## Validation
@@ -50,7 +52,7 @@ YAML parsing, and PSRule baseline discovery acquire the configured packages.
 A second fresh process passes offline with automatic installation disabled,
 using the same verified cache. No Azure plans or deployments run in this test.
 
-The final unfiltered gate passes layout/lint, 3,070 unit cases (nine existing
+The first candidate's unfiltered gate passes layout/lint, 3,070 unit cases (nine existing
 skips), and 1,417 component cases (one existing skip). An exact `b226e361`
 baseline run passed 1,383 component cases and the same skip: all 1,384 baseline
 case/result identities are retained, plus 34 new prerequisite cases. NUnit
@@ -71,15 +73,51 @@ were handed to the parent. Draft
 [#229](https://github.com/Azure/azure-verified-modules-tools/pull/229) awaits
 the full canary evidence.
 
+The parent's utility controls found that removing `required_output_rmfr7`
+lost the intended resource-ID exemption, and Regions still contains the
+disabled retired `terraform_output_separate` rule. Reopen the narrow migration
+to preserve verified equivalent-rule settings without ignoring unknown rules.
+Example and Naming passed both commands; fresh-process Terraform 1.15.8 and
+Pester 6.2 overrides passed both with visible warnings and isolated caches.
+Both upgrade guards still returned AVM1050/exit 10 with the override file.
+
+The utility audit covers all six override files at Naming `f74c017`, IP-addresses
+`02337a3`, and Regions `abcc7c4`. Only two legacy names occur:
+`required_output_rmfr7` maps to `avm_output_resource_id_required` in the
+[upstream 1.0.0 migration table](https://github.com/Azure/tflint-ruleset-avm/blob/v1.0.0/README.md#rule-name-migration).
+The old
+[output-separation rule](https://github.com/Azure/tflint-ruleset-basic-ext/blob/v0.7.1/rules/terraform_output_separate.go)
+has no replacement in the
+[1.0.0 rule registration](https://github.com/Azure/tflint-ruleset-avm/blob/v1.0.0/rules/rule_register.go)
+or its basic rules. Migrate only the disabled resource-ID exemption and remove
+only the disabled output-separation setting under the existing official-plugin
+guard. Preserve modern overrides, rule attributes, later scope precedence,
+and native errors for enabled, unknown or ambiguous legacy settings.
+
+Focused qualification passes 64 merge/engine cases and six native TFLint
+cases. The latter stage all six utility override configurations against the
+pinned, attested plugin in an isolated cache: only intended exemptions change
+the native issue set; enabled legacy and arbitrary unknown rules still fail.
+The native fixture does not initialize Terraform or contact Azure.
+
+The replacement's unfiltered `.\build.ps1 pre-commit` passes layout/lint,
+3,090 unit cases (nine existing skips), and 1,417 component cases (one existing
+skip), with no test/container failures. All component test definitions are
+unchanged; the correction adds 20 unit cases and six native integration cases.
+
 ## Blockers or dependencies
 
-Source qualification is complete. Final qualification depends on the parent's
-complete Terraform canary matrix against the frozen candidate; record the full
-matrix before closing this slice.
+The utility correction is locally qualified. Final qualification depends on
+the parent's utility reruns and complete Terraform canary matrix against the
+replacement frozen candidate; record the full matrix before closing this
+slice.
 The user authorized the parent to use existing credentials against the BAMI
 test tenant for plan/policy checks only, not apply/destroy, deployment, provider
-registration or access changes. DevOps-pool examples also need organization/PAT
-inputs. The parent's authenticated CDN baseline is blocked by the provider's
+registration or access changes. The user chose to leave the DevOps-pool policy
+check blocked by missing `azure_devops_organization_name` and
+`azure_devops_personal_access_token`; do not acquire credentials or invent
+values. Its pre-commit and lint pass unchanged. The parent's authenticated CDN
+baseline is blocked by the provider's
 prohibition on creating retired CDN endpoints, not retired-rule parsing.
 The checksum bypass is a user-directed security exception requiring the
 repository's SFI review/sign-off before merge/release; no sign-off is recorded.
