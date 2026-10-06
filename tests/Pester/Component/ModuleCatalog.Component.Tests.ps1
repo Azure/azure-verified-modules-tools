@@ -200,7 +200,7 @@ Describe 'Component: module catalog helpers' -Tag Component {
         }
     }
 
-    It 'keeps helper source-row removal guards through <Destination> generation and publication' -TestCases @(
+    It 'permits Bicep helper removals but protects Terraform helpers through <Destination> generation and publication' -TestCases @(
         @{ Destination = 'preview' }
         @{ Destination = 'canonical' }
     ) {
@@ -232,11 +232,12 @@ Describe 'Component: module catalog helpers' -Tag Component {
         }
         $inventory = Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration
         $held = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
-        $held.HeldBackSourceFiles | Should -HaveCount 6
+        $held.HeldBackSourceFiles | Should -HaveCount 3
+        $held.HeldBackSourceFiles | Should -Be @('TerraformPatternModules.csv', 'TerraformResourceModules.csv', 'TerraformUtilityModules.csv')
         $held.HeldBack | Should -Contain 'docs/v1/modules.json'
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -Force
         $bundle.Report.counts.catalogEntries | Should -Be 12
-        $bundle.Report.csvRowRemovals | Should -HaveCount 6
+        $bundle.Report.csvRowRemovals | Should -HaveCount 3
         $bundle.Report.csvRowRemovalsForced | Should -BeTrue
         $bundle.Report.missingMetadata | Should -HaveCount 0
         foreach ($ecosystem in @('bicep', 'terraform')) {
@@ -251,8 +252,13 @@ Describe 'Component: module catalog helpers' -Tag Component {
             $rows[0].ModuleName | Should -BeExactly $fixture.Original[$output.sourceFile].ModuleName
             $bundle.Report.sourceCsvRows[$output.sourceFile] | Should -HaveCount 2
             $removals = @($bundle.Report.csvRowRemovals | Where-Object sourceFile -eq $output.sourceFile)
-            $removals | Should -HaveCount 1
-            $removals[0].moduleName | Should -Match '/helper$'
+            if ($output.ecosystem -eq 'bicep') {
+                $removals | Should -HaveCount 0
+            }
+            else {
+                $removals | Should -HaveCount 1
+                $removals[0].moduleName | Should -Match '/helper$'
+            }
             $sourcePath = Join-Path $sourceRoot $output.sourcePath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($sourcePath))
             Copy-Item -LiteralPath (Join-Path $fixture.Legacy $output.sourceFile) -Destination $sourcePath
@@ -260,7 +266,7 @@ Describe 'Component: module catalog helpers' -Tag Component {
         Write-AvmCatalogBundle -Bundle $bundle -OutputPath $fixture.Output -Configuration $configuration | Out-Null
         $publicationRemovals = Get-AvmCatalogPublicationRowRemovals -BundlePath $fixture.Output `
             -Configuration $configuration -SourceRoot $sourceRoot
-        $publicationRemovals | Should -HaveCount 6
+        $publicationRemovals | Should -HaveCount 3
         $plan = [ordered]@{ schemaVersion = 1; manifestHash = $configuration.hash; outputHashes = [ordered]@{} }
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         foreach ($role in $paths.Keys) {
@@ -284,6 +290,57 @@ Describe 'Component: module catalog helpers' -Tag Component {
 }
 
 Describe 'Component: module catalog source CSV row retention' -Tag Component {
+    It 'permits removed Bicep submodule rows in <Kind> CSV generation and publication without force' -TestCases @(
+        @{ Kind = 'resource'; File = 'BicepResourceModules.csv' }
+        @{ Kind = 'pattern'; File = 'BicepPatternModules.csv' }
+        @{ Kind = 'utility'; File = 'BicepUtilityModules.csv' }
+    ) {
+        param($Kind, $File)
+        $fixture = New-CatalogFixture -AdoptAll
+        $family = @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'bicep' -and $_.ModuleType -eq $Kind })[0]
+        $rows = @($fixture.Original[$File])
+        foreach ($suffix in @('removed-child', 'removed-child/grandchild')) {
+            $row = [ordered]@{}
+            foreach ($header in $fixture.Headers[$File]) { $row[$header] = $fixture.Original[$File][$header] }
+            $row.ModuleName = "$($family.ModulePath)/$suffix"
+            $row.RepoURL = "$($family.Identity.RepoURL)/$suffix"
+            $rows += $row
+        }
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $File),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$File] -Rows $rows))
+        $null = Get-CatalogFixtureBundle -Fixture $fixture
+        $sourceRoot = Initialize-CatalogPublicationBase -Fixture $fixture
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+
+        & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root `
+            -OutputPath $fixture.Output -DiagnosticsPath $diagnostics | Out-Null
+
+        $report = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'v1' 'migration-report.json')
+        $report.sourceCsvRows[$File] | Should -HaveCount 3
+        $report.missingMetadata | Should -HaveCount 2
+        $report.csvRowRemovals | Should -HaveCount 0
+        $report.csvRowRemovalsForced | Should -BeFalse
+        $report.heldBackOutputs | Should -HaveCount 0
+        $generated = @(Import-Csv -LiteralPath (Join-Path $fixture.Output 'docs' $File))
+        $generated | Should -HaveCount 1
+        $generated[0].ModuleName | Should -BeExactly $family.ModulePath
+        { Test-AvmCatalogPublicationBundle -Path $fixture.Output } | Should -Not -Throw
+        (Get-AvmCatalogPublicationRowRemovals -BundlePath $fixture.Output `
+            -Configuration (Read-AvmCatalogConfiguration) -SourceRoot $sourceRoot) | Should -HaveCount 0
+        { & (Join-Path $catalogScripts 'Assert-ModuleCatalogPublication.ps1') -DiagnosticsPath $diagnostics } | Should -Not -Throw
+    }
+
+    It 'still rejects duplicate Bicep submodule source identities' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $file = 'BicepResourceModules.csv'
+        $row = $fixture.Original[$file]
+        $row.ModuleName += '/removed-child'
+        $row.RepoURL += '/removed-child'
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $file),
+            (ConvertTo-AvmCatalogCsv -Headers $fixture.Headers[$file] -Rows @($row, $row)))
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*Duplicate legacy identity*'
+    }
+
     It 'holds back outputs at the offline entry point and still honors WhatIf' {
         $fixture = New-CatalogFixture
         Save-CatalogMetadata -Module $fixture.Modules[0]

@@ -296,7 +296,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
 
         It 'does not let an exclusion hide an unrelated <Case> removal' -TestCases @(
             @{ Case = 'missing metadata'; Ecosystem = 'bicep' }
-            @{ Case = 'published helper'; Ecosystem = 'bicep' }
+            @{ Case = 'published helper'; Ecosystem = 'terraform' }
             @{ Case = 'unresolved identity'; Ecosystem = 'bicep' }
             @{ Case = 'same-name provider'; Ecosystem = 'terraform' }
             @{ Case = 'different CSV'; Ecosystem = 'bicep' }
@@ -322,8 +322,8 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
                             -ModulePath 'avm/res/key-vault/vault' -Canonical 'Microsoft.KeyVault/vaults'
                     }
                     'published helper' {
-                        Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository $module.Repository `
-                            -ModulePath "$($module.ModulePath)/helper" -Canonical 'helper' -Child -Adopt
+                        Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository $module.Repository `
+                            -ModulePath 'modules/helper' -Canonical 'helper' -Child -Adopt
                     }
                     'same-name provider' {
                         Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azure-avm-res-storage-storageaccount' `
@@ -417,6 +417,115 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
             $bundle.Report.missingOwners | Should -HaveCount 0
             $bundle.HeldBack | Should -HaveCount 0
         }
+    }
+
+    It 'derives a multi-scope Bicep parent status for <Case> without inventing a parent release' -TestCases @(
+        @{ Case = 'only management-group scope published'; Published = @('mg-scope'); Owned = $true; Deprecated = $false; Expected = 'Available' }
+        @{ Case = 'only subscription scope published'; Published = @('sub-scope'); Owned = $true; Deprecated = $false; Expected = 'Available' }
+        @{ Case = 'only resource-group scope published'; Published = @('rg-scope'); Owned = $true; Deprecated = $false; Expected = 'Available' }
+        @{ Case = 'all scopes published'; Published = @('mg-scope', 'rg-scope', 'sub-scope'); Owned = $true; Deprecated = $false; Expected = 'Available' }
+        @{ Case = 'no scopes published'; Published = @(); Owned = $true; Deprecated = $false; Expected = 'Proposed' }
+        @{ Case = 'published scope without owners'; Published = @('rg-scope'); Owned = $false; Deprecated = $false; Expected = 'Orphaned' }
+        @{ Case = 'deprecated published scope'; Published = @('sub-scope'); Owned = $true; Deprecated = $true; Expected = 'Deprecated' }
+        @{ Case = 'deprecated unpublished scopes'; Published = @(); Owned = $true; Deprecated = $true; Expected = 'Excluded' }
+    ) {
+        param($Case, $Published, $Owned, $Deprecated, $Expected)
+        $fixture = New-CatalogFixture -AdoptAll
+        $parent = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/authorization/role-assignment' -Canonical 'Microsoft.Authorization/roleAssignments' -Adopt
+        $scopes = @(foreach ($name in @('mg-scope', 'rg-scope', 'sub-scope')) {
+                Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository $parent.Repository `
+                    -ModulePath "$($parent.ModulePath)/$name" -Canonical $parent.Canonical -Child -Adopt
+            })
+        if (-not $Owned) {
+            $path = Join-Path $parent.Directory 'metadata.json'
+            $metadata = Read-AvmCatalogJson -Path $path
+            $metadata.owners = @()
+            Save-CatalogJson -Path $path -Data $metadata
+        }
+        if ($Deprecated) {
+            [System.IO.File]::WriteAllText((Join-Path $parent.Directory 'DEPRECATED.md'), 'Retired module.')
+        }
+        $unpublished = @($parent.Identity.Key) + @($scopes | Where-Object {
+                $Published -cnotcontains $_.ModulePath.Split('/')[-1]
+            } | ForEach-Object { $_.Identity.Key })
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Unpublished $unpublished
+        $catalog = ConvertFrom-Json -InputObject $bundle.Files['docs/v1/modules.json'] -AsHashtable
+        $rows = @($bundle.Files['docs/BicepResourceModules.csv'] | ConvertFrom-Csv)
+        $records = @(if ($catalog.modules.Contains($parent.Canonical)) { $catalog.modules[$parent.Canonical].bicep })
+        $rootRecord = @($records | Where-Object modulePath -CEQ $parent.ModulePath)
+        $rootRow = @($rows | Where-Object ModuleName -CEQ $parent.ModulePath)
+        if ($Expected -eq 'Excluded') {
+            $rootRecord | Should -HaveCount 0
+            $rootRow | Should -HaveCount 0
+            $bundle.Report.excludedModules | Should -HaveCount 4
+        }
+        else {
+            $rootRecord | Should -HaveCount 1
+            $rootRecord[0].moduleStatus | Should -BeExactly $Expected
+            $rootRow | Should -HaveCount 1
+            $rootRow[0].ModuleStatus | Should -BeExactly $Expected
+            $rootRecord[0].registry.status | Should -BeExactly 'not-published'
+            $rootRecord[0].registry.currentVersion | Should -BeNullOrEmpty
+            $rootRecord[0].registry.firstPublishedIn | Should -BeNullOrEmpty
+            $rootRecord[0].registry.marRegistered | Should -BeTrue
+            $rootRecord[0].publicRegistryReference | Should -BeExactly $parent.Identity.Reference
+            @($bundle.Report.excludedModules | ForEach-Object { $_.modulePath }) | Should -Not -Contain $parent.ModulePath
+        }
+        foreach ($scope in $scopes) {
+            $publishedScope = $Published -ccontains $scope.ModulePath.Split('/')[-1]
+            $record = @($records | Where-Object modulePath -CEQ $scope.ModulePath)
+            if ($Deprecated -and -not $publishedScope) {
+                $record | Should -HaveCount 0
+                continue
+            }
+            $record | Should -HaveCount 1
+            $scopeStatus = if ($Deprecated) { 'Deprecated' } elseif (-not $publishedScope) { 'Proposed' } elseif ($Owned) { 'Available' } else { 'Orphaned' }
+            $record[0].moduleStatus | Should -BeExactly $scopeStatus
+            $record[0].registry.status | Should -BeExactly $(if ($publishedScope) { 'available' } else { 'not-published' })
+        }
+        $bundle.HeldBack | Should -HaveCount 0
+        $catalog.modules['Microsoft.Storage/storageAccounts'].bicep[0].moduleStatus | Should -BeExactly 'Available'
+    }
+
+    It 'rejects incomplete multi-scope publication evidence: <Case>' -TestCases @(
+        @{ Case = 'missing scope registry entry' }
+        @{ Case = 'invalid scope registry entry' }
+        @{ Case = 'missing scope source' }
+        @{ Case = 'missing parent source' }
+    ) {
+        param($Case)
+        $fixture = New-CatalogFixture -AdoptAll
+        $parent = $fixture.Modules[0]
+        $scope = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository $parent.Repository `
+            -ModulePath "$($parent.ModulePath)/rg-scope" -Canonical $parent.Canonical -Child -Adopt
+        $null = Get-CatalogFixtureBundle -Fixture $fixture -Unpublished $parent.Identity.Key
+        $registryPath = Join-Path $fixture.Root 'registry.json'
+        $registry = Read-AvmCatalogJson -Path $registryPath
+        switch ($Case) {
+            'missing scope registry entry' { $registry.Remove($scope.Identity.Key) }
+            'invalid scope registry entry' { $registry[$scope.Identity.Key].currentVersion = $null }
+            'missing scope source' { [System.IO.File]::Delete((Join-Path $scope.Directory 'main.bicep')) }
+            'missing parent source' { [System.IO.File]::Delete((Join-Path $parent.Directory 'main.bicep')) }
+        }
+        Save-CatalogJson -Path $registryPath -Data $registry
+        { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output } | Should -Throw
+        Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+    }
+
+    It 'does not promote a multi-scope Bicep parent from a <Case> release' -TestCases @(
+        @{ Case = 'helper'; Path = 'rg-scope'; Canonical = 'helper' }
+        @{ Case = 'nested scope'; Path = 'child/rg-scope'; Canonical = 'Microsoft.Storage/storageAccounts' }
+        @{ Case = 'ordinary child'; Path = 'child'; Canonical = 'Microsoft.Storage/storageAccounts' }
+    ) {
+        param($Case, $Path, $Canonical)
+        $fixture = New-CatalogFixture -AdoptAll
+        $parent = $fixture.Modules[0]
+        $null = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository $parent.Repository `
+            -ModulePath "$($parent.ModulePath)/$Path" -Canonical $Canonical -Child -Adopt
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Unpublished $parent.Identity.Key
+        $record = @($bundle.Catalog.modules[$parent.Canonical].bicep | Where-Object modulePath -CEQ $parent.ModulePath)[0]
+        $record.moduleStatus | Should -BeExactly 'Proposed'
     }
 
     It 'resolves Bicep <Case> publication independently of the rest of the family' -TestCases @(
