@@ -89,7 +89,7 @@ function Select-AvmCatalogCsvRowRemoval {
         [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
-    if ($Renames.Count -eq 0 -and ($null -eq $ExcludedModuleKeys -or $ExcludedModuleKeys.Count -eq 0)) {
+    if ($Removals.Count -eq 0) {
         return , $Removals
     }
     $renamed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -104,9 +104,12 @@ function Select-AvmCatalogCsvRowRemoval {
             if ($renamed.Contains(('{0}|{1}|{2}' -f [string]$_.sourceFile, [string]$_.moduleName, [string]$_.repoURL))) {
                 return $false
             }
+            $key = Get-AvmCatalogCsvRowKey -Row @{ moduleName = $_.moduleName; repoURL = $_.repoURL } `
+                -Output $outputs[$_.sourceFile] -Configuration $Configuration
+            if ($key.StartsWith('bicep:', [StringComparison]::Ordinal) -and $_.moduleName.Split('/').Count -gt 4) {
+                return $false
+            }
             if ($null -ne $ExcludedModuleKeys -and $ExcludedModuleKeys.Count -gt 0) {
-                $key = Get-AvmCatalogCsvRowKey -Row @{ moduleName = $_.moduleName; repoURL = $_.repoURL } `
-                    -Output $outputs[$_.sourceFile] -Configuration $Configuration
                 return -not $ExcludedModuleKeys.Contains($key)
             }
             return $true

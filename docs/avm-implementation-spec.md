@@ -469,7 +469,12 @@ generated CSV indexes and catalog JSON after full validation; published deprecat
 modules remain Deprecated. Otherwise, unpublished modules are Proposed regardless
 of owners or source files; published modules without owners are Orphaned, and
 published modules with owners are Available. Existing Deprecated state is retained
-as a deprecation signal during transition. New deprecations are derived from Bicep `DEPRECATED.md` (covering that
+as a deprecation signal during transition. A multi-scope Bicep root counts as
+published for lifecycle status and deprecation retention when any direct
+`rg-scope`, `sub-scope`, or `mg-scope` module is published. Its registry fields
+still describe the root path, without an invented release version or date;
+ordinary children do not promote their parents.
+New deprecations are derived from Bicep `DEPRECATED.md` (covering that
 module and descendants), or
 the Terraform repository's archived flag (covering all its modules). There is
 no authored metadata status field. Each excluded module produces a warning naming
@@ -605,14 +610,18 @@ stable repository/module-path identities, inherited owners, the derived family
 `moduleType`, and null ARM `providerNamespace`/`resourceType`. Every generated
 CSV omits them, including previews and canonical outputs. Invalid present
 metadata is an error; missing metadata never causes a full legacy CSV record
-to be retained. Generation holds back affected outputs when source CSV module
-identities would disappear; publication independently enforces those holds.
+to be retained. Generation holds back affected outputs when protected source
+CSV module identities would disappear; publication independently enforces those
+holds. Valid Bicep submodule paths below `avm/{res,ptn,utl}/{group}/{module}`
+may disappear without `Force`, including helpers and deeper children. Root
+records, malformed or unresolved identities, and Terraform submodule rows remain
+protected.
 Validated deprecated/unpublished records are retained as `excludedModules` in
 the hash-protected migration report. Only their exact resolved implementation
-identities are exempt from this removal guard, without `Force`; malformed,
+identities are also exempt from this removal guard, without `Force`; malformed,
 inconsistent, or mismatched exclusion evidence fails publication.
 Explicit `Force` permits other removals only, not other validation failures.
-Other helper source rows remain subject to the removal report and guard.
+Other Terraform helper source rows remain subject to the removal report and guard.
 Source CSVs, not existing preview outputs, are the comparison baseline; this
 remains true after canonical CSV replacement. Hash-protected source-row evidence
 is checked again against the unchanged publication base before writes.
