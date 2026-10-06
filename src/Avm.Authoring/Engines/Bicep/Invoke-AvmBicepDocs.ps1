@@ -29,7 +29,12 @@ function Invoke-AvmBicepDocs {
 
         [switch] $CheckDrift,
 
-        [switch] $IncludeRenderedContent
+        [switch] $IncludeRenderedContent,
+
+        [switch] $PreparationOnly,
+
+        [AllowEmptyCollection()]
+        [object[]] $SelectedScope
     )
 
     Set-StrictMode -Version 3.0
@@ -47,9 +52,14 @@ function Invoke-AvmBicepDocs {
         throw [System.ArgumentException]::new(
             '-IncludeRenderedContent requires -CheckDrift to prevent accidental README writes.')
     }
+    if ($PreparationOnly -and -not $CheckDrift) {
+        throw [System.ArgumentException]::new('README validation preparation requires -CheckDrift.')
+    }
 
     $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
-    $scopes = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories -IncludeReadmeOnly)
+    $scopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else {
+            Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories -IncludeReadmeOnly
+        })
     $plan = [System.Collections.Generic.List[object]]::new()
     $issues = [System.Collections.Generic.List[object]]::new()
     $changed = [System.Collections.Generic.List[string]]::new()
@@ -273,6 +283,9 @@ function Invoke-AvmBicepDocs {
         $changed.Add($relative)
     }
 
+    if ($PreparationOnly) {
+        return [pscustomobject]@{ ReadmeInputs = $readmeInputs.ToArray(); Issues = $issues.ToArray() }
+    }
     if ($CheckDrift -and $readmeInputs.Count -gt 0) {
         $convention = @{
             Root                 = $Context.Root

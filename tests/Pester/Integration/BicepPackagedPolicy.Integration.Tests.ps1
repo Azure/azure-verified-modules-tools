@@ -57,9 +57,9 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $configuration.RulePath | Should -BeLike "$script:package*"
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
         $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
-        $result.TestsSelected | Should -Be 1
-        $result.BaselinesExecuted | Should -Be 4
-        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 4
+        $result.TestsSelected | Should -Be 2
+        $result.BaselinesExecuted | Should -Be 8
+        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
         $result.Evaluations.Baseline | Should -Contain 'CB.AVM.WAF.Security'
     }
 
@@ -74,6 +74,6 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
                 $_.RuleName -eq 'Azure.Storage.SecureTransfer' -and
                 $_.Baseline -eq 'CB.AVM.WAF.Security' -and $_.Severity -eq 'error'
             }).Count | Should -BeGreaterThan 0
-        $result.BaselinesExecuted | Should -Be 4
+        $result.BaselinesExecuted | Should -Be 8
     }
 }

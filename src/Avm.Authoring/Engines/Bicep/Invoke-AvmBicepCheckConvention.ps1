@@ -26,7 +26,12 @@ function Invoke-AvmBicepCheckConvention {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [switch] $PreparationOnly,
+
+        [AllowEmptyCollection()]
+        [object[]] $SelectedScope
     )
 
     Set-StrictMode -Version 3.0
@@ -39,7 +44,10 @@ function Invoke-AvmBicepCheckConvention {
 
     $issues = [System.Collections.Generic.List[object]]::new()
     $scopes = [System.Collections.Generic.List[object]]::new()
-    foreach ($module in @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)) {
+    $moduleScopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else {
+            Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories
+        })
+    foreach ($module in @($moduleScopes)) {
         $scope = Get-AvmBicepConventionScope -Path $module.Path
         if ($null -eq $scope) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `
@@ -205,6 +213,9 @@ function Invoke-AvmBicepCheckConvention {
         TestSources               = @($sources | Where-Object IsTest)
         Workflows                 = $workflows
         Publication               = $publication
+    }
+    if ($PreparationOnly) {
+        return [pscustomobject]@{ Convention = $convention; Issues = $issues.ToArray() }
     }
     foreach ($issue in @(Invoke-AvmBicepConventionSuite -Convention $convention)) {
         $issues.Add($issue)

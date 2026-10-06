@@ -7,10 +7,10 @@ function Invoke-AvmTestUnit {
         For Bicep, runs module tests/unit/*.tests.ps1 only by default.
         Pester runs in a child PowerShell process and receives repoRootPath
         and moduleFolderPaths. -Recurse includes nested module scopes.
-        -IncludeCompliance explicitly adds the registry's compliance
-        module.tests.ps1 suite using the pinned Bicep binary; -CompliancePath
-        selects an alternate suite and implies -IncludeCompliance. Compliance
-        is not run twice by default when convention checks are enabled.
+        -IncludeCompliance adds packaged native conventions, metadata and
+        README requirements in one in-process Pester run. Authored unit tests
+        remain isolated in a child process. -CompliancePath selects an explicit
+        alternate suite and implies -IncludeCompliance.
 
         For Terraform, runs 'terraform test' against tests/unit/ through
         Invoke-AvmTerraformTestSuite -Tier unit.
@@ -52,7 +52,7 @@ function Invoke-AvmTestUnit {
         Bicep-only: include child module scopes and their unit tests.
 
     .PARAMETER IncludeCompliance
-        Bicep-only: also run the registry compliance suite. This is an
+        Bicep-only: also run the packaged compliance suite. This is an
         explicit transition option, not part of the default unit tier.
 
     .PARAMETER CompliancePath
@@ -61,7 +61,7 @@ function Invoke-AvmTestUnit {
         Selecting a path enables compliance without -IncludeCompliance.
 
     .PARAMETER RepositoryRoot
-        Bicep-only: override the registry root passed to compliance tests.
+        Bicep-only: override the repository root passed to authored tests.
 
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check that otherwise stops the command when a
@@ -72,6 +72,8 @@ function Invoke-AvmTestUnit {
         Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
         Bicep also reports RunsSkipped, RunsInconclusive, RunsFiltered, UnitFiles,
         ComplianceFile and ModuleScopes.
+        RunsFailed includes native compliance warning assertions; their warning
+        severity does not fail the tier. Authored test failures always fail it.
 
     .EXAMPLE
         avm test unit

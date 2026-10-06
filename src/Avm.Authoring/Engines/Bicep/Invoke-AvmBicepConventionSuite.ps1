@@ -14,7 +14,21 @@ function Invoke-AvmBicepConventionSuite {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
-        [System.Collections.IDictionary] $Convention
+        [System.Collections.IDictionary] $Convention,
+
+        [switch] $Compliance,
+
+        [AllowEmptyCollection()]
+        [object[]] $MetadataInputs = @(),
+
+        [AllowEmptyCollection()]
+        [object[]] $ReadmeInputs = @(),
+
+        [AllowEmptyCollection()]
+        [string[]] $Tag = @(),
+
+        [AllowEmptyCollection()]
+        [string[]] $TestName = @()
     )
 
     Set-StrictMode -Version 3.0
@@ -30,6 +44,9 @@ function Invoke-AvmBicepConventionSuite {
     $Convention.NativeTestSourceExpected = -1
     $Convention.NativeLayoutExpected = -1
     $Convention.NativePublicationExpected = -1
+    $Convention.NativeMetadataExpected = if ($MetadataInputs.Count -gt 0) { -1 } else { 0 }
+    $Convention.NativeReadmeExpected = if ($ReadmeInputs.Count -gt 0) { -1 } else { 0 }
+    $Convention.ValidationSummary = $null
     $suiteDirectory = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'conventions'
     $suiteDirectory = [System.IO.Path]::GetFullPath($suiteDirectory)
@@ -39,7 +56,8 @@ function Invoke-AvmBicepConventionSuite {
     $scopeCount = @($Convention.Scopes).Count
     $workflowCount = @($Convention.Workflows).Count
     $expected = 0
-    if ($scopeCount -eq 0 -and $workflowCount -eq 0 -and $compiledCount -eq 0) {
+    if ($scopeCount -eq 0 -and $workflowCount -eq 0 -and $compiledCount -eq 0 -and
+        $MetadataInputs.Count -eq 0 -and $ReadmeInputs.Count -eq 0) {
         return $issues.ToArray()
     }
 
@@ -83,8 +101,21 @@ function Invoke-AvmBicepConventionSuite {
                             -Code 'avm.bicep.convention-suite-incomplete' -Message 'Publication input is missing target/tag data without a preparation diagnostic.'))
             }
         }
+        if ($Compliance) {
+            $Convention.MetadataValidations = $MetadataInputs
+            $Convention.ReadmeInputs = $ReadmeInputs
+            if ($MetadataInputs.Count -gt 0) {
+                $files += [System.IO.Path]::GetFullPath((Join-Path -Path $suiteDirectory -ChildPath '..' `
+                            -AdditionalChildPath '..', 'metadata', 'Metadata.Tests.ps1'))
+            }
+            if ($ReadmeInputs.Count -gt 0) { $files += Join-Path $suiteDirectory 'Readme.Tests.ps1' }
+            $Convention.SuiteFiles = $files
+            $Convention.ComplianceFile = Join-Path (Split-Path $suiteDirectory) 'Compliance.Tests.ps1'
+            $files = @($Convention.ComplianceFile)
+        }
         $summary = Invoke-AvmBicepPesterSuite -Files $files -WorkingDirectory $root `
-            -Mode Convention -ConventionData $Convention -EnvVars @{} -InProcess
+            -Mode Convention -ConventionData $Convention -Tag $Tag -TestName $TestName -EnvVars @{} -InProcess
+        $Convention.ValidationSummary = $summary
     }
     catch [AvmProcessException] {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
@@ -116,10 +147,12 @@ function Invoke-AvmBicepConventionSuite {
     }
     $expected += $Convention.NativeCompiledExpected + $Convention.NativeWorkflowExpected + $Convention.NativeOwnershipExpected
     $expected += $Convention.NativeApiVersionExpected
+    $expected += [Math]::Max(0, $Convention.NativeMetadataExpected) + [Math]::Max(0, $Convention.NativeReadmeExpected)
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeChildPublishExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeVersionExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeTestSourceExpected) }
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeLayoutExpected) + [Math]::Max(0, $Convention.NativePublicationExpected) }
+    $filtered = if ($Compliance) { $summary.Filtered } else { 0 }
     if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
         ($compiledCount -gt 0 -and $Convention.NativeApiVersionExpected -lt 1) -or
         $Convention.NativeWorkflowExpected -lt $workflowCount -or
@@ -128,7 +161,8 @@ function Invoke-AvmBicepConventionSuite {
         ($scopeCount -gt 0 -and $Convention.NativeVersionExpected -lt 0) -or
         ($scopeCount -gt 0 -and $Convention.NativeTestSourceExpected -lt 0) -or
         ($scopeCount -gt 0 -and ($Convention.NativeLayoutExpected -lt 0 -or $Convention.NativePublicationExpected -lt 0)) -or
-        $summary.Total -ne $expected -or $summary.Passed + $summary.Failed -ne $expected) {
+        $Convention.NativeMetadataExpected -lt 0 -or $Convention.NativeReadmeExpected -lt 0 -or
+        $summary.Total -ne $expected -or $summary.Passed + $summary.Failed + $filtered -ne $expected) {
         $issues.Add((New-AvmBicepConventionIssue -Root $root -Path $root `
                     -Code 'avm.bicep.convention-suite-incomplete' `
                     -Message "The convention suite ran $($summary.Passed + $summary.Failed) of $expected expected checks."))

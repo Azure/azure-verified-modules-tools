@@ -89,7 +89,7 @@ foreach ($test in @($result.Tests)) {
     $detail = if ($null -ne $errorRecord) { $errorRecord.Exception.Message } else { "Pester reported $($test.Result)." }
     $file = if ($null -ne $test.ScriptBlock) { $test.ScriptBlock.File } else { '' }
     $line = if ($null -ne $test.ScriptBlock) { $test.ScriptBlock.StartPosition.StartLine } else { 0 }
-    $nativeCode = @($test.Tag | Where-Object { $_ -like 'avm.bicep.*' }) | Select-Object -First 1
+    $nativeCode = @($test.Tag | Where-Object { $_ -like 'avm.bicep.*' -or $_ -like 'AVM_METADATA_*' }) | Select-Object -First 1
     if ($inputData.Mode -ceq 'Convention' -and $nativeCode) {
         $target = $null
         $targetLine = 0

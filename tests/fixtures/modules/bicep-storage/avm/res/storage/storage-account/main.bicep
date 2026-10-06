@@ -3,6 +3,10 @@ targetScope = 'resourceGroup'
 metadata name = 'Storage Account'
 metadata description = 'This module deploys a storage account.'
 
+type tagsType = {
+  *: string
+}
+
 @description('Required. The name of the storage account.')
 param name string
 
@@ -10,7 +14,7 @@ param name string
 param location string = resourceGroup().location
 
 @description('Optional. Tags of the storage account.')
-param tags object?
+param tags tagsType?
 
 @description('Optional. Require secure transport for storage requests.')
 param supportsHttpsTrafficOnly bool = true

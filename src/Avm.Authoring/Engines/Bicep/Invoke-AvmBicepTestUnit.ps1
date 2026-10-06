@@ -63,15 +63,16 @@ function Invoke-AvmBicepTestUnit {
     $unitFileCount = $files.Count
 
     $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context -RepositoryRoot $RepositoryRoot
-    $defaultSuite = Join-Path -Path $repoRoot -ChildPath 'utilities' `
-        -AdditionalChildPath 'pipelines', 'staticValidation', 'compliance', 'module.tests.ps1'
     $includeSuite = $IncludeCompliance -or -not [string]::IsNullOrWhiteSpace($CompliancePath)
     $suite = $null
-    if ($includeSuite) {
-        $resolvedSuite = if ([string]::IsNullOrWhiteSpace($CompliancePath)) {
-            $defaultSuite
-        }
-        elseif ([System.IO.Path]::IsPathRooted($CompliancePath)) {
+    $packaged = $null
+    if ($IncludeCompliance -and [string]::IsNullOrWhiteSpace($CompliancePath)) {
+        $packaged = Invoke-AvmBicepPackagedCompliance -Context $Context -Recurse:$Recurse `
+            -AllowPathFallback:$AllowPathFallback -Tag $Tag -TestName $TestName
+        $suite = $packaged.Suite
+    }
+    elseif ($includeSuite) {
+        $resolvedSuite = if ([System.IO.Path]::IsPathRooted($CompliancePath)) {
             $CompliancePath
         }
         else {
@@ -82,11 +83,11 @@ function Invoke-AvmBicepTestUnit {
         }
         $suite = (Get-Item -LiteralPath $resolvedSuite -ErrorAction Stop).FullName
     }
-    if ($null -ne $suite -and $scopes.Count -gt 0) {
+    if ($null -eq $packaged -and $null -ne $suite -and $scopes.Count -gt 0) {
         $files.Insert(0, $suite)
     }
 
-    if ($files.Count -eq 0) {
+    if ($files.Count -eq 0 -and $null -eq $packaged) {
         $message = if ($includeSuite) {
             'no Bicep unit or compliance tests found'
         }
@@ -115,18 +116,34 @@ function Invoke-AvmBicepTestUnit {
     }
 
     $envVars = @{ GITHUB_ACTIONS = $null; GITHUB_STEP_SUMMARY = $null }
-    if ($null -ne $suite) {
+    if ($null -ne $suite -and $files.Count -gt 0) {
         $bicep = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
         $envVars['PATH'] = [System.IO.Path]::GetDirectoryName($bicep.Path) + [System.IO.Path]::PathSeparator + $env:PATH
     }
 
-    $summary = Invoke-AvmBicepPesterSuite -Files $files.ToArray() `
-        -ModulePaths $modulePaths -RepositoryRoot $repoRoot `
-        -Tag $Tag -TestName $TestName -WorkingDirectory $repoRoot -EnvVars $envVars
+    $summary = @{
+        Version = 'not-run'; Total = 0; Passed = 0; Failed = 0
+        Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+    }
+    if ($files.Count -gt 0) {
+        $summary = Invoke-AvmBicepPesterSuite -Files $files.ToArray() `
+            -ModulePaths $modulePaths -RepositoryRoot $repoRoot `
+            -Tag $Tag -TestName $TestName -WorkingDirectory $repoRoot -EnvVars $envVars
+    }
 
     $issues = @($summary.Issues | ForEach-Object { [pscustomobject]$_ })
+    $unitFailures = [int]$summary.Failed
+    if ($null -ne $packaged) {
+        $issues += @($packaged.Issues)
+        if ($null -ne $packaged.Summary) {
+            if ($files.Count -eq 0) { $summary.Version = $packaged.Summary.Version }
+            foreach ($count in @('Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive', 'Filtered')) {
+                $summary[$count] += $packaged.Summary[$count]
+            }
+        }
+    }
     $executed = [int]$summary.Passed + [int]$summary.Failed + [int]$summary.Skipped + [int]$summary.Inconclusive
-    $status = if ($issues.Count -gt 0 -or [int]$summary.Failed -gt 0 -or
+    $status = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0 -or $unitFailures -gt 0 -or
         [int]$summary.Skipped -gt 0 -or [int]$summary.Inconclusive -gt 0) {
         'fail'
     }
@@ -144,7 +161,7 @@ function Invoke-AvmBicepTestUnit {
         ToolPath         = $null
         ToolSource       = 'PowerShell'
         Status           = $status
-        FilesProcessed   = $files.Count
+        FilesProcessed   = $files.Count + $(if ($null -ne $packaged) { 1 } else { 0 })
         UnitFiles        = $unitFileCount
         ComplianceFile   = if ($null -ne $suite -and $scopes.Count -gt 0) { $suite } else { $null }
         ModuleScopes     = $scopes.Count

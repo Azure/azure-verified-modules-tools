@@ -3,7 +3,12 @@ function Test-AvmMetadataModules {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)][pscustomobject] $Context
+        [Parameter(Mandatory)][pscustomobject] $Context,
+
+        [switch] $PreparationOnly,
+
+        [AllowEmptyCollection()]
+        [object[]] $SelectedScope
     )
 
     Set-StrictMode -Version 3.0
@@ -11,7 +16,7 @@ function Test-AvmMetadataModules {
     $issues = [System.Collections.Generic.List[object]]::new()
     $validations = [System.Collections.Generic.List[object]]::new()
     Write-AvmLog ("metadata: discovering module scopes under {0}" -f $Context.Root) -Level Verbose | Out-Null
-    $scopes = @(Get-AvmMetadataScope -Context $Context)
+    $scopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else { Get-AvmMetadataScope -Context $Context })
     Write-AvmLog ("metadata: discovered {0} module scope(s)" -f $scopes.Count) -Level Verbose | Out-Null
     if ($scopes.Count -eq 0) {
         $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_SCOPE' `
@@ -53,6 +58,9 @@ function Test-AvmMetadataModules {
         catch [System.ArgumentException] {
             $issues.Add((New-AvmMetadataIssue -Code 'AVM_METADATA_INVALID' -File $relativePath -Message $_.Exception.Message))
         }
+    }
+    if ($PreparationOnly) {
+        return [pscustomobject]@{ Validations = $validations.ToArray(); Issues = $issues.ToArray() }
     }
     if ($validations.Count -gt 0) {
         $result = Invoke-AvmMetadataValidation -Validations $validations.ToArray()

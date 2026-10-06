@@ -1,15 +1,21 @@
 #Requires -Version 7.4
 param(
     [Parameter(Mandatory)]
-    [object[]] $Validations
+    [object[]] $Validations,
+
+    [System.Collections.IDictionary] $Convention
 )
 
-Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object { @{ Validation = $_; Scope = $_.Path } }) {
+if ($null -ne $Convention) { $Convention.NativeMetadataExpected = 0 }
+Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object {
+        @{ Validation = $_; Scope = $_.Path; IssuePath = Join-Path $_.Path 'metadata.json' }
+    }) {
     BeforeAll {
         if ($Validation.CheckSource) {
             . $Validation.SourceParser
         }
     }
+    if ($null -ne $Convention) { $Convention.NativeMetadataExpected++ }
     It 'matches the packaged root or child schema' -Tag 'AVM_METADATA_SCHEMA' {
         $errors = @()
         $valid = Test-Json -Json $Validation.Json -Schema $Validation.Schemas.Shape `
@@ -18,6 +24,7 @@ Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object { @
     }
 
     if ($Validation.ShapeValid) {
+        if ($null -ne $Convention) { $Convention.NativeMetadataExpected += 5 }
         It 'identifies the requested module kind' -Tag 'AVM_METADATA_KIND' {
             Test-Json -Json $Validation.Json -Schema $Validation.Schemas.Kind -ErrorAction SilentlyContinue |
                 Should -BeTrue -Because 'canonicalType must identify the requested kind, or a permitted child helper'
@@ -44,7 +51,8 @@ Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object { @
         }
 
         if ($Validation.CheckSource) {
-            It 'uses a regular main.bicep with exact casing when source exists' -Tag 'AVM_METADATA_SOURCE' {
+            if ($null -ne $Convention) { $Convention.NativeMetadataExpected += 2 }
+            It 'uses a regular main.bicep with exact casing when source exists' -Tag 'AVM_METADATA_SOURCE', 'file:main.bicep' {
                 $files = @($Validation.SourceItems | Where-Object { $_.Name -ieq 'main.bicep' })
                 if ($files.Count -gt 0) {
                     $files | Should -HaveCount 1
@@ -57,7 +65,7 @@ Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object { @
                 }
             }
 
-            It 'includes main.bicep when version or compiled output exists' -Tag 'AVM_METADATA_SOURCE' {
+            It 'includes main.bicep when version or compiled output exists' -Tag 'AVM_METADATA_SOURCE', 'file:main.bicep' {
                 $markers = @($Validation.SourceItems | Where-Object { $_.Name -ieq 'version.json' -or $_.Name -ieq 'main.json' })
                 $sources = @($Validation.SourceItems | Where-Object { $_.Name -ieq 'main.bicep' })
                 ($markers.Count -eq 0 -or $sources.Count -gt 0) |
@@ -65,12 +73,13 @@ Describe 'Module metadata: <Scope>' -ForEach @($Validations | ForEach-Object { @
             }
 
             if ($null -ne $Validation.SourceText) {
-                It 'declares a literal source metadata name' -Tag 'AVM_METADATA_SOURCE' {
+                if ($null -ne $Convention) { $Convention.NativeMetadataExpected += 2 }
+                It 'declares a literal source metadata name' -Tag 'AVM_METADATA_SOURCE', 'file:main.bicep' {
                     (Get-AvmBicepMetadataLiteral -Source $Validation.SourceText -Name name)['name'] |
                         Should -BeOfType ([string])
                 }
 
-                It 'declares a literal source metadata description' -Tag 'AVM_METADATA_SOURCE' {
+                It 'declares a literal source metadata description' -Tag 'AVM_METADATA_SOURCE', 'file:main.bicep' {
                     (Get-AvmBicepMetadataLiteral -Source $Validation.SourceText -Name description)['description'] |
                         Should -BeOfType ([string])
                 }

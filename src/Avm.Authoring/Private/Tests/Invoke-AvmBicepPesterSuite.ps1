@@ -113,7 +113,7 @@ function Invoke-AvmBicepPesterSuite {
             $nativeConvention = $Mode -ceq 'Convention' -and
             $issue -is [System.Collections.IDictionary] -and
             $issue.Contains('NativeConvention') -and $issue['NativeConvention'] -is [bool] -and
-            $issue['NativeConvention'] -and [string]$issue['Code'] -cmatch '^avm\.bicep\.[a-zA-Z0-9.-]+$' -and
+            $issue['NativeConvention'] -and [string]$issue['Code'] -cmatch '^(?:avm\.bicep\.[a-zA-Z0-9.-]+|AVM_METADATA_[A-Z_]+)$' -and
             $issue['Severity'] -cin @('error', 'warning')
             if ($issue -isnot [System.Collections.IDictionary] -or
                 -not $issue.Contains('File') -or -not $issue.Contains('Line') -or

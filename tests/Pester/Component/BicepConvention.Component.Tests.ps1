@@ -156,6 +156,98 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
+    It 'runs default packaged compliance through native requirements: <Variant>' -ForEach @(
+        @{ Variant = 'valid'; ExpectedCode = '' }
+        @{ Variant = 'metadata'; ExpectedCode = 'AVM_METADATA_MISSING' }
+        @{ Variant = 'readme'; ExpectedCode = 'avm.bicep.docs-stale' }
+        @{ Variant = 'telemetry'; ExpectedCode = 'avm.bicep.telemetry-prefix' }
+        @{ Variant = 'filtered'; ExpectedCode = '' }
+        @{ Variant = 'empty-filter'; ExpectedCode = '' }
+        @{ Variant = 'warning'; ExpectedCode = '' }
+    ) {
+        foreach ($path in @($script:modulePath, (Join-Path $script:modulePath 'child'))) {
+            $metadataPath = Join-Path $path 'metadata.json'
+            $data = if (Test-Path -LiteralPath $metadataPath) {
+                Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -AsHashtable
+            } else { @{} }
+            $data.moduleDisplayName = 'Mock widget'
+            $data.moduleDescription = 'A mock module for native compliance.'
+            $data['$schema'] = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+            $data.canonicalType = 'helper'
+            if ($path -eq $script:modulePath) {
+                $data.canonicalType = 'Microsoft.Storage/storageAccounts'
+                $data.owners = @()
+                $data.telemetryIdPrefix = '46d3xbcp.res.1234567'
+                $compiledPath = Join-Path $path 'main.json'
+                $compiled = [System.IO.File]::ReadAllText($compiledPath).Replace(
+                    '46d3xbcp.res.mock.widget.abc1234', $data.telemetryIdPrefix)
+                [System.IO.File]::WriteAllText($compiledPath, $compiled, [System.Text.UTF8Encoding]::new($false))
+            }
+            $data | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $metadataPath
+        }
+        InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath; Variant = $Variant; ExpectedCode = $ExpectedCode } {
+            param($Path, $Variant, $ExpectedCode)
+            $script:preparedReadmes = @(
+                foreach ($modulePath in @($Path, (Join-Path $Path 'child'))) {
+                    $file = Join-Path $modulePath 'README.md'
+                    $bytes = [System.IO.File]::ReadAllBytes($file)
+                    @{
+                        IssuePath = $file
+                        Case = @{ Current = $bytes; Expected = $bytes; MissingExampleComments = 0 }
+                    }
+                }
+            )
+            if ($Variant -eq 'metadata') { Remove-Item -LiteralPath (Join-Path $Path 'metadata.json') }
+            if ($Variant -eq 'readme') { $script:preparedReadmes[0].Case.Current = [byte[]]@(1, 2, 3) }
+            if ($Variant -eq 'telemetry') {
+                $metadataPath = Join-Path $Path 'metadata.json'
+                $data = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -AsHashtable
+                $data.telemetryIdPrefix = '46d3xbcp.res.7654321'
+                $data | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $metadataPath
+            }
+            Mock Invoke-AvmBicepDocs {
+                if (-not $PreparationOnly -or -not $CheckDrift) { throw 'Compliance must only prepare docs before its native run.' }
+                [pscustomobject]@{ ReadmeInputs = $script:preparedReadmes; Issues = @() }
+            }
+            if ($Variant -eq 'warning') {
+                Mock Get-AvmBicepApiSpecList {
+                    @{ 'Microsoft.Storage' = @{ storageAccounts = @('2023-05-01', '2025-04-01') } }
+                }
+            }
+            $selection = @{}
+            if ($Variant -eq 'filtered') { $selection.TestName = '*Bicep module layout*' }
+            if ($Variant -eq 'empty-filter') { $selection.TestName = 'does-not-exist*' }
+            $result = Invoke-AvmTestUnit -Path $Path -Recurse -IncludeCompliance @selection
+            $result.ComplianceFile | Should -BeLike '*Resources*bicep*Compliance.Tests.ps1'
+            if ($Variant -eq 'filtered') {
+                $result.RunsTotal | Should -Be 22
+                $result.RunsFiltered | Should -BeGreaterThan 0
+            }
+            elseif ($Variant -eq 'empty-filter') {
+                $result.RunsTotal | Should -Be 0
+                $result.Status | Should -Be 'skipped'
+                return
+            }
+            else { $result.RunsTotal | Should -BeGreaterThan 100 -Because (@($result.Issues | ForEach-Object Message) -join '; ') }
+            $result.FilesProcessed | Should -Be 1
+            $result.UnitFiles | Should -Be 0
+            if ($ExpectedCode) {
+                $result.Status | Should -Be 'fail'
+                $result.Issues.Code | Should -Contain $ExpectedCode
+            }
+            else {
+                $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+                if ($Variant -eq 'warning') {
+                    $result.RunsFailed | Should -BeGreaterThan 0
+                    $result.Issues.Severity | Should -Contain 'warning'
+                    $result.Issues.Severity | Should -Not -Contain 'error'
+                }
+                else { $result.RunsFailed | Should -Be 0 }
+                ($result.RunsPassed + $result.RunsFailed) | Should -Be $result.RunsTotal
+            }
+        }
+    }
+
     It 'executes independent native workflow and ownership requirements' {
         $run = InModuleScope 'Avm.Authoring' -Parameters @{
             Path = $script:modulePath; Root = $script:workingRoot

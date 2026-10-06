@@ -136,7 +136,7 @@ Describe 'Compliance' {
         $result.RunsPassed | Should -Be 1
     }
 
-    It 'includes the discoverable registry compliance suite only when requested' {
+    It 'retains a registry suite as an explicit compliance override' {
         $suite = Join-Path -Path $script:root -ChildPath 'utilities' `
             -AdditionalChildPath 'pipelines', 'staticValidation', 'compliance', 'module.tests.ps1'
         $null = New-Item -ItemType Directory -Path (Split-Path $suite) -Force
@@ -149,18 +149,54 @@ Describe 'Compliance' {
     }
 }
 '@ -Encoding utf8NoBOM
-        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:root } {
-            param($Root)
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:root; Suite = $suite } {
+            param($Root, $Suite)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Path = [Environment]::ProcessPath; Source = 'cache' }
             }
             Invoke-AvmTestUnit -Path $Root -RepositoryRoot $Root `
-                -IncludeCompliance -Tag 'compliance'
+                -IncludeCompliance -CompliancePath $Suite -Tag 'compliance'
         }
         $result.Status | Should -Be 'pass'
         $result.ComplianceFile | Should -Be $suite
         $result.FilesProcessed | Should -Be 2
         $result.RunsPassed | Should -Be 1
+    }
+
+    It 'combines isolated authored tests with packaged results without masking failure: <Failure>' -ForEach @(
+        @{ Failure = $false }
+        @{ Failure = $true }
+    ) {
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ Root = $script:root; Failure = $Failure } {
+            param($Root, $Failure)
+            $script:complianceFailure = $Failure
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Path = [Environment]::ProcessPath; Source = 'cache' }
+            }
+            Mock Invoke-AvmBicepPackagedCompliance {
+                $issues = @()
+                if ($script:complianceFailure) {
+                    $issues = @([pscustomobject]@{ File = 'metadata.json'; Line = 1; Code = 'AVM_METADATA_SCHEMA'; Severity = 'error'; Message = 'Invalid metadata.' })
+                }
+                [pscustomobject]@{
+                    Suite = 'packaged'
+                    Issues = $issues
+                    Summary = @{
+                        Version = 'fixture'; Total = 2; Passed = 2 - [int]$script:complianceFailure
+                        Failed = [int]$script:complianceFailure; Skipped = 0; Inconclusive = 0; Filtered = 0
+                    }
+                }
+            }
+            Invoke-AvmTestUnit -Path $Root -IncludeCompliance -Tag fast
+        }
+        $result.Status | Should -Be $(if ($Failure) { 'fail' } else { 'pass' })
+        $result.RunsTotal | Should -Be 3
+        $result.RunsPassed | Should -Be (3 - [int]$Failure)
+        $result.RunsFailed | Should -Be ([int]$Failure)
+        $result.UnitFiles | Should -Be 1
+        $result.FilesProcessed | Should -Be 2
+        Get-Variable -Name AvmBicepUnitChildMarker -Scope Global -ErrorAction SilentlyContinue |
+            Should -BeNullOrEmpty
     }
 
     It 'returns skipped without starting Pester when no test suite exists' {
@@ -192,8 +228,12 @@ Describe 'Compliance' {
         $default.UnitFiles | Should -Be 1
         $default.RunsPassed | Should -Be 1
         $default.ComplianceFile | Should -BeNullOrEmpty
-        { Invoke-AvmTestUnit -Path $root -IncludeCompliance } |
-            Should -Throw -ExpectedMessage '*compliance suite not found*'
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+            param($Root)
+            Mock Invoke-AvmBicepPackagedCompliance { throw 'Packaged compliance selected' }
+            { Invoke-AvmTestUnit -Path $Root -IncludeCompliance } |
+                Should -Throw -ExpectedMessage '*Packaged compliance selected*'
+        }
     }
 
     It 'rejects wrong-case Bicep entry point and test directories' {
