@@ -43,7 +43,7 @@ function Get-AvmBicepPublicationGitState {
         throw [AvmConfigurationException]::new(
             'Cannot verify the current Azure/bicep-registry-modules main commit; publication targets are unknown.')
     }
-    if ($candidates.Count -eq 0) {
+    if (-not $candidates.Contains($Matches['sha'])) {
         return [pscustomobject]@{
             GitPath        = $gitPath
             RepositoryRoot = $RepositoryRoot
@@ -59,11 +59,6 @@ function Get-AvmBicepPublicationGitState {
             break
         }
     }
-    if ($null -eq $baseSha) {
-        throw [AvmConfigurationException]::new(
-            'The trusted upstream main tracking ref is stale. Fetch upstream main before checking publication versions.')
-    }
-
     $changed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($arguments in @(
             @('diff', '--diff-filter=AM', '--name-only', '-z', $baseSha, '--', 'avm/'),

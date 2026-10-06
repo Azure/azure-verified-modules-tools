@@ -23,13 +23,6 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
         $script:consumer = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         Copy-Item -LiteralPath $script:fixture -Destination $script:consumer -Recurse
         $script:modulePath = Join-Path $script:consumer 'avm' 'res' 'storage' 'storage-account'
-        $template = Join-Path $script:consumer '.avm' 'avm-readme-v1.scriban'
-        $null = New-Item -ItemType Directory -Path (Split-Path $template) -Force
-        Copy-Item -LiteralPath (Join-Path $script:package 'Resources' 'bicep' 'avm-readme-v1.scriban') -Destination $template
-        @{
-            documentation = @{ template = @{ file = '.avm/avm-readme-v1.scriban' } }
-            analyzers = @{ core = @{ enabled = $true } }
-        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $script:consumer 'bicepconfig.json')
         InModuleScope Avm.Authoring -Parameters @{ Path = $script:modulePath } {
             param($Path)
             $tool = Resolve-AvmTool -Name bicep
@@ -77,6 +70,7 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
     It 'runs native compliance and an authored unit test without any registry utilities' {
         Test-Path -LiteralPath (Join-Path $script:consumer 'utilities') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $script:consumer '.git') | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $script:consumer -Filter '*.scriban' -Recurse -File) | Should -HaveCount 0
         (Get-Module Avm.Authoring).ModuleBase | Should -BeExactly $script:package
         (Get-Module Avm.Authoring).PrivateData.AvmCapabilities.BicepPackagedCompliance | Should -Be 1
         $result = Invoke-AvmTestUnit -Path $script:modulePath -Recurse -IncludeCompliance

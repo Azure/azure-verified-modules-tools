@@ -104,7 +104,7 @@ function Invoke-AvmBicepDocs {
             continue
         }
 
-        $null = Get-AvmBicepDocsConfiguration -ModulePath $scope.Path
+        $docsConfiguration = Get-AvmBicepDocsConfiguration -ModulePath $scope.Path
         $sourcePath = $files[0].FullName
         $target = Join-Path -Path $scope.Path -ChildPath 'README.md'
         $relative = [System.IO.Path]::GetRelativePath($Context.Root, $target).Replace('\', '/')
@@ -130,7 +130,7 @@ function Invoke-AvmBicepDocs {
         }
         try {
             $result = Invoke-AvmBicepDocsRender -Values $values -SourcePath $sourcePath `
-                -ToolPath $tool.Path -WorkingDirectory $scope.Path
+                -TemplatePath $docsConfiguration.TemplatePath -ToolPath $tool.Path -WorkingDirectory $scope.Path
         }
         catch [AvmProcessException] {
             if (-not $CheckDrift) {
@@ -223,7 +223,7 @@ function Invoke-AvmBicepDocs {
                 try {
                     $probeResult = Invoke-AvmBicepDocsRender -Values $probe.Values `
                         -SourcePath $sourcePath -ToolPath $tool.Path `
-                        -WorkingDirectory $scope.Path
+                        -TemplatePath $docsConfiguration.TemplatePath -WorkingDirectory $scope.Path
                 }
                 catch [AvmProcessException] {
                     $issues.Add([pscustomobject][ordered]@{

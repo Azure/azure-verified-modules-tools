@@ -658,9 +658,11 @@ were added directly to the module repository rather than through Bicep Sync.
 and child READMEs through the pinned `bicep docs generate --stdout` command.
 Module-root runs include tests in that root's `tests/e2e` for its own and
 nested READMEs, but do not search above the selected root. The
-nearest `bicepconfig.json` must set `documentation.template.file` to a
-relative, tracked copy of the packaged `avm-readme-v1.scriban`; a different
-template or hash fails before writing. Generated content comes from the
+packaged `avm-readme-v1.scriban` is used by default through the compiler's
+`--template-file` option, without creating caller config or template files.
+An explicit `documentation.template.file` in the nearest `bicepconfig.json`
+must reference a relative canonical copy; a different template or hash fails
+before writing. Generated content comes from the
 native model, Bicep test sources, and compiled `main.json` (or a local build
 when it is absent), never from the existing README body.
 

@@ -51,12 +51,14 @@ Describe 'Bicep publication Git provenance' -Tag 'Unit' {
         }
     }
 
-    It 'fails if the tracking main ref is stale rather than calculating a false target' {
+    It 'uses pinned current module data when the trusted tracking ref is stale' {
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $TestDrive } {
             param($R)
             $script:upstreamSha = 'b' * 40
-            { Get-AvmBicepPublicationGitState -RepositoryRoot $R } |
-                Should -Throw '*tracking ref is stale*'
+            $state = Get-AvmBicepPublicationGitState -RepositoryRoot $R
+            $state.BaseSha | Should -BeExactly ('b' * 40)
+            $state.RemoteFiles.Count | Should -Be 0
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'diff' }
         }
     }
 

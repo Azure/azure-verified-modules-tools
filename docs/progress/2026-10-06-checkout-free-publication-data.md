@@ -38,8 +38,17 @@ metadata/telemetry/README mutations fail with located error diagnostics.
 The cached public-data path preserves changed/unchanged source comparison,
 descendant publishing changes, next-patch calculation and downgrade rejection.
 Unavailable, redirected, malformed and false-not-found responses fail explicitly.
-Current trusted local Git objects retain their existing efficient path and stale
-tracking refs still fail. No external assertion definitions are fetched.
+Current trusted local Git objects retain their existing efficient path.
+The final boundary correction uses pinned remote data for stale trusted refs
+as well as absent refs. Unavailable or unverifiable remote data still fails.
+No external assertion definitions are fetched.
+
+The coordinator's final audit found that README configuration still required
+a canonical caller-owned copy. This was not a genuine customization boundary:
+the exact template hash prohibited changes. Rendering now defaults to the
+packaged template without writing caller config or templates. Explicit template
+configuration retains its existing strict validation. The independent package
+acceptance no longer creates documentation configuration or copies Scriban.
 
 `PrivateData.AvmCapabilities.BicepPackagedCompliance = 1` now identifies the
 qualified default native convention/metadata/README plus authored-unit route.
