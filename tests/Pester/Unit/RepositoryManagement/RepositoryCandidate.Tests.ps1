@@ -146,7 +146,7 @@ Describe 'Repository candidate failure diagnostics' {
 
         $skipped = [pscustomobject]@{ Status = 'skipped'; RunsTotal = 0; RunsFailed = 0; Issues = @() }
         (@(Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $skipped) -join "`n") |
-            Should -Match 'No unit tests ran; changed candidates require tests/unit/'
+            Should -Match 'No unit tests found; unit validation is skipped'
         @(Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result ([pscustomobject]@{ Status = 'pass' })) |
             Should -BeNullOrEmpty
     }
@@ -232,9 +232,41 @@ Describe 'Repository sync candidate validation' {
         }
     }
 
-    It 'runs both checks but does not issue a receipt when pr-check fails' {
+    It 'issues a receipt when no unit tests exist while reporting the skipped tier' {
+        $script:diagnostics = [System.Collections.Generic.List[string]]::new()
+        $script:unitResult = [pscustomobject]@{
+            Status = 'skipped'
+            FilesProcessed = 0
+            RunsTotal = 0
+            RunsPassed = 0
+            RunsFailed = 0
+            Issues = @()
+        }
+        Mock Write-Host { $script:diagnostics.Add([string]$Object) }
+        Mock Invoke-AvmTestUnit { $script:unitResult }
+
+        $result = Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
+            -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
+
+        $result | Should -BeExactly 'Passed'
+        Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+        Should -Invoke Invoke-AvmTestUnit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+        $script:unitResult.Status | Should -BeExactly 'skipped'
+        ($script:diagnostics -join "`n") | Should -Match 'Candidate unit: skipped'
+        ($script:diagnostics -join "`n") | Should -Match '0 test run\(s\); 0 failed'
+        ($script:diagnostics -join "`n") | Should -Match 'No unit tests found; unit validation is skipped'
+        ($script:diagnostics -join "`n") | Should -Not -Match 'unit: pass'
+        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
+        { Assert-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt } |
+            Should -Not -Throw
+    }
+
+    It 'runs both checks but does not issue a receipt when pr-check fails' -ForEach @('pass', 'skipped') {
+        $script:unitStatus = $_
         $script:diagnostics = [System.Collections.Generic.List[string]]::new()
         Mock Write-Host { $script:diagnostics.Add([string]$Object) }
+        Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = $script:unitStatus } }
         Mock Invoke-AvmPrCheck {
             [pscustomobject]@{
                 Status = 'fail'
@@ -262,13 +294,32 @@ Describe 'Repository sync candidate validation' {
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
     }
 
-    It 'does not issue a receipt when unit tests fail or are skipped' -ForEach @('fail', 'skipped') {
+    It 'does not issue a receipt for failed, errored or unexpected unit results' -ForEach @('fail', 'error', 'unexpected') {
         $script:unitStatus = $_
         Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = $script:unitStatus } }
         { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
             -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
             Should -Throw "*unit=$script:unitStatus*"
+        Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
+    }
+
+    It 'does not issue a receipt when unit-test execution throws' {
+        Mock Invoke-AvmTestUnit { throw [System.InvalidOperationException]::new('Unit-test initialization failed.') }
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
+            -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
+            Should -Throw '*Unit-test initialization failed*'
+        Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
+    }
+
+    It 'still rejects a changed file tree when no unit tests exist' {
+        Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = 'skipped' } }
+        Mock Invoke-RepositoryGit { ' M main.tf' } -ParameterFilter { $Arguments[0] -eq 'status' }
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
+            -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
+            Should -Throw '*Candidate checks changed the prepared file tree*'
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
     }
 

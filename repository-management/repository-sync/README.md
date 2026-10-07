@@ -129,10 +129,12 @@ After `avm pre-commit`, a changed module is committed locally and transferred
 as an artifact; the preparation job no longer pushes it. A separate
 `avm-validation` job runs `avm pr-check` and `avm test unit` against that exact
 file tree with the module's existing test identity and a randomly selected
-configured test subscription. A failure blocks publication. When both pass, a
-job with the GitHub App token checks that the target branch has not moved and
-that the patch recreates the validated Git tree before pushing and merging the
-generated change. An unchanged module needs neither checks nor publication.
+configured test subscription. Static-check failures and failures in existing
+unit tests block publication. A module with no discovered unit tests skips that
+tier without blocking validation. Once the static checks and any unit tests
+pass, a job with the GitHub App token checks that the target branch has not moved
+and that the patch recreates the validated Git tree before pushing and merging
+the generated change. An unchanged module needs neither checks nor publication.
 Each matrix entry calls the per-repository reusable workflow so a failed
 preparation skips only its own validation and publication; other repositories
 continue through their own checks.

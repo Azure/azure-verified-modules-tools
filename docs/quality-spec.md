@@ -1362,6 +1362,12 @@ This section is the implementation-level expression of the **Security stance** p
 - Integration tests are tagged `-Tag Integration` and excluded from default runs. CI runs them on pull requests via the `integration` job in the `ci` workflow.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
 
+Repository-sync candidate validation requires static checks to pass. Terraform
+unit tests run when discovered; an absent suite is a visible, non-blocking
+`skipped` result, never a unit-test pass. Failures or execution errors in
+existing suites block validation. Candidate-tree and publication safeguards
+still apply when unit tests are absent.
+
 ### Coverage
 
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.

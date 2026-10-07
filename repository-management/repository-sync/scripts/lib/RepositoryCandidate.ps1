@@ -274,7 +274,7 @@ function Format-RepositorySyncCandidateCheckResult {
         }
         if ($issues.Count -eq 0 -and -not $hasError) {
             $lines.Add($(if ($Check -eq 'unit' -and $Result.Status -ceq 'skipped') {
-                        '    No unit tests ran; changed candidates require tests/unit/*.tftest.hcl.'
+                        '    No unit tests found; unit validation is skipped.'
                     }
                     else {
                         '    No structured diagnostics were returned.'
@@ -368,13 +368,13 @@ function Invoke-RepositorySyncCandidateValidation {
             throw [System.IO.InvalidDataException]::new('The unit-test checkout differs from the validated candidate.')
         }
         $unitTests = Invoke-AvmTestUnit -Path $unitRoot -Ecosystem terraform -SkipModuleVersionCheck
-        if ($prCheck.Status -cne 'pass' -or $unitTests.Status -cne 'pass') {
-            foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $prCheck)) {
-                Write-Host $line
-            }
-            foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $unitTests)) {
-                Write-Host $line
-            }
+        foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $prCheck)) {
+            Write-Host $line
+        }
+        foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $unitTests)) {
+            Write-Host $line
+        }
+        if ($prCheck.Status -cne 'pass' -or $unitTests.Status -cnotin @('pass', 'skipped')) {
             $failedSteps = @($prCheck.Steps | Where-Object Status -in @('fail', 'error') | ForEach-Object {
                     "$($_.Step): $($_.Status)"
                 })
