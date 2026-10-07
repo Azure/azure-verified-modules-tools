@@ -13,11 +13,13 @@ running module is outdated, safely invokes Update-PSResource for the
 CurrentUser scope. This command bypasses stale-version enforcement so
 an outdated module can update itself.
 
-Routed by the dispatcher: 'avm update'.
+Routed by the dispatcher: 'avm upgrade' (with 'avm update' retained as
+a backwards-compatible alias).
 
 ## CLI commands
 
 - `avm update`
+- `avm upgrade`
 
 ## Syntax
 
@@ -34,13 +36,13 @@ This cmdlet has no cmdlet-specific parameters.
 ### EXAMPLE 1
 
 ```powershell
-avm update
+avm upgrade
 ```
 
 ### EXAMPLE 2
 
 ```powershell
-avm update --what-if
+avm upgrade --what-if
 ```
 
 ## Outputs
