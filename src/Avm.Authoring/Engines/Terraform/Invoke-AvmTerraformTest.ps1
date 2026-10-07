@@ -28,6 +28,10 @@ function Invoke-AvmTerraformTest {
         assessed because existing module manifests can contain stale records;
         a warning reports that limitation.
 
+    .PARAMETER UseExistingInit
+        Reuse initialization prepared by a composite command and assess module
+        coverage from each example's existing module manifest.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, Issues.
@@ -40,7 +44,9 @@ function Invoke-AvmTerraformTest {
 
         [switch] $AllowPathFallback,
 
-        [switch] $NoInit
+        [switch] $NoInit,
+
+        [switch] $UseExistingInit
     )
 
     Set-StrictMode -Version 3.0
@@ -49,6 +55,9 @@ function Invoke-AvmTerraformTest {
     if ($Context.Ecosystem -ne 'terraform') {
         throw [System.ArgumentException]::new(
             "Invoke-AvmTerraformTest requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
+    }
+    if ($NoInit -and $UseExistingInit) {
+        throw [System.ArgumentException]::new('NoInit and UseExistingInit cannot be combined.')
     }
 
     $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
@@ -59,26 +68,33 @@ function Invoke-AvmTerraformTest {
     $coveredModules = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $filesProcessed = 0
     $anyFail = $false
+    $exampleIndex = 0
 
     foreach ($example in $scope.Examples) {
+        $exampleIndex++
         $dataDirectory = $null
         $ownsDataDirectory = $false
         $environment = @{}
         try {
-            if (-not $NoInit) {
+            if (-not $NoInit -and -not $UseExistingInit) {
+                Write-AvmLog (
+                    'validate: initializing example {0}/{1}: {2}' -f
+                    $exampleIndex,
+                    $scope.Examples.Count,
+                    $example.RelativePath) -Level Info | Out-Null
                 $dataDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-validate-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $null = New-Item -ItemType Directory -Path $dataDirectory -ErrorAction Stop
                 $ownsDataDirectory = $true
                 $environment.TF_DATA_DIR = $dataDirectory
-                $initResult = Invoke-AvmProcess `
-                    -FilePath $tool.Path `
-                    -ArgumentList @('init', '-backend=false', '-upgrade', '-input=false', '-no-color') `
+                $initResult = Invoke-AvmTerraformInit `
+                    -TerraformPath $tool.Path `
                     -WorkingDirectory $example.Path `
                     -EnvVars $environment `
                     -StreamOutput:(Test-AvmVerboseEnabled) `
                     -Label ('terraform init {0}' -f $example.RelativePath) `
-                    -IgnoreExitCode `
-                    -RetryNetworkFailure
+                    -BackendFalse `
+                    -NoColor `
+                    -IgnoreExitCode
 
                 if ($initResult.ExitCode -ne 0) {
                     $message = Add-AvmProcessFailureDetail `
@@ -87,6 +103,10 @@ function Invoke-AvmTerraformTest {
                         -StdErr $initResult.StdErr
                     throw [AvmProcessException]::new($message)
                 }
+            }
+            elseif ($UseExistingInit) {
+                $dataDirectory = Join-Path $example.Path '.terraform'
+                $environment.TF_PLUGIN_CACHE_DIR = Get-AvmTerraformPluginCachePath
             }
 
             $result = Invoke-AvmProcess `

@@ -3,7 +3,7 @@ function Invoke-AvmPreCommit {
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
         bicep:     metadata -> format -> lint -> validate -> transform -> docs.
-        terraform: metadata -> sync -> check convention -> transform -> format -> docs.
+        terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -14,10 +14,10 @@ function Invoke-AvmPreCommit {
         pass when no errors are thrown).
 
         The Terraform chain follows the legacy Terraform governance
-        pre-commit.porch.yaml philosophy: after an initial managed-files
-        sync it stays fast and fully offline
-        (check convention -> transform -> format -> docs), so it
-        never needs `terraform init`. The `sync` step runs after metadata so the
+        pre-commit.porch.yaml philosophy: its initialize step prepares the shared
+        Terraform provider and Mapotf schema caches without running `terraform
+        init`, then the managed-files sync and remaining checks stay offline
+        (check convention -> transform -> format -> docs). The `sync` step runs after metadata so the
         rest of the chain sees the freshest governed files; it fetches the
         managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
@@ -188,6 +188,16 @@ function Invoke-AvmPreCommit {
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
+            [pscustomobject]@{
+                Name        = 'initialize'
+                Cmdlet      = 'Initialize-AvmTerraformCommand'
+                ContextOnly = $true
+                ExtraArgs   = @{
+                    Context           = $context
+                    Command           = 'pre-commit'
+                    AllowPathFallback = $AllowPathFallback
+                }
+            }
             [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync' }
             [pscustomobject]@{
                 Name      = 'check convention'

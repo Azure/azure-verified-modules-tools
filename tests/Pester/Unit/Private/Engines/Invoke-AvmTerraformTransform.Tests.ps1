@@ -70,7 +70,9 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $ArgumentList[0] -eq 'transform' -and
                 ([array]::IndexOf($ArgumentList, '/fake/root')) -lt ([array]::IndexOf($ArgumentList, '/fake/module')) -and
                 ([array]::IndexOf($ArgumentList, '/fake/module')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
-                $ArgumentList -contains '--tf-dir'
+                $ArgumentList -contains '--tf-dir' -and
+                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['TF_PLUGIN_CACHE_DIR']) -and
+                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_PROVIDER_SCHEMA_CACHE_DIR'])
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/mapotf' -and
@@ -117,7 +119,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'finishes module targets before scheduling examples with the requested throttle' {
+    It 'finishes module targets before scheduling examples with the cache-safe throttle' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -145,7 +147,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             Should -Invoke Invoke-AvmParallel -Exactly 2 -ParameterFilter {
                 $FunctionName -eq 'Invoke-AvmMapotfTransformTarget' -and
                 $InputObject.Count -eq 2 -and
-                $ThrottleLimit -eq 4
+                $ThrottleLimit -eq 1
             }
             $script:transformBatches.ToArray() | Should -Be @('root,module', 'example,example')
         }
@@ -165,6 +167,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     }
                 }
                 Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+                Mock Get-AvmTerraformPluginCachePath { '/fake/plugin-cache' }
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }

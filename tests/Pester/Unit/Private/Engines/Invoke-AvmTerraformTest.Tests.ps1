@@ -39,6 +39,7 @@ Describe 'Invoke-AvmTerraformTest' {
             $script:validationExitCode = 0
             $script:validationManifest = '{"Modules":[{"Key":"","Dir":"."},{"Key":"subject","Dir":"../.."}]}'
             $script:validationDataDirectories = [System.Collections.Generic.List[string]]::new()
+            $script:validationInitEnvironments = [System.Collections.Generic.List[hashtable]]::new()
 
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
@@ -47,22 +48,25 @@ Describe 'Invoke-AvmTerraformTest' {
             }
             Mock Get-AvmTerraformValidationScope { $script:validationScope }
             Mock New-Item {
-                $script:validationDataDirectories.Add($Path)
+                if ([System.IO.Path]::GetFileName($Path) -like 'avm-validate-*') {
+                    $script:validationDataDirectories.Add($Path)
+                }
             }
             Mock Test-Path { $true }
             Mock Remove-Item {}
             Mock Write-AvmLog {}
             Mock Get-Content { $script:validationManifest }
             Mock Invoke-AvmProcess {
-                if ($ArgumentList[0] -eq 'init') {
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-                }
                 if ($ArgumentList[0] -eq 'validate') {
                     return [pscustomobject]@{
                         ExitCode = $script:validationExitCode; StdOut = $script:validationJson; StdErr = ''
                     }
                 }
                 throw "Unexpected Terraform arguments: $($ArgumentList -join ' ')"
+            }
+            Mock Invoke-AvmTerraformInit {
+                $script:validationInitEnvironments.Add($EnvVars.Clone())
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
         }
     }
@@ -87,11 +91,8 @@ Describe 'Invoke-AvmTerraformTest' {
             $result.FilesProcessed | Should -Be 2
             $result.Issues | Should -BeNullOrEmpty
 
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'init' -and
-                $ArgumentList -contains '-backend=false' -and
-                $ArgumentList -contains '-upgrade' -and
-                $ArgumentList -contains '-input=false' -and
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                $BackendFalse -and $NoColor -and $IgnoreExitCode -and
                 $WorkingDirectory -eq $script:validationScope.Examples[0].Path -and
                 -not [bool]$StreamOutput
             }
@@ -117,14 +118,15 @@ Describe 'Invoke-AvmTerraformTest' {
             $result.FilesProcessed | Should -Be 3
             $result.Issues | Should -BeNullOrEmpty
             @($script:validationDataDirectories | Select-Object -Unique).Count | Should -Be 2
+            $script:validationInitEnvironments.Count | Should -Be 2
+            $script:validationInitEnvironments[0].TF_DATA_DIR | Should -Be $script:validationDataDirectories[0]
+            $script:validationInitEnvironments[1].TF_DATA_DIR | Should -Be $script:validationDataDirectories[1]
 
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
-                $WorkingDirectory -eq $script:validationScope.Examples[0].Path -and
-                $EnvVars.TF_DATA_DIR -eq $script:validationDataDirectories[0]
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                $WorkingDirectory -eq $script:validationScope.Examples[0].Path
             }
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
-                $WorkingDirectory -eq $script:validationScope.Examples[1].Path -and
-                $EnvVars.TF_DATA_DIR -eq $script:validationDataDirectories[1]
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                $WorkingDirectory -eq $script:validationScope.Examples[1].Path
             }
             Should -Invoke Get-Content -Exactly 1 -ParameterFilter {
                 $LiteralPath -eq (Join-Path $script:validationDataDirectories[0] 'modules' 'modules.json')
@@ -144,8 +146,8 @@ Describe 'Invoke-AvmTerraformTest' {
             param($DebugValue, $EnableVerbose)
             $env:RUNNER_DEBUG = $DebugValue
             $null = Invoke-AvmTerraformTest -Context $script:validationContext -Verbose:$EnableVerbose
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'init' -and [bool]$StreamOutput
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                [bool]$StreamOutput
             }
         }
     }
@@ -159,7 +161,7 @@ Describe 'Invoke-AvmTerraformTest' {
             $result.Issues[0].Severity | Should -Be 'warning'
             $result.Issues[0].Code | Should -Be 'terraform.module-coverage-unavailable'
             $result.Issues[0].Message | Should -Match 'NoInit'
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'init' }
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'validate' -and -not $EnvVars.ContainsKey('TF_DATA_DIR')
             }
@@ -167,6 +169,30 @@ Describe 'Invoke-AvmTerraformTest' {
             Should -Invoke Get-Content -Exactly 0
             Should -Invoke Remove-Item -Exactly 0
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Level -eq 'Warning' }
+        }
+    }
+
+    It 'reuses composite initialization and still assesses module coverage' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmTerraformPluginCachePath { Join-Path $TestDrive 'provider-cache' }
+
+            $result = Invoke-AvmTerraformTest `
+                -Context $script:validationContext `
+                -UseExistingInit
+
+            $result.Status | Should -Be 'pass'
+            $result.Issues | Should -BeNullOrEmpty
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'validate' -and
+                $WorkingDirectory -eq $script:validationScope.Examples[0].Path
+            }
+            Should -Invoke Get-Content -Exactly 1 -ParameterFilter {
+                $LiteralPath -eq (Join-Path $script:validationScope.Examples[0].Path '.terraform' 'modules' 'modules.json')
+            }
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -match 'NoInit'
+            }
         }
     }
 
@@ -180,6 +206,7 @@ Describe 'Invoke-AvmTerraformTest' {
             $result.Issues.Message -join ' ' | Should -Match 'No Terraform examples'
             $result.Issues.Message -join ' ' | Should -Match "module '\.'"
             Should -Invoke Invoke-AvmProcess -Exactly 0
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             Should -Invoke New-Item -Exactly 0
         }
     }
@@ -348,7 +375,9 @@ Describe 'Invoke-AvmTerraformTest' {
 
     It 'throws an actionable initialization error and cleans temporary data' {
         InModuleScope 'Avm.Authoring' {
-            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'init boom' } }
+            Mock Invoke-AvmTerraformInit {
+                [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'init boom' }
+            }
             { Invoke-AvmTerraformTest -Context $script:validationContext } |
                 Should -Throw -ExceptionType ([AvmProcessException]) -ExpectedMessage '*examples/default*init boom*'
             Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'validate' }

@@ -376,9 +376,16 @@ function Invoke-AvmTerraformTransform {
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
+        $mapotfEnv.TF_PLUGIN_CACHE_DIR = Get-AvmTerraformPluginCachePath
+        $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-provider-schema'
+        $null = New-Item `
+            -ItemType Directory `
+            -Path $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR `
+            -Force `
+            -ErrorAction Stop
 
         $effectiveThrottle = $ThrottleLimit
-        $pluginCache = [string]$env:TF_PLUGIN_CACHE_DIR
+        $pluginCache = [string]$mapotfEnv.TF_PLUGIN_CACHE_DIR
         if ($effectiveThrottle -gt 1 -and -not [string]::IsNullOrWhiteSpace($pluginCache)) {
             $effectiveThrottle = 1
             Write-AvmLog (
