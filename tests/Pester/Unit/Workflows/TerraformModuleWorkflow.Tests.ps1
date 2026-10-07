@@ -300,7 +300,8 @@ Describe 'CI workflow' {
         $globalEnvironment.Groups['body'].Value |
             Should -Match "(?m)^  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'\r?$"
         ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
-        $script:ci | Should -Match 'run: \./build\.ps1 ci-tests'
+        $script:ci | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
+        $script:ci | Should -Match 'run: \./build\.ps1 ci-component'
         $script:ci | Should -Match 'run: \./build\.ps1 test-workflows'
         $script:ci | Should -Match 'run: \./build\.ps1 integration'
     }
@@ -315,7 +316,7 @@ Describe 'CI workflow' {
         $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
         $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
 
-        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
     }
 
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
@@ -324,24 +325,47 @@ Describe 'CI workflow' {
 
     It 'runs lint once in a dedicated Ubuntu job while retaining the three-OS test matrix' {
         $lint = [regex]::Match($script:ci, '(?ms)^  lint:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
-        $build = [regex]::Match($script:ci, '(?ms)^  build:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $unit = [regex]::Match($script:ci, '(?ms)^  unit:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $component = [regex]::Match($script:ci, '(?ms)^  component:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         $lint.Success | Should -BeTrue
-        $build.Success | Should -BeTrue
+        $unit.Success | Should -BeTrue
+        $component.Success | Should -BeTrue
         $lint.Value | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
         $lint.Value | Should -Not -Match 'matrix:'
         $lint.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         $lint.Value | Should -Match 'run: \./build\.ps1 lint'
         ([regex]::Matches($script:ci, '(?m)run: \./build\.ps1 lint\r?$')).Count | Should -Be 1
-        $build.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
-        $build.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
-        $build.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
-        $build.Value | Should -Match 'run: \./build\.ps1 ci-tests'
+        $unit.Value | Should -Match 'os: ubuntu-latest'
+        $unit.Value | Should -Match 'os: windows-latest'
+        $unit.Value | Should -Match 'os: macos-latest'
+        $unit.Value | Should -Match 'task: ci-coverage'
+        $unit.Value | Should -Match 'task: ci-unit'
+        $unit.Value | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
+        $unit.Value | Should -Match 'Upload coverage to GitHub'
+        $unit.Value | Should -Match "matrix\.os == 'ubuntu-latest'"
+        $unit.Value | Should -Match 'out/coverage/coverage\.cobertura\.xml'
+        $component.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
+        foreach ($job in @($unit, $component)) {
+            $job.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
+            $job.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+        }
+        $component.Value | Should -Match 'run: \./build\.ps1 ci-component'
+    }
+
+    It 'collects coverage in the Ubuntu unit leg without a duplicate test job' {
+        $unit = [regex]::Match($script:ci, '(?ms)^  unit:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $unit.Success | Should -BeTrue
+        $unit.Value | Should -Match 'task: ci-coverage'
+        $unit.Value | Should -Match 'Upload coverage to GitHub'
+        $script:ci | Should -Not -Match '(?m)^  coverage:\r?$'
+        $script:ci | Should -Not -Match 'coverage-inputs'
+        $script:ci | Should -Not -Match 'coverage-input\.zip'
     }
 
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
     }
 
     It 'installs pinned Bicep policy dependencies before integration acceptance only' {
@@ -362,7 +386,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
     }
 }
 

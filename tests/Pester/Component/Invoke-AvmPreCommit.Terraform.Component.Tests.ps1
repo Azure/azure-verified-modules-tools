@@ -430,12 +430,12 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $unit = avm test unit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback --passthru
 
             $result.Status | Should -Be 'pass'
-            $result.Steps | Should -HaveCount 9
+            $result.Steps | Should -HaveCount 10
             $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
             $skipped | Should -HaveCount 1
             $skipped[0].Step | Should -Be 'check policy'
             $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
-            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
+            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 9
             $unit.Status | Should -Be 'pass'
             $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
             foreach ($command in @('fmt', 'init', 'validate', 'test')) {
