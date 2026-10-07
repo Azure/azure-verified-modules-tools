@@ -236,11 +236,6 @@ function script:Invoke-AvmPesterShardedTier {
             $aggregate = [pscustomobject]@{ TotalCount = 0; PassedCount = 0; FailedCount = 0; SkippedCount = 0 }
             foreach ($shard in $running) {
                 $exit = $shard.Process.ExitCode
-                $duration = $shard.Process.ExitTime - $shard.Process.StartTime
-                Write-Build Gray (
-                    "  $Tier shard $($shard.Index): $([math]::Round($duration.TotalSeconds, 2))s; " +
-                    "$($shard.Files.Count) file(s); exit $exit"
-                )
                 if (Test-Path -LiteralPath $shard.Log) {
                     Get-Content -LiteralPath $shard.Log | Write-Host
                 }
@@ -263,6 +258,11 @@ function script:Invoke-AvmPesterShardedTier {
 
                 $xml = [xml](Get-Content -LiteralPath $shard.Output -Raw)
                 $root = $xml.'test-results'
+                $durationSeconds = [System.Xml.XmlConvert]::ToDouble([string] $root.'test-suite'.time)
+                Write-Build Gray (
+                    "  $Tier shard $($shard.Index): $([math]::Round($durationSeconds, 2))s; " +
+                    "$($shard.Files.Count) file(s); exit $exit"
+                )
                 $total = [int] $root.total
                 $failures = [int] $root.failures + [int] $root.errors
                 $skipped = [int] $root.skipped + [int] $root.'not-run' + [int] $root.ignored
