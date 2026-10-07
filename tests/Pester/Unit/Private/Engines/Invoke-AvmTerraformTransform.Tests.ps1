@@ -130,7 +130,6 @@ Describe 'Invoke-AvmTerraformTransform' {
                 }
             }
             Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
-            Mock Get-AvmTerraformPluginCachePath { '/fake/plugin-cache' }
             Mock Get-AvmTerraformTransformTarget {
                 @(
                     [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
@@ -168,6 +167,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     }
                 }
                 Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+                Mock Get-AvmTerraformPluginCachePath { '/fake/plugin-cache' }
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
