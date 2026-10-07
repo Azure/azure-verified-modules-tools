@@ -24,6 +24,16 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $preCommitPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmPreCommit.md') -Raw
         $preCommitPage | Should -Match '`avm pre-commit`'
 
+        $prCheckPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmPrCheck.md') -Raw
+        $prCheckPage | Should -Match '### -ExcludeSteps'
+        $prCheckPage | Should -Match '\| Type \| `String\[\]` \|'
+        $prCheckPage | Should -Match ([regex]::Escape("avm pr-check -ExcludeSteps @('check policy', 'docs')"))
+        $prCheckPage | Should -Match ([regex]::Escape("avm pr-check -Ecosystem terraform -ExcludeSteps 'check policy'"))
+        $prCheckPage | Should -Match "Excluding every step returns overall Status='skipped', not 'pass'"
+        $prCheckPage | Should -Match '## Notes'
+        $prCheckPage | Should -Match 'no configured secrets are required'
+        $prCheckPage | Should -Match 'Older releases fail with upgrade guidance'
+
         $index = Get-Content -LiteralPath (Join-Path $outputPath 'README.md') -Raw
         $index | Should -Match '\| Cmdlet \| CLI command\(s\) \| Purpose \|'
         $index | Should -Match '\| \[Invoke-AvmPreCommit\]\(Invoke-AvmPreCommit\.md\) \| `avm pre-commit` \|'

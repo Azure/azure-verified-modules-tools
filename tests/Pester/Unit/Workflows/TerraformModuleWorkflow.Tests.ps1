@@ -13,6 +13,7 @@ Describe 'terraform-module reusable workflow' {
 
     It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
         @{ Job = 'unit-test'; Run = '&install-avm-authoring |' }
+        @{ Job = 'pr-check-fork'; Run = '*install-avm-authoring' }
         @{ Job = 'pr-check'; Run = '*install-avm-authoring' }
         @{ Job = 'integration-test'; Run = '*install-avm-authoring' }
         @{ Job = 'discover-examples'; Run = '*install-avm-authoring' }
@@ -89,6 +90,120 @@ Describe 'terraform-module reusable workflow' {
 
     It 'no longer lists per-example e2e targeting as a divergence' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
+    }
+}
+
+Describe 'terraform-module fork isolation' {
+    BeforeAll {
+        $workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
+        $script:workflow = Get-Content -LiteralPath $workflowPath -Raw
+        $script:jobs = @{}
+        foreach ($name in @('subscriptions', 'unit-test', 'unit-test-fork', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
+            $pattern = '(?ms)^  ' + [regex]::Escape($name) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
+            $block = [regex]::Match($script:workflow, $pattern)
+            if (-not $block.Success) { throw "Could not isolate the $name job block." }
+            $script:jobs[$name] = $block.Value
+        }
+        $run = [regex]::Match(
+            $script:jobs['pr-check-fork'],
+            '(?m)^      - name: Run PR check without policy\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
+        if (-not $run.Success -or [string]::IsNullOrWhiteSpace($run.Groups['code'].Value)) {
+            throw 'Could not isolate the fork pr-check script.'
+        }
+        $script:forkCheckScript = [scriptblock]::Create(($run.Groups['code'].Value -replace '(?m)^          ', ''))
+    }
+
+    It 'runs <Job> independently with read-only permissions and no protected environment' -ForEach @(
+        @{ Job = 'unit-test-fork' }
+        @{ Job = 'pr-check-fork' }
+    ) {
+        $block = $script:jobs[$Job]
+        $block | Should -Match '(?m)^    if: github\.event\.pull_request\.head\.repo\.fork == true\r?$'
+        $block | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
+        $block | Should -Match '(?m)^    permissions:\r?\n      contents: read\r?\n    env:'
+        $block | Should -Not -Match 'environment:|needs:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
+        $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
+    }
+
+    It 'overrides inherited credential contexts and disables OIDC in both fork jobs' {
+        $script:jobs['unit-test-fork'] | Should -Match (
+            '(?m)^    env: &fork-environment\r?\n' +
+            "      SECRETS_CONTEXT: '\{\}'\r?\n" +
+            "      VARS_CONTEXT: '\{\}'\r?\n" +
+            "      ARM_USE_OIDC: 'false'\r?$")
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^    env: \*fork-environment\r?$'
+    }
+
+    It 'shares the unit-test steps but never prepares the environment on a fork' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^    steps: &unit-test-steps\r?$'
+        $script:jobs['unit-test-fork'] | Should -Match '(?m)^    steps: \*unit-test-steps\r?$'
+        $script:jobs['unit-test'] | Should -Match (
+            '(?m)^      - name: Prepare test environment\r?\n' +
+            '        if: github\.event\.pull_request\.head\.repo\.fork == false\r?$')
+        $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
+        $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'uses the existing cache setup and non-persistent checkout for fork pr-check' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^        run: &configure-avm-tool-cache \|\r?$'
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^        run: \*configure-avm-tool-cache\r?$'
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+        $script:jobs['pr-check-fork'] | Should -Not -Match 'continue-on-error:|Prepare test environment'
+    }
+
+    It 'rejects an older module before invoking any checks' {
+        & {
+            function Import-Module {
+                param([string] $Name)
+                $Name | Should -Be 'Avm.Authoring'
+            }
+            function Invoke-AvmPrCheck { param([string] $Path) }
+            function avm { throw 'Checks must not execute with an older module.' }
+
+            { & $script:forkCheckScript } | Should -Throw '*Fork checks require an Avm.Authoring release with -ExcludeSteps*'
+        }
+    }
+
+    It 'runs the composite command excluding only policy with a compatible module' {
+        $result = & {
+            function Import-Module {
+                param([string] $Name)
+                $Name | Should -Be 'Avm.Authoring'
+            }
+            function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
+            function avm {
+                param([string] $Verb, [string[]] $ExcludeSteps)
+                [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
+            }
+
+            & $script:forkCheckScript
+        }
+        $result.Verb | Should -Be 'pr-check'
+        $result.Exclusions | Should -Be @('check policy')
+    }
+
+    It 'retains the non-fork gate for <Job>' -ForEach @(
+        @{ Job = 'subscriptions' }
+        @{ Job = 'unit-test' }
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'discover-examples' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $script:jobs[$Job] | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
+    }
+
+    It 'preserves normal-branch credentials, environments, and the full pr-check command' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^    environment: no-approval\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^    environment: pr-check\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^    needs: subscriptions\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^      id-token: write\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^          avm pr-check\r?$'
+        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|fork-environment'
+        foreach ($job in @('unit-test', 'pr-check')) {
+            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
+            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
+        }
     }
 }
 

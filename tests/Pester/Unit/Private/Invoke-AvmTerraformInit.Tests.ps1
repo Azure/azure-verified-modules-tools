@@ -78,6 +78,59 @@ Describe 'Invoke-AvmTerraformInit' {
         $disposed | Should -BeTrue
     }
 
+    It 'supports backend-disabled initialization with caller-owned exit handling' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Lock-AvmTerraformPluginCache {}
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0 }
+            }
+
+            $null = Invoke-AvmTerraformInit `
+                -TerraformPath 'terraform' `
+                -WorkingDirectory $TestDrive `
+                -EnvVars @{ TF_PLUGIN_CACHE_DIR = $null } `
+                -BackendFalse `
+                -NoColor `
+                -IgnoreExitCode
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList -contains '-backend=false' -and
+                $ArgumentList -contains '-no-color' -and
+                [bool]$IgnoreExitCode
+            }
+        }
+    }
+
+    It 'uses an AVM-managed provider cache when none is configured' {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            CacheRoot = Join-Path $TestDrive 'avm-cache'
+        } {
+            param($CacheRoot)
+
+            Mock Get-AvmFolder { $CacheRoot }
+            Mock New-Item {}
+            Mock Lock-AvmTerraformPluginCache {}
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0 }
+            }
+
+            $null = Invoke-AvmTerraformInit `
+                -TerraformPath 'terraform' `
+                -WorkingDirectory $TestDrive
+
+            $expected = Join-Path $CacheRoot 'terraform-plugin-cache'
+            Should -Invoke New-Item -Exactly 1 -ParameterFilter {
+                $Path -eq $expected -and $ItemType -eq 'Directory' -and $Force
+            }
+            Should -Invoke Lock-AvmTerraformPluginCache -Exactly 1 -ParameterFilter {
+                $EnvVars.TF_PLUGIN_CACHE_DIR -eq $expected
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $EnvVars.TF_PLUGIN_CACHE_DIR -eq $expected
+            }
+        }
+    }
+
     It 'does not lock when the effective provider cache is disabled' {
         InModuleScope 'Avm.Authoring' {
             Mock Lock-AvmToolCache { throw 'unexpected lock' }

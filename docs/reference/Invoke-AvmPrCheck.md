@@ -5,7 +5,7 @@
 ## Synopsis
 
 Run the pull-request linting and drift gauntlet against the resolved module:
-metadata -> sync -> format -> transform -> lint -> check policy ->
+metadata -> initialize -> sync -> format -> transform -> lint -> check policy ->
 check convention -> validate -> docs.
 
 ## Description
@@ -23,10 +23,17 @@ verify that pre-commit output is current. Before any step runs, git
 status must report a clean working tree.
 Metadata validation runs after tool resolution but before the other steps.
 Missing or invalid root or child metadata aborts the chain without
-changing module files or reading indexes, regardless of StopOnFail.
+changing module files or reading indexes, regardless of StopOnFail,
+unless metadata is explicitly excluded with -ExcludeSteps.
 
-The 'validate' step is a build-validation pass ('terraform
-validate' / 'bicep build'), not a test run. Unit tests remain a
+ExcludeSteps omits named steps and tools needed only by those steps.
+Excluded steps remain visible as 'skipped' in the result and log.
+Excluding every step returns overall Status='skipped', not 'pass'.
+
+For Terraform, the initialize step prepares each source example once.
+The later validate step reuses that persistent `.terraform` state instead
+of initializing the example again. The 'validate' step is a build-validation
+pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
 separate CI job so a failure produces one actionable signal and
 fork contributors receive results without environment approval.
 The convention step requires a tests/unit/*.tftest.hcl fixture,
@@ -57,8 +64,9 @@ Status semantics (same as Invoke-AvmPreCommit):
                 format).
   - 'fail'    : step returned Status='fail'.
   - 'error'   : step threw an unexpected exception; the chain aborts.
-  - 'skipped' : step threw AvmNotSupportedException because it does
-                not apply to the selected ecosystem.
+  - 'skipped' : step was explicitly excluded or threw
+                AvmNotSupportedException because it does not apply
+                to the selected ecosystem.
   - configuration exceptions are failures, not skips.
 
 By default the gauntlet is fail-soft: a step that returns
@@ -77,7 +85,7 @@ Routed by the dispatcher: 'avm pr-check'.
 ## Syntax
 
 ```powershell
-Invoke-AvmPrCheck [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-StopOnFail] [-ThrottleLimit <int>] [-SkipModuleVersionCheck] [<CommonParameters>]
+Invoke-AvmPrCheck [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-StopOnFail] [-ExcludeSteps <string[]>] [-ThrottleLimit <int>] [-SkipModuleVersionCheck] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -106,6 +114,24 @@ Force the ecosystem selector. Defaults to 'auto'.
 | Required | false |
 | Position | named |
 | Default value | auto |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
+### -ExcludeSteps
+
+Step names to skip: metadata, sync, format, transform, lint,
+check policy, check convention, validate, docs. Accepts an array;
+names are case-insensitive and duplicates are ignored. Unknown or
+empty names are rejected. Omit this parameter or supply an empty
+array to run every step.
+Version and clean-working-tree checks always run.
+
+| Property | Value |
+| --- | --- |
+| Type | `String[]` |
+| Required | false |
+| Position | named |
+| Default value | @() |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
@@ -179,11 +205,43 @@ avm pr-check
 Invoke-AvmPrCheck -Path C:\repos\my-module -StopOnFail
 ```
 
+### EXAMPLE 3
+
+```powershell
+avm pr-check -ExcludeSteps @('check policy', 'docs')
+```
+
+### EXAMPLE 4
+
+```powershell
+avm pr-check -Ecosystem terraform -ExcludeSteps 'check policy'
+```
+
+Run the fork-compatible Terraform checks. Run unit tests separately
+with 'avm test unit'.
+
 ## Outputs
 
 - `pscustomobject with:
   - Path        : the resolved module root
   - Ecosystem   : bicep | terraform
-  - Status      : pass | fail | error
+  - Status      : pass | fail | error | skipped
   - Steps       : array of { Step, Status, Error?, Result?, DurationMs }
   - DurationMs  : total wall-clock cost`
+
+## Notes
+
+The reusable Terraform workflow runs fork pr-check and unit tests in
+independent jobs. Fork pr-check excludes only check policy and its
+Conftest prerequisite. Both jobs omit GitHub environments, subscription
+selection, Azure OIDC permissions, and secret/variable preparation.
+Inherited secret and variable payloads are replaced with empty objects.
+Only GitHub's automatically provided read-only token remains available;
+no configured secrets are required. Unit fixtures and repository hooks
+must work without Azure credentials.
+
+Normal branch jobs retain their full checks, credentials, environments,
+and integration/end-to-end tests. Publish a compatible Avm.Authoring
+release containing -ExcludeSteps before adopting this workflow revision.
+Older releases fail with upgrade guidance rather than running policy
+or silently omitting the other checks.
