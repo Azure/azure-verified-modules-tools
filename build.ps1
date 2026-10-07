@@ -16,6 +16,8 @@
 .EXAMPLE
     ./build.ps1 build
 .EXAMPLE
+    ./build.ps1 docs
+.EXAMPLE
     ./build.ps1 ?      # list tasks
 .EXAMPLE
     ./build.ps1 integration -TestName 'Integration: module metadata*'
