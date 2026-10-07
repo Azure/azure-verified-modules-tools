@@ -35,4 +35,4 @@ This reference is generated from the comment-based help on the public PowerShell
 | [New-AvmTelemetryIdPrefix](New-AvmTelemetryIdPrefix.md) |  | Generate a seven-character hexadecimal telemetry identifier. |
 | [Register-AvmFeature](Register-AvmFeature.md) | `avm register-features` | Ensure features declared at a module root are registered in one Azure test subscription. |
 | [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
-| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm update` | Update Avm.Authoring to the latest PowerShell Gallery version. |
+| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm update`<br>`avm upgrade` | Update Avm.Authoring to the latest PowerShell Gallery version. |
