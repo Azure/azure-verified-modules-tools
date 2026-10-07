@@ -17,6 +17,11 @@ skill, which covers the inputs to ask for and the Open Source Portal steps.
 [State infrastructure and TME cutover](repository-sync/README.md) documents
 the independent state identity, deployment, migration, and rollback.
 
+[Module owner audit](module-owner-audit/README.md) is an operator tool. It
+checks that root module owners are still active Microsoft FTEs (members of the
+`Azure` organization), reconciles orphaned module issues, and can open
+metadata pull requests that remove inactive owners.
+
 The current snapshot came from the legacy Terraform governance repository at commit
 `59078e1bde61af0a5881331d2d26a41f791f5624`. This is an interim home until
 these capabilities move to Proxima.
