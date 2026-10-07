@@ -47,6 +47,14 @@ The protocol exists so that "I lost my context window" never means "I lost my pl
 ./build.ps1 clean        # remove out/
 ```
 
+## Generated cmdlet docs are part of the contract
+
+- Public cmdlet docs are generated from the inline help on each public function in `src/Avm.Authoring/Public/`.
+- Regenerate them with `avm docs` (or `Invoke-AvmDocs -Path .`) whenever a public cmdlet, parameter, or help block changes.
+- The generated reference is intentionally checked in and must stay in sync with the inline help; stale generated docs are a failing PR condition.
+- `avm pr-check` and `./build.ps1 pre-commit` run the docs step in `-CheckDrift` mode, so a stale generated reference fails validation until you regenerate and commit it.
+- If the check fails with a docs drift message, regenerate the docs, review the diff, and commit the updated reference pages before the PR is considered valid.
+
 Run `./build.ps1 pre-commit` before handing work off. If lint ever crashes with `Object reference not set to an instance of an object.`, see `docs/quality-standards.md` — the prior recurrence was transient and bisecting per file under `src/Avm.Authoring/` was the diagnostic path.
 
 ## Repo conventions that matter

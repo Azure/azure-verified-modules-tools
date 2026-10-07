@@ -1306,6 +1306,9 @@ Scheduled and `repository_dispatch` runs cannot enable this override.
 ## 22. Documentation
 
 - Comment-based help on every public function is the source of truth for command-level docs. A docs job generates `docs/reference/<cmdlet>.md` from it.
+- This repo treats generated public-cmdlet reference pages as part of the checked-in contract. Every public help change requires a regenerate: `avm docs` (or `Invoke-AvmDocs -Path .`) followed by a commit of the updated markdown files.
+- CI and PR validation run the docs step in `-CheckDrift` mode; stale generated markdown fails the gate. Local agents must refresh the docs before a PR is considered valid.
+- The generated docs are for both human readers and agent consumers. Each page should document the cmdlet purpose, behaviour, and each parameter's role in plain language. Doc generation must preserve the public help semantics; do not hand-edit generated output to hide drift.
 - `docs/` in this repo holds:
   - `avm-consolidation-plan.md` — the phased plan.
   - `avm-implementation-spec.md` — this file.
