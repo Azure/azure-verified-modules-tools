@@ -1,8 +1,8 @@
 # Telemetry migration for explicit unit-test targets
 
-**Status**: blocked
+**Status**: complete
 **Started**: 2026-10-02
-**Updated**: 2026-10-05
+**Updated**: 2026-10-07
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
@@ -10,15 +10,14 @@
 Preserve existing unit-test targets and assertions during central telemetry
 migration. Establish which local delegated runs can be migrated safely
 without weakening the safeguards for unknown dependencies or real providers.
-The original implementation passed all-platform CI and local ALZ qualification.
-Its plan-only workflow preview reached the selected ALZ repository but
-stopped at a BAMI test-tenant group lookup before telemetry migration.
-The merged prerequisite repairs passed local and hosted qualification.
-The approved plan-only state-lock repair also passed full qualification.
-The new ALZ preview resolved the required groups, prepared the telemetry
-candidate and passed all eight original mocked unit plans. Complete candidate
-validation remains blocked: TFLint plugin installation hit GitHub's API rate
-limit. Publication was skipped and the single-preview approval is consumed.
+The implementation passed all-platform CI and local ALZ qualification.
+After the prerequisite repairs, preservation of recent main and the central
+example-input repair, the authorized plan-only BAMI qualification completed
+successfully. ALZ passed all nine candidate checks and all eight original
+mocked unit plans; publication was skipped.
+The [representative qualification slice](2026-10-07-telemetry-representative-qualification.md)
+records the final source, candidate trees and matching receipts. Earlier
+failed previews below remain historical evidence, not current blockers.
 
 ## Checklist
 
@@ -39,7 +38,7 @@ limit. Publication was skipped and the single-preview approval is consumed.
 - [x] Pass hosted qualification on the combined source.
 - [x] Make plan-only state-lock handling non-mutating and qualify the repair.
 - [x] Verify controller group resolution and all eight unit plans in the repaired-source preview.
-- [ ] Complete the narrow ALZ networking preview after its identity prerequisites pass.
+- [x] Complete the narrow ALZ networking preview after its identity prerequisites pass.
 
 ## Evidence
 
@@ -445,25 +444,47 @@ is under `out/telemetry-alz-preview-37296299963-candidate/`.
 The eight passing remote plans are genuine qualification evidence, but they
 do not replace the remaining candidate checks.
 
+## Completed qualification on October 7
+
+The user subsequently authorized the necessary BAMI tests and autonomous
+completion. Recent main was merged without discarding its consolidated
+repository-sync runner, state handling or Bicep work. Candidate validation
+now uses the job's existing read-only `GITHUB_TOKEN` for tool acquisition;
+it does not receive the repository-sync App token or broader permissions.
+
+The first representative batch exposed unsupplied newly generated example
+locations, not a unit-test regression. The central example-only repair was
+reproduced with real noninteractive Terraform plans and qualified locally
+and in all 22 exact-head checks at
+`a1df0e7976e9e7db70dc6532d91dffa88d410f99`.
+
+The successful
+[bounded rerun](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37605021337)
+retained ALZ source `670c45d48b0c7c6a244cddac8715269b0fc06185` and validated
+candidate tree `1e3a26670ab6c35f0aff5aef33851b9aa72592fc`. All nine checks,
+including policy and lint, passed, together with all eight original unit
+runs. The matching receipt was inspected. Virtual-network qualification
+also passed all nine checks and 53 original unit runs. Both prerequisite
+plans were no-ops and both publication jobs were skipped.
+
 ## Blockers or dependencies
 
-Full remote qualification is blocked by TFLint plugin acquisition hitting
-GitHub's API rate limit, not by group lookup or workflow concurrency.
-A candidate fix is safe, narrowly scoped authentication or caching for plugin
-acquisition; do not expose privileged repository-sync credentials to candidate
-execution. Any implementation or fresh preview requires separate approval.
-No automatic retry is authorized when the rate limit resets.
-The identity guard remains intact. Do not invent replacement groups, grant
-permissions or switch tenants. Archived repositories remain excluded.
-No deployment, module publication, protected approval, or source-module repair
-is authorized by this slice.
+No blocker remains for native unit-test migration or the bounded candidate
+qualification. The retired-group and TFLint-download failures above are
+superseded by the completed-source evidence. No deployment, module
+publication, protected approval, access change or source-module publication
+was performed. Separate live end-to-end and rollout work remains outside
+this qualification.
+
 The MaPoTF release dependency is satisfied. Release creation, approval and
 publication remained operator-owned; this session verified the published
 distribution and attestation without changing either. Existing direct-unit
 migration remains qualified by the preceding local gate, all-platform CI and
 active-pattern preview.
-Before rollout, the team documentation should describe the approved release,
+Before rollout, the
+[team documentation](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
+should describe the approved release,
 test-migration behavior and upgrade procedure, reusing an existing open
-documentation review where applicable. The current check could not enumerate
+documentation review where applicable. The earlier check could not enumerate
 those reviews: the GitHub Enterprise CLI returned HTTP 401 and the Edge
 fallback reached the single-sign-on page. No login or account change was made.

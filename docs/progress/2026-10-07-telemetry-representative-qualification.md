@@ -1,17 +1,18 @@
 # Representative telemetry qualification in BAMI
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-07
 **Updated**: 2026-10-07
 **Branch**: `jaredfholgate-mapotf-telemetry-alignment`
 
 ## Outcome
 
-Qualify the telemetry replacement on representative modules after preserving
+Qualified the telemetry replacement on representative modules after preserving
 the recent main updates. The user explicitly approved the tests needed
-against the BAMI test tenant. Start with the existing plan-only candidate
-workflow, which runs candidate checks and existing unit suites without
-publishing module changes.
+against the BAMI test tenant. The existing plan-only candidate workflow
+passed for Key Vault, virtual network, ALZ networking and Windows Agent,
+including their 97 original unit runs across the two batches below.
+Regions remained unchanged and is not a migrated telemetry result.
 
 No permission changes, group creation, state repair, releases, publication,
 protected-gate approval, or merge to main is authorized by this slice.
@@ -47,8 +48,8 @@ and transformation idempotency.
 - [x] Run bounded representative candidate checks.
 - [x] Repair newly generated example locations without changing module
       requirements, authored regions, or main's policy safeguards.
-- [ ] Qualify the repair locally and rerun the affected BAMI candidates.
-- [ ] Record actual results, candidate trees, receipts, and remaining blockers.
+- [x] Qualify the repair locally and rerun the affected BAMI candidates.
+- [x] Record actual results, candidate trees, receipts, and remaining blockers.
 
 ## Validation
 
@@ -70,10 +71,10 @@ publication job was skipped.
 | Windows Agent | `11af19c862b6cfe889c259634007a71be2221b08` | Checks and two unit runs passed; policy skipped by existing configuration; matching receipt |
 | Regions | No changed tree | `NoChange` receipt; remote module checks and unit tests did not run |
 
-ALZ and virtual-network lint passed. Their current blocker is not a group,
-permission, or download failure: the example transform introduces a required
-`location` input but gives previously runnable examples no value for it.
-The repair must make newly generated example inputs runnable without adding
+ALZ and virtual-network lint passed. That run's policy failure was not a group,
+permission, or download failure: the example transform introduced a required
+`location` input but gave previously runnable examples no value for it.
+The repair makes newly generated example inputs runnable without adding
 defaults to reusable modules or replacing authored example declarations.
 Actual Terraform plans, rather than configuration validation alone, cover
 the regression.
@@ -95,13 +96,60 @@ lint, 3,301 unit tests and 1,498 component tests (nine and one platform skips)
 in 25 minutes 13 seconds. The known intermittent analyzer crash recovered
 within the existing retry limit; no lint rule was disabled.
 
+### Successful repaired-source rerun
+
+The repair was committed and pushed as
+`a1df0e7976e9e7db70dc6532d91dffa88d410f99`. All 22 exact-head checks passed,
+including all 16 jobs in
+[Authoring CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37600188116)
+and the
+[configuration workflow](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37600188102).
+Main `d14117248e085baa80fb608b97c93e3c3619b90e` remains an ancestor through
+the history-preserving merge; no main changes were discarded.
+
+The scheduled repository sync completed successfully before the next
+dispatch. Fresh preflight checks found no active or pending sync, no
+same-head duplicate, unchanged selected source commits, and the approved
+BAMI configuration. The bounded
+[ALZ and virtual-network rerun](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37605021337)
+then executed exactly once on the qualified repair head, with
+`plan_only=true` and checked-out authoring source. Both preparation plans
+reported no infrastructure changes.
+
+| Module | Candidate tree | Executed result |
+| --- | --- | --- |
+| ALZ networking | `1e3a26670ab6c35f0aff5aef33851b9aa72592fc` | All nine checks, including policy, and all eight original unit runs passed |
+| Virtual network | `688e332c9a1c5d0f83eea930b838df61c966bacd` | All nine checks, including policy, and all 53 original root/child unit runs passed |
+
+Both validation receipts match their prepared candidate's repository, phase,
+base commit, changed-state flag and tree. Each candidate retains its own
+dedicated validation client in the approved BAMI tenant, distinct from the
+controller, Bicep client and other candidate. The 28 configured test
+subscriptions are unchanged. The workflow completed successfully, and both
+publication jobs were skipped.
+
+Archive comparisons verified the new default in eight ALZ examples and five
+virtual-network examples, with corresponding README updates. The other
+differences were ordering in regenerated telemetry files; original module
+calls, authored regions and unit-test files were byte-identical to the first
+candidates. No policy or identity safeguard was weakened.
+
+Key Vault and Windows Agent were not rerun: their earlier candidates contain
+no example changes affected by this repair. Their matching receipts remain
+bound to the first run and its Tools head, not to the rerun or a later
+documentation-only commit.
+
+### Utility and rollout boundaries
+
 The unchanged Regions source at `abcc7c4138028371e88aa8d0be60a6537b08c40e`
 passed its 56 existing provider-mocked unit runs across 12 files locally.
 These are mocked applies with synthetic credentials and Azure CLI, managed
 identity, and OIDC authentication disabled, not live deployments.
 Its metadata has no `telemetryIdPrefix`, so the telemetry replacement profile
 does not run. Its existing modtm telemetry remains; this is utility-exemption
-coverage, not evidence of modtm removal.
+coverage, not evidence of modtm removal. Legacy utility retirement needs a
+separate disposition before claiming fleet-wide removal. Published module
+dependencies were not rewritten and may still require modtm.
 
 Candidate validation now uses the job's existing read-only `GITHUB_TOKEN`
 for tool downloads, matching main's integration workflow. The historical
@@ -128,9 +176,15 @@ and plan/unit coverage is not evidence of a full live deployment test.
 ## Blockers or dependencies
 
 The [main integration slice](2026-10-06-telemetry-main-integration.md) is
-complete. ALZ and virtual-network qualification remains blocked on the
-repair's exact-head hosted checks and a successful bounded rerun. The
-example-only repair is locally qualified; the already-passing Key Vault and
-Windows Agent candidates contain no example changes affected by it. No
-second run has been dispatched. Retain current-main behavior and do not bypass any
-candidate identity, source, policy, or publication guard to obtain a pass.
+complete. No blocker remains for the bounded candidate qualification recorded
+here. The former group, plugin-download and example-input failures are
+resolved for these candidates.
+
+Live deployment and end-to-end idempotency checks, protected environment
+approvals, release, consumer publication and wider rollout are not completion
+claims of this slice. No further workflow dispatch is needed for its outcome.
+Before wider rollout, update the internal
+[team migration documentation](https://msft.ghe.com/azure-cloud-native/Azure-Verified-Modules-Docs)
+with the location contract, non-destructive state retirement, test migration
+and utility boundary, reusing an existing open documentation review where
+applicable. No internal documentation or authentication was changed here.
