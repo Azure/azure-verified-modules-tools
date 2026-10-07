@@ -101,6 +101,26 @@ Describe 'Invoke-AvmTerraformInit' {
         }
     }
 
+    It 'preserves compatible dependency selections without requesting upgrades' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Lock-AvmTerraformPluginCache {}
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0 }
+            }
+
+            $null = Invoke-AvmTerraformInit `
+                -TerraformPath 'terraform' `
+                -WorkingDirectory $TestDrive `
+                -EnvVars @{ TF_PLUGIN_CACHE_DIR = $null } `
+                -PreserveDependencySelections
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList -notcontains '-lockfile=readonly' -and
+                $ArgumentList -notcontains '-upgrade'
+            }
+        }
+    }
+
     It 'uses an AVM-managed provider cache when none is configured' {
         InModuleScope 'Avm.Authoring' -Parameters @{
             CacheRoot = Join-Path $TestDrive 'avm-cache'

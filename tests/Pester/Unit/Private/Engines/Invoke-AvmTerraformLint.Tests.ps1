@@ -678,10 +678,9 @@ Describe 'Invoke-AvmTerraformLint' {
             $r = Invoke-AvmTerraformLint -Context $C
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList.Count -eq 3 -and
+                $ArgumentList.Count -eq 2 -and
                 $ArgumentList[0] -eq 'init' -and
-                $ArgumentList[1] -eq '-upgrade' -and
-                $ArgumentList[2] -eq '-input=false' -and
+                $ArgumentList[1] -eq '-input=false' -and
                 $WorkingDirectory -ne $C.Root -and
                 -not [bool]$StreamOutput
             }
@@ -818,8 +817,11 @@ rule "$($entry.Value)" {
         $ctx = $script:context
         $cache = $script:lintCache
         $terraformDir = Join-Path $script:moduleDir '.terraform'
-        New-Item -ItemType Directory -Path $terraformDir -Force | Out-Null
+        $moduleCache = Join-Path $terraformDir 'modules'
+        New-Item -ItemType Directory -Path $moduleCache -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $terraformDir 'plugin.bin') -Value 'cached' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $moduleCache 'modules.json') -Value '{"Modules":[]}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $moduleCache 'cached.tf') -Value 'locals {}' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:moduleDir '.terraform.lock.hcl') -Value 'lock' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'terraform.tfstate') -Value '{}' -Encoding utf8
 
@@ -834,8 +836,8 @@ rule "$($entry.Value)" {
                 $ArgumentList.Count -gt 0 -and $ArgumentList[0] -eq 'init'
             } {
                 $script:artifactCount = @(
-                    '.terraform'
                     '.terraform.lock.hcl'
+                    '.terraform\modules\cached.tf'
                     'terraform.tfstate'
                 ) | Where-Object { Test-Path -LiteralPath (Join-Path $WorkingDirectory $_) } |
                     Measure-Object |
@@ -858,7 +860,7 @@ rule "$($entry.Value)" {
         }
 
         $probe.Result.Status | Should -Be 'pass'
-        $probe.ArtifactCount | Should -Be 0
+        $probe.ArtifactCount | Should -Be 2
         $probe.StageChildren | Should -Be 0
         Join-Path $script:moduleDir '.terraform.lock.hcl' | Should -Exist
         Join-Path $script:moduleDir 'terraform.tfstate' | Should -Exist

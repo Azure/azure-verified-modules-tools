@@ -81,6 +81,7 @@ Describe 'Initialize-AvmTerraformCommand' {
                 $WorkingDirectory -eq $second -and
                 $BackendFalse -and
                 $NoColor -and
+                -not $PreserveDependencySelections -and
                 $EnvVars.TF_PLUGIN_CACHE_DIR -eq (Join-Path $TestDrive 'provider-cache')
             }
         }
