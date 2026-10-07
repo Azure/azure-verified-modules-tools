@@ -108,10 +108,16 @@ section when cutting a release.
 ### Changed
 
 - Bicep native retries and cleanup incorporate the registry updates through
-  [`6001a5b`](https://github.com/Azure/bicep-registry-modules/commit/6001a5b529e3e6490c0b63323fb60b9e069ffd9d):
+  [`5a18dc9`](https://github.com/Azure/bicep-registry-modules/commit/5a18dc97e82951ae6ccf9e1b7a354e0ebfdc9e5e):
   bounded metadata-timeout reads, narrowly recognized capacity failures,
   cleanup before eligible same-region retries, exact nested-preflight and
   existing-Graph evidence, and resumable deployment-record deletion.
+  Management-group HTTP 403 submissions observe the exact original deployment
+  using its captured Azure context; only confirmed success recovers outputs,
+  and authorization failures never permit replay.
+- Pester initialization rejects an already-loaded same-version engine from
+  another configured path, with fresh-session guidance. Build checks also fail
+  on setup/teardown errors even when individual tests pass.
 - Bicep is pinned to 0.48.1. Documentation selects the canonical template
   through native configuration; package defaults use temporary inputs without
   changing caller files, while explicit template overrides remain validated.
@@ -339,7 +345,7 @@ section when cutting a release.
   dispatch, and the secure-type contract) was implemented end-to-end and then
   removed wholesale. A future design will shell out to a dedicated Bicep docs
   CLI when one is selected.
-- `docs/avm-consolidation-plan.md` verb-table entries for `avm docs` (Bicep),
+- The documented command contract for `avm docs` (Bicep),
   `avm pre-commit`, and `avm pr-check` rewritten to match the engines as
   wired today (`format → lint → test → docs` for `pre-commit`;
   clean-worktree preflight then
@@ -362,6 +368,10 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm pr-check` keeps its nine public steps and exclusions. Terraform
+  source-example initialization is a prerequisite only when validation is
+  enabled; formatting-only and all-excluded runs do not initialize examples.
+  Normal and fork checks retain initialization and provider-cache reuse.
 - Bicep e2e now watches the same deployment after a submission timeout instead
   of failing with an unknown outcome. A recovered failure is retried as a
   confirmed failure; the timed-out deployment is never resubmitted. Confirmed
@@ -498,7 +508,7 @@ section when cutting a release.
 - Root `README.md` refreshed to reflect the actual repo state after the
   2026-05-26 Terraform-first pivot.
 - New `docs/terraform-migration.md` migration guide.
-- `docs/progress.md` audit of Terraform tool binary availability — 3 of 4
+- Audit of Terraform tool binary availability — 3 of 4
   candidates (`mapotf`, `avmfix`, `grept`) ship no GitHub releases, blocking
   `avm transform` / `avm check convention` / the `avmfix`-format-chain on an
   A/B/C supply-chain decision.
@@ -1108,9 +1118,8 @@ Release-pipeline and packaging fixes.
 
 ## [0.1.0] - 2026-05-18
 
-First real release of `Avm.Authoring` — the Phase 0 skeleton from the
-[consolidation plan](docs/avm-consolidation-plan.md) and
-[implementation spec](docs/avm-implementation-spec.md). Single `avm`
+First real release of `Avm.Authoring` — the initial skeleton now governed by
+the [quality specification](docs/quality-spec.md). Single `avm`
 dispatcher, managed-tool resolver, and Bicep / Terraform inner-loop
 scaffolding (`format` / `lint` / `test` / `docs`).
 

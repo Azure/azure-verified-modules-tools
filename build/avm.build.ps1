@@ -23,9 +23,11 @@
                     release pipeline, not here; the in-repo manifest is never
                     modified.
       clean       - Remove ./out.
-      pre-commit  - Composite: layout + lint + test + component. The recommended local gate.
-      ci          - Full local CI gate: layout + lint + coverage + component.
-      ci-tests    - Matrix CI gate: layout + coverage + component. CI lints once
+      docs        - Generate docs/reference from public comment-based help.
+      docs-check  - Fail when docs/reference is missing, stale, or has extra pages.
+      pre-commit  - Composite: docs-check + layout + lint + test + component.
+      ci          - Full local CI gate: docs-check + layout + lint + coverage + component.
+      ci-tests    - Matrix CI gate: docs-check + layout + coverage + component. CI lints once
                     in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
@@ -60,6 +62,7 @@ $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:workflowUnitTestsRoot = Join-Path $script:testsRoot 'Unit' 'Workflows'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
+$script:cmdletDocsGenerator = Join-Path $script:repoRoot 'scripts' 'Generate-AvmCmdletDocumentation.ps1'
 $script:testNameFilter = $TestName
 
 # Single source of truth for the spec section 18 line-coverage floor. The CI
@@ -122,6 +125,10 @@ function script:Invoke-AvmPester {
         if ($result.FailedContainersCount -gt 0) {
             $paths = @($result.Containers | Where-Object Result -eq 'Failed' | ForEach-Object { $_.Item })
             throw "$($result.FailedContainersCount) Pester test file(s) failed to load or run: $($paths -join ', ')"
+        }
+        if ($result.FailedBlocksCount -gt 0) {
+            $names = @($result.FailedBlocks | ForEach-Object Name)
+            throw "$($result.FailedBlocksCount) Pester setup or teardown block(s) failed: $($names -join ', ')"
         }
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
@@ -728,6 +735,16 @@ task clean {
     Write-Build Green '  clean OK'
 }
 
+task docs {
+    & $script:cmdletDocsGenerator
+    Write-Build Green '  docs OK: generated docs/reference'
+}
+
+task 'docs-check' {
+    & $script:cmdletDocsGenerator -Check
+    Write-Build Green '  docs-check OK: generated reference is current'
+}
+
 # Spec section 18 Component tier: real FS + real subprocess, stub binaries on
 # PATH, no network. Tests live under tests/Pester/Component/ and are tagged
 # `Component` so they are excluded from `test` / `coverage` (which run the Unit
@@ -822,13 +839,13 @@ task integration build, {
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
-task 'pre-commit' layout, lint, test, component
+task 'pre-commit' 'docs-check', layout, lint, test, component
 
 # The CI matrix runs layout + coverage + component; lint and workflow tests run
 # in dedicated Ubuntu jobs. The full local ci task includes lint. Integration
 # remains a separate real-network job, and pre-commit runs unit tests without
 # coverage while retaining the component tier.
-task 'ci-tests' layout, coverage, component
-task ci layout, lint, coverage, component
+task 'ci-tests' 'docs-check', layout, coverage, component
+task ci 'docs-check', layout, lint, coverage, component
 
 task . layout

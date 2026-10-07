@@ -7,6 +7,75 @@ BeforeAll {
         -SourceManifest (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
     . (Join-Path $PSScriptRoot '..' 'Helpers' 'BicepNativeWorkflow.ps1')
 }
+
+Describe 'Component: Bicep native management-group authorization recovery' -Tag Component {
+    BeforeEach {
+        $script:fixture = New-NativeBicepWorkflowFixture -TestRoot $TestDrive
+        $script:options = Get-NativeBicepWorkflowOptions -Fixture $script:fixture
+        $script:fixture.Schema = 'managementGroupDeploymentTemplate'
+        $script:fixture.CreateMode = 'forbidden'
+        $script:fixture.ReadinessState = 'Succeeded'
+        $script:options.ManagementGroupId = 'test-management-group'
+    }
+    AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
+
+    It 'recovers exact outputs for assertions and cleans normally without replay' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
+        Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        $creates = @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create')
+        $creates.Count | Should -Be 1
+        $reads = @($script:fixture.RestInputs | Where-Object { $null -ne $_.DefaultProfile })
+        $reads.Count | Should -Be 1
+        $reads[0].Method | Should -Be 'GET'
+        $reads[0].Path | Should -BeExactly "$($script:fixture.LastDeploymentId)?api-version=2021-04-01"
+        [object]::ReferenceEquals($reads[0].DefaultProfile, $creates[0].DefaultProfile) | Should -BeTrue
+        $script:fixture.PesterInput.DeploymentOutputs.account.value | Should -BeExactly 'deployed-account'
+        $script:fixture.Calls | Should -Contain 'pester'
+        $script:fixture.Calls | Should -Contain 'post'
+        @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $stored.status | Should -Be 'Complete'
+        $stored.deployments.Count | Should -Be 1
+        $stored.deployments[0].status | Should -Be 'Succeeded'
+        $script:fixture.CurrentSubscription | Should -Be '00000000-0000-0000-0000-000000000099'
+    }
+
+    It 'does not run assertions or spend another deployment on <Recovery>' -ForEach @(
+        @{ Recovery = 'Failed'; State = 'Failed'; OutputMode = 'valid' }
+        @{ Recovery = 'Unknown'; State = 'Unknown'; OutputMode = 'valid' }
+        @{ Recovery = 'Canceled'; State = 'Canceled'; OutputMode = 'valid' }
+        @{ Recovery = 'wrong ID'; State = 'Succeeded'; OutputMode = 'wrong-id' }
+        @{ Recovery = 'invalid outputs'; State = 'Succeeded'; OutputMode = 'invalid' }
+    ) {
+        $script:fixture.ReadinessState = $State
+        $script:fixture.OutputMode = $OutputMode
+        $result = Invoke-AvmTestE2e @script:options -Phase Deploy
+        $result.Status | Should -Be 'fail'
+        $result.CleanupDeferred | Should -BeTrue
+        ($result.Issues.Message -join ' ') | Should -Match 'HTTP 403'
+        ($result.Issues.Message -join ' ') | Should -Not -Match 'private-fixture-detail'
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'discover'
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        @($script:fixture.Calls | Where-Object { $_ -match '^(delete-record|remove|purge):' }).Count | Should -Be 0
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $stored.deployments.Count | Should -Be 1
+        $stored.deployments[0].preflightRejected | Should -BeFalse
+    }
+
+    It 'does not treat validation-stage HTTP 403 as a submitted deployment' {
+        $script:fixture.ValidationError = [Net.Http.HttpRequestException]::new(
+            'Validation forbidden.', $null, [Net.HttpStatusCode]::Forbidden)
+        $result = Invoke-AvmTestE2e @script:options -Phase Deploy
+        $result.Status | Should -Be 'fail'
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 0
+        $script:fixture.RestInputs.Count | Should -Be 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 0
+    }
+}
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
 Describe 'Component: Bicep native cleaned retries' -Tag Component {

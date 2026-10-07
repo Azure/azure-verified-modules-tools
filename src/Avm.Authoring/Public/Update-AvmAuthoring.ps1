@@ -9,13 +9,14 @@ function Update-AvmAuthoring {
         CurrentUser scope. This command bypasses stale-version enforcement so
         an outdated module can update itself.
 
-        Routed by the dispatcher: 'avm update'.
+        Routed by the dispatcher: 'avm upgrade' (with 'avm update' retained as
+        a backwards-compatible alias).
 
     .EXAMPLE
-        avm update
+        avm upgrade
 
     .EXAMPLE
-        avm update --what-if
+        avm upgrade --what-if
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
@@ -29,7 +30,7 @@ function Update-AvmAuthoring {
     }
     catch {
         throw [AvmToolException]::new(
-            "Unable to determine the latest Avm.Authoring version from PowerShell Gallery. Verify PSGallery connectivity and try 'avm update' again. $($_.Exception.Message)",
+            "Unable to determine the latest Avm.Authoring version from PowerShell Gallery. Verify PSGallery connectivity and try 'avm upgrade' again. $($_.Exception.Message)",
             $_.Exception)
     }
 
@@ -38,7 +39,7 @@ function Update-AvmAuthoring {
         Select-Object -First 1
     if (-not $currentModule) {
         throw [AvmConfigurationException]::new(
-            'Unable to determine the running Avm.Authoring version. Re-import Avm.Authoring and run ''avm update'' again.')
+            'Unable to determine the running Avm.Authoring version. Re-import Avm.Authoring and run ''avm upgrade'' again.')
     }
 
     $currentVersion = [version]$currentModule.Version

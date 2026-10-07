@@ -8,8 +8,13 @@ BeforeAll {
     & (Get-Module Avm.Authoring) {
         function script:Invoke-AzRestMethod {
             [CmdletBinding()]
-            param($Method, $Path)
+            param($Method, $Path, $DefaultProfile)
             throw 'Unexpected Azure request.'
+        }
+        function script:Get-AzContext {
+            [CmdletBinding()]
+            param()
+            throw 'Unexpected Azure context lookup.'
         }
         function script:New-AzResourceGroupDeployment {
             [CmdletBinding()]
@@ -28,7 +33,7 @@ BeforeAll {
         }
         function script:New-AzManagementGroupDeployment {
             [CmdletBinding()]
-            param($Name, $Location, $ManagementGroupId, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)
+            param($Name, $Location, $ManagementGroupId, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)
             throw 'Unexpected Azure deployment.'
         }
         function script:New-AzTenantDeployment {
@@ -36,6 +41,33 @@ BeforeAll {
             param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)
             throw 'Unexpected Azure deployment.'
         }
+    }
+
+    function New-TestForbiddenFailure {
+        param([string] $Shape = 'response', [AllowNull()] [object] $Status = [System.Net.HttpStatusCode]::Forbidden)
+
+        $fault = [InvalidOperationException]::new('Original forbidden submission; private-submission-detail.')
+        if ($Shape -eq 'http') {
+            $fault = [Net.Http.HttpRequestException]::new(
+                $fault.Message, $null, [Net.HttpStatusCode]::Forbidden)
+        }
+        elseif ($Shape -eq 'direct status') { $fault | Add-Member -NotePropertyName StatusCode -NotePropertyValue $Status }
+        elseif ($Shape -ne 'message only') {
+            $fault | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $Status }
+        }
+        switch ($Shape) {
+            'inner' { $fault = [InvalidOperationException]::new('Wrapped submission.', $fault) }
+            'aggregate' { $fault = [AggregateException]::new([Exception[]]@($fault)) }
+            'mixed timeout' { $fault = [AggregateException]::new([Exception[]]@($fault, [TimeoutException]::new('Timeout.'))) }
+            'mixed cancellation' { $fault = [AggregateException]::new([Exception[]]@($fault, [OperationCanceledException]::new('Cancelled.'))) }
+            'pipeline cancellation' { $fault = [AggregateException]::new([Exception[]]@($fault, [Management.Automation.PipelineStoppedException]::new('Cancelled.'))) }
+        }
+        $record = [Management.Automation.ErrorRecord]::new($fault, 'OriginalForbidden', 'PermissionDenied', 'original-target')
+        $record.ErrorDetails = [Management.Automation.ErrorDetails]::new('Private original diagnostic; operation fixture-id.')
+        if ($Shape -eq 'runtime') {
+            return [Management.Automation.RuntimeException]::new('Wrapped submission.', $null, $record)
+        }
+        return $record
     }
 }
 
@@ -102,6 +134,20 @@ Describe 'Bicep native ARM operation' {
             Invoke-AvmBicepNativeArmOperation -Scope group -Operation Create -TemplatePath 'test.json' `
                 -DeploymentName 'attempt' -MetadataLocation 'westus' -ResourceGroupName 'owned' -WhatIf
             Should -Invoke New-AzResourceGroupDeployment -Exactly 0
+        }
+    }
+
+    It 'forwards the exact management-group profile without changing authored parameters' {
+        InModuleScope Avm.Authoring {
+            $submissionProfile = @{ Tenant = @{ Id = 'original-tenant' } }
+            Mock New-AzManagementGroupDeployment { @{ ProvisioningState = 'Succeeded' } }
+            $null = Invoke-AvmBicepNativeArmOperation -Scope mg -Operation Create -TemplatePath 'test.json' `
+                -DeploymentName 'attempt' -MetadataLocation 'westus' -ManagementGroupId 'test-mg' `
+                -Parameters @{ DefaultProfile = 'authored-value' } -DefaultProfile $submissionProfile
+            Should -Invoke New-AzManagementGroupDeployment -Exactly 1 -ParameterFilter {
+                [object]::ReferenceEquals($DefaultProfile, $submissionProfile) -and
+                $TemplateParameterObject['DefaultProfile'] -ceq 'authored-value'
+            }
         }
     }
 }
@@ -274,6 +320,246 @@ Describe 'Bicep native deployment retries' {
             Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
         }
     }
+
+    Context 'management-group authorization recovery' {
+        BeforeEach {
+            $submissionFailure = New-TestForbiddenFailure
+            InModuleScope Avm.Authoring -Parameters @{ SubmissionFailure = $submissionFailure } {
+                param($SubmissionFailure)
+                $script:inputOptions.Scope = 'mg'
+                $script:inputOptions.ManagementGroupId = 'test-mg'
+                $script:submissionFailure = $SubmissionFailure
+                $script:submittedProfile = @{
+                    Subscription = @{ Id = $script:state.subscriptionId }
+                    Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' }
+                }
+                $script:ambientProfile = $script:submittedProfile
+                $script:recoveryMode = 'Succeeded'
+                $script:recoverySequence = [Collections.Generic.Queue[string]]::new()
+                Mock Get-AzContext { $script:ambientProfile }
+                Mock Invoke-AvmBicepNativeArmOperation { throw $script:submissionFailure }
+                Mock Get-AvmBicepDeploymentRetryKind { throw 'Authorization recovery must not classify resource failures.' }
+                Mock Invoke-AzRestMethod {
+                    $id = $script:state.deployments[-1].id
+                    $mode = if ($script:recoverySequence.Count -gt 0) { $script:recoverySequence.Dequeue() } else { $script:recoveryMode }
+                    $document = @{
+                        id = $id
+                        properties = @{ provisioningState = $mode; outputs = @{ recovered = @{ value = 'original-output' } } }
+                    }
+                    switch ($mode) {
+                        'timeout' { throw [TimeoutException]::new('Read timeout.') }
+                        'forbidden' { throw [Net.Http.HttpRequestException]::new('Read denied.', $null, [Net.HttpStatusCode]::Forbidden) }
+                        'transport' { throw [Net.Http.HttpRequestException]::new('Read interrupted.') }
+                        'cancelled' { throw [OperationCanceledException]::new('Read cancelled.') }
+                        'missing' { return @{ StatusCode = 404; Content = '{}' } }
+                        'wrong group' { $document.id = $id.Replace('/test-mg/', '/foreign-mg/') }
+                        'missing ID' { $document.Remove('id') }
+                        'array ID' { $document.id = @($id) }
+                        'array state' { $document.properties.provisioningState = @('Succeeded') }
+                        'missing state' { $document.properties.Remove('provisioningState') }
+                        'invalid outputs' { $document.properties.outputs = @('not-an-object') }
+                    }
+                    return @{ StatusCode = 200; Content = $document | ConvertTo-Json -Depth 6 -Compress }
+                }
+            }
+        }
+
+        It 'observes a typed <Shape> HTTP 403 once and recovers only the original outputs' -ForEach @(
+            @{ Shape = 'response' }, @{ Shape = 'direct status' }, @{ Shape = 'http' }
+            @{ Shape = 'inner' }, @{ Shape = 'aggregate' }, @{ Shape = 'runtime' }, @{ Shape = 'mixed timeout' }
+        ) {
+            $submissionFailure = New-TestForbiddenFailure -Shape $Shape
+            InModuleScope Avm.Authoring -Parameters @{ SubmissionFailure = $submissionFailure } {
+                param($SubmissionFailure)
+                $script:submissionFailure = $SubmissionFailure
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
+                    -DeploymentInput $script:inputOptions -AllowRelocation -AllowTransientRetry
+                $result.Status | Should -Be 'pass'
+                $result.Outputs.recovered.value | Should -BeExactly 'original-output'
+                $script:state.deployments.Count | Should -Be 1
+                $script:state.deployments[0].status | Should -Be 'Succeeded'
+                $script:state.deployments[0].preflightRejected | Should -BeFalse
+                Should -Invoke Get-AzContext -Exactly 1
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1 -ParameterFilter {
+                    [object]::ReferenceEquals($DefaultProfile, $script:submittedProfile) -and
+                    $ManagementGroupId -ceq 'test-mg' -and $Parameters.baseTime -ceq '2026-10-02 12:34:56Z'
+                }
+                Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                    $Method -ceq 'GET' -and $Path -ceq "$($result.DeploymentId)?api-version=2021-04-01" -and
+                    [object]::ReferenceEquals($DefaultProfile, $script:submittedProfile)
+                }
+                Should -Invoke Get-AvmBicepDeploymentRetryKind -Exactly 0
+                Should -Invoke Start-Sleep -Exactly 0
+            }
+        }
+
+        It 'keeps the original profile after the ambient context changes during submission' {
+            InModuleScope Avm.Authoring {
+                Mock Invoke-AvmBicepNativeArmOperation {
+                    $script:ambientProfile = @{ Tenant = @{ Id = 'foreign' } }
+                    throw $script:submissionFailure
+                }
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+                $result.Status | Should -Be 'pass'
+                Should -Invoke Get-AzContext -Exactly 1
+                Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                    [object]::ReferenceEquals($DefaultProfile, $script:submittedProfile)
+                }
+            }
+        }
+
+        It 'uses the captured profile for management-group timeout observation too' {
+            InModuleScope Avm.Authoring {
+                Mock Invoke-AvmBicepNativeArmOperation { throw [TimeoutException]::new('Timed out.') }
+                (New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions).Status |
+                    Should -Be 'pass'
+                Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                    [object]::ReferenceEquals($DefaultProfile, $script:submittedProfile)
+                }
+            }
+        }
+
+        It 'retains both diagnostics without replay or regional classification after <Recovery>' -ForEach @(
+            @{ Recovery = 'Failed'; Outcome = 'Failed' }, @{ Recovery = 'Unknown'; Outcome = 'Unknown' }
+            @{ Recovery = 'Canceled'; Outcome = 'Unknown' }, @{ Recovery = 'missing'; Outcome = 'Unknown' }
+            @{ Recovery = 'wrong group'; Outcome = 'Unknown' }, @{ Recovery = 'missing ID'; Outcome = 'Unknown' }
+            @{ Recovery = 'array ID'; Outcome = 'Unknown' }, @{ Recovery = 'array state'; Outcome = 'Unknown' }
+            @{ Recovery = 'missing state'; Outcome = 'Unknown' }, @{ Recovery = 'invalid outputs'; Outcome = 'Unknown' }
+            @{ Recovery = 'forbidden'; Outcome = 'Unknown' }, @{ Recovery = 'transport'; Outcome = 'Unknown' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Recovery = $Recovery; Outcome = $Outcome } {
+                param($Recovery, $Outcome)
+                $script:recoveryMode = $Recovery
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
+                    -DeploymentInput $script:inputOptions -AllowRelocation -AllowTransientRetry
+                $result.Status | Should -Be 'fail'
+                $result.Outcome | Should -Be $Outcome
+                $result.ErrorKind | Should -Be 'Forbidden'
+                $result.Outputs.Count | Should -Be 0
+                $result.ErrorRecord.FullyQualifiedErrorId | Should -BeLike 'OriginalForbidden*'
+                $result.ErrorRecord.ErrorDetails.Message | Should -BeExactly 'Private original diagnostic; operation fixture-id.'
+                $result.ErrorRecord.TargetObject | Should -BeExactly 'original-target'
+                $result.RecoveryErrorRecord | Should -Not -BeNullOrEmpty
+                $script:state.deployments.Count | Should -Be 1
+                $script:state.deployments[0].status | Should -Be $Outcome
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+                Should -Invoke Invoke-AzRestMethod -Exactly 1
+                Should -Invoke Get-AvmBicepDeploymentRetryKind -Exactly 0
+                Should -Invoke Start-Sleep -Exactly 0
+                Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -match 'private-submission-detail|Private original diagnostic' }
+            }
+        }
+
+        It 'shares the existing bounded observation budget without spending a submission: <Sequence>' -ForEach @(
+            @{ Sequence = 'active then success'; States = @('Accepted', 'timeout', 'Running', 'Creating', 'Updating', 'Succeeded'); Status = 'pass'; Reads = 6; Sleeps = 5 }
+            @{ Sequence = 'consecutive timeouts'; States = @('timeout', 'timeout', 'timeout'); Status = 'fail'; Reads = 3; Sleeps = 2 }
+        ) {
+            InModuleScope Avm.Authoring -Parameters $_ {
+                param($States, $Status, $Reads, $Sleeps)
+                foreach ($value in $States) { $script:recoverySequence.Enqueue($value) }
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions -RetryLimit 1
+                $result.Status | Should -Be $Status
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+                Should -Invoke Invoke-AzRestMethod -Exactly $Reads
+                Should -Invoke Start-Sleep -Exactly $Sleeps -ParameterFilter { $Seconds -eq 15 }
+            }
+        }
+
+        It 'does not observe wording or malformed <Evidence> as an HTTP 403' -ForEach @(
+            @{ Evidence = 'message'; Shape = 'message only'; Status = $null }
+            @{ Evidence = 'missing status'; Shape = 'response'; Status = $null }
+            @{ Evidence = 'HTTP 401'; Shape = 'response'; Status = 401 }
+            @{ Evidence = 'string'; Shape = 'response'; Status = '403' }
+            @{ Evidence = 'Boolean'; Shape = 'response'; Status = $true }
+            @{ Evidence = 'floating point'; Shape = 'response'; Status = 403.0 }
+            @{ Evidence = 'single-item array'; Shape = 'response'; Status = @(403) }
+            @{ Evidence = 'multiple statuses'; Shape = 'response'; Status = @(403, 401) }
+        ) {
+            $submissionFailure = New-TestForbiddenFailure -Shape $Shape -Status $Status
+            InModuleScope Avm.Authoring -Parameters @{ SubmissionFailure = $submissionFailure } {
+                param($SubmissionFailure)
+                $script:submissionFailure = $SubmissionFailure
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+                $result.Status | Should -Be 'fail'
+                $result.ErrorKind | Should -Not -Be 'Forbidden'
+                Should -Invoke Invoke-AzRestMethod -Exactly 0
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+                Should -Invoke Start-Sleep -Exactly 0
+            }
+        }
+
+        It 'does not extend HTTP 403 observation to <Scope> submissions' -ForEach @(
+            @{ Scope = 'group' }, @{ Scope = 'sub' }, @{ Scope = 'tenant' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Scope = $Scope } {
+                param($Scope)
+                $script:inputOptions.Scope = $Scope
+                $script:inputOptions.ResourceGroupName = 'test-rg'
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+                $result.Status | Should -Be 'fail'
+                $result.ErrorKind | Should -Be 'Forbidden'
+                Should -Invoke Get-AzContext -Exactly 0
+                Should -Invoke Invoke-AzRestMethod -Exactly 0
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            }
+        }
+
+        It 'propagates <Shape> cancellation without authorization recovery' -ForEach @(
+            @{ Shape = 'mixed cancellation' }, @{ Shape = 'pipeline cancellation' }
+        ) {
+            $submissionFailure = New-TestForbiddenFailure -Shape $Shape
+            InModuleScope Avm.Authoring -Parameters @{ SubmissionFailure = $submissionFailure } {
+                param($SubmissionFailure)
+                $script:submissionFailure = $SubmissionFailure
+                { New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions } |
+                    Should -Throw '*Cancelled*'
+                Should -Invoke Invoke-AzRestMethod -Exactly 0
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            }
+        }
+
+        It 'propagates cancellation during observation without another status read or submission' {
+            InModuleScope Avm.Authoring {
+                $script:recoveryMode = 'cancelled'
+                { New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions } |
+                    Should -Throw '*cancelled*'
+                Should -Invoke Invoke-AzRestMethod -Exactly 1
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+                $script:state.deployments[0].status | Should -Be 'Unknown'
+            }
+        }
+
+        It 'does not record or submit without a usable original context: <Missing>' -ForEach @(
+            @{ Missing = 'context' }, @{ Missing = 'tenant' }, @{ Missing = 'tenant ID' }, @{ Missing = 'context lookup denied' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Missing = $Missing } {
+                param($Missing)
+                switch ($Missing) {
+                    'context' { $script:ambientProfile = $null }
+                    'tenant' { $script:ambientProfile.Tenant = $null }
+                    'tenant ID' { $script:ambientProfile.Tenant.Id = ' ' }
+                    'context lookup denied' { Mock Get-AzContext { throw $script:submissionFailure } }
+                }
+                { New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions } |
+                    Should -Throw
+                $script:state.deployments.Count | Should -Be 0
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 0
+                Should -Invoke Invoke-AzRestMethod -Exactly 0
+                Should -Invoke Save-AvmBicepCleanupState -Exactly 0
+            }
+        }
+
+        It 'does not capture a profile or observe a deployment under WhatIf' {
+            InModuleScope Avm.Authoring {
+                (New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions -WhatIf).Status |
+                    Should -Be 'skipped'
+                Should -Invoke Get-AzContext -Exactly 0
+                Should -Invoke Invoke-AzRestMethod -Exactly 0
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 0
+                $script:state.deployments.Count | Should -Be 0
+            }
+        }
+    }
 }
 
 Describe 'Bicep native deployment timeout recovery' {
@@ -337,6 +623,24 @@ Describe 'Bicep native deployment timeout recovery' {
             }
             { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -TimeoutSeconds 1 -PollIntervalSeconds 1 } |
                 Should -Throw -ExpectedMessage '*recovery window*'
+        }
+    }
+
+    It 'rejects an untyped HTTP response status: <Label>' -ForEach @(
+        @{ Label = 'null'; Value = $null }
+        @{ Label = 'string'; Value = '200' }
+        @{ Label = 'Boolean'; Value = $true }
+        @{ Label = 'floating point'; Value = 200.0 }
+        @{ Label = 'single-item array'; Value = @(200) }
+        @{ Label = 'array'; Value = @(200, 403) }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Value = $Value } {
+            param($Value)
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = $Value; Content = (@{ id = $script:id; properties = @{ provisioningState = 'Succeeded' } } | ConvertTo-Json) }
+            }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id } | Should -Throw '*invalid HTTP status*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
         }
     }
 

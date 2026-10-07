@@ -244,7 +244,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $result.Steps) {
                 $step.Status | Should -Be 'pass' -Because "pre-commit step '$($step.Step)' should pass (error: $($step.Error))"
             }
-            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,sync,check convention,transform,format,docs'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,initialize,sync,check convention,transform,format,docs'
             $result.Status | Should -Be 'pass'
             $metadataStep = $result.Steps | Where-Object Step -eq 'metadata'
             $metadataStep.Result.ToolSource | Should -Be 'builtin'

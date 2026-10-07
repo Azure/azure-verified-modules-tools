@@ -205,8 +205,12 @@ function Invoke-AvmBicepNativeTestCase {
                 $firstAttempt = $deployed.Attempt + 1
             }
             if ($deployed.Status -ne 'pass' -and -not $relocationBlocked) {
+                $authorizationDetail = if ($deployed.ErrorKind -eq 'Forbidden') {
+                    ' Submission returned HTTP 403; authorization failures never permit replay.'
+                }
+                else { '' }
                 Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'deployment-failed' `
-                    -Message "Deployment '$($deployed.DeploymentId)' ended with '$($deployed.Outcome)' outcome. Cleanup state is retained at '$($handle.Path)'."
+                    -Message "Deployment '$($deployed.DeploymentId)' ended with '$($deployed.Outcome)' outcome.$authorizationDetail Cleanup state is retained at '$($handle.Path)'."
             }
         }
         catch {

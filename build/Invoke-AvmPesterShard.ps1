@@ -93,7 +93,7 @@ $env:GITHUB_STEP_SUMMARY = ''
 $result = Invoke-Pester -Configuration $config
 
 $selectedCount = $result.PassedCount + $result.FailedCount + $result.SkippedCount
-if ($result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
+if ($result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0 -or $result.FailedBlocksCount -gt 0) {
     exit 1
 }
 if ($selectedCount -eq 0) {

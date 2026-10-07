@@ -41,12 +41,25 @@ function New-AvmBicepNativeDeployment {
         if (-not $PSCmdlet.ShouldProcess($id, 'Record and submit Bicep test deployment')) {
             return [pscustomobject]@{ Status = 'skipped'; DeploymentName = $name; DeploymentId = $id; Outputs = @{} }
         }
+        $inputOptions = $DeploymentInput.Clone()
+        $inputOptions.DeploymentName = $name
+        $observationOptions = @{}
+        if ($DeploymentInput.Scope -eq 'mg') {
+            $submissionProfile = Get-AzContext -ErrorAction Stop
+            $tenant = Get-AvmPropertyValue -InputObject $submissionProfile -Name 'Tenant'
+            $tenantId = Get-AvmPropertyValue -InputObject $tenant -Name 'Id'
+            if ($tenantId -isnot [string] -or [string]::IsNullOrWhiteSpace($tenantId)) {
+                throw [AvmConfigurationException]::new('Management-group submission requires an authenticated Azure tenant context.')
+            }
+            $inputOptions.DefaultProfile = $submissionProfile
+            $observationOptions.DefaultProfile = $submissionProfile
+        }
         $entry = @{ id = $id; status = 'Attempted'; preflightRejected = $false }
         $State['deployments'] = @($State['deployments']) + @($entry)
         Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
-        $inputOptions = $DeploymentInput.Clone()
-        $inputOptions.DeploymentName = $name
         $failure = $null
+        $recoveryFailure = $null
+        $kind = 'Other'
         $outputs = $null
         $submissionReturned = $false
         $failureQueryAllowed = $false
@@ -94,22 +107,30 @@ function New-AvmBicepNativeDeployment {
                 Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
                 throw
             }
-            if ($kind -eq 'Timeout' -and $entry['status'] -eq 'Unknown') {
+            $canObserve = $kind -eq 'Timeout' -or
+            ($kind -eq 'Forbidden' -and $DeploymentInput.Scope -eq 'mg' -and -not $submissionReturned)
+            if ($canObserve -and $entry['status'] -eq 'Unknown') {
                 # The request may still have been accepted, so watch the same deployment instead of submitting another.
                 Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
-                Write-AvmLog -Level Warning -Message "Request for deployment '$name' timed out; watching it without resubmitting."
+                Write-AvmLog -Level Warning -Message "Request for deployment '$name' returned $kind; watching it without resubmitting."
                 try {
-                    $recovered = Wait-AvmBicepNativeDeployment -DeploymentId $id
+                    $recovered = Wait-AvmBicepNativeDeployment -DeploymentId $id @observationOptions
                     $entry['status'] = $recovered.State
+                    if ($kind -eq 'Forbidden' -and $recovered.State -ne 'Succeeded') {
+                        throw [AvmProcessException]::new(
+                            "The original management-group deployment '$id' has a confirmed Failed outcome after HTTP 403.")
+                    }
                     $outputs = $recovered.Outputs
                     $recoveredFailure = $recovered.State -eq 'Failed'
                 }
                 catch {
+                    $recoveryFailure = $_
                     if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') {
                         Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
                         throw
                     }
-                    Write-AvmLog -Level Warning -Message "Status recovery for deployment '$name' failed; its outcome remains unknown."
+                    Write-AvmLog -Level Warning -Message (
+                        "Status recovery for deployment '$name' did not confirm success; its recorded outcome is '$($entry['status'])'.")
                 }
             }
         }
@@ -118,7 +139,7 @@ function New-AvmBicepNativeDeployment {
             if ($null -eq $outputs) { $outputs = @{} }
             return [pscustomobject]@{ Status = 'pass'; DeploymentName = $name; DeploymentId = $id; Outputs = $outputs }
         }
-        if (($AllowRelocation -or $AllowTransientRetry) -and $attempt -lt $RetryLimit -and
+        if ($kind -ne 'Forbidden' -and ($AllowRelocation -or $AllowTransientRetry) -and $attempt -lt $RetryLimit -and
             ($entry['status'] -eq 'Failed' -or $failureQueryAllowed)) {
             $classificationFailure = $failure
             if ($recoveredFailure) { $classificationFailure = $null }
@@ -140,12 +161,13 @@ function New-AvmBicepNativeDeployment {
                 }
             }
         }
-        if ($entry['status'] -eq 'Unknown' -or $attempt -eq $RetryLimit) {
-            $kind = if ($null -eq $failure -or $entry['status'] -eq 'Failed') { 'Other' }
+        if ($kind -eq 'Forbidden' -or $entry['status'] -eq 'Unknown' -or $attempt -eq $RetryLimit) {
+            $kind = if ($null -eq $failure -or ($entry['status'] -eq 'Failed' -and $kind -ne 'Forbidden')) { 'Other' }
             else { Get-AvmBicepDeploymentErrorKind -ErrorRecord $failure }
             return [pscustomobject]@{
                 Status = 'fail'; DeploymentName = $name; DeploymentId = $id; Outputs = @{}
                 ErrorKind = $kind; Outcome = $entry['status']
+                ErrorRecord = $failure; RecoveryErrorRecord = $recoveryFailure
             }
         }
         Write-AvmLog -Level Warning -Message (

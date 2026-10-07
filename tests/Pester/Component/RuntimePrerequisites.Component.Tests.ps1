@@ -190,6 +190,39 @@ Describe 'Component: runtime prerequisites' -Tag Component {
         }
     }
 
+    It 'rejects same-version Pester from another path before importing a second engine' {
+        $pester = Get-Module -Name Pester
+        $script:fixture.Pins.powerShellModules.Pester = @{ version = $pester.Version.ToString(); sha256 = '0' * 64 }
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Path = Join-Path $F.Root 'different Pester' 'Pester.psd1' }
+            } -ParameterFilter { $Name -ceq 'Pester' }
+            Mock Import-Module { throw 'A second Pester engine must not be imported.' }
+            { Import-AvmPowerShellModule -Name Pester -PinsPath $F.PinsPath -ModuleRoot $F.Root } |
+                Should -Throw '*already loaded*not the configured path*fresh PowerShell session*'
+            Should -Invoke Import-Module -Exactly 0
+            Should -Invoke Invoke-WebRequest -Exactly 0
+        }
+    }
+
+    It 'reuses the configured Pester engine when its version and path already match' {
+        $pester = Get-Module -Name Pester
+        $script:fixture.Pins.powerShellModules.Pester = @{ version = $pester.Version.ToString(); sha256 = '0' * 64 }
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture; Pester = $pester } {
+            param($F, $Pester)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Path = Join-Path $Pester.ModuleBase 'Pester.psd1' }
+            } -ParameterFilter { $Name -ceq 'Pester' }
+            $loaded = Import-AvmPowerShellModule -Name Pester -PinsPath $F.PinsPath -ModuleRoot $F.Root
+            $loaded.Version | Should -Be $Pester.Version
+            $loaded.ModuleBase | Should -BeExactly $Pester.ModuleBase
+            Should -Invoke Invoke-WebRequest -Exactly 0
+        }
+    }
+
     It 'keeps <Setting> effective for an uncached <Kind>' -ForEach @(
         @{ Setting = 'AVM_OFFLINE'; Kind = 'pin'; Override = $false; Message = '*AVM_OFFLINE=1*' }
         @{ Setting = 'AVM_NO_AUTO_INSTALL'; Kind = 'pin'; Override = $false; Message = '*automatic installation is disabled*' }

@@ -40,6 +40,10 @@ function Import-AvmPowerShellModule {
         $directory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($tool.Path))
         $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
         foreach ($loaded in @(Get-Module -All -Name $Name)) {
+            if ($Name -ceq 'Pester' -and -not [string]::Equals($loaded.ModuleBase, $directory, $comparison)) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Pester $($loaded.Version) is already loaded from '$($loaded.ModuleBase)', not the configured path '$directory'.")
+            }
             if (-not [string]::Equals($loaded.ModuleBase, $directory, $comparison) -and
                 (Test-Path -LiteralPath (Join-Path $loaded.ModuleBase '.unverified') -PathType Leaf)) {
                 throw [System.IO.InvalidDataException]::new("An unverified '$Name' override is already loaded from '$($loaded.ModuleBase)'.")

@@ -18,6 +18,7 @@ function New-NativeBicepWorkflowFixture {
         RemovalSubscriptions = @{}; AdditionalRootResources = @()
         Calls = [Collections.Generic.List[object]]::new()
         NativeInputs = [Collections.Generic.List[object]]::new()
+        RestInputs = [Collections.Generic.List[object]]::new()
         GroupLocations = [Collections.Generic.List[string]]::new()
         GroupAbsenceChecks = 0
         CurrentSubscription = '00000000-0000-0000-0000-000000000099'
@@ -48,7 +49,7 @@ function New-NativeBicepWorkflowFixture {
             [CmdletBinding()] param($Name) throw 'Unmocked group lookup.'
         }
         function script:Invoke-AzRestMethod {
-            [CmdletBinding()] param($Method, $Path) throw 'Unmocked Azure REST.'
+            [CmdletBinding()] param($Method, $Path, $DefaultProfile) throw 'Unmocked Azure REST.'
         }
     }
     InModuleScope Avm.Authoring -Parameters @{ State = $state } {
@@ -144,6 +145,7 @@ function New-NativeBicepWorkflowFixture {
                     TemplatePath = $TemplatePath; Content = [IO.File]::ReadAllText($TemplatePath)
                     SubscriptionId = $state.CurrentSubscription; Scope = $Scope
                     Location = $MetadataLocation; ResourceGroupName = $ResourceGroupName
+                    DefaultProfile = $DefaultProfile
                 })
             if ($Operation -eq 'Validate') {
                 if ($state.ValidationFails) { throw [UnauthorizedAccessException]::new('Validation denied.') }
@@ -187,7 +189,7 @@ function New-NativeBicepWorkflowFixture {
                 'Failed'
             }
             elseif ($state.CreateMode -eq 'failed') { 'Failed' }
-            elseif ($state.CreateMode -in @('timeout', 'cancel', 'running')) { $state.ReadinessState }
+            elseif ($state.CreateMode -in @('timeout', 'cancel', 'running', 'forbidden')) { $state.ReadinessState }
             else { 'Succeeded' }
             $state.Deployments[$id] = @{
                 id = $id; properties = @{ provisioningState = $provisioning; outputs = $state.Outputs }
@@ -243,6 +245,10 @@ function New-NativeBicepWorkflowFixture {
                 }
             }
             if ($state.CreateMode -eq 'timeout') { throw [TimeoutException]::new('Submission timed out.') }
+            if ($state.CreateMode -eq 'forbidden') {
+                throw [Net.Http.HttpRequestException]::new(
+                    'Forbidden submission with private-fixture-detail.', $null, [Net.HttpStatusCode]::Forbidden)
+            }
             if ($state.CreateMode -eq 'cancel') { throw [OperationCanceledException]::new('Cancelled submission.') }
             if (($regional -or $transient) -and $state.ThrowRetryFailure) {
                 throw [InvalidOperationException]::new('Native submission reported a resource failure.')
@@ -257,6 +263,7 @@ function New-NativeBicepWorkflowFixture {
         }
         Mock Invoke-AzRestMethod {
             $state = $script:nativeWorkflow
+            $state.RestInputs.Add([pscustomobject]@{ Method = $Method; Path = $Path; DefaultProfile = $DefaultProfile })
             $recordId = $Path.Split('?')[0]
             if ($Method -eq 'DELETE' -and $state.Deployments.ContainsKey($recordId)) {
                 $state.Calls.Add("delete-record:$recordId")

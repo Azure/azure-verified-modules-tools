@@ -66,7 +66,7 @@ function Invoke-Avm {
             $PSDefaultParameterValues['*:Verbose'] = $true
         }
 
-        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -cin @('update', 'upgrade')
         $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
         $isE2eListCommand = $false
         if ($rawArguments.Count -ge 3) {
@@ -105,11 +105,12 @@ function Invoke-Avm {
         $arguments = @(
             foreach ($arg in $rawArguments) {
                 $token = [string]$arg
-                if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
+                if ($arg -is [string] -and $token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
                     $passThru = $true
                     continue
                 }
-                $arg
+                # Preserve array-valued parameters as a single argument.
+                , $arg
             }
         )
         $registry = @(Get-AvmVerbRegistry)
