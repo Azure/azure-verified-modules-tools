@@ -13,6 +13,10 @@ section from README.md to README.notes.md without overwriting either
 file. Existing sidecars are left unchanged; normal documentation
 generation reads only the sidecar, never README Notes.
 
+## CLI commands
+
+- `avm docs export-notes`
+
 ## Syntax
 
 ```powershell

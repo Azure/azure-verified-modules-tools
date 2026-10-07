@@ -17,6 +17,10 @@ The dispatcher is intentionally not declared as a [CmdletBinding] cmdlet
 so that unbound arguments such as '-Json' or '--json' flow through
 unchanged into $args rather than failing parameter binding at this layer.
 
+## CLI commands
+
+- `avm`
+
 ## Syntax
 
 ```powershell

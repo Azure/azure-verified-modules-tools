@@ -56,6 +56,10 @@ Status='fail' instead.
 
 Routed by the dispatcher: 'avm pre-commit'.
 
+## CLI commands
+
+- `avm pre-commit`
+
 ## Syntax
 
 ```powershell

@@ -31,6 +31,10 @@ the .avm/context.psd1 override file and the -Ecosystem filter.
 
 Routed by the dispatcher: 'avm transform'.
 
+## CLI commands
+
+- `avm transform`
+
 ## Syntax
 
 ```powershell

@@ -89,7 +89,6 @@ Get-Content ./SHA256SUMS
 
 - [Cmdlet reference](docs/reference/README.md) — generated user documentation for every public cmdlet and parameter.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — run the module from source, plus the build / test / lint dev loop.
-- [docs/migration-terraform.md](docs/migration-terraform.md) — migrating off `make` / `./avm` / the `azterraform` container / `porch`.
 - [docs/quality-spec.md](docs/quality-spec.md) — purpose, architecture, and mandatory engineering practices.
 
 ## License

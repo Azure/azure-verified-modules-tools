@@ -19,6 +19,10 @@ any missing tool into the per-user cache (atomic stage->verify->rename
 through Install-AvmToolFromPins). Tools that do not ship a release for
 the current platform are reported as 'Skip', not 'Fail'.
 
+## CLI commands
+
+- `avm doctor`
+
 ## Syntax
 
 ```powershell

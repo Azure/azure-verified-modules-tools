@@ -39,6 +39,10 @@ fixture that selects a random region can choose another region.
 
 Routed by the dispatcher: 'avm test integration'.
 
+## CLI commands
+
+- `avm test integration`
+
 ## Syntax
 
 ```powershell

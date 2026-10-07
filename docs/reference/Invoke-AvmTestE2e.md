@@ -55,6 +55,10 @@ No deployment tests belong in avm pr-check or the local build gate.
 Listing does not resolve tools or credentials. An absent tier is
 'skipped', not a pass; .e2eignore excludes a case.
 
+## CLI commands
+
+- `avm test e2e`
+
 ## Syntax
 
 ```powershell

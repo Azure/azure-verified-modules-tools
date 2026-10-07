@@ -16,8 +16,17 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
 
         $docsPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmDocs.md') -Raw
         $docsPage | Should -Match '## Description'
+        $docsPage | Should -Match '## CLI commands'
+        $docsPage | Should -Match '`avm docs`'
         $docsPage | Should -Match '### -CheckDrift'
         $docsPage | Should -Match 'Report-only mode used by pr-check'
+
+        $preCommitPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmPreCommit.md') -Raw
+        $preCommitPage | Should -Match '`avm pre-commit`'
+
+        $index = Get-Content -LiteralPath (Join-Path $outputPath 'README.md') -Raw
+        $index | Should -Match '\| Cmdlet \| CLI command\(s\) \| Purpose \|'
+        $index | Should -Match '\| \[Invoke-AvmPreCommit\]\(Invoke-AvmPreCommit\.md\) \| `avm pre-commit` \|'
     }
 
     It 'reports drift without rewriting the destination' {

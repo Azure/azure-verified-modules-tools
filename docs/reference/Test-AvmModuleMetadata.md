@@ -15,6 +15,10 @@ Both ecosystems use the same native assertion suite and shared schemas.
 Requires Pester 5.5 or later. InputObject validates supplied values without
 reading metadata.json.
 
+## CLI commands
+
+- `avm metadata validate`
+
 ## Syntax
 
 ```powershell

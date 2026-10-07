@@ -36,6 +36,10 @@ caller (a human, pre-commit, or a repo-sync workflow).
 
 Routed by the dispatcher: 'avm sync'.
 
+## CLI commands
+
+- `avm sync`
+
 ## Syntax
 
 ```powershell

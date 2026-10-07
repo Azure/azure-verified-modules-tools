@@ -26,6 +26,10 @@ installed. A rule that throws is reported as an error issue.
 
 Routed by the dispatcher: 'avm check convention'.
 
+## CLI commands
+
+- `avm check convention`
+
 ## Syntax
 
 ```powershell

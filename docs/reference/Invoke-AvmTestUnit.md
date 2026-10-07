@@ -32,6 +32,10 @@ complete and a cutover is approved.
 
 Routed by the dispatcher: 'avm test unit'.
 
+## CLI commands
+
+- `avm test unit`
+
 ## Syntax
 
 ```powershell

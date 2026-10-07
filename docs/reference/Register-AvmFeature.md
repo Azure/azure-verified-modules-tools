@@ -19,6 +19,10 @@ resource provider is registered again to propagate the change.
 Pending approval, failed CLI calls, and timeouts stop the test run.
 Feature registrations persist; this command never unregisters them.
 
+## CLI commands
+
+- `avm register-features`
+
 ## Syntax
 
 ```powershell

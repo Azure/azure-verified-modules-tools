@@ -21,6 +21,10 @@ treat Status='fail' as a failed lint pass.
 
 Routed by the dispatcher: 'avm lint'.
 
+## CLI commands
+
+- `avm lint`
+
 ## Syntax
 
 ```powershell

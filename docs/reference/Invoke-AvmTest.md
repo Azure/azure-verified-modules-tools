@@ -29,6 +29,10 @@ example. Coverage gaps do not fail validation. No examples is skipped.
 
 Routed by the dispatcher: 'avm test'.
 
+## CLI commands
+
+- `avm test`
+
 ## Syntax
 
 ```powershell

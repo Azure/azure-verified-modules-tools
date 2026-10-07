@@ -27,6 +27,10 @@ Missing inputs or uninspectable results fail rather than skip.
 
 Routed by the dispatcher: 'avm check policy'.
 
+## CLI commands
+
+- `avm check policy`
+
 ## Syntax
 
 ```powershell

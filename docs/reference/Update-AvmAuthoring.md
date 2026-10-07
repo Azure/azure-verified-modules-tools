@@ -15,6 +15,10 @@ an outdated module can update itself.
 
 Routed by the dispatcher: 'avm update'.
 
+## CLI commands
+
+- `avm update`
+
 ## Syntax
 
 ```powershell

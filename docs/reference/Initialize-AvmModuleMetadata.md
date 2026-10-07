@@ -18,6 +18,10 @@ Optional Bicep source wiring loads the telemetry prefix without changing
 its transport. Terraform source wiring is not supported.
 WhatIf performs validation and returns the plan.
 
+## CLI commands
+
+- `avm metadata initialize`
+
 ## Syntax
 
 ```powershell

@@ -70,6 +70,10 @@ instead.
 
 Routed by the dispatcher: 'avm pr-check'.
 
+## CLI commands
+
+- `avm pr-check`
+
 ## Syntax
 
 ```powershell

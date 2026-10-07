@@ -19,6 +19,10 @@ by Install-AvmToolFromPins: SHA256 verified before extraction, version
 directory renamed atomically into place, and a '.verified' marker
 written last so that interrupted installs are re-tried automatically.
 
+## CLI commands
+
+- `avm tool install`
+
 ## Syntax
 
 ```powershell

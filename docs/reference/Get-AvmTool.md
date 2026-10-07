@@ -34,6 +34,11 @@ Routed by the dispatcher:
     avm tool list           -> Get-AvmTool
     avm tool which <name>   -> Get-AvmTool -Name <name>
 
+## CLI commands
+
+- `avm tool list`
+- `avm tool which`
+
 ## Syntax
 
 ```powershell

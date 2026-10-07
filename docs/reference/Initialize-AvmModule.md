@@ -27,6 +27,10 @@ local files are never published. Every stage checks what already
 exists, so running the command again resumes an interrupted setup.
 Terraform -ChildModule initialization creates only metadata.json.
 
+## CLI commands
+
+- `avm init`
+
 ## Syntax
 
 ```powershell

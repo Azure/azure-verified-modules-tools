@@ -13,6 +13,10 @@ PowerShell version and edition, the detected OS, and the process
 architecture. Warns when a newer module version is available without
 preventing version reporting.
 
+## CLI commands
+
+- `avm version`
+
 ## Syntax
 
 ```powershell

@@ -16,6 +16,10 @@ The file remains available after success or failure. A downloaded Actions
 artifact can be used in the same way as a locally saved file.
 This command does not log in, install modules, or execute test hooks.
 
+## CLI commands
+
+- `avm test cleanup`
+
 ## Syntax
 
 ```powershell

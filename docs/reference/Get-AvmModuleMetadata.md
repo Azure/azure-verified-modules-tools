@@ -12,6 +12,10 @@ Returns validated metadata or explicit diagnostics without writing files
 or deriving values from other sources. Missing files are reported as
 failures. Bicep name and description are also checked against source.
 
+## CLI commands
+
+- `avm metadata show`
+
 ## Syntax
 
 ```powershell

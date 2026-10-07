@@ -34,6 +34,10 @@ an explicit -Ecosystem selection is required.
 Throws AvmContextException when nothing matches, or when an
 explicit -Ecosystem value conflicts with what was detected.
 
+## CLI commands
+
+- `avm context`
+
 ## Syntax
 
 ```powershell

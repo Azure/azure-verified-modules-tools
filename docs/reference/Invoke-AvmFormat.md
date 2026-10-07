@@ -22,6 +22,10 @@ the bundled avm.pins; install missing tools beforehand with
 
 Routed by the dispatcher: 'avm format'.
 
+## CLI commands
+
+- `avm format`
+
 ## Syntax
 
 ```powershell

@@ -101,9 +101,12 @@ function Get-CommandReferenceContent {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [System.Management.Automation.CommandInfo] $Command
+        [System.Management.Automation.CommandInfo] $Command,
+
+        [string[]] $CliCommands = @()
     )
 
+    $CliCommands = @($CliCommands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $help = Get-Help -Name $Command.Name -Full
     $synopsis = ConvertTo-MarkdownText -Value $help.Synopsis
     $description = ConvertTo-MarkdownText -Value $help.Description
@@ -148,6 +151,14 @@ function Get-CommandReferenceContent {
     $content.Add('')
     $content.Add($description)
     $content.Add('')
+    if (@($CliCommands).Count -gt 0) {
+        $content.Add('## CLI commands')
+        $content.Add('')
+        foreach ($cliCommand in $CliCommands) {
+            $content.Add(('- `{0}`' -f $cliCommand))
+        }
+        $content.Add('')
+    }
     $content.Add('## Syntax')
     $content.Add('')
     $content.Add('```powershell')
@@ -293,9 +304,33 @@ try {
         throw "No exported functions were found in '$manifestPath'."
     }
 
+    $cliCommandsByCmdlet = @{}
+    foreach ($entry in @(& $module { Get-AvmVerbRegistry })) {
+        $cmdlet = [string]$entry.Cmdlet
+        if (-not $cliCommandsByCmdlet.ContainsKey($cmdlet)) {
+            $cliCommandsByCmdlet[$cmdlet] = [System.Collections.Generic.List[string]]::new()
+        }
+        $cliCommandsByCmdlet[$cmdlet].Add("avm $($entry.Path -join ' ')")
+    }
+    $invokeAvm = $commands | Where-Object Name -EQ 'Invoke-Avm'
+    if ($null -ne $invokeAvm) {
+        if (-not $cliCommandsByCmdlet.ContainsKey($invokeAvm.Name)) {
+            $cliCommandsByCmdlet[$invokeAvm.Name] = [System.Collections.Generic.List[string]]::new()
+        }
+        $cliCommandsByCmdlet[$invokeAvm.Name].Insert(0, 'avm')
+    }
+
     $expectedFiles = [ordered]@{}
     foreach ($command in $commands) {
-        $expectedFiles["$($command.Name).md"] = Get-CommandReferenceContent -Command $command
+        $cliCommands = if ($cliCommandsByCmdlet.ContainsKey($command.Name)) {
+            @($cliCommandsByCmdlet[$command.Name])
+        }
+        else {
+            @()
+        }
+        $expectedFiles["$($command.Name).md"] = Get-CommandReferenceContent `
+            -Command $command `
+            -CliCommands $cliCommands
     }
 
     $index = [System.Collections.Generic.List[string]]::new()
@@ -305,12 +340,18 @@ try {
     $index.Add('')
     $index.Add('This reference is generated from the comment-based help on the public PowerShell functions.')
     $index.Add('')
-    $index.Add('| Cmdlet | Purpose |')
-    $index.Add('| --- | --- |')
+    $index.Add('| Cmdlet | CLI command(s) | Purpose |')
+    $index.Add('| --- | --- | --- |')
     foreach ($command in $commands) {
         $help = Get-Help -Name $command.Name
+        $cliCommands = if ($cliCommandsByCmdlet.ContainsKey($command.Name)) {
+            ($cliCommandsByCmdlet[$command.Name] | ForEach-Object { "``$_``" }) -join '<br>'
+        }
+        else {
+            ''
+        }
         $purpose = ConvertTo-MarkdownTableCell -Value $help.Synopsis
-        $index.Add("| [$($command.Name)]($($command.Name).md) | $purpose |")
+        $index.Add("| [$($command.Name)]($($command.Name).md) | $cliCommands | $purpose |")
     }
     $expectedFiles['README.md'] = (($index -join $lineFeed).TrimEnd() + $lineFeed)
 

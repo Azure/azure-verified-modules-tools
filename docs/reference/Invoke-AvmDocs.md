@@ -18,6 +18,10 @@ the .avm/context.psd1 override file and the -Ecosystem filter.
 
 Routed by the dispatcher: 'avm docs'.
 
+## CLI commands
+
+- `avm docs`
+
 ## Syntax
 
 ```powershell
