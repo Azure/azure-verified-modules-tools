@@ -27,7 +27,7 @@
       docs-check  - Fail when docs/reference is missing, stale, or has extra pages.
       pre-commit  - Composite: docs-check + layout + lint + test + component.
       ci          - Full local CI gate: docs-check + layout + lint + coverage + component.
-      ci-tests    - Matrix CI gate: docs-check + layout + coverage + component. CI lints once
+      ci-tests    - Matrix CI gate: docs-check + layout + test + component. CI lints once
                     in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
@@ -618,7 +618,7 @@ task coverage {
     }
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
-    $config.Output.Verbosity                   = 'Detailed'
+    $config.Output.Verbosity                   = if ($env:AVM_COVERAGE_VERBOSE -eq '1') { 'Detailed' } else { 'Minimal' }
     $config.Filter.ExcludeTag                  = @('Integration', 'Component')
     $config.TestResult.Enabled                 = $true
     $config.TestResult.OutputFormat            = 'NUnitXml'
@@ -837,11 +837,11 @@ task integration build, {
 
 task 'pre-commit' 'docs-check', layout, lint, test, component
 
-# The CI matrix runs layout + coverage + component; lint and workflow tests run
+# The CI matrix runs layout + test + component; lint and workflow tests run
 # in dedicated Ubuntu jobs. The full local ci task includes lint. Integration
 # remains a separate real-network job, and pre-commit runs unit tests without
 # coverage while retaining the component tier.
-task 'ci-tests' 'docs-check', layout, coverage, component
+task 'ci-tests' 'docs-check', layout, test, component
 task ci 'docs-check', layout, lint, coverage, component
 
 task . layout

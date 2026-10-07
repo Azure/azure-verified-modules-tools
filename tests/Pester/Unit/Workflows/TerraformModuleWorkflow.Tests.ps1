@@ -223,10 +223,53 @@ Describe 'CI workflow' {
         $build.Value | Should -Match 'run: \./build\.ps1 ci-tests'
     }
 
+    It 'runs coverage once after the test matrix from packaged inputs' {
+        $build = [regex]::Match($script:ci, '(?ms)^  build:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $coverage = [regex]::Match($script:ci, '(?ms)^  coverage:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $build.Success | Should -BeTrue
+        $coverage.Success | Should -BeTrue
+        $coverage.Value | Should -Match 'needs: \[build\]'
+        $coverage.Value | Should -Match (
+            [regex]::Escape("if: `${{ !cancelled() && needs.build.result == 'success' }}")
+        )
+        $coverage.Value | Should -Match 'Download coverage inputs'
+        $coverage.Value | Should -Match 'Initialize coverage repository'
+        $coverage.Value | Should -Match 'git init --quiet'
+        $coverage.Value | Should -Match 'git add --all'
+        $coverage.Value | Should -Match "git commit --quiet --message 'Coverage inputs'"
+        $coverage.Value | Should -Match 'run: \./build\.ps1 coverage'
+        $coverage.Value | Should -Match 'out/coverage/coverage\.cobertura\.xml'
+        $coverage.Value | Should -Match (
+            "(?m)^      - name: Upload coverage to GitHub\r?\n" +
+            [regex]::Escape(
+                "        if: `${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
+            ) +
+            '\r?$'
+        )
+        $build.Value | Should -Match 'Package coverage inputs'
+        $build.Value | Should -Match "(?m)^        if: matrix.os == 'ubuntu-latest'\r?$"
+        $build.Value | Should -Match "\`$stagingPath = Join-Path \`$env:RUNNER_TEMP 'coverage-inputs'"
+        $build.Value | Should -Match "Join-Path \`$stagingPath 'tests' 'Pester'"
+        $build.Value | Should -Match "foreach \(\`$directory in @\("
+        $build.Value | Should -Match "'repository-management'"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \`$directory -Destination \`$stagingPath -Recurse"
+        $build.Value | Should -Match "foreach \(\`$file in @\("
+        $build.Value | Should -Match "'build.ps1'"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \`$file -Destination \`$stagingPath"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \(Join-Path 'tests' 'Pester' 'Import-AvmTestModule.ps1'\) -Destination \(Join-Path \`$stagingPath 'tests' 'Pester'\)"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \(Join-Path 'tests' 'Pester' 'Component'\) -Destination \(Join-Path \`$stagingPath 'tests' 'Pester'\) -Recurse"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \(Join-Path 'tests' 'Pester' 'Unit'\) -Destination \(Join-Path \`$stagingPath 'tests' 'Pester'\) -Recurse"
+        $build.Value | Should -Match "Copy-Item -LiteralPath \(Join-Path 'tests' 'fixtures'\) -Destination \(Join-Path \`$stagingPath 'tests'\) -Recurse"
+        $build.Value | Should -Match '\[System\.IO\.Compression\.ZipFile\]::CreateFromDirectory\('
+        $build.Value | Should -Match '\[System\.IO\.Compression\.CompressionLevel\]::Optimal'
+        $build.Value | Should -Match 'name: coverage-inputs'
+        $build.Value | Should -Not -Match 'run: \./build\.ps1 coverage'
+    }
+
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
     }
 
     It 'installs pinned Bicep policy dependencies before integration acceptance only' {
