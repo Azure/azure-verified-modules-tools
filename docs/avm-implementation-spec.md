@@ -1250,7 +1250,8 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - Normal commands compare the running module against the latest PowerShell
   Gallery release and stop with upgrade guidance when outdated. `avm version`
   and `Get-AvmVersion` instead return the running version with an update warning.
-  `avm update` bypasses the guard so it can install the newer version.
+  `avm upgrade` bypasses the guard so it can install the newer version;
+  `avm update` remains a backwards-compatible alias.
   `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
   checkouts; Gallery lookup failures warn and allow the command to continue.
 - SemVer 2.0.0. Pre-release labels: `-preview.N`, `-rc.N`.

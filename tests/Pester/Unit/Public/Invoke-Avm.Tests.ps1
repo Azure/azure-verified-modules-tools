@@ -121,7 +121,14 @@ function script:Test-AvmModuleVersion {
     throw [AvmModuleVersionException]::new(
         [version]'0.16.0',
         [version]'0.17.1',
-        "A newer version of Avm.Authoring is required. Run 'avm update' to upgrade.")
+        @(
+            'Installed version: 0.16.0'
+            'Latest version: 0.17.1'
+            ''
+            'Update and reload the module:'
+            '  Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
+            '  Import-Module Avm.Authoring -Force'
+        ) -join "`n")
 }
 '@
         }
@@ -205,8 +212,9 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
             -RejectOutdatedModule
 
         $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -Match 'AVM upgrade required'
-        $result.Output | Should -Match "Run 'avm update' to upgrade"
+        $result.Output | Should -Match "Avm\.Authoring 0\.16\.0 is outdated\. Version 0\.17\.1 is required to run 'avm spec-verb'\."
+        $result.Output | Should -Match "Update-PSResource -Name Avm\.Authoring -Scope CurrentUser"
+        $result.Output | Should -Not -Match 'NotInstalled:'
         $result.Output | Should -Not -Match 'avm spec-verb: pass'
         $result.Output | Should -Not -Match '\.ps1:\d+'
     }
