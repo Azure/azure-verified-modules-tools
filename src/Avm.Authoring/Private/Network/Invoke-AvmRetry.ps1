@@ -9,8 +9,11 @@ function Invoke-AvmRetry {
         are rethrown immediately. A Retry-After longer than the configured cap is
         not waited for. After the final attempt the original error is rethrown,
         unless it carries Data['AvmResult'], which is then returned so callers can
-        report the last response themselves. -RetryQuiet sends retry progress to
-        the verbose stream for advisory callers that report failure themselves.
+        report the last response themselves. Retry progress is written only to
+        the verbose stream. After retries are exhausted, the original exception
+        is preserved with a concise user-facing error detail. -RetryQuiet leaves
+        the original error detail unchanged for advisory callers that report
+        failure themselves.
 
         Only wrap reads or operations that are safe to repeat. Never wrap
         deployments, creates or other mutations whose outcome may be ambiguous.
@@ -46,13 +49,14 @@ function Invoke-AvmRetry {
             $retryAfter = Get-AvmRetryAfterDelay -ErrorRecord $retryError
             $retryTooLong = $null -ne $retryAfter -and $retryAfter -gt $retryPolicy.MaxRetryAfterSeconds
             if ($retryAttempt -ge $retryLimit -or $retryTooLong) {
-                if ($retryLimit -gt 1) {
-                    $retryReason = if ($retryTooLong) { "server asked to wait $([math]::Round($retryAfter))s, above the $($retryPolicy.MaxRetryAfterSeconds)s limit" } else { "$retryAttempt attempts" }
-                    $retryMessage = "{0} failed after {1}: {2}" -f $RetryActivity, $retryReason, $retryError.Exception.Message
-                    if ($RetryQuiet) { Write-Verbose $retryMessage } else { Write-Warning $retryMessage }
-                }
+                $retryReason = if ($retryTooLong) { "server asked to wait $([math]::Round($retryAfter))s, above the $($retryPolicy.MaxRetryAfterSeconds)s limit" } else { "$retryAttempt attempts" }
+                Write-Verbose ("{0} failed after {1}: {2}" -f $RetryActivity, $retryReason, $retryError.Exception.Message)
                 if ($retryError.Exception.Data.Contains('AvmResult')) { return $retryError.Exception.Data['AvmResult'] }
-                throw
+                if (-not $RetryQuiet) {
+                    $retryError.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
+                        (Get-AvmRetryFailureMessage -Activity $RetryActivity -ErrorRecord $retryError -Attempts $retryAttempt))
+                }
+                throw $retryError
             }
 
             $retryCap = [math]::Min($retryPolicy.MaxDelaySeconds, $retryBaseDelay * [math]::Pow(2, $retryAttempt - 1))
@@ -60,7 +64,7 @@ function Invoke-AvmRetry {
             if ($null -ne $retryAfter) { $retryDelay = [math]::Max($retryDelay, $retryAfter) }
             $retryMessage = "{0} hit a transient failure (attempt {1} of {2}); retrying in {3:0.#}s: {4}" -f
             $RetryActivity, $retryAttempt, $retryLimit, $retryDelay, $retryError.Exception.Message
-            if ($RetryQuiet) { Write-Verbose $retryMessage } else { Write-Warning $retryMessage }
+            Write-Verbose $retryMessage
             Wait-AvmRetryDelay -Seconds $retryDelay
         }
     }

@@ -342,7 +342,12 @@ function Invoke-AvmPrCheck {
         }
         catch {
             $stepStatus = 'error'
-            $stepError = $_.Exception.Message
+            $stepError = if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+                $_.ErrorDetails.Message
+            }
+            else {
+                $_.Exception.Message
+            }
         }
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)

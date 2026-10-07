@@ -416,6 +416,36 @@ Describe 'Invoke-AvmPreCommit' {
         ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
+    It 'uses a retry failure error detail for the sync step' {
+        $dir = Join-Path $TestDrive ("precommit-tf-retry-detail-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Get-AvmModuleContextInternal {
+                [pscustomobject]@{
+                    Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
+                }
+            }
+            Mock Invoke-AvmSync {
+                $record = [System.Management.Automation.ErrorRecord]::new(
+                    [AvmProcessException]::new('raw git failure'),
+                    'AVM1020',
+                    [System.Management.Automation.ErrorCategory]::ConnectionError,
+                    $null)
+                $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
+                    'Managed files could not be fetched. Run the command with -Verbose for technical details.')
+                throw $record
+            }
+
+            Invoke-AvmPreCommit -Path $D -Ecosystem terraform
+        }
+
+        $result.Status | Should -Be 'error'
+        $result.Steps[2].Step | Should -Be 'sync'
+        $result.Steps[2].Error | Should -Be 'Managed files could not be fetched. Run the command with -Verbose for technical details.'
+    }
+
     It 'reports a stubbed engine (AvmNotSupportedException) as skipped and continues the chain (terraform)' {
         $dir = Join-Path $TestDrive ("precommit-tf-skip-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
