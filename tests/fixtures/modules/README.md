@@ -58,7 +58,7 @@ the upstream governance pipeline was removed:
 - Legacy AVM shim scripts (`avm`, `avm.bat`, `avm.ps1`) — replaced by the
   `Avm.Authoring` CLI in this repo.
 - `Makefile` — replaced by `./build.ps1` and the `avm` verbs.
-- Repository boilerplate (`LICENSE`, `AGENTS.md`, `CODE_OF_CONDUCT.md`,
+- Repository boilerplate (`LICENSE`, agent instructions, `CODE_OF_CONDUCT.md`,
   `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`) — would shadow or
   confuse this repo's own copies.
 - Editor / tooling metadata (`.editorconfig`, `.devcontainer/`,
@@ -100,7 +100,7 @@ encoding remains deterministic.
   its current TestDrive scaffold onto either of these fixtures. Separate
   follow-up slice; the existing test still has value as a hermetic
   fixture-builder smoke.
-- A keyvault-flavoured fixture (`terraform-azurerm-avm-res-keyvault-vault`
-  per the Phase 2 §3 demo deliverable in `docs/progress.md`). That
+- A keyvault-flavoured fixture (`terraform-azurerm-avm-res-keyvault-vault`).
+  That
   module is real (not a mock) and would pull live provider downloads;
   add when the demo slice itself is ready.
