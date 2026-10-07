@@ -14,9 +14,8 @@ binaries. `check convention` uses the in-module rule framework that ships
 `<root>/.avm/rules/*.psd1` extensions. The full status matrix is in
 [§ 5 Engine status](#5-engine-status) below.
 
-For active delivery slices, start at [`docs/progress.md`](progress.md) and
-inspect the independent records under `docs/progress/`. The implementation spec
-and consolidation plan remain authoritative for engineering rules and scope.
+The current engineering contract is in [`docs/quality-spec.md`](quality-spec.md).
+Roadmap and delivery status are tracked in issues and pull requests.
 
 ---
 
@@ -482,9 +481,8 @@ attributes and later per-scope overrides retain their usual precedence.
 
 ## 6. What's not migrated yet
 
-These items are sequenced in
-[`docs/avm-consolidation-plan.md`](avm-consolidation-plan.md); active work has
-an independent record under `docs/progress/`.
+These are the current known migration gaps. Track implementation work in
+issues and pull requests rather than adding plan or progress documents.
 
 - **`avm format` `avmfix` chaining** — the legacy chain is
   `terraform fmt` → `avmfix`. The `avmfix` follow-up step is the same
@@ -570,21 +568,15 @@ different config files and write to different caches.
 - **"PSSA `NullReferenceException` during `./build.ps1 lint`."**
   Known transient; the build wrapper retries automatically. Set
   `$env:AVM_LINT_MAX_ATTEMPTS` higher if needed. See
-  [`docs/quality-standards.md`](quality-standards.md).
+  [`docs/quality-spec.md`](quality-spec.md).
 
 ---
 
 ## See also
 
-- [`docs/progress.md`](progress.md) — progress protocol and active-slice discovery.
-- [`docs/avm-implementation-spec.md`](avm-implementation-spec.md) —
-  engineering rules (file layout, encoding, cross-OS, error handling,
-  test layers).
-- [`docs/avm-consolidation-plan.md`](avm-consolidation-plan.md) —
-  scope and phase sequencing.
-- [`docs/quality-standards.md`](quality-standards.md) — cross-cutting
-  standards and traps (encoding, cross-OS, subprocess, PSScriptAnalyzer
-  + Pester traps, networking, test layers, manifest casing, error
-  handling, commit + push protocol).
+- [`docs/quality-spec.md`](quality-spec.md) — purpose, architecture,
+  engineering rules, and mandatory maintenance practices.
+- [`docs/reference/README.md`](reference/README.md) — generated public cmdlet
+  and parameter reference.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — dev loop, install path,
   publish process, OS-specific notes.

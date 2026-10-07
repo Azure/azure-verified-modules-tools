@@ -2,7 +2,7 @@
 
 Source for the **`Avm.Authoring`** PowerShell module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/Avm.Authoring).
 
-An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm update`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
+An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm update`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The purpose, architecture, and engineering rules are in [`docs/quality-spec.md`](../../docs/quality-spec.md).
 
 ## Layout
 
@@ -488,7 +488,7 @@ The lock schema accepts an optional `platformAliases` map for tools whose releas
 
 ## Tool cache layout
 
-Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools` per `docs/avm-implementation-spec.md` §10):
+Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools` per `docs/quality-spec.md` §10):
 
 ```
 <Data>/tools/<name>/
