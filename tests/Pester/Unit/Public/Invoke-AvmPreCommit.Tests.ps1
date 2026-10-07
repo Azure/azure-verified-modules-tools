@@ -15,6 +15,7 @@ Describe 'Invoke-AvmPreCommit' {
         InModuleScope 'Avm.Authoring' {
             Mock Resolve-AvmCommandTool { @() }
             Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
+            Mock Initialize-AvmTerraformCommand { [pscustomobject]@{ Status = 'pass' } }
         }
     }
 
@@ -206,7 +207,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
-    It 'composes all six steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
+    It 'composes all seven steps in the expected order on a passing chain (terraform) and forwards the ecosystem to every step' {
         $dir = Join-Path $TestDrive ("precommit-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -229,6 +230,9 @@ Describe 'Invoke-AvmPreCommit' {
             $r = Invoke-AvmPreCommit -Path $D -ThrottleLimit 5
 
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Initialize-AvmTerraformCommand -Exactly 1 -ParameterFilter {
+                $Context.Root -eq $D -and $Command -eq 'pre-commit'
+            }
             Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter {
                 $Ecosystem -eq 'terraform' -and $Fix -eq $true -and $FixableOnly -eq $true
             }
@@ -255,8 +259,8 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 6
-        $result.Steps.Step | Should -Be @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
+        $result.Steps.Count               | Should -Be 7
+        $result.Steps.Step | Should -Be @('metadata', 'initialize', 'sync', 'check convention', 'transform', 'format', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -310,7 +314,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status | Should -Be 'pass'
-        $result.Steps.Step | Should -Be @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
+        $result.Steps.Step | Should -Be @('metadata', 'initialize', 'sync', 'check convention', 'transform', 'format', 'docs')
     }
 
     It 'exposes the managed-files version switches the engine understands' {
@@ -403,11 +407,11 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status            | Should -Be 'fail'
-        $result.Steps.Count       | Should -Be 6
-        $result.Steps[1].Step     | Should -Be 'sync'
-        $result.Steps[1].Status   | Should -Be 'fail'
-        $result.Steps[1].Error    | Should -Match 'major release 2\.0\.0'
-        $result.Steps[1].Error    | Should -Match '-Upgrade'
+        $result.Steps.Count       | Should -Be 7
+        $result.Steps[2].Step     | Should -Be 'sync'
+        $result.Steps[2].Status   | Should -Be 'fail'
+        $result.Steps[2].Error    | Should -Match 'major release 2\.0\.0'
+        $result.Steps[2].Error    | Should -Match '-Upgrade'
         # An adoption gap must not abort the chain the way 'error' does.
         ($result.Steps | Where-Object Step -ne 'sync' | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
@@ -432,7 +436,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                                                 | Should -Be 'pass'
-        $result.Steps.Count                                            | Should -Be 6
+        $result.Steps.Count                                            | Should -Be 7
         ($result.Steps | Where-Object Status -eq 'skipped').Count      | Should -Be 1
         ($result.Steps | Where-Object Step -eq 'transform').Status     | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'transform').Error      | Should -Match 'not wired'
@@ -489,7 +493,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                                          | Should -Be 'fail'
-        $result.Steps.Count                                     | Should -Be 6
+        $result.Steps.Count                                     | Should -Be 7
         ($result.Steps | Where-Object Step -eq 'format').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status   | Should -Be 'pass'
     }
@@ -514,7 +518,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 5
+        $result.Steps.Count                  | Should -Be 6
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
@@ -543,7 +547,7 @@ Describe 'Invoke-AvmPreCommit' {
         }
 
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 5
+        $result.Steps.Count                  | Should -Be 6
         $result.Steps[-1].Step               | Should -Be 'format'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'

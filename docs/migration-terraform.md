@@ -36,8 +36,8 @@ in sync, and a custom CA story for corporate networks.
   download at module-load time.
 - **One CLI**: every workflow is an `Invoke-Avm…` cmdlet (also
   available as the short verb form, e.g. `avm pre-commit`). The
-  cmdlets compose: `avm pre-commit` chains six steps, `avm pr-check`
-  chains nine, and each engine is also runnable standalone.
+  cmdlets compose: `avm pre-commit` chains seven steps, `avm pr-check`
+  chains ten, and each engine is also runnable standalone.
 - **Same upstream binaries**: every engine shells out to the canonical
   tool (`terraform`, `tflint`, `terraform-docs`, `conftest`) — no
   alternate implementation, no re-implementation drift. The module
@@ -319,9 +319,9 @@ through the host's own TLS trust store.
 The composition cmdlets and the exact order of engines they call:
 
 - **`avm pre-commit`** →
-  - **Terraform**: `metadata` → `sync` → fixable `check convention` rules → `transform` → `format` → `docs`. Lint and validate remain in `pr-check` because they require `terraform init`.
+  - **Terraform**: `metadata` → `initialize` → `sync` → fixable `check convention` rules → `transform` → `format` → `docs`. Initialize prepares the shared provider and Mapotf schema caches; lint and validate remain in `pr-check`.
   - **Bicep**: `metadata` → `format` → `lint` → `validate` → `docs`
-- **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
+- **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `initialize` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`. Each source example is initialized at most once; validate reuses its persistent `.terraform` module cache. Provider binaries and Mapotf provider schemas use central AVM caches.
 
 Both chains resolve every applicable binary and PowerShell prerequisite before
 metadata/step 1, retaining the default module-upgrade guard. They stop on missing

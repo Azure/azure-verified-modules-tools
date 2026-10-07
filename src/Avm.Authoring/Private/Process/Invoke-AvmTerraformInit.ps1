@@ -5,7 +5,9 @@ function Invoke-AvmTerraformInit {
 
     .DESCRIPTION
         Runs terraform init -upgrade and serializes calls that share
-        TF_PLUGIN_CACHE_DIR.
+        TF_PLUGIN_CACHE_DIR. When the caller and process environment do not
+        configure a provider cache, uses the AVM cache so repeated lint,
+        policy, and validation initializations reuse provider binaries.
         Terraform's provider plugin cache is not concurrency-safe, while working
         directories without a shared cache can initialize independently.
     #>
@@ -22,7 +24,11 @@ function Invoke-AvmTerraformInit {
 
         [string] $Label,
 
+        [switch] $BackendFalse,
+
         [switch] $NoColor,
+
+        [switch] $IgnoreExitCode,
 
         [switch] $SkipPluginCacheLock,
 
@@ -36,18 +42,27 @@ function Invoke-AvmTerraformInit {
     $arguments.Add('init')
     $arguments.Add('-upgrade')
     $arguments.Add('-input=false')
+    if ($BackendFalse) {
+        $arguments.Add('-backend=false')
+    }
     if ($NoColor) {
         $arguments.Add('-no-color')
+    }
+
+    $effectiveEnvironment = if ($null -eq $EnvVars) { @{} } else { $EnvVars.Clone() }
+    if (-not $effectiveEnvironment.ContainsKey('TF_PLUGIN_CACHE_DIR')) {
+        $effectiveEnvironment.TF_PLUGIN_CACHE_DIR = Get-AvmTerraformPluginCachePath
     }
 
     $processParameters = @{
         FilePath            = $TerraformPath
         ArgumentList        = $arguments.ToArray()
         WorkingDirectory    = $WorkingDirectory
-        EnvVars             = $EnvVars
+        EnvVars             = $effectiveEnvironment
         Label               = $Label
         StreamOutput        = $StreamOutput
         RetryNetworkFailure = $true
+        IgnoreExitCode      = $IgnoreExitCode
     }
 
     $lock = $null
@@ -55,7 +70,7 @@ function Invoke-AvmTerraformInit {
         if (-not $SkipPluginCacheLock) {
             $lock = Lock-AvmTerraformPluginCache `
                 -WorkingDirectory $WorkingDirectory `
-                -EnvVars $EnvVars
+                -EnvVars $effectiveEnvironment
         }
 
         Invoke-AvmProcess @processParameters

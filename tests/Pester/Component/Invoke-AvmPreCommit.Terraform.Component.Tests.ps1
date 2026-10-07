@@ -214,7 +214,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.0.0)'
     }
 
-    It 'pre-commit composes the six-step terraform chain end-to-end (metadata first) via launcher-resolved stubs and built-in checks' {
+    It 'pre-commit composes the seven-step terraform chain end-to-end (metadata first) via launcher-resolved stubs and built-in checks' {
         $result = Invoke-AvmPreCommit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
 
         $result | Should -Not -BeNullOrEmpty
@@ -222,8 +222,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 6
-        $expected = @('metadata', 'sync', 'check convention', 'transform', 'format', 'docs')
+        $steps.Count | Should -Be 7
+        $expected = @('metadata', 'initialize', 'sync', 'check convention', 'transform', 'format', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -317,16 +317,24 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
     }
 
-    It 'pr-check composes nine steps with metadata validation before the drift checks' {
-        $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+    It 'pr-check composes ten steps with one initialization pass before the drift checks' {
+        $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
+        $trace = Join-Path $TestDrive 'pr-check-initialization-trace.jsonl'
+        $env:AVM_STUB_TERRAFORM_TRACE = $trace
+        try {
+            $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_STUB_TERRAFORM_TRACE', $(if ($null -eq $savedTrace) { [NullString]::Value } else { $savedTrace }), 'Process')
+        }
 
         $result | Should -Not -BeNullOrEmpty
         $result.PSObject.Properties['Ecosystem'].Value | Should -Be 'terraform'
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 9
-        $expected = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $steps.Count | Should -Be 10
+        $expected = @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -335,6 +343,19 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
         $byName['metadata'].Result.Issues | Should -HaveCount 0
         Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeTrue
+
+        $terraformCalls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
+        $sourceExample = Join-Path $script:fixtureRoot 'examples' 'foo'
+        @($terraformCalls | Where-Object {
+                $_.Command -eq 'init' -and $_.Directory -eq $sourceExample
+            }) | Should -HaveCount 1
+        @($terraformCalls | Where-Object {
+                $_.Command -eq 'validate' -and $_.Directory -eq $sourceExample
+            }) | Should -HaveCount 1
+        $initCalls = @($terraformCalls | Where-Object Command -eq 'init')
+        $initCalls.Count | Should -BeGreaterThan 1
+        @($initCalls.PluginCache | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }) | Should -HaveCount 0
+        @($initCalls.PluginCache | Sort-Object -Unique) | Should -HaveCount 1
 
         # sync runs under -CheckDrift (drift-check mode) against the empty
         # local managed-files source (AVM_MANAGED_FILES_LOCAL_PATH -> an empty

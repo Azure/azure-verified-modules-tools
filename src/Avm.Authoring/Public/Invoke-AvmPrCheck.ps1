@@ -2,7 +2,7 @@ function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
-        metadata -> sync -> format -> transform -> lint -> check policy ->
+        metadata -> initialize -> sync -> format -> transform -> lint -> check policy ->
         check convention -> validate -> docs.
 
     .DESCRIPTION
@@ -21,8 +21,10 @@ function Invoke-AvmPrCheck {
         Missing or invalid root or child metadata aborts the chain without
         changing module files or reading indexes, regardless of StopOnFail.
 
-        The 'validate' step is a build-validation pass ('terraform
-        validate' / 'bicep build'), not a test run. Unit tests remain a
+        For Terraform, the initialize step prepares each source example once.
+        The later validate step reuses that persistent `.terraform` state instead
+        of initializing the example again. The 'validate' step is a build-validation
+        pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
         separate CI job so a failure produces one actionable signal and
         fork contributors receive results without environment approval.
         The convention step requires a tests/unit/*.tftest.hcl fixture,
@@ -142,6 +144,18 @@ function Invoke-AvmPrCheck {
             ContextOnly = $true
             ExtraArgs   = @{ Context = $context }
         }
+        if ($context.Ecosystem -eq 'terraform') {
+            [pscustomobject]@{
+                Name        = 'initialize'
+                Cmdlet      = 'Initialize-AvmTerraformCommand'
+                ContextOnly = $true
+                ExtraArgs   = @{
+                    Context           = $context
+                    Command           = 'pr-check'
+                    AllowPathFallback = $AllowPathFallback
+                }
+            }
+        }
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{
@@ -157,7 +171,15 @@ function Invoke-AvmPrCheck {
             ExtraArgs = @{ ThrottleLimit = $ThrottleLimit }
         }
         [pscustomobject]@{ Name = 'check convention'; Cmdlet = 'Invoke-AvmCheckConvention' }
-        [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
+        if ($context.Ecosystem -eq 'terraform') {
+            [pscustomobject]@{
+                Name = 'validate'; Cmdlet = 'Invoke-AvmTest'
+                ExtraArgs = @{ UseExistingInit = $true }
+            }
+        }
+        else {
+            [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
+        }
         [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs'; ExtraArgs = @{ CheckDrift = $true } }
     )
 

@@ -17,6 +17,7 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Resolve-AvmCommandTool { @() }
             Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
+            Mock Initialize-AvmTerraformCommand { [pscustomobject]@{ Status = 'pass' } }
         }
     }
 
@@ -733,6 +734,9 @@ Describe 'Invoke-AvmPrCheck' {
             # sync runs first in drift-check mode: -CheckDrift is forwarded via
             # the step's ExtraArgs so CI treats stale governed files as a fail.
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
+            Should -Invoke Initialize-AvmTerraformCommand -Exactly 1 -ParameterFilter {
+                $Context.Root -eq $D -and $Command -eq 'pr-check'
+            }
             Should -Invoke Invoke-AvmFormat          -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
             Should -Invoke Invoke-AvmTransform       -Exactly 1 -ParameterFilter {
                 $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5
@@ -740,7 +744,9 @@ Describe 'Invoke-AvmPrCheck' {
             Should -Invoke Invoke-AvmLint            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5 }
             Should -Invoke Invoke-AvmCheckPolicy     -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $ThrottleLimit -eq 5 }
             Should -Invoke Invoke-AvmCheckConvention -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
-            Should -Invoke Invoke-AvmTest            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
+            Should -Invoke Invoke-AvmTest            -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'terraform' -and $UseExistingInit
+            }
             Should -Invoke Invoke-AvmTestUnit        -Times 0 -Exactly
             Should -Invoke Invoke-AvmDocs            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' }
 
@@ -749,8 +755,8 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 9
-        $result.Steps.Step | Should -Be @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $result.Steps.Count               | Should -Be 10
+        $result.Steps.Step | Should -Be @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -828,7 +834,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                                                     | Should -Be 'pass'
         $result.Ecosystem                                                  | Should -Be 'terraform'
-        $result.Steps.Count                                                | Should -Be 9
+        $result.Steps.Count                                                | Should -Be 10
         ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'pass'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
