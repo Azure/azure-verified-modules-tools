@@ -602,7 +602,12 @@ calls forward the parent's location when the child needs it and no location
 was authored, preserving
 per-item locations in multi-region modules. Instrumented children also
 receive the parent's opt-out, and supported example calls expose and forward
-missing inputs. Variable blocks are sorted after missing location inputs are
+missing inputs. Only newly generated example `location` inputs default to
+`"eastus"`, so runnable examples remain usable by noninteractive plans.
+Authored example declarations, defaults, required inputs, and per-item regions
+are preserved; reusable module inputs still receive no default. Override the
+example value when another region or cloud is required.
+Variable blocks are sorted after missing location inputs are
 created, so the first transform already satisfies drift checks.
 
 `main.telemetry.tf` reads `telemetryIdPrefix` from the module's own

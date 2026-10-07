@@ -39,20 +39,69 @@ and transformation idempotency.
 - [x] Record explicit BAMI test approval.
 - [x] Identify active representative repositories and source commits.
 - [x] Finish the main-preservation gate and real-tool checks.
-- [ ] Commit and push the qualified Tools source without force.
-- [ ] Verify automatic checks on the exact new Tools head.
+- [x] Commit and push the qualified Tools source without force.
+- [x] Verify automatic checks on the exact new Tools head.
 - [x] Verify the configured BAMI tenant, controller, and admin subscription.
-- [ ] Verify dedicated identities and no-op prerequisites in the executing run.
-- [ ] Check all active/pending workflow states and exact-head duplicates.
-- [ ] Run bounded representative candidate checks.
+- [x] Verify dedicated identities and no-op prerequisites in the executing run.
+- [x] Check all active/pending workflow states and exact-head duplicates.
+- [x] Run bounded representative candidate checks.
+- [x] Repair newly generated example locations without changing module
+      requirements, authored regions, or main's policy safeguards.
+- [ ] Qualify the repair locally and rerun the affected BAMI candidates.
 - [ ] Record actual results, candidate trees, receipts, and remaining blockers.
 
 ## Validation
 
-No new BAMI run has been dispatched. The earlier ALZ group failure was
-resolved; its later candidate ran all eight unit plans successfully but
-failed full checks while acquiring TFLint through a rate-limited GitHub API.
-Those results do not qualify the current merged source.
+The main integration was committed and pushed as
+`a12660b1a08c91bd65e15513c8e66176092e6c2f`. All 22 exact-head checks passed,
+including all 16 jobs in
+[Authoring CI](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37590697782).
+The bounded, plan-only
+[representative run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37592597034)
+used that checked-out Tools source and only the five repositories above.
+All five preparation plans reported no infrastructure changes, and every
+publication job was skipped.
+
+| Module | Candidate tree | Executed result |
+| --- | --- | --- |
+| Key Vault | `9e6c7dcebb78376430d95513f9db9156f8ac9454` | All nine checks and 34 unit runs passed; matching receipt |
+| Virtual network | `435f7914042c7ca7c3f35be4daab83b8ca20ba7e` | Policy planning failed on an unset new example location; 53 unit runs across three directories passed |
+| ALZ networking | `b1b3c0a7b7a7740ec353438b46f9fcd97a0f0ec5` | Same policy input failure; all eight unit runs passed |
+| Windows Agent | `11af19c862b6cfe889c259634007a71be2221b08` | Checks and two unit runs passed; policy skipped by existing configuration; matching receipt |
+| Regions | No changed tree | `NoChange` receipt; remote module checks and unit tests did not run |
+
+ALZ and virtual-network lint passed. Their current blocker is not a group,
+permission, or download failure: the example transform introduces a required
+`location` input but gives previously runnable examples no value for it.
+The repair must make newly generated example inputs runnable without adding
+defaults to reusable modules or replacing authored example declarations.
+Actual Terraform plans, rather than configuration validation alone, cover
+the regression.
+
+The regression reproduced the same unset-variable failure with the released
+MaPoTF 0.3.0 and Terraform 1.16.5, using a provider-free local module. Its
+authored-default and authored-required counterparts passed. The central fix
+gives only newly created example `location` declarations an `"eastus"`
+default. Reusable module inputs remain required; existing example defaults,
+required declarations, and per-item regions are not changed. No policy
+engine or workflow input fallback was added.
+
+The repaired example and deployment-telemetry integration selection passed
+all 72 cases with no failures or skips. It verifies actual noninteractive
+plans, authored defaults and required inputs, per-item regions, unchanged
+canonical examples, utility exemptions, opt-outs, state migration, and
+second-pass stability. The full `./build.ps1 pre-commit` gate passed layout,
+lint, 3,301 unit tests and 1,498 component tests (nine and one platform skips)
+in 25 minutes 13 seconds. The known intermittent analyzer crash recovered
+within the existing retry limit; no lint rule was disabled.
+
+The unchanged Regions source at `abcc7c4138028371e88aa8d0be60a6537b08c40e`
+passed its 56 existing provider-mocked unit runs across 12 files locally.
+These are mocked applies with synthetic credentials and Azure CLI, managed
+identity, and OIDC authentication disabled, not live deployments.
+Its metadata has no `telemetryIdPrefix`, so the telemetry replacement profile
+does not run. Its existing modtm telemetry remains; this is utility-exemption
+coverage, not evidence of modtm removal.
 
 Candidate validation now uses the job's existing read-only `GITHUB_TOKEN`
 for tool downloads, matching main's integration workflow. The historical
@@ -78,6 +127,10 @@ and plan/unit coverage is not evidence of a full live deployment test.
 
 ## Blockers or dependencies
 
-The [main integration slice](2026-10-06-telemetry-main-integration.md) must
-complete first. Retain its current-main behavior and do not bypass any
-candidate identity, source, or publication guard to obtain a passing run.
+The [main integration slice](2026-10-06-telemetry-main-integration.md) is
+complete. ALZ and virtual-network qualification remains blocked on the
+repair's exact-head hosted checks and a successful bounded rerun. The
+example-only repair is locally qualified; the already-passing Key Vault and
+Windows Agent candidates contain no example changes affected by it. No
+second run has been dispatched. Retain current-main behavior and do not bypass any
+candidate identity, source, policy, or publication guard to obtain a pass.

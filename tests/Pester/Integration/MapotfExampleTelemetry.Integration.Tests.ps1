@@ -26,7 +26,7 @@ Describe 'Integration: MAPOTF example telemetry' -Tag 'Integration' -Skip:($env:
             param($Terraform)
             New-AvmToolPathEnvironment -ToolPath $Terraform -ToolName terraform
         }
-        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_get', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate')) {
+        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_get', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate', 'TF_CLI_ARGS_plan', 'TF_CLI_ARGS_show', 'TF_VAR_location')) {
             $script:processEnvironment[$name] = $null
         }
 
@@ -284,6 +284,11 @@ variable "location" {
   type = string
 }
 '@
+        Set-Content -LiteralPath (Join-Path $script:source 'outputs.tf') -Encoding utf8NoBOM -Value @'
+output "location" {
+  value = var.location
+}
+'@
         $exampleVariables = Join-Path $script:target 'variables.tf'
         Set-Content -LiteralPath $exampleVariables -Encoding utf8NoBOM -Value @'
 variable "example_name" {
@@ -295,7 +300,7 @@ variable "example_name" {
             @'
 variable "location" {
   type    = string
-  default = "eastus"
+  default = "westus2"
 }
 '@
         }
@@ -309,6 +314,10 @@ module "example" {
 
   enable_telemetry = true # keep this comment
 }
+
+output "location" {
+  value = module.example.location
+}
 "@
 
         Invoke-TelemetryProfiles -Root $script:target
@@ -320,19 +329,66 @@ module "example" {
         $declaration | Should -Match 'variable "example_name"'
         $declaration | Should -Not -Match 'telemetry_location'
         if ($Location) {
-            $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*"eastus"'
+            $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*"westus2"'
             $declaration | Should -Not -Match 'variable "location"'
         }
         else {
             $declaration | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
             $locationBody = [regex]::Match($declaration, '(?s)variable "location" \{(?<body>[^}]*)\}').Groups['body'].Value
-            $locationBody | Should -Not -Match 'default\s*='
+            $locationBody | Should -Match 'default\s*=\s*"eastus"'
         }
         Assert-TelemetryExampleValid -Root $script:target
+        $plan = Invoke-TelemetryProcess -Tool terraform -Root $script:target -IgnoreExitCode -Arguments @(
+            'plan', '-input=false', '-out=location.tfplan', '-no-color'
+        )
+        $plan.ExitCode | Should -Be 0 -Because $plan.StdErr
+        $planned = Invoke-TelemetryProcess -Tool terraform -Root $script:target -Arguments @(
+            'show', '-json', 'location.tfplan'
+        )
+        $expectedLocation = if ($Location) { 'westus2' } else { 'eastus' }
+        ($planned.StdOut | ConvertFrom-Json).planned_values.outputs.location.value |
+            Should -BeExactly $expectedLocation
 
         Invoke-TelemetryProfiles -Root $script:target
         Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
         Get-Content -LiteralPath $exampleVariables -Raw | Should -BeExactly $declaration
+    }
+
+    It 'preserves an authored required example location' {
+        Add-Content -LiteralPath $script:variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type = string
+}
+'@
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type     = string
+  nullable = false
+}
+
+module "example" {
+  source = "../../modules/support"
+}
+'@
+
+        Invoke-TelemetryProfiles -Root $script:target
+        $first = Get-Content -LiteralPath $script:main -Raw
+        $locationBody = [regex]::Match($first, '(?s)variable "location" \{(?<body>[^}]*)\}').Groups['body'].Value
+        $locationBody | Should -Not -Match 'default\s*='
+        $first | Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        Assert-TelemetryExampleValid -Root $script:target
+        $missingInput = Invoke-TelemetryProcess -Tool terraform -Root $script:target -IgnoreExitCode -Arguments @(
+            'plan', '-input=false', '-no-color'
+        )
+        $missingInput.ExitCode | Should -Be 1
+        $missingInput.StdErr | Should -Match 'No value for required variable'
+        $providedInput = Invoke-TelemetryProcess -Tool terraform -Root $script:target -Arguments @(
+            'plan', '-input=false', '-var=location=westeurope', '-no-color'
+        )
+        $providedInput.ExitCode | Should -Be 0
+
+        Invoke-TelemetryProfiles -Root $script:target
+        Get-Content -LiteralPath $script:main -Raw | Should -BeExactly $first
     }
 
     It 'keeps an authored per-item location in an example module call' {
