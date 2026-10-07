@@ -178,6 +178,15 @@ function script:Invoke-AvmPesterShardedTier {
     }
 
     Write-Build Gray "  $Tier : $($File.Count) file(s) across $($plan.Count) shard(s)"
+    for ($i = 0; $i -lt $plan.Count; $i++) {
+        $files = @($plan[$i].Paths | ForEach-Object {
+                [System.IO.Path]::GetRelativePath($script:repoRoot, $_)
+            })
+        Write-Build Gray (
+            "  $Tier shard $($i + 1): estimated cost $([math]::Round($plan[$i].Cost, 2)); " +
+            "$($files.Count) file(s): $($files -join ', ')"
+        )
+    }
 
     # Isolated shard folders sit outside the repository so git commands run in
     # TestDrive never discover this checkout. Names stay short, and component
@@ -214,7 +223,7 @@ function script:Invoke-AvmPesterShardedTier {
                 -RedirectStandardOutput $logPath -RedirectStandardError "$logPath.err"
             $running += [pscustomobject]@{
                 Index = $index; Process = $process; Log = $logPath; Output = $outputPath
-                AvmHome = $shardAvmHome
+                AvmHome = $shardAvmHome; Files = @($plan[$i].Paths)
             }
         }
 
@@ -249,6 +258,11 @@ function script:Invoke-AvmPesterShardedTier {
 
                 $xml = [xml](Get-Content -LiteralPath $shard.Output -Raw)
                 $root = $xml.'test-results'
+                $durationSeconds = [System.Xml.XmlConvert]::ToDouble([string] $root.'test-suite'.time)
+                Write-Build Gray (
+                    "  $Tier shard $($shard.Index): $([math]::Round($durationSeconds, 2))s; " +
+                    "$($shard.Files.Count) file(s); exit $exit"
+                )
                 $total = [int] $root.total
                 $failures = [int] $root.failures + [int] $root.errors
                 $skipped = [int] $root.skipped + [int] $root.'not-run' + [int] $root.ignored

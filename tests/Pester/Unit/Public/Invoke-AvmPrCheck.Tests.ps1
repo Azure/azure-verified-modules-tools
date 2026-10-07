@@ -81,19 +81,26 @@ Describe 'Invoke-AvmPrCheck' {
                 param($SelectedStep, $SelectedEcosystem, $Commands)
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem $SelectedEcosystem -ExcludeSteps @($SelectedStep) -StopOnFail
 
+                $expectedSteps = @('metadata')
+                if ($SelectedEcosystem -eq 'terraform') {
+                    $expectedSteps += 'initialize'
+                }
+                $expectedSteps += @($Commands.Keys | Where-Object { $_ -ne 'metadata' })
                 $result.Status | Should -Be 'pass'
-                $result.Steps.Step | Should -Be @($Commands.Keys)
+                $result.Steps.Step | Should -Be $expectedSteps
                 $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
                 $skipped | Should -HaveCount 1
                 $skipped[0].Step | Should -Be $SelectedStep
                 $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
                 $skipped[0].Result | Should -BeNullOrEmpty
                 $skipped[0].DurationMs | Should -Be 0
-                @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
+                @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount ($expectedSteps.Count - 1)
                 foreach ($entry in $Commands.GetEnumerator()) {
                     $count = if ($entry.Key -eq $SelectedStep) { 0 } else { 1 }
                     Should -Invoke $entry.Value -Exactly $count
                 }
+                $initializeCount = if ($SelectedEcosystem -eq 'terraform') { 1 } else { 0 }
+                Should -Invoke Initialize-AvmTerraformCommand -Exactly $initializeCount
                 Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
                     $Command -eq 'pr-check' -and $ModuleRoot -eq 'root' -and
                     $Ecosystem -eq $SelectedEcosystem -and
@@ -113,7 +120,7 @@ Describe 'Invoke-AvmPrCheck' {
                 param($Flag)
                 $result = avm pr-check $Flag @('CHECK POLICY', 'Lint', 'lint') -Path root --passthru
                 $result.Status | Should -Be 'pass'
-                $result.Steps | Should -HaveCount 9
+                $result.Steps | Should -HaveCount 10
                 @($result.Steps | Where-Object Status -eq 'skipped').Step | Should -Be @('lint', 'check policy')
                 Should -Invoke Invoke-AvmCheckPolicy -Exactly 0
                 Should -Invoke Invoke-AvmLint -Exactly 0
@@ -128,7 +135,7 @@ Describe 'Invoke-AvmPrCheck' {
             InModuleScope Avm.Authoring {
                 $result = avm pr-check -ExcludeSteps @() -Path root --passthru
                 $result.Status | Should -Be 'pass'
-                $result.Steps | Should -HaveCount 9
+                $result.Steps | Should -HaveCount 10
                 @($result.Steps | Where-Object Status -ne 'pass') | Should -HaveCount 0
                 Should -Invoke Invoke-AvmCheckPolicy -Exactly 1
                 Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter { $ExcludeSteps.Count -eq 0 }
@@ -138,7 +145,7 @@ Describe 'Invoke-AvmPrCheck' {
         It 'reports an entirely excluded chain as skipped while retaining the version and clean-tree guards' {
             InModuleScope Avm.Authoring -Parameters @{ Commands = $script:stepCommands } {
                 param($Commands)
-                $result = Invoke-AvmPrCheck -Path root -ExcludeSteps @($Commands.Keys) -StopOnFail
+                $result = Invoke-AvmPrCheck -Path root -Ecosystem bicep -ExcludeSteps @($Commands.Keys) -StopOnFail
                 $result.Status | Should -Be 'skipped'
                 $result.Steps | Should -HaveCount 9
                 @($result.Steps | Where-Object Status -ne 'skipped') | Should -HaveCount 0
@@ -177,8 +184,8 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         It 'retains fail-soft and StopOnFail behavior for non-excluded steps with StopOnFail=<Stop>' -ForEach @(
-            @{ Stop = $false; Count = 9; DocsCalls = 1 }
-            @{ Stop = $true; Count = 5; DocsCalls = 0 }
+            @{ Stop = $false; Count = 10; DocsCalls = 1 }
+            @{ Stop = $true; Count = 6; DocsCalls = 0 }
         ) {
             InModuleScope Avm.Authoring -Parameters @{ Stop = $Stop; Count = $Count; DocsCalls = $DocsCalls } {
                 param($Stop, $Count, $DocsCalls)
