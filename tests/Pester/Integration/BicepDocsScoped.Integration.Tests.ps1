@@ -633,6 +633,45 @@ output registrationToken string? = 'token'
                 $_.Path -eq 'rg-scope/README.md'
             })[0].Content
         $moduleScoped | Should -BeExactly $scoped
+
+        $defaultRoot = Join-Path $TestDrive 'package defaults with spaces'
+        Copy-Item -LiteralPath $root -Destination $defaultRoot -Recurse
+        $defaultConfigPath = Join-Path $defaultRoot 'bicepconfig.json'
+        $defaultConfig = [IO.File]::ReadAllText($defaultConfigPath) | ConvertFrom-Json -AsHashtable
+        $defaultConfig.documentation.Remove('template')
+        $defaultConfig['extends'] = './compiler-settings.json'
+        [IO.File]::WriteAllText(
+            (Join-Path $defaultRoot 'compiler-settings.json'), '{"analyzers":{"core":{"enabled":false}}}')
+        [IO.File]::WriteAllText($defaultConfigPath, (ConvertTo-Json -InputObject $defaultConfig -Depth 10))
+        Remove-Item -LiteralPath (Join-Path $defaultRoot 'docs' 'templates' 'avm-readme-v1.scriban')
+        $beforeDefault = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $defaultRoot -Recurse -File) {
+            $beforeDefault[$file.FullName] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file.FullName))
+        }
+        $defaultResult = Invoke-AvmDocs -Path $defaultRoot -CheckDrift `
+            -IncludeRenderedContent -SkipModuleVersionCheck
+        $defaultResult.FilesProcessed | Should -Be 3 -Because (
+            @($defaultResult.Issues | ForEach-Object Message) -join '; ')
+        foreach ($readme in $result.GeneratedReadmes) {
+            $defaultReadme = @($defaultResult.GeneratedReadmes | Where-Object Path -EQ $readme.Path)
+            $defaultReadme | Should -HaveCount 1
+            $defaultReadme[0].Content | Should -BeExactly $readme.Content
+        }
+        $defaultModule = Join-Path $defaultRoot 'avm' 'res' 'storage' 'storage-account'
+        $defaultModuleResult = Invoke-AvmDocs -Path $defaultModule -CheckDrift `
+            -IncludeRenderedContent -SkipModuleVersionCheck
+        $defaultModuleResult.FilesProcessed | Should -Be 3 -Because (
+            @($defaultModuleResult.Issues | ForEach-Object Message) -join '; ')
+        foreach ($readme in $moduleResult.GeneratedReadmes) {
+            $defaultReadme = @($defaultModuleResult.GeneratedReadmes | Where-Object Path -EQ $readme.Path)
+            $defaultReadme | Should -HaveCount 1
+            $defaultReadme[0].Content | Should -BeExactly $readme.Content
+        }
+        @(Get-ChildItem -LiteralPath $defaultRoot -Recurse -File).Count | Should -Be $beforeDefault.Count
+        foreach ($path in $beforeDefault.Keys) {
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) | Should -BeExactly $beforeDefault[$path]
+        }
+
         $scoped | Should -Match '```text\nRequires credentials\.\n```\n\n<details>'
         $scoped | Should -Match '## Parameters\n\n\*\*Required parameters\*\*'
         $scoped | Should -Match '(?s)### Parameter: `name`.*?- Type: string\n\n### Parameter: `a`'

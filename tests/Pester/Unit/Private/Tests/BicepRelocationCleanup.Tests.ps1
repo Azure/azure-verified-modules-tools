@@ -38,7 +38,7 @@ Describe 'Bicep relocation regional classification' {
             }
             $script:failed = {
                 param($ErrorNode)
-                @{ properties = @{ provisioningState = 'Failed'; statusMessage = @{ error = $ErrorNode } } }
+                @{ properties = @{ provisioningOperation = 'Create'; provisioningState = 'Failed'; statusMessage = @{ error = $ErrorNode } } }
             }
         }
     }
@@ -46,11 +46,11 @@ Describe 'Bicep relocation regional classification' {
     It 'relocates only when every failed operation is regional, including wrapped failures' {
         InModuleScope Avm.Authoring {
             & $script:respond 'Failed' @(
-                @{ properties = @{ provisioningState = 'Succeeded' } }
+                @{ properties = @{ provisioningOperation = 'Read'; provisioningState = 'Succeeded' } }
                 & $script:failed $script:regional
                 & $script:failed @{ code = 'ResourceDeploymentFailure'; message = 'wrapped'; details = @($script:regional) }
             )
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeTrue
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'Regional'
         }
     }
 
@@ -62,15 +62,44 @@ Describe 'Bicep relocation regional classification' {
         InModuleScope Avm.Authoring -Parameters @{ Node = $Node } {
             param($Node)
             & $script:respond 'Failed' @((& $script:failed $script:regional), (& $script:failed $Node))
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeFalse
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
         }
     }
 
     It 'does not read operations unless the deployment is exactly Failed' {
         InModuleScope Avm.Authoring {
             & $script:respond 'Canceled' @()
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeFalse
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
             Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+
+    It 'rejects untyped HTTP evidence for both the deployment and operation pages: <Kind>' -ForEach @(
+        @{ Kind = 'Boolean'; HttpStatus = $true }
+        @{ Kind = 'string'; HttpStatus = '200' }
+        @{ Kind = 'floating point'; HttpStatus = 200.1 }
+        @{ Kind = 'singleton array'; HttpStatus = @(200) }
+        @{ Kind = 'missing'; HttpStatus = $null }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ HttpStatus = $HttpStatus } {
+            param($HttpStatus)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:invalidStatus = $HttpStatus
+            $script:invalidResponsePath = $script:root + '?api-version=2021-04-01'
+            Mock Invoke-AzRestMethod {
+                param($Path)
+                $response = [pscustomobject]@{
+                    StatusCode = 200
+                    Content = $script:pages[$Path] | ConvertTo-Json -Depth 20
+                }
+                if ($Path -eq $script:invalidResponsePath) { $response.StatusCode = $script:invalidStatus }
+                return $response
+            }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
+                Should -Throw '*Deployment state could not be confirmed*'
+            $script:invalidResponsePath = $script:root + '/operations?api-version=2021-04-01'
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
+                Should -Throw '*Deployment operations could not be read*'
         }
     }
 }
@@ -176,12 +205,15 @@ Describe 'Bicep deployment record removal' {
     }
 
     It 'fails when <Label>' -ForEach @(
-        @{ Label = 'the record remains after every lookup'; Status = 200; Content = '{}'; Message = '*still exists*' }
+        @{ Label = 'the record remains after every lookup'; Status = 200; Content = 'present'; Message = '*still exists*' }
         @{ Label = 'a 404 has an unexpected code'; Status = 404; Content = '{"error":{"code":"AuthorizationFailed"}}'; Message = '*not confirmed*' }
         @{ Label = 'the lookup fails'; Status = 500; Content = '{}'; Message = '*HTTP 500*' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Status = $Status; Content = $Content; Message = $Message } {
             param($Status, $Content, $Message)
+            if ($Content -eq 'present') {
+                $Content = @{ id = $script:root; properties = @{ provisioningState = 'Failed' } } | ConvertTo-Json
+            }
             $script:lookup = [pscustomobject]@{ StatusCode = $Status; Content = $Content }
             Mock Invoke-AzRestMethod {
                 param($Method)

@@ -165,27 +165,32 @@ function Invoke-AvmBicepNativeTestCase {
             $unavailableRegions = @()
             $relocationBlocked = $false
             $firstAttempt = 1
+            $needsValidation = $true
             while ($true) {
-                $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options `
-                    -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
-                    -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
-                    -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
-                    -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
-                $canRelocate = $validated.CanRelocate -and -not $executionOptions.KeepResources -and
+                if ($needsValidation) {
+                    $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options -SubscriptionId $Item.SubscriptionId `
+                        -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
+                        -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
+                        -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
+                        -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
+                }
+                $canCleanRetry = $validated.CanRelocate -and -not $executionOptions.KeepResources
+                $canRelocate = $canCleanRetry -and
                 $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit
                 $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
                     -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit `
-                    -FirstAttempt $firstAttempt -AllowRelocation:$canRelocate -Confirm:$false
-                if ($deployed.Status -ne 'relocate') { break }
+                    -FirstAttempt $firstAttempt -AllowRelocation:$canRelocate -AllowTransientRetry:$canCleanRetry `
+                    -ResourceLocation $validated.Location -Confirm:$false
+                if ($deployed.Status -notin @('relocate', 'retry-clean')) { break }
+                $needsValidation = $deployed.Status -eq 'relocate'
 
-                # A wholly regional failure must be fully removed, including deployment records, before another region is tried.
-                Write-AvmLog -Level Warning -Message "Deployment '$($deployed.DeploymentName)' failed for regional reasons; removing it before relocating."
+                Write-AvmLog -Level Warning -Message "Deployment '$($deployed.DeploymentName)' requires complete cleanup before its '$($deployed.Status)' retry."
                 $relocationCleanup = Invoke-AvmBicepCleanup -StatePath $handle.Path -SubscriptionId $Item.SubscriptionId `
-                    -TenantId $TenantId -RequireCompleteRemoval -Confirm:$false
+                    -TenantId $TenantId -RequireCompleteRemoval -RequireNoDeploymentScripts:(-not $needsValidation) -Confirm:$false
                 if (-not $relocationCleanup.Cleaned) {
                     foreach ($issue in $relocationCleanup.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
                     Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'relocation-blocked' `
-                        -Message "Cleanup did not confirm removal of every outstanding deployment, so relocation stopped. Cleanup state: '$($handle.Path)'."
+                        -Message "Cleanup did not confirm safe removal of every outstanding deployment, so the retry stopped. Cleanup state: '$($handle.Path)'."
                     $relocationBlocked = $true
                     $deployed.Status = 'fail'
                     break
@@ -195,7 +200,8 @@ function Invoke-AvmBicepNativeTestCase {
                 $state['deployments'] = @()
                 $state['resources'] = @()
                 Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
-                $unavailableRegions = $validated.AttemptedRegions
+                if ($needsValidation) { $unavailableRegions = $validated.AttemptedRegions }
+                else { Start-Sleep -Seconds 5 }
                 $firstAttempt = $deployed.Attempt + 1
             }
             if ($deployed.Status -ne 'pass' -and -not $relocationBlocked) {

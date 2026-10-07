@@ -18,8 +18,11 @@ function New-AvmBicepNativeDeployment {
         [ValidateRange(1, 3)]
         [int] $FirstAttempt = 1,
 
-        # Return 'relocate' instead of retrying in place when a confirmed failure is wholly regional.
-        [switch] $AllowRelocation
+        [switch] $AllowRelocation,
+
+        [switch] $AllowTransientRetry,
+
+        [string] $ResourceLocation
     )
 
     Set-StrictMode -Version 3.0
@@ -45,14 +48,31 @@ function New-AvmBicepNativeDeployment {
         $inputOptions.DeploymentName = $name
         $failure = $null
         $outputs = $null
+        $submissionReturned = $false
+        $failureQueryAllowed = $false
+        $recoveredFailure = $false
         try {
             $response = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -Confirm:$false
-            $responseId = Get-AvmPropertyValue -InputObject $response -Name 'Id'
+            $submissionReturned = $true
+            $responseId = $null
+            $provisioningState = $null
+            if ($response -is [System.Collections.IDictionary]) {
+                $responseId = $response['Id']
+                $provisioningState = $response['ProvisioningState']
+            }
+            elseif ($null -ne $response -and $response -isnot [System.Collections.IList]) {
+                $idProperty = $response.PSObject.Properties['Id']
+                $stateProperty = $response.PSObject.Properties['ProvisioningState']
+                if ($null -ne $idProperty) { $responseId = $idProperty.Value }
+                if ($null -ne $stateProperty) { $provisioningState = $stateProperty.Value }
+            }
             if ($responseId -isnot [string] -or $responseId -ine $id) {
                 throw [AvmProcessException]::new('The native deployment response did not identify the recorded deployment.')
             }
-            $provisioningState = Get-AvmPropertyValue -InputObject $response -Name 'ProvisioningState'
-            $entry['status'] = if ($provisioningState -in @('Succeeded', 'Failed')) { $provisioningState } else { 'Unknown' }
+            $entry['status'] = if ($provisioningState -is [string] -and $provisioningState -cin @('Succeeded', 'Failed')) {
+                $provisioningState
+            }
+            else { 'Unknown' }
             $outputs = Get-AvmPropertyValue -InputObject $response -Name 'Outputs'
         }
         catch {
@@ -68,6 +88,8 @@ function New-AvmBicepNativeDeployment {
                 $entry['status'] = 'Failed'
             }
             else { $entry['status'] = 'Unknown' }
+            $failureQueryAllowed = -not $submissionReturned -and $kind -eq 'Other' -and
+            -not $entry['preflightRejected']
             if ($kind -eq 'Cancellation') {
                 Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
                 throw
@@ -80,6 +102,7 @@ function New-AvmBicepNativeDeployment {
                     $recovered = Wait-AvmBicepNativeDeployment -DeploymentId $id
                     $entry['status'] = $recovered.State
                     $outputs = $recovered.Outputs
+                    $recoveredFailure = $recovered.State -eq 'Failed'
                 }
                 catch {
                     if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') {
@@ -95,26 +118,34 @@ function New-AvmBicepNativeDeployment {
             if ($null -eq $outputs) { $outputs = @{} }
             return [pscustomobject]@{ Status = 'pass'; DeploymentName = $name; DeploymentId = $id; Outputs = $outputs }
         }
+        if (($AllowRelocation -or $AllowTransientRetry) -and $attempt -lt $RetryLimit -and
+            ($entry['status'] -eq 'Failed' -or $failureQueryAllowed)) {
+            $classificationFailure = $failure
+            if ($recoveredFailure) { $classificationFailure = $null }
+            elseif ($null -ne $failure -and $failure.CategoryInfo.Category -eq 'OperationStopped') {
+                $classificationFailure = [System.Management.Automation.ErrorRecord]::new(
+                    $failure.Exception, 'AvmBicepConfirmedDeploymentFailure',
+                    [System.Management.Automation.ErrorCategory]::InvalidResult, $null)
+            }
+            $retryKind = Get-AvmBicepDeploymentRetryKind -DeploymentId $id -SubscriptionId $State['subscriptionId'] `
+                -ResourceLocation $ResourceLocation -Failure $classificationFailure
+            if (($AllowRelocation -and $retryKind -eq 'Regional') -or
+                ($AllowTransientRetry -and $retryKind -eq 'Transient')) {
+                $entry['status'] = 'Failed'
+                Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
+                return [pscustomobject]@{
+                    Status = if ($retryKind -eq 'Regional') { 'relocate' } else { 'retry-clean' }
+                    DeploymentName = $name; DeploymentId = $id; Outputs = @{}
+                    ErrorKind = 'Other'; Outcome = 'Failed'; Attempt = $attempt
+                }
+            }
+        }
         if ($entry['status'] -eq 'Unknown' -or $attempt -eq $RetryLimit) {
             $kind = if ($null -eq $failure -or $entry['status'] -eq 'Failed') { 'Other' }
             else { Get-AvmBicepDeploymentErrorKind -ErrorRecord $failure }
             return [pscustomobject]@{
                 Status = 'fail'; DeploymentName = $name; DeploymentId = $id; Outputs = @{}
                 ErrorKind = $kind; Outcome = $entry['status']
-            }
-        }
-        if ($AllowRelocation -and $entry['status'] -eq 'Failed') {
-            $regional = $false
-            try { $regional = Test-AvmBicepRegionalDeploymentFailure -DeploymentId $id }
-            catch {
-                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }
-                Write-AvmLog -Level Warning -Message "Regional classification for '$name' failed; retrying in place."
-            }
-            if ($regional) {
-                return [pscustomobject]@{
-                    Status = 'relocate'; DeploymentName = $name; DeploymentId = $id; Outputs = @{}
-                    ErrorKind = 'Other'; Outcome = 'Failed'; Attempt = $attempt
-                }
             }
         }
         Write-AvmLog -Level Warning -Message (

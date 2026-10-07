@@ -153,9 +153,9 @@ Describe 'Component: Bicep native regional validation' -Tag Component {
             $node = [InvalidOperationException]::new('Insufficient capacity in the region.')
             $node | Add-Member -MemberType NoteProperty -Name Code -Value 'AllocationFailed'
             ($node -is [pscustomobject]) | Should -BeFalse
-            Test-AvmBicepRegionalErrorNode -Node $node | Should -BeTrue
+            Test-AvmBicepRetryErrorNode -Node $node | Should -BeTrue
             $node.Code = 'AuthorizationFailed'
-            Test-AvmBicepRegionalErrorNode -Node $node | Should -BeFalse
+            Test-AvmBicepRetryErrorNode -Node $node | Should -BeFalse
         }
     }
 }

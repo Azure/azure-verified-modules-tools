@@ -195,6 +195,17 @@ an unfinished upload provides no recovery artifact. `avm test cleanup`
 resumes removal without source or authored-script execution. No external
 journal is required.
 
+Preserve the registry caller's current orchestration when replacing it:
+experimental checks require both `PR: Run Checks` and `PR: Run E2E Tests`;
+ignored jobs exit before checkout, bootstrap or sign-in. The seeded matrix
+retains the original subscription index and canonical GUID-based identity.
+Main, preview and publish callers share the deployment implementation,
+per-module/subscription deployment locks, and a shared deployment-phase lock
+for management-group/tenant, linked or expression-valued nested templates.
+Publication retains its separate per-module lock. There is no tools-owned
+Bicep reusable deployment workflow yet; these are migration requirements,
+not permission to replace or run the registry callers.
+
 Local compilation and simulated Azure tests qualify source behavior only.
 Release, live Azure qualification and registry workflow replacement remain
 separate approval gates. Existing registry workflows stay active until

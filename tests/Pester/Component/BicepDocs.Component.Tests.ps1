@@ -214,6 +214,96 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
         }
     }
 
+    It 'preserves caller files and cleans package-default render inputs: <Mode>' -ForEach @(
+        @{ Mode = 'drift without config'; Json = $null }
+        @{ Mode = 'drift with config'; Json = '{"analyzers":{"core":{"enabled":true}}}' }
+        @{ Mode = 'WhatIf'; Json = '{"documentation":{"examples":{"sources":[]}}}' }
+        @{ Mode = 'compiler failure'; Json = '{}' }
+        @{ Mode = 'launch failure'; Json = '{}' }
+    ) {
+        $fixture = New-BicepDocsFixture -Name $Mode
+        $configPath = Join-Path $fixture.Root 'bicepconfig.json'
+        Remove-Item -LiteralPath $fixture.Template
+        if ($null -eq $Json) {
+            Remove-Item -LiteralPath $configPath
+        }
+        else {
+            [IO.File]::WriteAllText($configPath, $Json)
+        }
+        InModuleScope Avm.Authoring -Parameters @{ F = $fixture; Mode = $Mode } {
+            param($F, $Mode)
+            $commandPath = if ($Mode -eq 'drift without config') { $F.Module } else { $F.Root }
+            $script:renderMode = $Mode
+            $script:originalFiles = @{}
+            foreach ($file in Get-ChildItem -LiteralPath $F.Root -Recurse -File) {
+                $script:originalFiles[$file.FullName] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file.FullName))
+            }
+            $script:temporaryInputs = [System.Collections.Generic.List[string]]::new()
+            $script:sourceStages = [System.Collections.Generic.HashSet[string]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                $ArgumentList | Should -Not -Contain '--template-file'
+                $script:temporaryInputs.Add($ArgumentList[2])
+                $script:temporaryInputs.Add($ArgumentList[5])
+                [IO.File]::Exists($ArgumentList[2]) | Should -BeTrue
+                $directory = [IO.DirectoryInfo]::new($WorkingDirectory)
+                while (-not [IO.File]::Exists((Join-Path $directory.FullName 'bicepconfig.json'))) {
+                    $directory = $directory.Parent
+                }
+                $null = $script:sourceStages.Add($directory.FullName)
+                $config = [IO.File]::ReadAllText((Join-Path $directory.FullName 'bicepconfig.json')) |
+                    ConvertFrom-Json -AsHashtable
+                $config.documentation.template.file | Should -BeExactly (Get-AvmBicepDocsTemplate).Path
+                foreach ($path in $script:originalFiles.Keys) {
+                    [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) |
+                        Should -BeExactly $script:originalFiles[$path]
+                }
+                if ($script:renderMode -eq 'launch failure') {
+                    throw [InvalidOperationException]::new('fixture compiler launch failure')
+                }
+                if ($script:renderMode -eq 'compiler failure') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'fixture compilation diagnostic' }
+                }
+                $content = if ($WorkingDirectory -match 'child$') { "# Child`n" } else { "# Root`n" }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $content; StdErr = '' }
+            }
+            if ($Mode -eq 'launch failure') {
+                { Invoke-AvmDocs -Path $commandPath -SkipModuleVersionCheck } |
+                    Should -Throw '*fixture compiler launch failure*'
+            }
+            elseif ($Mode -eq 'WhatIf') {
+                $result = Invoke-AvmDocs -Path $commandPath -SkipModuleVersionCheck -WhatIf
+                $result.Status | Should -Be 'skipped'
+                $result.FilesProcessed | Should -Be 2
+            }
+            else {
+                $result = Invoke-AvmDocs -Path $commandPath -CheckDrift -SkipModuleVersionCheck
+                $result.Status | Should -Be 'fail'
+                if ($Mode -eq 'compiler failure') {
+                    $result.FilesProcessed | Should -Be 0
+                    $result.Issues.Code | Should -Contain 'avm.bicep.docs-render-failed'
+                    $result.Issues[0].Message | Should -Match 'fixture compilation diagnostic'
+                }
+                else {
+                    $result.FilesProcessed | Should -Be 2
+                    $result.Issues.Code | Should -Contain 'avm.bicep.docs-missing'
+                }
+            }
+            $script:sourceStages.Count | Should -Be 1
+            foreach ($path in @($script:temporaryInputs) + @($script:sourceStages)) {
+                Test-Path -LiteralPath $path | Should -BeFalse
+            }
+            $after = @(Get-ChildItem -LiteralPath $F.Root -Recurse -File)
+            $after.Count | Should -Be $script:originalFiles.Count
+            foreach ($file in $after) {
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($file.FullName)) |
+                    Should -BeExactly $script:originalFiles[$file.FullName]
+            }
+        }
+    }
+
     It 'rejects an incomplete native README run: <Kind>' -ForEach @(
         @{ Kind = 'unregistered'; Expected = -1; Passed = 4; Failed = 0 }
         @{ Kind = 'missing test'; Expected = 4; Passed = 3; Failed = 0 }
@@ -243,8 +333,15 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
         }
     }
 
-    It 'warns only for missing generated JSON comments and writes the unmodified renderer output' {
-        $fixture = New-BicepDocsFixture -Name 'grouped-json-comments'
+    It 'warns only for missing generated JSON comments and writes the unmodified renderer output: package default <PackageDefault>' -ForEach @(
+        @{ PackageDefault = $false }
+        @{ PackageDefault = $true }
+    ) {
+        $fixture = New-BicepDocsFixture -Name "grouped-json-comments-$PackageDefault"
+        if ($PackageDefault) {
+            Remove-Item -LiteralPath $fixture.Template
+            [IO.File]::WriteAllText((Join-Path $fixture.Root 'bicepconfig.json'), '{}')
+        }
         $generated = New-BicepDocsGroupedReadme
         $custom = New-BicepDocsGroupedCustomValues -Content $generated
         $tracked = Remove-BicepDocsJsonGroupingComments -Content $generated
@@ -255,9 +352,9 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             (Join-Path $fixture.Module 'child' 'README.md'), "# Child`n", $utf8)
         InModuleScope 'Avm.Authoring' -Parameters @{
             F = $fixture; Expected = $generated; Authored = $tracked
-            Custom = $custom
+            Custom = $custom; PackageDefault = $PackageDefault
         } {
-            param($F, $Expected, $Authored, $Custom)
+            param($F, $Expected, $Authored, $Custom, $PackageDefault)
             $script:expectedReadme = $Expected
             $script:originalJson = $Custom.Fragment
             $script:customValues = $Custom.Values
@@ -303,7 +400,12 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $script:renderArgs.Count | Should -Be 3
             foreach ($invocation in $script:renderArgs) {
                 ($invocation -contains '--no-restore') | Should -BeTrue
+                ($invocation -contains '--template-file') | Should -BeFalse
+                if ($PackageDefault) {
+                    Test-Path -LiteralPath $invocation[2] | Should -BeFalse
+                }
             }
+            $script:renderArgs[0][2] | Should -BeExactly $script:renderArgs[1][2]
             foreach ($path in $script:renderPaths) {
                 Test-Path -LiteralPath $path | Should -BeFalse
             }

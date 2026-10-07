@@ -668,11 +668,19 @@ were added directly to the module repository rather than through Bicep Sync.
 and child READMEs through the pinned `bicep docs generate --stdout` command.
 Module-root runs include tests in that root's `tests/e2e` for its own and
 nested READMEs, but do not search above the selected root. The
-packaged `avm-readme-v1.scriban` is used by default through the compiler's
-`--template-file` option, without creating caller config or template files.
+packaged `avm-readme-v1.scriban` is used by default without creating caller
+config or template files. Bicep 0.48 resolves templates only from configuration;
+package-default renders use a temporary copy of the selected source/config
+tree (owner-only on POSIX), with the canonical template selected only in that copy. The copy
+preserves relative sources, binary assets, compiler options and example
+reassignments, excludes Git administration data, and is reused across modules
+and provenance renders in one invocation. It is removed on success or failure.
+Linked entries and filesystem/home/temporary-root staging are rejected rather
+than following links or copying an unbounded directory.
 An explicit `documentation.template.file` in the nearest `bicepconfig.json`
 must reference a relative canonical copy; a different template or hash fails
-before writing. Generated content comes from the
+before writing. Valid explicit configurations render directly without a
+temporary source copy. Generated content comes from the
 native model, Bicep test sources, and compiled `main.json` (or a local build
 when it is absent), never from the existing README body.
 
@@ -768,14 +776,23 @@ parameters, never in authored source. Scope tokens belong to explicit
 target inputs. `keys` and `count` remain valid authored names.
 
 Subscription pools use a seeded, order-independent permutation and
-round-robin case assignment, rather than the registry's `Get-Random`
-permutation. Explicit subscription selection takes precedence over ambient
+round-robin case assignment. Explicit subscription selection takes precedence over ambient
 CI pools. Resource placement uses the owning module's canonical resource
 type when available; pattern/helper or absent metadata uses the generic
 allowed-region list. Explicit parameter, token and resource-location pins
 must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
-`baseTime` stay fixed. Record every attempt before submission, verify the
+`baseTime` stay fixed. Provider and location metadata reads buffer each attempt
+and independently allow three attempts for typed request timeouts through
+the shared retry mechanism. Permission, authentication, cancellation and
+untyped transport or message-only failures do not qualify.
+
+Regional evidence includes the registry's captured small Linux container-group
+capacity message, wrapped ML/Cosmos high-demand response and AKS preflight
+response with an explicitly empty supported-zone list. Require the matching
+region and resource/subscription context, complete error structure and no
+mixed or malformed evidence; do not generalize these to arbitrary messages.
+Record every attempt before submission, verify the
 native response's exact deployment ID, and retry only confirmed failure or
 exact preflight rejection. A submission timeout watches the same deployment
 for up to an hour (stopping after three consecutive read timeouts); a
@@ -786,6 +803,26 @@ deployment is terminal and fully discovered, remove its resources (no retained
 or soft-deleted names) and delete its deployment records. Otherwise relocation
 stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
 forward, so relocation never exceeds the validation or deployment budgets.
+An unclassified submission exception may be recovered only by an exact Failed
+root record and complete eligible operation evidence; a malformed returned
+identity or unreadable classification must never enable replay.
+
+Matching `InternalServerError` leaves for application gateways, private
+endpoints and PostgreSQL flexible servers can request cleanup before retrying
+the same region. This uses the same eligible case boundaries and submission
+budget as relocation, preserves the validated template and parameters, and
+does not revalidate an unchanged region. Any discovered deployment script
+blocks this cleaned replay because its cleanup may still be running.
+Existing confirmed-failure and preflight in-place retry behavior is unchanged.
+
+Strict discovery may omit a nested deployment only after a unique failed
+preflight Create operation in the complete parent history and explicit
+`DeploymentNotFound` from an exact child-record GET. A missing operations
+page alone is insufficient. An ID-less Graph service-principal Create may
+be ignored only when a successful operation and that exact deployment's
+exported template prove the matching literal existing declaration, extension,
+import and scope. This proof also applies during ordinary final cleanup;
+never reuse a parent deployment's export for a child.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
@@ -820,6 +857,13 @@ location. Never overwrite an existing file during creation. Updates use a
 flushed, exclusive sibling temporary file followed by an atomic replacement,
 and retain the last valid state if serialization fails. State survives
 temporary-template and parameter-file cleanup.
+Failed/rejected root entries may additionally retain `recordDeletion` as
+`Pending` or `Complete`, only after all saved resources are post-processed.
+An accepted history DELETE is not confirmed absence. Persist progress and
+verify exact terminal record/404 responses; cleanup-only recovery confirms
+pending deletion with GET without repeating DELETE or rediscovering those
+roots. Pending history deletion prevents a Complete outcome. These fields
+do not permit nested root entries or authorize another deployment retry.
 
 Capture post-removal metadata before deleting resources or their parents.
 If the native SDK reports a plain, unclassified named-group failure without

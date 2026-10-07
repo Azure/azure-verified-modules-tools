@@ -213,6 +213,15 @@ if ($obj.PSObject.Properties['Children']) { $obj.Children }
 **`AVM_MIRROR`.** When set, every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. The mirror itself **MUST** be `https://` — an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy can't silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
 
 **Network retry.** Every network read goes through the shared retry: `Invoke-AvmWebRequest` for HTTP, `Invoke-AvmProcess -RetryNetworkFailure` (or `Invoke-AvmGit -RetryNetworkFailure`) for network-performing tools, and `Invoke-AvmRetry` for cmdlets such as `Find-PSResource`. `Get-AvmNetworkFailureKind` decides what is transient from status codes and the message patterns in `Resources/network.json`; authentication, configuration, not-found and cancellation errors are never retried. Do not add private retry loops, and do not wrap a call that already retries (Azure SDK clients, Az PowerShell, Azure CLI and `bicep` registry restore) because budgets multiply. Never retry pushes, publishes, deployments or other mutations whose outcome is ambiguous; observe the result first, as `Update-AvmAuthoring` does with `Get-InstalledPSResource`. Repository scripts outside the module dot-source `scripts/Import-AvmNetworkRetry.ps1`. Tests mock `Wait-AvmRetryDelay` (inside the module) or `Start-Sleep` (scripts) so no test sleeps for real.
+
+The narrow Az exception is Bicep provider/location metadata discovery:
+`Invoke-AvmBicepMetadataRead` buffers each read and uses the shared retry with
+three attempts and a five-second initial delay only after a typed request
+timeout. Failed partial output is discarded; separate reads have separate
+budgets. Authentication, permission, cancellation and untyped transport or
+message-only failures do not qualify. This does not add retries to mutations
+or change the shared retry defaults.
+
 **Tool binary supply chain.** Pinned in `src/Avm.Authoring/Resources/avm.pins.jsonc`. The lock file is the only sanctioned source of truth for SHA256s. `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation records what was updated and which upstream release notes were reviewed. No precompiled binaries in the repo — everything is fetched at first use and cached under `Get-AvmFolder Tools`.
 
 > See also: [`avm-implementation-spec.md` §10](avm-implementation-spec.md#10-tool-resolver-and-cache), [`avm-implementation-spec.md` §16](avm-implementation-spec.md#16-networking), [`avm-implementation-spec.md` §17](avm-implementation-spec.md#17-security).
@@ -371,6 +380,8 @@ Currently vendored:
   Bicep options, AVM security baseline, and suppression groups. Policy checks
   resolve these from the installed module, never a consuming repository's
   `utilities/` tree. Module source and test configuration remain consumer-owned.
+  The synthetic `builtInServicePrincipalObjectId` parameter default is for
+  static expansion only; it must not populate native deployment parameters.
 - `Resources/tflint/avm.tflint.hcl`, `avm.tflint_module.hcl`,
   `avm.tflint_example.hcl` - applied per scope by `Invoke-AvmTerraformLint`
   (root / `modules/*` / `examples/*`).

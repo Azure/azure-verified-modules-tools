@@ -107,6 +107,16 @@ section when cutting a release.
 
 ### Changed
 
+- Bicep native retries and cleanup incorporate the registry updates through
+  [`6001a5b`](https://github.com/Azure/bicep-registry-modules/commit/6001a5b529e3e6490c0b63323fb60b9e069ffd9d):
+  bounded metadata-timeout reads, narrowly recognized capacity failures,
+  cleanup before eligible same-region retries, exact nested-preflight and
+  existing-Graph evidence, and resumable deployment-record deletion.
+- Bicep is pinned to 0.48.1. Documentation selects the canonical template
+  through native configuration; package defaults use temporary inputs without
+  changing caller files, while explicit template overrides remain validated.
+- Packaged Bicep PSRule options supply `builtInServicePrincipalObjectId` for
+  static analysis only, never for deployment parameters.
 - `avm check convention` for Bicep now runs its rules as a packaged Pester
   suite (`Resources/bicep/conventions`), so it, and therefore Bicep
   `pre-commit` and `pr-check`, requires Pester 5.5.0 or later. Compilation,

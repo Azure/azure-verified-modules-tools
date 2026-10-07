@@ -76,4 +76,34 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
             }).Count | Should -BeGreaterThan 0
         $result.BaselinesExecuted | Should -Be 8
     }
+
+    It 'supplies the static principal default without changing required consumer parameters' {
+        $sourcePath = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+            'param resourceLocation string = deployment().location',
+            "param resourceLocation string = deployment().location`nparam builtInServicePrincipalObjectId string").Replace(
+            '  location: resourceLocation',
+            "  location: resourceLocation`n  tags: {`n    principal: builtInServicePrincipalObjectId`n  }")
+        [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        $result.BaselinesExecuted | Should -Be 8
+        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
+        [System.IO.File]::ReadAllText($sourcePath) | Should -BeExactly $source
+        $source | Should -Not -Match '00000000-0000-4000-8000-000000000001'
+
+        $optionPath = Join-Path $script:package 'Resources' 'bicep' 'psrule' 'ps-rule.yaml'
+        $original = [System.IO.File]::ReadAllText($optionPath)
+        $withoutDefault = $original -replace '(?m)^  AZURE_PARAMETER_DEFAULTS:\r?\n    builtInServicePrincipalObjectId: "[^"]+"\r?\n', ''
+        $withoutDefault | Should -Not -BeExactly $original
+        try {
+            [System.IO.File]::WriteAllText($optionPath, $withoutDefault, [System.Text.UTF8Encoding]::new($false))
+            $missing = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+            $missing.Status | Should -Be 'fail'
+            $missing.BaselinesExecuted | Should -BeLessThan 8
+        }
+        finally {
+            [System.IO.File]::WriteAllText($optionPath, $original, [System.Text.UTF8Encoding]::new($false))
+        }
+    }
 }

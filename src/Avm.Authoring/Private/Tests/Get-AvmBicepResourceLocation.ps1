@@ -31,7 +31,9 @@ function Get-AvmBicepResourceLocation {
             throw [AvmConfigurationException]::new('Automatic resource location selection requires a canonical ARM resource type.')
         }
         $providerName, $typeName = $ResourceType -split '/', 2
-        $provider = Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
+        $provider = Invoke-AvmBicepMetadataRead -Activity "Read provider locations for $providerName" -Read {
+            Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
+        }
         $resourceTypes = Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
         $providerLocations = @(
             foreach ($type in $resourceTypes) {
@@ -56,8 +58,11 @@ function Get-AvmBicepResourceLocation {
             }
             return [pscustomobject]@{ Location = $location; IsGlobal = $true }
         }
+        $locations = Invoke-AvmBicepMetadataRead -Activity 'Read Azure location metadata' -Read {
+            Get-AzLocation -ErrorAction Stop
+        }
         $candidates = @(
-            foreach ($entry in (Get-AzLocation -ErrorAction Stop)) {
+            foreach ($entry in $locations) {
                 $location = [string](Get-AvmPropertyValue -InputObject $entry -Name 'Location')
                 $displayName = [string](Get-AvmPropertyValue -InputObject $entry -Name 'DisplayName')
                 $pairedRegion = Get-AvmPropertyValue -InputObject $entry -Name 'PairedRegion'

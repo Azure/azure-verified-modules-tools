@@ -32,6 +32,11 @@ function New-NativeBicepWorkflowFixture {
         Outputs = @{ account = @{ type = 'String'; value = 'deployed-account' } }
         CreatedId = ''; LastDeploymentId = ''
         RegionalFailures = 0; RecordDeleteFails = $false
+        RetrySequence = [Collections.Generic.Queue[string]]::new()
+        TransientResourceType = ''; TransientErrorCode = 'InternalServerError'; ThrowRetryFailure = $false
+        NativeResponseMode = ''; RecordVisibilityReads = 0; RecordVisibilityAfterDeletion = 1
+        RecordConfirmationDenied = $false
+        OperationLookupDenied = $false
         RemovedRecords = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     }
     & (Get-Module Avm.Authoring) {
@@ -157,11 +162,24 @@ function New-NativeBicepWorkflowFixture {
                 $id.Substring(0, $id.LastIndexOf('/providers/Microsoft.Resources/deployments/')) +
                 "/providers/$($state.RootResourceType)/example"
             }
+            if ($state.TransientResourceType) {
+                $targetGroup = if ($Scope -eq 'group') { $ResourceGroupName } else { "transient-$runId" }
+                $target = "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$targetGroup/providers/$($state.TransientResourceType)/example"
+            }
             $state.CreatedId = $target
             $state.LastDeploymentId = $id
             $regional = $state.RegionalFailures -gt 0
+            $transient = $false
+            if ($state.RetrySequence.Count -gt 0) {
+                $failureKind = $state.RetrySequence.Dequeue()
+                $regional = $failureKind -eq 'Regional'
+                $transient = $failureKind -eq 'Transient'
+            }
             $provisioning = if ($regional) {
-                $state.RegionalFailures--
+                if ($state.RegionalFailures -gt 0) { $state.RegionalFailures-- }
+                'Failed'
+            }
+            elseif ($transient) {
                 'Failed'
             }
             elseif ($state.FailuresRemaining -gt 0) {
@@ -175,15 +193,24 @@ function New-NativeBicepWorkflowFixture {
                 id = $id; properties = @{ provisioningState = $provisioning; outputs = $state.Outputs }
             }
             $state.OperationMap[$id] = @(@{
-                    properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = $target } }
+                    properties = @{ provisioningOperation = 'Create'; provisioningState = $provisioning; targetResource = @{ id = $target } }
                 }, @{
-                    properties = @{ provisioningOperation = 'Read'; targetResource = @{ id = $target + '-existing' } }
+                    properties = @{ provisioningOperation = 'Read'; provisioningState = 'Succeeded'; targetResource = @{ id = $target + '-existing' } }
                 })
-            if ($regional) {
+            if ($regional -or $transient) {
+                $errorBody = if ($regional) {
+                    @{ code = 'AllocationFailed'; message = 'Insufficient capacity in the region.' }
+                }
+                else {
+                    @{
+                        code = 'ResourceDeploymentFailure'; target = $target
+                        details = @(@{ code = $state.TransientErrorCode; message = 'Service temporarily failed.' })
+                    }
+                }
                 $state.OperationMap[$id] = @(@{
                         properties = @{
                             provisioningOperation = 'Create'; provisioningState = 'Failed'; targetResource = @{ id = $target }
-                            statusMessage = @{ error = @{ code = 'AllocationFailed'; message = 'Insufficient capacity in the region.' } }
+                            statusMessage = @{ error = $errorBody }
                         }
                     }, @{
                         properties = @{ provisioningOperation = 'Read'; provisioningState = 'Succeeded'; targetResource = @{ id = $target + '-existing' } }
@@ -194,27 +221,38 @@ function New-NativeBicepWorkflowFixture {
                 $group = "/subscriptions/$nestedSubscription/resourceGroups/nested-$runId"
                 $nested = "$group/providers/Microsoft.Resources/deployments/module"
                 $target = "$group/providers/$($state.NestedResourceType)/example"
+                $state.Deployments[$nested] = @{ id = $nested; properties = @{ provisioningState = $provisioning } }
                 $state.OperationMap[$id] = @(
-                    @{ properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = $group } } }
-                    @{ properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = $nested } } }
+                    @{ properties = @{ provisioningOperation = 'Create'; provisioningState = 'Succeeded'; targetResource = @{ id = $group } } }
+                    @{ properties = @{ provisioningOperation = 'Create'; provisioningState = $provisioning; targetResource = @{ id = $nested } } }
                 )
+                if ($regional -or $transient) { $state.OperationMap[$id][1].properties.statusMessage = @{ error = $errorBody } }
                 $state.OperationMap[$nested] = @(
-                    @{ properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = $target } } }
+                    @{ properties = @{ provisioningOperation = 'Create'; provisioningState = $provisioning; targetResource = @{ id = $target } } }
                 )
                 foreach ($extension in $state.NestedExtensions) {
                     $state.OperationMap[$nested] += @{
-                        properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = "$target/providers/$extension" } }
+                        properties = @{ provisioningOperation = 'Create'; provisioningState = 'Succeeded'; targetResource = @{ id = "$target/providers/$extension" } }
                     }
                 }
                 $state.CreatedId = $target
             }
             foreach ($additional in $state.AdditionalRootResources) {
                 $state.OperationMap[$id] += @{
-                    properties = @{ provisioningOperation = 'Create'; targetResource = @{ id = $additional } }
+                    properties = @{ provisioningOperation = 'Create'; provisioningState = 'Succeeded'; targetResource = @{ id = $additional } }
                 }
             }
             if ($state.CreateMode -eq 'timeout') { throw [TimeoutException]::new('Submission timed out.') }
             if ($state.CreateMode -eq 'cancel') { throw [OperationCanceledException]::new('Cancelled submission.') }
+            if (($regional -or $transient) -and $state.ThrowRetryFailure) {
+                throw [InvalidOperationException]::new('Native submission reported a resource failure.')
+            }
+            if ($state.NativeResponseMode -eq 'array-id') {
+                return @{ Id = @($id); ProvisioningState = $provisioning; Outputs = $state.Outputs }
+            }
+            if ($state.NativeResponseMode -eq 'array-state') {
+                return @{ Id = $id; ProvisioningState = @($provisioning); Outputs = $state.Outputs }
+            }
             return @{ Id = $id; DeploymentName = $DeploymentName; ProvisioningState = $provisioning; Outputs = $state.Outputs }
         }
         Mock Invoke-AzRestMethod {
@@ -228,6 +266,15 @@ function New-NativeBicepWorkflowFixture {
             }
             if ($Method -ne 'GET') { throw 'Unexpected mutating REST request.' }
             if ($state.RemovedRecords.Contains($recordId) -or $state.RemovedRecords.Contains(($recordId -replace '/operations$', ''))) {
+                $state.Calls.Add("confirm-record:$recordId")
+                if ($state.RecordConfirmationDenied) {
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
+                if ($state.RecordVisibilityReads -gt 0 -and $state.RemovedRecords.Count -ge $state.RecordVisibilityAfterDeletion -and
+                    $state.Deployments.ContainsKey($recordId)) {
+                    $state.RecordVisibilityReads--
+                    return @{ StatusCode = 200; Content = $state.Deployments[$recordId] | ConvertTo-Json -Depth 20 }
+                }
                 return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
             }
             $groupMatch = [regex]::Match($Path, '^/subscriptions/([^/]+)/resourceGroups/([^/?]+)\?api-version=2021-04-01$')
@@ -242,6 +289,9 @@ function New-NativeBicepWorkflowFixture {
             }
             if ($Path.EndsWith('/operations?api-version=2021-04-01')) {
                 $state.Calls.Add('discover')
+                if ($state.OperationLookupDenied) {
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
                 $id = $Path.Substring(0, $Path.Length - '/operations?api-version=2021-04-01'.Length)
                 if ($state.MissingOperations -or -not $state.OperationMap.ContainsKey($id)) {
                     return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }

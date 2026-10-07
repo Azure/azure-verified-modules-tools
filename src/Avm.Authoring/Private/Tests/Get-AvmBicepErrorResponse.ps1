@@ -24,7 +24,7 @@ function Get-AvmBicepErrorResponse {
     $message = Get-AvmPropertyValue -InputObject $ErrorRecord.ErrorDetails -Name 'Message'
     if ($message -isnot [string]) { return $null }
     try {
-        return , (ConvertFrom-Json -InputObject $message -AsHashtable -NoEnumerate -ErrorAction Stop)
+        return , (ConvertFrom-AvmStrictJson -Json $message -RejectCaseInsensitiveDuplicates -AllowArray)
     }
     catch [System.ArgumentException] {
         return $null

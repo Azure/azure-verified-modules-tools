@@ -34,6 +34,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
             Status            = 'Pending'
             ErrorCode         = ''
             ErrorMessage      = ''
+            References        = 0
         }
     }
     foreach ($rejectedId in $PreflightRejectedDeploymentIds) {
@@ -58,16 +59,20 @@ function Get-AvmBicepDeploymentCleanupTarget {
             $nextPath = $record.Id + '/operations?api-version=2021-04-01'
             $visitedPages = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::Ordinal)
+            $operations = [System.Collections.Generic.List[object]]::new()
+            $children = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $exports = @{}
             try {
                 if ($RequireCompleteRemoval) {
                     Assert-AvmBicepCleanupDeploymentTerminal -Record $record
+                    if ($record.Status -eq 'RejectedWithoutRecord') { continue }
                 }
                 while (-not [string]::IsNullOrEmpty($nextPath)) {
                     if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
                         throw [AvmProcessException]::new("Repeated or excessive deployment operations page: $nextPath")
                     }
                     $response = Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
-                    $document = $response.Content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+                    $document = ConvertFrom-AvmStrictJson -Json $response.Content -RejectCaseInsensitiveDuplicates
                     if ([int]$response.StatusCode -ne 200) {
                         $errorBody = Get-AvmPropertyValue -InputObject $document -Name 'error'
                         $errorCode = [string](Get-AvmPropertyValue -InputObject $errorBody -Name 'code')
@@ -77,6 +82,9 @@ function Get-AvmBicepDeploymentCleanupTarget {
                             break
                         }
                         if ([int]$response.StatusCode -eq 404 -and $errorCode -ceq 'DeploymentNotFound') {
+                            if ($RequireCompleteRemoval) {
+                                throw [AvmProcessException]::new("Existing deployment has no complete operation history: $($record.Id)")
+                            }
                             if ($visitedPages.Count -gt 1) {
                                 throw [AvmProcessException]::new(
                                     "Deployment record disappeared during pagination: $($record.Id)")
@@ -104,9 +112,13 @@ function Get-AvmBicepDeploymentCleanupTarget {
                             throw [AvmProcessException]::new("Invalid deployment operation properties: $($record.Id)")
                         }
                         if ($RequireCompleteRemoval -and
-                            (Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState') -cnotin @('Succeeded', 'Failed')) {
-                            throw [AvmProcessException]::new("Deployment has a non-terminal operation: $($record.Id)")
+                            ($properties['provisioningState'] -isnot [string] -or
+                            $properties['provisioningState'] -cnotin @('Succeeded', 'Failed') -or
+                            $properties['provisioningOperation'] -isnot [string] -or
+                            [string]::IsNullOrWhiteSpace($properties['provisioningOperation']))) {
+                            throw [AvmProcessException]::new("Deployment has an incomplete operation: $($record.Id)")
                         }
+                        $operations.Add($properties)
                         if ((Get-AvmPropertyValue -InputObject $properties -Name 'provisioningOperation') -ine 'Create') {
                             continue
                         }
@@ -114,8 +126,12 @@ function Get-AvmBicepDeploymentCleanupTarget {
                         if ($null -eq $target -and -not $RequireCompleteRemoval) {
                             continue
                         }
-                        $targetId = Get-AvmPropertyValue -InputObject $target -Name 'id'
+                        $targetId = $null
+                        if ($target -is [System.Collections.IDictionary]) { $targetId = $target['id'] }
                         if ($targetId -isnot [string] -or [string]::IsNullOrWhiteSpace($targetId)) {
+                            if (Test-AvmBicepExistingGraphLookup -Operation $properties -DeploymentId $record.Id -Exports $exports) {
+                                continue
+                            }
                             throw [AvmProcessException]::new("Deployment operation has an invalid target ID: $($record.Id)")
                         }
                         foreach ($resource in @(Resolve-AvmBicepCleanupResource -ResourceId $targetId)) {
@@ -129,8 +145,20 @@ function Get-AvmBicepDeploymentCleanupTarget {
                                             Status            = 'Pending'
                                             ErrorCode         = ''
                                             ErrorMessage      = ''
+                                            References        = 0
                                         })
                                     $queue.Enqueue($resource.resourceId)
+                                }
+                                $child = $records[$resource.resourceId]
+                                $child.References++
+                                $null = $children.Add($resource.resourceId)
+                                if ($RequireCompleteRemoval -and -not $child.Required -and $child.References -gt 1) {
+                                    $child.PreflightRejected = $false
+                                    if ($child.Status -eq 'RejectedWithoutRecord') {
+                                        $child.Status = 'Failed'
+                                        $child.ErrorCode = 'AmbiguousPreflightRejection'
+                                        $child.ErrorMessage = "Multiple operations reference preflight-rejected deployment '$($child.Id)'."
+                                    }
                                 }
                             }
                             else {
@@ -143,6 +171,14 @@ function Get-AvmBicepDeploymentCleanupTarget {
                     if ([string]::IsNullOrEmpty($nextPath)) {
                         $record.Status = 'Resolved'
                         $record.ErrorCode = ''
+                    }
+                }
+                if ($RequireCompleteRemoval -and $record.Status -eq 'Resolved' -and $record.ProvisioningState -ceq 'Failed') {
+                    foreach ($childId in $children) {
+                        $child = $records[$childId]
+                        if (-not $child.Required -and $child.References -eq 1) {
+                            $child.PreflightRejected = Test-AvmBicepNestedPreflightRejection -DeploymentId $childId -Operations $operations.ToArray()
+                        }
                     }
                 }
             }

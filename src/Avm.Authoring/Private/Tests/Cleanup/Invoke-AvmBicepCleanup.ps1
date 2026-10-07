@@ -25,18 +25,27 @@ function Invoke-AvmBicepCleanup {
 
         # Relocation mode: requires terminal, fully discovered deployments, no retained resources,
         # freed soft-deleted names and removed deployment records before reporting success.
-        [switch] $RequireCompleteRemoval
+        [switch] $RequireCompleteRemoval,
+
+        [switch] $RequireNoDeploymentScripts
     )
 
     Set-StrictMode -Version 3.0
     $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
+    if ($RequireNoDeploymentScripts -and -not $RequireCompleteRemoval) {
+        throw [System.ArgumentException]::new('Deployment-script replay protection requires complete-removal mode.')
+    }
 
     $StatePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($StatePath)
     $state = Read-AvmBicepCleanupState -Path $StatePath
     if ($state['subscriptionId'] -ine $SubscriptionId.ToString('D') -or
         $state['tenantId'] -ine $TenantId.ToString('D')) {
         throw [AvmConfigurationException]::new('Cleanup state does not match the explicitly selected subscription and tenant.')
+    }
+    if ($RequireCompleteRemoval -and
+        @($state['deployments'] | Where-Object { $_.Contains('recordDeletion') }).Count -gt 0) {
+        throw [AvmConfigurationException]::new('Recorded deployment deletion progress is for cleanup-only recovery, not deployment replay.')
     }
     if (-not $PSCmdlet.ShouldProcess(
             "recorded Bicep deployments in $SubscriptionId, tenant $TenantId", 'Resume deployment-owned cleanup')) {
@@ -79,11 +88,35 @@ function Invoke-AvmBicepCleanup {
         }
 
         $issues = [System.Collections.Generic.List[object]]::new()
+        $saveDeletionProgress = {
+            param($RecordId, $RecordStatus)
+            foreach ($owner in $state['deployments']) {
+                if ($owner['id'] -ieq $RecordId) {
+                    $owner['recordDeletion'] = $RecordStatus
+                    Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false
+                    break
+                }
+            }
+        }
+        foreach ($owner in @($state['deployments'] | Where-Object { $_['recordDeletion'] -ceq 'Pending' })) {
+            try {
+                Remove-AvmBicepDeploymentRecord -DeploymentIds @($owner['id']) -ConfirmOnly `
+                    -RetryLimit $RemovalRetryLimit -RetryInterval $RemovalRetryInterval -OnProgress $saveDeletionProgress -Confirm:$false
+            }
+            catch {
+                if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }
+                $issues.Add([pscustomobject]@{
+                        ResourceId = $owner['id']; Code = 'DeploymentRecordRetained'; Message = $_.Exception.Message
+                    })
+                Write-AvmLog -Message $_.Exception.Message -Level Warning
+            }
+        }
         $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $blockedGroups = [System.Collections.Generic.List[string]]::new()
+        $discoverOwners = @($state['deployments'] | Where-Object { -not $_.Contains('recordDeletion') })
         $discovery = Get-AvmBicepDeploymentCleanupTarget @discoveryOptions `
-            -DeploymentIds @($state['deployments'] | ForEach-Object { $_['id'] }) `
-            -PreflightRejectedDeploymentIds @($state['deployments'] |
+            -DeploymentIds @($discoverOwners | ForEach-Object { $_['id'] }) `
+            -PreflightRejectedDeploymentIds @($discoverOwners |
                 Where-Object { $_['preflightRejected'] } | ForEach-Object { $_['id'] })
         foreach ($issue in $discovery.Issues) { $issues.Add($issue) }
         foreach ($id in $discovery.ResourceIds) { $null = $ids.Add($id) }
@@ -150,6 +183,17 @@ function Invoke-AvmBicepCleanup {
             $null = $records.Remove($id)
         }
         $state['resources'] = @($records.Values)
+        $deploymentScripts = @($state['resources'] | Where-Object { $_['type'] -ieq 'Microsoft.Resources/deploymentScripts' })
+        if ($RequireNoDeploymentScripts -and $deploymentScripts.Count -gt 0) {
+            $message = 'Same-region replay is unsafe because the attempt contains deployment scripts with potentially delayed cleanup.'
+            $issues.Add([pscustomobject]@{ ResourceId = ''; Code = 'DeploymentScriptReplayUnsafe'; Message = $message })
+            Write-AvmLog -Level Warning -Message $message
+            Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false
+            return [pscustomobject]@{
+                Cleaned = $false; Status = 'fail'; Pending = @($deploymentScripts | ForEach-Object { $_['id'] })
+                Issues = $issues.ToArray(); StatePath = $StatePath
+            }
+        }
         $blocked = [System.Collections.Generic.List[string]]::new()
         foreach ($resource in $state['resources']) {
             if ($discovery.Issues.Count -gt 0 -and
@@ -183,7 +227,7 @@ function Invoke-AvmBicepCleanup {
             $removedIds = @($state['resources'] | Where-Object { $_['removed'] } | ForEach-Object { $_['id'] })
             try {
                 Remove-AvmBicepDeploymentRecord -DeploymentIds $recordIds -RemovedParentIds $removedIds `
-                    -RetryLimit $RemovalRetryLimit -RetryInterval $RemovalRetryInterval -Confirm:$false
+                    -RetryLimit $RemovalRetryLimit -RetryInterval $RemovalRetryInterval -OnProgress $saveDeletionProgress -Confirm:$false
             }
             catch {
                 if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') {
@@ -203,6 +247,7 @@ function Invoke-AvmBicepCleanup {
             Status    = if ($cleaned) { 'pass' } else { 'fail' }
             Pending   = @(
                 @($batch.Pending) + @($blockedGroups) +
+                @($state['deployments'] | Where-Object { $_['recordDeletion'] -ceq 'Pending' } | ForEach-Object { $_['id'] }) +
                 @($discovery.Issues | ForEach-Object { $_.DeploymentId }) |
                     Select-Object -Unique
             )
