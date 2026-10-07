@@ -13,17 +13,29 @@ function Invoke-AvmTransform {
         scoped config profiles under Resources/mapotf/. Instrumented roots
         and children get metadata-backed AzAPI deployment telemetry using
         var.location. Missing required location inputs are generated for
-        roots and Azure-resource children. Local module calls forward missing
+        roots and Azure-resource children; utility roots that deploy no Azure
+        resources are exempt. Local module calls forward missing
         location inputs and the parent's telemetry opt-out; supported example
-        calls expose and forward the same controls. Test-module requirements and
-        standard empty modtm test mocks are migrated. Existing authored
-        variables keep their location and metadata when their defaults change.
+        calls expose and forward the same controls. Only newly generated
+        example location inputs default to "eastus"; new reusable-module
+        inputs are required without defaults. Authored location declarations
+        and per-item regions are preserved.
+
+        Generated removed blocks let Terraform forget legacy modtm telemetry
+        state without destroying its resources. Existing state may require
+        the old providers for one final initialization. Test-module provider
+        requirements and standard empty modtm test mocks are migrated;
+        custom mocks require review. Mocked
+        unit tests receive location values only for newly required inputs,
+        preserving their assertions, targets and telemetry opt-outs.
+        Published dependencies and unprefixed legacy telemetry are not migrated.
+
         -WhatIf previews the Terraform transformation without changing files.
         A consumer repository can override a profile under
         config/mapotf/<profile> or set AVM_MPTF_CONFIG_DIR to a profile root.
         The Bicep engine compiles root and child main.bicep sources, including
-        children under modules/, into main.json. README generation and
-        repeatable test scaffolding remain separate follow-on slices.
+        children under modules/, into main.json. Bicep README generation is
+        handled separately by Invoke-AvmDocs.
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.

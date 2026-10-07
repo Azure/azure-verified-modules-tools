@@ -91,7 +91,8 @@ Describe 'Test-AvmModuleVersion' {
             $caught.ExitCode | Should -Be 10
             $caught.CurrentVersion | Should -Be (Get-Module Avm.Authoring).Version
             $caught.LatestVersion | Should -Be ([version]'99.0.0')
-            $caught.Message | Should -Match 'A newer version of Avm.Authoring is required'
+            $caught.Message | Should -Match 'Installed version:'
+            $caught.Message | Should -Match 'Latest version: 99\.0\.0'
             $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
             $caught.Message | Should -Match 'Import-Module Avm\.Authoring -Force'
         }
@@ -108,7 +109,7 @@ Describe 'Test-AvmModuleVersion' {
             $records.Count | Should -Be 1
             $records[0] | Should -BeOfType ([System.Management.Automation.WarningRecord])
             [string]$records[0] | Should -Match 'update available: 99\.0\.0'
-            [string]$records[0] | Should -Match 'avm update'
+            [string]$records[0] | Should -Match 'avm upgrade'
         }
     }
 

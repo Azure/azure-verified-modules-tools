@@ -351,7 +351,7 @@ section when cutting a release.
   dispatch, and the secure-type contract) was implemented end-to-end and then
   removed wholesale. A future design will shell out to a dedicated Bicep docs
   CLI when one is selected.
-- `docs/avm-consolidation-plan.md` verb-table entries for `avm docs` (Bicep),
+- The documented command contract for `avm docs` (Bicep),
   `avm pre-commit`, and `avm pr-check` rewritten to match the engines as
   wired today (`format → lint → test → docs` for `pre-commit`;
   clean-worktree preflight then
@@ -531,7 +531,7 @@ section when cutting a release.
 - Root `README.md` refreshed to reflect the actual repo state after the
   2026-05-26 Terraform-first pivot.
 - New `docs/terraform-migration.md` migration guide.
-- `docs/progress.md` audit of Terraform tool binary availability — 3 of 4
+- Audit of Terraform tool binary availability — 3 of 4
   candidates (`mapotf`, `avmfix`, `grept`) ship no GitHub releases, blocking
   `avm transform` / `avm check convention` / the `avmfix`-format-chain on an
   A/B/C supply-chain decision.
@@ -1141,9 +1141,8 @@ Release-pipeline and packaging fixes.
 
 ## [0.1.0] - 2026-05-18
 
-First real release of `Avm.Authoring` — the Phase 0 skeleton from the
-[consolidation plan](docs/avm-consolidation-plan.md) and
-[implementation spec](docs/avm-implementation-spec.md). Single `avm`
+First real release of `Avm.Authoring` — the initial skeleton now governed by
+the [quality specification](docs/quality-spec.md). Single `avm`
 dispatcher, managed-tool resolver, and Bicep / Terraform inner-loop
 scaffolding (`format` / `lint` / `test` / `docs`).
 
