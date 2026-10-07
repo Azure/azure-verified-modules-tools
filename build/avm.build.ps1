@@ -27,6 +27,9 @@
       docs-check  - Fail when docs/reference is missing, stale, or has extra pages.
       pre-commit  - Composite: docs-check + layout + lint + test + component.
       ci          - Full local CI gate: docs-check + layout + lint + coverage + component.
+      ci-unit     - CI unit-test matrix leg: docs-check + layout + unit tests.
+      ci-coverage - CI Ubuntu unit-test matrix leg with coverage.
+      ci-component - CI component-test matrix leg.
       ci-tests    - Matrix CI gate: docs-check + layout + test + component. CI lints once
                     in a separate Ubuntu job and runs workflow tests separately.
 
@@ -837,10 +840,11 @@ task integration build, {
 
 task 'pre-commit' 'docs-check', layout, lint, test, component
 
-# The CI matrix runs layout + test + component; lint and workflow tests run
-# in dedicated Ubuntu jobs. The full local ci task includes lint. Integration
-# remains a separate real-network job, and pre-commit runs unit tests without
-# coverage while retaining the component tier.
+# CI runs unit and component matrices independently so both tiers can use the
+# full job-level parallelism. The combined task remains for local parity.
+task 'ci-unit' 'docs-check', layout, test
+task 'ci-coverage' 'docs-check', layout, coverage
+task 'ci-component' component
 task 'ci-tests' 'docs-check', layout, test, component
 task ci 'docs-check', layout, lint, coverage, component
 
