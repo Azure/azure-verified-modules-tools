@@ -14,6 +14,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         Mock Get-InstalledPSResource
         Mock Install-PSResource
         Mock Start-Sleep
+        Mock Write-Verbose
         Mock Write-Warning
     }
 
@@ -50,7 +51,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter {
             $Milliseconds -ge 500 -and $Milliseconds -le 1000
         }
-        Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
+        Should -Invoke Write-Verbose -Times 1 -Exactly -ParameterFilter {
             $Message -match 'attempt 1 of 3'
         }
     }
